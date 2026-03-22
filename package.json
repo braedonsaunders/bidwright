@@ -1,0 +1,24 @@
+{
+  "name": "bidwright",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @bidwright/web --filter @bidwright/api --filter @bidwright/worker dev",
+    "dev:web": "pnpm --filter @bidwright/web dev",
+    "dev:api": "pnpm --filter @bidwright/api dev",
+    "dev:worker": "pnpm --filter @bidwright/worker dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "db:generate": "pnpm --filter @bidwright/db db:generate",
+    "db:push": "pnpm --filter @bidwright/db db:push",
+    "db:seed": "pnpm --filter @bidwright/db db:seed"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "typescript": "^5.9.2",
+    "tsx": "^4.20.5"
+  }
+}

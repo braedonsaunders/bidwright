@@ -1,0 +1,7 @@
+opencv-python
+pytesseract
+PyMuPDF
+numpy
+scipy
+Pillow
+scikit-learn

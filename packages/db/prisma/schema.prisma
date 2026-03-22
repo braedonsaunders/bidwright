@@ -1,0 +1,141 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String         @id
+  name        String
+  customer    String
+  stage       String
+  estimator   String
+  dueDate     DateTime
+  documents   SourceDocument[]
+  quotes      Quote[]
+  aiRuns      AIRun[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model SourceDocument {
+  id          String   @id
+  projectId   String
+  name        String
+  kind        String
+  discipline  String
+  pages       Int
+  summary     String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model Quote {
+  id          String     @id
+  projectId    String
+  quoteNumber  String
+  title        String
+  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisions    Revision[]
+}
+
+model Revision {
+  id             String      @id
+  quoteId         String
+  revisionNumber  Int
+  title           String
+  status          String
+  breakoutStyle   String
+  subtotal        Float      @default(0)
+  cost            Float      @default(0)
+  estimatedProfit Float      @default(0)
+  estimatedMargin Float      @default(0)
+  quote           Quote      @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  worksheets      Worksheet[]
+  phases          Phase[]
+  modifiers       Modifier[]
+  conditions      Condition[]
+  reportSections  ReportSection[]
+}
+
+model Worksheet {
+  id         String     @id
+  revisionId String
+  name       String
+  sortOrder  Int
+  revision   Revision   @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  items      WorksheetItem[]
+}
+
+model WorksheetItem {
+  id                String   @id
+  worksheetId       String
+  phaseId           String?
+  category          String
+  entityName        String
+  vendor            String?
+  description       String
+  quantity          Float
+  uom               String
+  cost              Float
+  markup            Float
+  price             Float
+  labourHoursReg    Float
+  labourHoursOver   Float
+  labourHoursDouble Float
+  worksheet         Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+}
+
+model Phase {
+  id          String   @id
+  revisionId   String
+  number       String
+  name         String
+  description  String
+  sortOrder    Int
+  revision     Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+}
+
+model Modifier {
+  id           String   @id
+  revisionId    String
+  name         String
+  type         String
+  appliesTo    String
+  percentage   Float?
+  amount       Float?
+  showOnQuote  Boolean  @default(true)
+  revision     Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+}
+
+model Condition {
+  id          String   @id
+  revisionId   String
+  type        String
+  value       String
+  sortOrder   Int
+  revision    Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+}
+
+model ReportSection {
+  id          String   @id
+  revisionId   String
+  title       String
+  content     String
+  sectionType String
+  sortOrder   Int
+  revision    Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+}
+
+model AIRun {
+  id          String   @id
+  projectId   String
+  runType     String
+  status      String
+  summary     String
+  confidence  Float
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+}

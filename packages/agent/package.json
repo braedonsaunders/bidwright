@@ -1,0 +1,18 @@
+{
+  "name": "@bidwright/agent",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@bidwright/domain": "workspace:*",
+    "openai": "^6.32.0",
+    "zod": "^3.24.1"
+  }
+}

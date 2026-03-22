@@ -1,0 +1,18 @@
+{
+  "name": "@bidwright/ingestion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "jszip": "^3.10.1",
+    "zod": "^3.24.1"
+  }
+}

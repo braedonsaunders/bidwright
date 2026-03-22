@@ -1,0 +1,16 @@
+{
+  "name": "@bidwright/vector",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "openai": "^4.77.0",
+    "zod": "^3.24.1"
+  }
+}

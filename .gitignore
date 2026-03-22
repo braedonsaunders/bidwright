@@ -1,0 +1,16 @@
+node_modules
+dist
+.next
+.DS_Store
+.env
+.env.*
+.env.local
+coverage
+.turbo
+.prisma
+*.log
+*.tsbuildinfo
+data/
+venv/
+__pycache__/
+*.pyc
