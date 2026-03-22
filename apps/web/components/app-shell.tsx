@@ -11,6 +11,7 @@ import {
   Moon,
   Package,
   PackageOpen,
+  Puzzle,
   Search,
   Settings,
   Sun,
@@ -26,6 +27,7 @@ const navItems = [
   { href: "/intake", label: "Intake", icon: PackageOpen },
   { href: "/quotes", label: "Quotes", icon: FileText },
   { href: "/items", label: "Items", icon: Package },
+  { href: "/plugins", label: "Plugins", icon: Puzzle },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

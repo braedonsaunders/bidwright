@@ -24,6 +24,11 @@ import {
   Separator,
   Toggle,
 } from "@/components/ui";
+import {
+  getSettings as apiGetSettings,
+  updateSettings as apiUpdateSettings,
+  type AppSettingsRecord,
+} from "@/lib/api";
 
 const STORAGE_KEY = "bidwright-settings";
 

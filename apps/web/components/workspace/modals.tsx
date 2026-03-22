@@ -879,12 +879,14 @@ export function PDFModal({
   onDownload,
   isPending = false,
   documents = [],
+  previewUrl,
 }: {
   open: boolean;
   onClose: () => void;
   onDownload: (options: PDFDownloadOptions) => void;
   isPending?: boolean;
   documents?: Array<{ id: string; fileName: string }>;
+  previewUrl?: string;
 }) {
   const [options, setOptions] = useState<PDFDownloadOptions>({
     template: "standard",
@@ -920,12 +922,19 @@ export function PDFModal({
   };
 
   return (
-    <ModalBackdrop open={open} onClose={onClose} size="md">
+    <ModalBackdrop open={open} onClose={onClose} size={previewUrl ? "xl" : "md"}>
       <CardHeader className="relative">
-        <CardTitle>Download PDF</CardTitle>
+        <CardTitle>PDF Preview &amp; Download</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
       <CardBody>
+        {previewUrl && (
+          <iframe
+            src={previewUrl}
+            className="w-full h-96 rounded-lg border border-line bg-white mb-5"
+            title="PDF Preview"
+          />
+        )}
         <div className="space-y-5">
           <div>
             <Label htmlFor="pdf-template">Template</Label>

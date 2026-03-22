@@ -8,13 +8,19 @@ import { buildProjectWorkspace, getProjectById, listProjects, mockStore, summari
 import type {
   Activity,
   AdditionalLineItem,
+  AppSettings,
   BidwrightStore,
+  Catalog,
+  CatalogItem,
   Condition,
   ConditionLibraryEntry,
+  FileNode,
   Job,
   LabourRate,
   Modifier,
   Phase,
+  Plugin,
+  PluginExecution,
   Project,
   ProjectWorkspace,
   Quote,
@@ -93,7 +99,19 @@ export interface ApiStateFile {
   packages: StoredPackageRecord[];
   jobs: IngestionJobRecord[];
   workspaceStates: WorkspaceStateRecord[];
+  settings: AppSettings;
 }
+
+export type PluginPatchInput = Partial<Pick<Plugin, "name" | "description" | "enabled" | "config">>;
+
+export type CreatePluginInput = Omit<Plugin, "id" | "createdAt" | "updatedAt">;
+
+const DEFAULT_SETTINGS: AppSettings = {
+  general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
+  email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
+  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm" },
+  integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514" },
+};
 
 export interface CreateProjectInput {
   name: string;
@@ -324,6 +342,59 @@ export interface CreateJobInput {
   poIssuer?: string;
 }
 
+export interface CreateCatalogInput {
+  name: string;
+  kind: string;
+  scope: string;
+  projectId?: string | null;
+  description?: string;
+}
+
+export interface CatalogPatchInput {
+  name?: string;
+  kind?: string;
+  scope?: string;
+  projectId?: string | null;
+  description?: string;
+}
+
+export interface CreateCatalogItemInput {
+  code: string;
+  name: string;
+  unit: string;
+  unitCost: number;
+  unitPrice: number;
+  category?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CatalogItemPatchInput {
+  code?: string;
+  name?: string;
+  unit?: string;
+  unitCost?: number;
+  unitPrice?: number;
+  category?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateFileNodeInput {
+  parentId?: string | null;
+  name: string;
+  type: "file" | "directory";
+  fileType?: string;
+  size?: number;
+  documentId?: string;
+  storagePath?: string;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+}
+
+export interface FileNodePatchInput {
+  name?: string;
+  parentId?: string | null;
+}
+
 export interface ImportPreviewResult {
   headers: string[];
   sampleRows: string[][];
@@ -480,9 +551,22 @@ function createSeedWorkspaceState(projectId: string, quoteId: string, revisionId
 
 function normalizeState(rawState: Partial<ApiStateFile> | undefined): ApiStateFile {
   const store = rawState?.store ? cloneStore(rawState.store) : cloneStore(mockStore);
+
+  // Ensure all arrays exist (handles old state files missing new fields)
+  if (!Array.isArray(store.labourRates)) store.labourRates = [];
+  if (!Array.isArray(store.activities)) store.activities = [];
+  if (!Array.isArray(store.conditionLibrary)) store.conditionLibrary = [];
+  if (!Array.isArray(store.reportSections)) store.reportSections = [];
+  if (!Array.isArray(store.additionalLineItems)) store.additionalLineItems = [];
+  if (!Array.isArray(store.jobs)) store.jobs = [];
+  if (!Array.isArray(store.fileNodes)) store.fileNodes = [];
+  if (!Array.isArray(store.plugins)) store.plugins = [];
+  if (!Array.isArray(store.pluginExecutions)) store.pluginExecutions = [];
+
   const packages = Array.isArray(rawState?.packages) ? rawState!.packages : [];
   const jobs = Array.isArray(rawState?.jobs) ? rawState!.jobs : [];
   const workspaceStates = Array.isArray(rawState?.workspaceStates) ? rawState!.workspaceStates : [];
+  const settings: AppSettings = rawState?.settings ? structuredClone(rawState.settings) : structuredClone(DEFAULT_SETTINGS);
 
   for (const project of store.projects) {
     const quote = store.quotes.find((entry) => entry.projectId === project.id);
@@ -502,7 +586,8 @@ function normalizeState(rawState: Partial<ApiStateFile> | undefined): ApiStateFi
     store,
     packages,
     jobs,
-    workspaceStates
+    workspaceStates,
+    settings
   };
 }
 
@@ -645,6 +730,18 @@ export class BidwrightApiStore {
     }
 
     return normalizeState(this.state);
+  }
+
+  private pushActivity(state: ApiStateFile, projectId: string, revisionId: string | null, type: string, data: Record<string, unknown>) {
+    state.store.activities.push({
+      id: createId("activity"),
+      projectId,
+      revisionId,
+      type,
+      data,
+      userId: null,
+      createdAt: isoNow(),
+    });
   }
 
   private syncProjectEstimate(state: ApiStateFile, projectId: string, timestamp = isoNow()) {
@@ -965,6 +1062,7 @@ export class BidwrightApiStore {
       const timestamp = isoNow();
       Object.assign(revision, patch);
       revision.updatedAt = timestamp;
+      this.pushActivity(state, projectId, revisionId, "revision_updated", { fields: Object.keys(patch) });
       this.syncProjectEstimate(state, projectId, timestamp);
 
       return revision;
@@ -1017,6 +1115,7 @@ export class BidwrightApiStore {
       Object.assign(item, calculated);
 
       state.store.worksheetItems.push(item);
+      this.pushActivity(state, projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -1126,6 +1225,7 @@ export class BidwrightApiStore {
       const calculated = calculateLineItem(item, revision, labourRates);
       Object.assign(item, calculated);
 
+      this.pushActivity(state, projectId, revision.id, "item_updated", { itemId: item.id, entityName: item.entityName, patch: Object.keys(patch) });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -1146,6 +1246,7 @@ export class BidwrightApiStore {
       }
 
       state.store.worksheetItems.splice(index, 1);
+      this.pushActivity(state, projectId, revision.id, "item_deleted", { itemId: item.id, entityName: item.entityName });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -1549,6 +1650,7 @@ export class BidwrightApiStore {
       };
 
       state.store.phases.push(phase);
+      this.pushActivity(state, projectId, revisionId, "phase_created", { phaseId: phase.id, name: phase.name });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -1600,6 +1702,7 @@ export class BidwrightApiStore {
         }
       }
 
+      this.pushActivity(state, projectId, phase.revisionId, "phase_deleted", { phaseId: phase.id, name: phase.name });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -1867,7 +1970,7 @@ export class BidwrightApiStore {
     if (!revision) {
       return [];
     }
-    return snapshot.store.labourRates.filter((entry) => entry.revisionId === revision.id);
+    return (snapshot.store.labourRates ?? []).filter((entry) => entry.revisionId === revision.id);
   }
 
   async createLabourRate(projectId: string, revisionId: string, input: CreateLabourRateInput) {
@@ -2058,6 +2161,7 @@ export class BidwrightApiStore {
       // Switch to the new revision
       quote.currentRevisionId = newRevisionId;
       quote.updatedAt = timestamp;
+      this.pushActivity(state, projectId, newRevisionId, "revision_created", { revisionNumber: newRevision.revisionNumber });
       this.syncProjectEstimate(state, projectId, timestamp);
 
       return newRevision;
@@ -2104,6 +2208,7 @@ export class BidwrightApiStore {
       state.store.reportSections = state.store.reportSections.filter((entry) => entry.revisionId !== revisionId);
       state.store.revisions = state.store.revisions.filter((entry) => entry.id !== revisionId);
 
+      this.pushActivity(state, projectId, null, "revision_deleted", { revisionId, revisionNumber: revision.revisionNumber });
       const timestamp = isoNow();
       this.syncProjectEstimate(state, projectId, timestamp);
 
@@ -2568,6 +2673,197 @@ export class BidwrightApiStore {
     });
   }
 
+  // ── Catalog CRUD ─────────────────────────────────────────────────
+
+  async createCatalog(input: CreateCatalogInput) {
+    return this.runMutation(async (state) => {
+      const catalog: Catalog = {
+        id: createId("cat"),
+        name: input.name,
+        kind: (input.kind || "materials") as Catalog["kind"],
+        scope: (input.scope || "global") as Catalog["scope"],
+        projectId: input.projectId ?? null,
+        description: input.description ?? "",
+      };
+      state.store.catalogs.push(catalog);
+      return catalog;
+    });
+  }
+
+  async updateCatalog(catalogId: string, patch: CatalogPatchInput) {
+    return this.runMutation(async (state) => {
+      const catalog = state.store.catalogs.find((c) => c.id === catalogId);
+      if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+      if (patch.name !== undefined) catalog.name = patch.name;
+      if (patch.kind !== undefined) catalog.kind = patch.kind as Catalog["kind"];
+      if (patch.scope !== undefined) catalog.scope = patch.scope as Catalog["scope"];
+      if (patch.projectId !== undefined) catalog.projectId = patch.projectId ?? null;
+      if (patch.description !== undefined) catalog.description = patch.description;
+      return catalog;
+    });
+  }
+
+  async deleteCatalog(catalogId: string) {
+    return this.runMutation(async (state) => {
+      const catalog = state.store.catalogs.find((c) => c.id === catalogId);
+      if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+      state.store.catalogs = state.store.catalogs.filter((c) => c.id !== catalogId);
+      state.store.catalogItems = state.store.catalogItems.filter((i) => i.catalogId !== catalogId);
+      return { deleted: true };
+    });
+  }
+
+  async listCatalogItems(catalogId: string) {
+    await this.ensureLoaded();
+    return this.snapshot().store.catalogItems.filter((i) => i.catalogId === catalogId);
+  }
+
+  async createCatalogItem(catalogId: string, input: CreateCatalogItemInput) {
+    return this.runMutation(async (state) => {
+      const catalog = state.store.catalogs.find((c) => c.id === catalogId);
+      if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+      const item: CatalogItem = {
+        id: createId("ci"),
+        catalogId,
+        code: input.code,
+        name: input.name,
+        unit: input.unit,
+        unitCost: input.unitCost,
+        unitPrice: input.unitPrice,
+        metadata: { category: input.category ?? "", ...(input.metadata ?? {}) },
+      };
+      state.store.catalogItems.push(item);
+      return item;
+    });
+  }
+
+  async updateCatalogItem(itemId: string, patch: CatalogItemPatchInput) {
+    return this.runMutation(async (state) => {
+      const item = state.store.catalogItems.find((i) => i.id === itemId);
+      if (!item) throw new Error(`Catalog item ${itemId} not found`);
+      if (patch.code !== undefined) item.code = patch.code;
+      if (patch.name !== undefined) item.name = patch.name;
+      if (patch.unit !== undefined) item.unit = patch.unit;
+      if (patch.unitCost !== undefined) item.unitCost = patch.unitCost;
+      if (patch.unitPrice !== undefined) item.unitPrice = patch.unitPrice;
+      if (patch.category !== undefined) {
+        item.metadata = { ...item.metadata, category: patch.category };
+      }
+      if (patch.metadata !== undefined) {
+        item.metadata = { ...item.metadata, ...patch.metadata };
+      }
+      return item;
+    });
+  }
+
+  async deleteCatalogItem(itemId: string) {
+    return this.runMutation(async (state) => {
+      const item = state.store.catalogItems.find((i) => i.id === itemId);
+      if (!item) throw new Error(`Catalog item ${itemId} not found`);
+      state.store.catalogItems = state.store.catalogItems.filter((i) => i.id !== itemId);
+      return { deleted: true };
+    });
+  }
+
+  async searchCatalogItems(query: string, catalogId?: string) {
+    await this.ensureLoaded();
+    const snapshot = this.snapshot();
+    let items = snapshot.store.catalogItems;
+    if (catalogId) {
+      items = items.filter((i) => i.catalogId === catalogId);
+    }
+    if (!query.trim()) return items;
+    const q = query.toLowerCase();
+    return items.filter(
+      (i) =>
+        i.code.toLowerCase().includes(q) ||
+        i.name.toLowerCase().includes(q) ||
+        (typeof i.metadata?.category === "string" && i.metadata.category.toLowerCase().includes(q))
+    );
+  }
+
+  // ── File Node CRUD ─────────────────────────────────────────────────
+
+  async listFileNodes(projectId: string, parentId?: string | null) {
+    await this.ensureLoaded();
+    const nodes = this.snapshot().store.fileNodes.filter((n) => n.projectId === projectId);
+    if (parentId === undefined) return nodes;
+    return nodes.filter((n) => n.parentId === (parentId ?? null));
+  }
+
+  async getFileNode(nodeId: string) {
+    await this.ensureLoaded();
+    return this.snapshot().store.fileNodes.find((n) => n.id === nodeId) ?? null;
+  }
+
+  async createFileNode(projectId: string, input: CreateFileNodeInput) {
+    return this.runMutation(async (state) => {
+      const project = state.store.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error(`Project ${projectId} not found`);
+      if (input.parentId) {
+        const parent = state.store.fileNodes.find((n) => n.id === input.parentId && n.projectId === projectId);
+        if (!parent || parent.type !== "directory") {
+          throw new Error(`Parent directory ${input.parentId} not found`);
+        }
+      }
+      const timestamp = isoNow();
+      const node: FileNode = {
+        id: createId("fn"),
+        projectId,
+        parentId: input.parentId ?? null,
+        name: input.name,
+        type: input.type,
+        fileType: input.fileType,
+        size: input.size,
+        documentId: input.documentId,
+        storagePath: input.storagePath,
+        metadata: input.metadata ?? {},
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        createdBy: input.createdBy,
+      };
+      state.store.fileNodes.push(node);
+      return node;
+    });
+  }
+
+  async updateFileNode(nodeId: string, patch: FileNodePatchInput) {
+    return this.runMutation(async (state) => {
+      const node = state.store.fileNodes.find((n) => n.id === nodeId);
+      if (!node) throw new Error(`File node ${nodeId} not found`);
+      if (patch.name !== undefined) node.name = patch.name;
+      if (patch.parentId !== undefined) node.parentId = patch.parentId ?? null;
+      node.updatedAt = isoNow();
+      return node;
+    });
+  }
+
+  async deleteFileNode(nodeId: string) {
+    return this.runMutation(async (state) => {
+      const node = state.store.fileNodes.find((n) => n.id === nodeId);
+      if (!node) throw new Error(`File node ${nodeId} not found`);
+      // Recursive delete: collect all descendant IDs
+      const toDelete = new Set<string>([nodeId]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const n of state.store.fileNodes) {
+          if (n.parentId && toDelete.has(n.parentId) && !toDelete.has(n.id)) {
+            toDelete.add(n.id);
+            changed = true;
+          }
+        }
+      }
+      state.store.fileNodes = state.store.fileNodes.filter((n) => !toDelete.has(n.id));
+      return { deleted: true };
+    });
+  }
+
+  async getFileTree(projectId: string) {
+    await this.ensureLoaded();
+    return this.snapshot().store.fileNodes.filter((n) => n.projectId === projectId);
+  }
+
   async listAllJobs() {
     await this.ensureLoaded();
     return this.snapshot().store.jobs;
@@ -2661,6 +2957,116 @@ export class BidwrightApiStore {
     }
 
     this.clearImportPreview(fileId);
+  }
+
+  // ── Plugin CRUD ──────────────────────────────────────────────────────
+
+  async listPlugins() {
+    await this.ensureLoaded();
+    return this.snapshot().store.plugins;
+  }
+
+  async getPlugin(pluginId: string) {
+    await this.ensureLoaded();
+    return this.snapshot().store.plugins.find((p) => p.id === pluginId) ?? null;
+  }
+
+  async createPlugin(input: CreatePluginInput) {
+    return this.runMutation(async (state) => {
+      const plugin: Plugin = {
+        id: createId("plugin"),
+        ...input,
+        createdAt: isoNow(),
+        updatedAt: isoNow(),
+      };
+      state.store.plugins.push(plugin);
+      return plugin;
+    });
+  }
+
+  async updatePlugin(pluginId: string, patch: PluginPatchInput) {
+    return this.runMutation(async (state) => {
+      const plugin = state.store.plugins.find((p) => p.id === pluginId);
+      if (!plugin) {
+        throw new Error(`Plugin ${pluginId} not found`);
+      }
+      if (patch.name !== undefined) plugin.name = patch.name;
+      if (patch.description !== undefined) plugin.description = patch.description;
+      if (patch.enabled !== undefined) plugin.enabled = patch.enabled;
+      if (patch.config !== undefined) plugin.config = { ...plugin.config, ...patch.config };
+      plugin.updatedAt = isoNow();
+      return plugin;
+    });
+  }
+
+  async deletePlugin(pluginId: string) {
+    return this.runMutation(async (state) => {
+      const plugin = state.store.plugins.find((p) => p.id === pluginId);
+      if (!plugin) {
+        throw new Error(`Plugin ${pluginId} not found`);
+      }
+      state.store.plugins = state.store.plugins.filter((p) => p.id !== pluginId);
+      state.store.pluginExecutions = state.store.pluginExecutions.filter((e) => e.pluginId !== pluginId);
+      return plugin;
+    });
+  }
+
+  async executePlugin(pluginId: string, projectId: string, revisionId: string, input: Record<string, unknown>) {
+    return this.runMutation(async (state) => {
+      const plugin = state.store.plugins.find((p) => p.id === pluginId);
+      if (!plugin) {
+        throw new Error(`Plugin ${pluginId} not found`);
+      }
+      const project = state.store.projects.find((p) => p.id === projectId);
+      if (!project) {
+        throw new Error(`Project ${projectId} not found`);
+      }
+
+      const execution: PluginExecution = {
+        id: createId("pexec"),
+        pluginId,
+        projectId,
+        revisionId,
+        input,
+        output: { message: `Executed ${plugin.name} with provided input` },
+        status: "complete",
+        createdAt: isoNow(),
+      };
+      state.store.pluginExecutions.push(execution);
+      return execution;
+    });
+  }
+
+  async listPluginExecutions(projectId: string) {
+    await this.ensureLoaded();
+    return this.snapshot().store.pluginExecutions
+      .filter((e) => e.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  // ── Settings ─────────────────────────────────────────────────────────
+
+  async getSettings() {
+    await this.ensureLoaded();
+    return structuredClone(this.snapshot().settings);
+  }
+
+  async updateSettings(patch: Partial<AppSettings>) {
+    return this.runMutation(async (state) => {
+      if (patch.general) {
+        state.settings.general = { ...state.settings.general, ...patch.general };
+      }
+      if (patch.email) {
+        state.settings.email = { ...state.settings.email, ...patch.email };
+      }
+      if (patch.defaults) {
+        state.settings.defaults = { ...state.settings.defaults, ...patch.defaults };
+      }
+      if (patch.integrations) {
+        state.settings.integrations = { ...state.settings.integrations, ...patch.integrations };
+      }
+      return structuredClone(state.settings);
+    });
   }
 }
 

@@ -11,9 +11,14 @@ import { z } from "zod";
 import {
   apiStore,
   type AdditionalLineItemPatchInput,
+  type CatalogItemPatchInput,
+  type CatalogPatchInput,
   type ConditionPatchInput,
   type CreateAdditionalLineItemInput,
+  type CreateCatalogInput,
+  type CreateCatalogItemInput,
   type CreateConditionInput,
+  type CreateFileNodeInput,
   type CreateLabourRateInput,
   type CreateModifierInput,
   type CreatePhaseInput,
@@ -21,6 +26,7 @@ import {
   type CreateWorksheetInput,
   type CreateWorksheetItemInput,
   type CreateProjectInput,
+  type FileNodePatchInput,
   type LabourRatePatchInput,
   type ModifierPatchInput,
   type PackageIngestionOutcome,
@@ -32,7 +38,9 @@ import {
   type WorksheetPatchInput,
   type WorksheetItemPatchInput,
   type CreateJobInput,
-  type ImportProcessInput
+  type ImportProcessInput,
+  type PluginPatchInput,
+  type CreatePluginInput
 } from "./persistent-store.js";
 import {
   relativePackageArchivePath,
@@ -240,6 +248,59 @@ const reportSectionPatchSchema = z.object({
 
 const statusPatchSchema = z.object({
   ingestionStatus: z.enum(["queued", "processing", "ready", "review", "quoted"])
+});
+
+const createCatalogSchema = z.object({
+  name: z.string().min(1),
+  kind: z.string().min(1),
+  scope: z.string().min(1),
+  projectId: z.string().nullable().optional(),
+  description: z.string().optional()
+});
+
+const catalogPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  kind: z.string().min(1).optional(),
+  scope: z.string().min(1).optional(),
+  projectId: z.string().nullable().optional(),
+  description: z.string().optional()
+});
+
+const createCatalogItemSchema = z.object({
+  code: z.string().default(""),
+  name: z.string().min(1),
+  unit: z.string().default("EA"),
+  unitCost: z.number().finite().default(0),
+  unitPrice: z.number().finite().default(0),
+  category: z.string().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const catalogItemPatchSchema = z.object({
+  code: z.string().optional(),
+  name: z.string().min(1).optional(),
+  unit: z.string().optional(),
+  unitCost: z.number().finite().optional(),
+  unitPrice: z.number().finite().optional(),
+  category: z.string().optional(),
+  metadata: z.record(z.unknown()).optional()
+});
+
+const createFileNodeSchema = z.object({
+  parentId: z.string().nullable().optional(),
+  name: z.string().min(1),
+  type: z.enum(["file", "directory"]),
+  fileType: z.string().optional(),
+  size: z.number().int().optional(),
+  documentId: z.string().optional(),
+  storagePath: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  createdBy: z.string().optional()
+});
+
+const fileNodePatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  parentId: z.string().nullable().optional()
 });
 
 interface UploadFieldMap {
@@ -1309,7 +1370,145 @@ export function buildServer() {
 
   app.get("/catalogs", async () => apiStore.listCatalogs());
 
+  app.post("/catalogs", async (request, reply) => {
+    const parsed = createCatalogSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid catalog payload", issues: parsed.error.flatten() });
+    }
+    const catalog = await apiStore.createCatalog(parsed.data satisfies CreateCatalogInput);
+    reply.code(201);
+    return catalog;
+  });
+
+  app.patch("/catalogs/:catalogId", async (request, reply) => {
+    const { catalogId } = request.params as { catalogId: string };
+    const parsed = catalogPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid catalog payload", issues: parsed.error.flatten() });
+    }
+    try {
+      return await apiStore.updateCatalog(catalogId, parsed.data satisfies CatalogPatchInput);
+    } catch {
+      return reply.code(404).send({ message: "Catalog not found" });
+    }
+  });
+
+  app.delete("/catalogs/:catalogId", async (request, reply) => {
+    const { catalogId } = request.params as { catalogId: string };
+    try {
+      return await apiStore.deleteCatalog(catalogId);
+    } catch {
+      return reply.code(404).send({ message: "Catalog not found" });
+    }
+  });
+
+  app.get("/catalogs/:catalogId/items", async (request) => {
+    const { catalogId } = request.params as { catalogId: string };
+    return apiStore.listCatalogItems(catalogId);
+  });
+
+  app.post("/catalogs/:catalogId/items", async (request, reply) => {
+    const { catalogId } = request.params as { catalogId: string };
+    const parsed = createCatalogItemSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid catalog item payload", issues: parsed.error.flatten() });
+    }
+    try {
+      const item = await apiStore.createCatalogItem(catalogId, parsed.data satisfies CreateCatalogItemInput);
+      reply.code(201);
+      return item;
+    } catch {
+      return reply.code(404).send({ message: "Catalog not found" });
+    }
+  });
+
+  app.patch("/catalogs/:catalogId/items/:itemId", async (request, reply) => {
+    const { itemId } = request.params as { catalogId: string; itemId: string };
+    const parsed = catalogItemPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid catalog item payload", issues: parsed.error.flatten() });
+    }
+    try {
+      return await apiStore.updateCatalogItem(itemId, parsed.data satisfies CatalogItemPatchInput);
+    } catch {
+      return reply.code(404).send({ message: "Catalog item not found" });
+    }
+  });
+
+  app.delete("/catalogs/:catalogId/items/:itemId", async (request, reply) => {
+    const { itemId } = request.params as { catalogId: string; itemId: string };
+    try {
+      return await apiStore.deleteCatalogItem(itemId);
+    } catch {
+      return reply.code(404).send({ message: "Catalog item not found" });
+    }
+  });
+
+  app.get("/catalogs/search", async (request) => {
+    const query = z.object({
+      q: z.string().default(""),
+      catalogId: z.string().optional()
+    }).safeParse(request.query ?? {});
+    if (!query.success) return [];
+    return apiStore.searchCatalogItems(query.data.q, query.data.catalogId);
+  });
+
   app.get("/catalog/rates", async () => apiStore.listCatalogRates());
+
+  // ── File Node routes ──────────────────────────────────────────────
+
+  app.get("/projects/:projectId/files", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await apiStore.getProject(projectId);
+    if (!project) return reply.code(404).send({ message: "Project not found" });
+    const query = z.object({ parentId: z.string().optional() }).safeParse(request.query ?? {});
+    const parentId = query.success ? query.data.parentId : undefined;
+    return apiStore.listFileNodes(projectId, parentId);
+  });
+
+  app.get("/projects/:projectId/files/tree", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await apiStore.getProject(projectId);
+    if (!project) return reply.code(404).send({ message: "Project not found" });
+    return apiStore.getFileTree(projectId);
+  });
+
+  app.post("/projects/:projectId/files", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createFileNodeSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid file node payload", issues: parsed.error.flatten() });
+    }
+    try {
+      const node = await apiStore.createFileNode(projectId, parsed.data satisfies CreateFileNodeInput);
+      reply.code(201);
+      return node;
+    } catch {
+      return reply.code(404).send({ message: "Project or parent not found" });
+    }
+  });
+
+  app.patch("/projects/:projectId/files/:nodeId", async (request, reply) => {
+    const { nodeId } = request.params as { projectId: string; nodeId: string };
+    const parsed = fileNodePatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid file node payload", issues: parsed.error.flatten() });
+    }
+    try {
+      return await apiStore.updateFileNode(nodeId, parsed.data satisfies FileNodePatchInput);
+    } catch {
+      return reply.code(404).send({ message: "File node not found" });
+    }
+  });
+
+  app.delete("/projects/:projectId/files/:nodeId", async (request, reply) => {
+    const { nodeId } = request.params as { projectId: string; nodeId: string };
+    try {
+      return await apiStore.deleteFileNode(nodeId);
+    } catch {
+      return reply.code(404).send({ message: "File node not found" });
+    }
+  });
 
   app.get("/ai/runs", async (request) => {
     const query = z.object({
@@ -1707,6 +1906,77 @@ export function buildServer() {
     }
 
     return payload;
+  });
+
+  // ── Plugin Routes ──────────────────────────────────────────────────
+
+  app.get("/plugins", async () => apiStore.listPlugins());
+
+  app.get("/plugins/:pluginId", async (request, reply) => {
+    const { pluginId } = request.params as { pluginId: string };
+    const plugin = await apiStore.getPlugin(pluginId);
+    if (!plugin) {
+      return reply.code(404).send({ message: "Plugin not found" });
+    }
+    return plugin;
+  });
+
+  app.post("/plugins", async (request, reply) => {
+    const body = request.body as CreatePluginInput;
+    const plugin = await apiStore.createPlugin(body);
+    reply.code(201);
+    return plugin;
+  });
+
+  app.patch("/plugins/:pluginId", async (request, reply) => {
+    const { pluginId } = request.params as { pluginId: string };
+    const patch = request.body as PluginPatchInput;
+    try {
+      const plugin = await apiStore.updatePlugin(pluginId, patch);
+      return plugin;
+    } catch {
+      return reply.code(404).send({ message: "Plugin not found" });
+    }
+  });
+
+  app.delete("/plugins/:pluginId", async (request, reply) => {
+    const { pluginId } = request.params as { pluginId: string };
+    try {
+      const plugin = await apiStore.deletePlugin(pluginId);
+      return plugin;
+    } catch {
+      return reply.code(404).send({ message: "Plugin not found" });
+    }
+  });
+
+  app.post("/plugins/:pluginId/execute", async (request, reply) => {
+    const { pluginId } = request.params as { pluginId: string };
+    const { projectId, revisionId, input } = request.body as { projectId: string; revisionId: string; input: Record<string, unknown> };
+    try {
+      const execution = await apiStore.executePlugin(pluginId, projectId, revisionId, input ?? {});
+      reply.code(201);
+      return execution;
+    } catch (error) {
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Execution failed" });
+    }
+  });
+
+  app.get("/projects/:projectId/plugin-executions", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await apiStore.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return apiStore.listPluginExecutions(projectId);
+  });
+
+  // ── Settings Routes ──────────────────────────────────────────────────
+
+  app.get("/settings", async () => apiStore.getSettings());
+
+  app.patch("/settings", async (request) => {
+    const patch = request.body as Record<string, unknown>;
+    return apiStore.updateSettings(patch as Parameters<typeof apiStore.updateSettings>[0]);
   });
 
   app.register(agentRoutes);

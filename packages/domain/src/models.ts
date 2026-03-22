@@ -266,6 +266,61 @@ export interface ReportSection {
   parentSectionId: string | null;
 }
 
+export interface FileNode {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  name: string;
+  type: "file" | "directory";
+  fileType?: string;
+  size?: number;
+  documentId?: string;
+  storagePath?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
+export interface Plugin {
+  id: string;
+  name: string;
+  slug: string;
+  category: "labour" | "equipment" | "material" | "travel" | "general";
+  description: string;
+  version: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  uiComponentPath?: string;
+  toolDefinitions: Array<{
+    id: string;
+    name: string;
+    description: string;
+    parameters: Array<{ name: string; type: string; description: string; required: boolean }>;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PluginExecution {
+  id: string;
+  pluginId: string;
+  projectId: string;
+  revisionId: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  status: "pending" | "running" | "complete" | "failed";
+  error?: string;
+  createdAt: string;
+}
+
+export interface AppSettings {
+  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
+  email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
+  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+}
+
 export interface BidwrightStore {
   projects: Project[];
   sourceDocuments: SourceDocument[];
@@ -286,6 +341,9 @@ export interface BidwrightStore {
   conditionLibrary: ConditionLibraryEntry[];
   reportSections: ReportSection[];
   jobs: Job[];
+  fileNodes: FileNode[];
+  plugins: Plugin[];
+  pluginExecutions: PluginExecution[];
 }
 
 export interface BreakoutEntry {

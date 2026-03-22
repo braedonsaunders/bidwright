@@ -29,17 +29,29 @@ import type {
 } from "@/lib/api";
 import {
   activateRevision,
+  aiAcceptEquipment,
+  aiAcceptPhases,
+  aiRewriteDescription,
+  aiRewriteNotes,
+  aiSuggestEquipment,
+  aiSuggestPhases,
   copyQuote,
   createPhase,
+  createProjectJob,
   createRevision,
   createWorksheet,
   createWorksheetItem,
   deletePhase,
+  deleteProject,
   deleteRevisionById,
   deleteWorksheet,
   deleteWorksheetItem,
   getActivities,
+  getQuotePdfUrl,
+  importPreview,
+  importProcess,
   makeRevisionZero,
+  sendQuote,
   updatePhase,
   updateProjectStatus,
   updateRevision,
@@ -449,6 +461,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     <MenuItem onClick={() => handleAction("createRevision")}>New Revision</MenuItem>
                     <MenuItem onClick={() => handleAction("deleteRevision")} className="text-danger">Delete Revision</MenuItem>
                   </MenuSection>
+                  <MenuSection label="Danger">
+                    <MenuItem onClick={() => handleAction("deleteQuote")} className="text-danger">Delete Quote</MenuItem>
+                  </MenuSection>
                 </div>
               </>
             )}
@@ -554,6 +569,18 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         message="Create a complete copy of this quote with all revisions, worksheets, and line items?"
         confirmLabel="Copy" onConfirm={() => exec(() => copyQuote(workspace.project.id))} isPending={isPending} />
 
+      <ConfirmModal open={modal === "deleteQuote"} onClose={closeModal} title="Delete Quote"
+        message="Permanently delete this quote and all its data? This cannot be undone."
+        confirmLabel="Delete" confirmVariant="danger"
+        onConfirm={() => {
+          startTransition(async () => {
+            try {
+              await deleteProject(workspace.project.id);
+              window.location.href = "/";
+            } catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
+          });
+        }} isPending={isPending} />
+
       <ConfirmModal open={modal === "deleteWorksheet"} onClose={closeModal} title="Delete Worksheet"
         message={`Delete "${selectedWs?.name ?? "this worksheet"}" and all its line items?`} confirmLabel="Delete" confirmVariant="danger"
         onConfirm={handleDeleteWorksheet} isPending={isPending} />
@@ -562,39 +589,125 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       <RenameWorksheetModal open={modal === "renameWorksheet"} onClose={closeModal} currentName={selectedWs?.name ?? ""} onConfirm={handleRenameWorksheet} isPending={isPending} />
 
       <SendQuoteModal open={modal === "sendQuote"} onClose={closeModal} isPending={isPending}
-        onConfirm={(contacts, message) => { closeModal(); /* TODO: wire to send API */ }} />
+        onConfirm={(contacts, message) => {
+          startTransition(async () => {
+            try {
+              await sendQuote(workspace.project.id, { contacts, message });
+              closeModal();
+            } catch (e) { setError(e instanceof Error ? e.message : "Send failed"); }
+          });
+        }} />
 
       <CreateJobModal open={modal === "createJob"} onClose={closeModal} isPending={isPending}
-        onConfirm={(jobData) => { closeModal(); /* TODO: wire to create job API */ }} />
+        onConfirm={(jobData) => {
+          startTransition(async () => {
+            try {
+              await createProjectJob(workspace.project.id, {
+                name: jobData.jobName,
+                foreman: jobData.foreman || undefined,
+                projectManager: jobData.projectManager || undefined,
+                startDate: jobData.startDate || undefined,
+                shipDate: jobData.shipDate || undefined,
+                poNumber: jobData.poNumber || undefined,
+                poIssuer: jobData.poIssuer || undefined,
+              });
+              closeModal();
+            } catch (e) { setError(e instanceof Error ? e.message : "Job creation failed"); }
+          });
+        }} />
 
       <ImportBOMModal open={modal === "importBOM"} onClose={closeModal} isPending={isPending}
-        onImport={(file, mapping) => { closeModal(); /* TODO: wire to import API */ }} />
+        onImport={(file, mapping) => {
+          startTransition(async () => {
+            try {
+              const preview = await importPreview(workspace.project.id, file);
+              const result = await importProcess(workspace.project.id, {
+                fileId: preview.fileId,
+                worksheetId: (workspace.worksheets ?? [])[0]?.id ?? "",
+                mapping,
+              });
+              if (result) apply(result);
+              closeModal();
+            } catch (e) { setError(e instanceof Error ? e.message : "Import failed"); }
+          });
+        }} />
 
       <AIModal open={modal === "aiDescription"} onClose={closeModal} title="AI - Rewrite Description"
         message="Rewrite the scope of work description using AI? This will replace the current description."
         result={aiResult} isPending={isPending}
-        onConfirm={() => { /* TODO: wire to AI description API */ closeModal(); }} />
+        onConfirm={() => {
+          startTransition(async () => {
+            try {
+              const res = await aiRewriteDescription(workspace.project.id);
+              setAiResult(res.description);
+            } catch (e) { setError(e instanceof Error ? e.message : "AI description failed"); }
+          });
+        }} />
 
       <AIModal open={modal === "aiNotes"} onClose={closeModal} title="AI - Rewrite Notes"
         message="Rewrite the estimator notes using AI? This will replace the current notes."
         result={aiResult} isPending={isPending}
-        onConfirm={() => { /* TODO: wire to AI notes API */ closeModal(); }} />
+        onConfirm={() => {
+          startTransition(async () => {
+            try {
+              const res = await aiRewriteNotes(workspace.project.id);
+              setAiResult(res.notes);
+            } catch (e) { setError(e instanceof Error ? e.message : "AI notes failed"); }
+          });
+        }} />
 
       <AIPhasesModal open={modal === "aiPhases"} onClose={closeModal} isPending={isPending}
         documents={data.documents.map((d) => ({ id: d.id, fileName: d.fileName }))}
         result={aiPhaseResult}
-        onGenerate={(docId) => { /* TODO: wire to AI phases API */ }}
-        onAccept={() => { closeModal(); }} />
+        onGenerate={() => {
+          startTransition(async () => {
+            try {
+              const res = await aiSuggestPhases(workspace.project.id);
+              setAiPhaseResult(res.phases);
+            } catch (e) { setError(e instanceof Error ? e.message : "AI phases failed"); }
+          });
+        }}
+        onAccept={() => {
+          if (!aiPhaseResult) return;
+          startTransition(async () => {
+            try {
+              const res = await aiAcceptPhases(workspace.project.id, aiPhaseResult);
+              apply(res);
+              closeModal();
+            } catch (e) { setError(e instanceof Error ? e.message : "Accept phases failed"); }
+          });
+        }} />
 
       <AIEquipmentModal open={modal === "aiEquipment"} onClose={closeModal} isPending={isPending}
         result={aiEquipResult}
-        onGenerate={() => { /* TODO: wire to AI equipment API */ }}
-        onAccept={() => { closeModal(); }} />
+        onGenerate={() => {
+          startTransition(async () => {
+            try {
+              const res = await aiSuggestEquipment(workspace.project.id);
+              setAiEquipResult(res.equipment.map((e) => ({ name: e.name, description: e.description, quantity: e.quantity, cost: e.estimatedCost })));
+            } catch (e) { setError(e instanceof Error ? e.message : "AI equipment failed"); }
+          });
+        }}
+        onAccept={() => {
+          if (!aiEquipResult) return;
+          startTransition(async () => {
+            try {
+              const res = await aiAcceptEquipment(workspace.project.id, aiEquipResult);
+              apply(res);
+              closeModal();
+            } catch (e) { setError(e instanceof Error ? e.message : "Accept equipment failed"); }
+          });
+        }} />
 
       <ActivityModal open={modal === "activity"} onClose={closeModal} activities={activities} />
 
       <PDFModal open={modal === "pdf"} onClose={closeModal} isPending={isPending}
-        onDownload={(options) => { closeModal(); /* TODO: wire to PDF generation */ }} />
+        previewUrl={getQuotePdfUrl(workspace.project.id, "main")}
+        onDownload={(options) => {
+          const url = getQuotePdfUrl(workspace.project.id, options.template ?? "main");
+          window.open(url, "_blank");
+          closeModal();
+        }} />
 
       <AgentChat projectId={workspace.project.id} open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>

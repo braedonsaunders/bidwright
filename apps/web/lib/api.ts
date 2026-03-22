@@ -234,6 +234,22 @@ export interface CatalogSummary {
   items?: CatalogItem[];
 }
 
+export interface FileNode {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  name: string;
+  type: "file" | "directory";
+  fileType?: string;
+  size?: number;
+  documentId?: string;
+  storagePath?: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: string;
+}
+
 export interface Citation {
   id: string;
   projectId: string;
@@ -1198,5 +1214,205 @@ export async function importProcess(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(input),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Catalog CRUD
+// ---------------------------------------------------------------------------
+
+export async function createCatalog(input: {
+  name: string;
+  kind: string;
+  scope: string;
+  projectId?: string | null;
+  description?: string;
+}) {
+  return apiRequest<CatalogSummary>("/catalogs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCatalog(catalogId: string, patch: Partial<CatalogSummary>) {
+  return apiRequest<CatalogSummary>(`/catalogs/${catalogId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteCatalog(catalogId: string) {
+  return apiRequest<{ deleted: boolean }>(`/catalogs/${catalogId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listCatalogItems(catalogId: string) {
+  return apiRequest<CatalogItem[]>(`/catalogs/${catalogId}/items`);
+}
+
+export async function createCatalogItem(
+  catalogId: string,
+  input: { code: string; name: string; unit: string; unitCost: number; unitPrice: number; category?: string; metadata?: Record<string, unknown> }
+) {
+  return apiRequest<CatalogItem>(`/catalogs/${catalogId}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCatalogItem(
+  catalogId: string,
+  itemId: string,
+  patch: Partial<CatalogItem> & { category?: string }
+) {
+  return apiRequest<CatalogItem>(`/catalogs/${catalogId}/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteCatalogItem(catalogId: string, itemId: string) {
+  return apiRequest<{ deleted: boolean }>(`/catalogs/${catalogId}/items/${itemId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function searchCatalogItems(query: string, catalogId?: string) {
+  const params = new URLSearchParams({ q: query });
+  if (catalogId) params.set("catalogId", catalogId);
+  return apiRequest<CatalogItem[]>(`/catalogs/search?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// File Node CRUD
+// ---------------------------------------------------------------------------
+
+export async function listFileNodes(projectId: string, parentId?: string) {
+  const params = parentId ? `?parentId=${parentId}` : "";
+  return apiRequest<FileNode[]>(`/projects/${projectId}/files${params}`);
+}
+
+export async function getFileTree(projectId: string) {
+  return apiRequest<FileNode[]>(`/projects/${projectId}/files/tree`);
+}
+
+export async function createFileNode(
+  projectId: string,
+  input: { parentId?: string | null; name: string; type: "file" | "directory"; fileType?: string; size?: number; documentId?: string; metadata?: Record<string, unknown> }
+) {
+  return apiRequest<FileNode>(`/projects/${projectId}/files`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateFileNode(
+  projectId: string,
+  nodeId: string,
+  patch: { name?: string; parentId?: string | null }
+) {
+  return apiRequest<FileNode>(`/projects/${projectId}/files/${nodeId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteFileNode(projectId: string, nodeId: string) {
+  return apiRequest<{ deleted: boolean }>(`/projects/${projectId}/files/${nodeId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Plugins
+// ---------------------------------------------------------------------------
+
+export interface PluginRecord {
+  id: string;
+  name: string;
+  slug: string;
+  category: "labour" | "equipment" | "material" | "travel" | "general";
+  description: string;
+  version: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  uiComponentPath?: string;
+  toolDefinitions: Array<{
+    id: string;
+    name: string;
+    description: string;
+    parameters: Array<{ name: string; type: string; description: string; required: boolean }>;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PluginExecutionRecord {
+  id: string;
+  pluginId: string;
+  projectId: string;
+  revisionId: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  status: "pending" | "running" | "complete" | "failed";
+  error?: string;
+  createdAt: string;
+}
+
+export async function listPlugins() {
+  return apiRequest<PluginRecord[]>("/plugins");
+}
+
+export async function getPlugin(pluginId: string) {
+  return apiRequest<PluginRecord>(`/plugins/${pluginId}`);
+}
+
+export async function updatePlugin(pluginId: string, patch: Partial<Pick<PluginRecord, "name" | "description" | "enabled" | "config">>) {
+  return apiRequest<PluginRecord>(`/plugins/${pluginId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function executePlugin(pluginId: string, projectId: string, revisionId: string, input: Record<string, unknown>) {
+  return apiRequest<PluginExecutionRecord>(`/plugins/${pluginId}/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ projectId, revisionId, input }),
+  });
+}
+
+export async function listPluginExecutions(projectId: string) {
+  return apiRequest<PluginExecutionRecord[]>(`/projects/${projectId}/plugin-executions`);
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+export interface AppSettingsRecord {
+  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
+  email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
+  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+}
+
+export async function getSettings() {
+  return apiRequest<AppSettingsRecord>("/settings");
+}
+
+export async function updateSettings(patch: Partial<AppSettingsRecord>) {
+  return apiRequest<AppSettingsRecord>("/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
   });
 }
