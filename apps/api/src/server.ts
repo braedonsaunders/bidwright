@@ -1601,46 +1601,6 @@ export function buildServer() {
     return response;
   });
 
-  // -------------------------------------------------------------------------
-  // Jobs (project jobs / field work tracking)
-  // -------------------------------------------------------------------------
-
-  app.post("/projects/:projectId/jobs", async (request, reply) => {
-    const { projectId } = request.params as { projectId: string };
-    const body = request.body as {
-      name?: string;
-      foreman?: string;
-      projectManager?: string;
-      startDate?: string;
-      shipDate?: string;
-      poNumber?: string;
-      poIssuer?: string;
-    } | null;
-
-    const workspace = await apiStore.getWorkspace(projectId);
-    if (!workspace) {
-      return reply.code(404).send({ message: "Project not found" });
-    }
-
-    const revisionId = workspace.currentRevision?.id;
-
-    await apiStore.logActivity(projectId, revisionId ?? null, "job_created", {
-      name: body?.name ?? "Untitled Job",
-      foreman: body?.foreman,
-      projectManager: body?.projectManager,
-      startDate: body?.startDate,
-      shipDate: body?.shipDate,
-      poNumber: body?.poNumber,
-      poIssuer: body?.poIssuer,
-    });
-
-    const response = await buildWorkspaceResponse(projectId);
-    if (!response) {
-      return reply.code(404).send({ message: "Failed to build workspace" });
-    }
-    return response;
-  });
-
   // ── Job routes ─────────────────────────────────────────────────────
 
   const createJobSchema = z.object({
