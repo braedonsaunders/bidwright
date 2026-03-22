@@ -12,16 +12,18 @@
   "dependencies": {
     "@bidwright/agent": "workspace:*",
     "@bidwright/db": "workspace:*",
-    "@bidwright/ingestion": "workspace:*",
     "@bidwright/domain": "workspace:*",
+    "@bidwright/ingestion": "workspace:*",
+    "@bidwright/vector": "workspace:*",
+    "@fastify/cors": "^10.0.2",
     "@fastify/multipart": "^9.3.0",
     "argon2": "^0.41.1",
     "bullmq": "^5.34.8",
     "fastify": "^5.1.0",
     "fastify-plugin": "^5.0.1",
-    "@fastify/cors": "^10.0.2",
     "ioredis": "^5.4.2",
     "nodemailer": "^6.9.16",
+    "playwright": "^1.58.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {

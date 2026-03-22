@@ -5,9 +5,11 @@
  * Usage: pnpm migrate:data [--org-name "My Company"] [--org-slug "my-company"]
  */
 
-import { PrismaClient } from '@prisma/client';
+import { prisma as prismaClient } from '@bidwright/db';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+
+type PrismaClient = typeof prismaClient;
 
 interface MigrateOptions {
   orgName: string;
@@ -36,7 +38,7 @@ function parseArgs(): MigrateOptions {
 
 async function main() {
   const opts = parseArgs();
-  const prisma = new PrismaClient();
+  const prisma = prismaClient;
 
   console.log(`[migrate] Reading state from: ${opts.stateFilePath}`);
 
