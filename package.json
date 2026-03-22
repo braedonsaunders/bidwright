@@ -18,6 +18,9 @@
     "db:migrate": "pnpm --filter @bidwright/db prisma migrate deploy",
     "migrate:data": "tsx scripts/migrate-json-to-postgres.ts"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": ["argon2", "msgpackr-extract"]
+  },
   "devDependencies": {
     "@types/node": "^22.15.30",
     "typescript": "^5.9.2",

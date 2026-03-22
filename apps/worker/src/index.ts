@@ -6,14 +6,15 @@ export * from './runtime.js';
 async function main(): Promise<void> {
   const [zipPath, packageName = 'Bidwright customer package'] = process.argv.slice(2);
 
-  const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-
+  // Only connect to Redis if REDIS_URL is explicitly set (skip in local dev)
   let redisConnection: any = undefined;
-  try {
-    const IORedis = (await import('ioredis')).default;
-    redisConnection = new IORedis(redisUrl, { maxRetriesPerRequest: null });
-  } catch {
-    // ioredis not available — run without BullMQ
+  if (process.env.REDIS_URL) {
+    try {
+      const IORedis = (await import('ioredis')).default;
+      redisConnection = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
+    } catch {
+      // ioredis not available — run without BullMQ
+    }
   }
 
   const runtime = createBidwrightWorkerRuntime(

@@ -153,7 +153,7 @@ export function createBidwrightWorkerRuntime(
       const connection = config.redisConnection;
 
       const ingestionWorker = new Worker(
-        'bidwright:ingestion',
+        'bidwright-ingestion',
         async (job: any) => {
           const { taskName, input, context } = job.data;
           if (taskName === 'ingest-package') {
@@ -169,7 +169,7 @@ export function createBidwrightWorkerRuntime(
       workers.push(ingestionWorker);
 
       const aiWorker = new Worker(
-        'bidwright:ai',
+        'bidwright-ai',
         async (job: any) => {
           const { taskName, input, context } = job.data;
           if (orchestrator.has(taskName)) {
@@ -182,7 +182,7 @@ export function createBidwrightWorkerRuntime(
       workers.push(aiWorker);
 
       const generalWorker = new Worker(
-        'bidwright:general',
+        'bidwright-general',
         async (job: any) => {
           const { taskName, input, context } = job.data;
           if (orchestrator.has(taskName)) {

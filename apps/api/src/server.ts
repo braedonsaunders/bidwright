@@ -44,9 +44,7 @@ import {
   type CreateUserInput,
   type UserPatchInput
 } from "./prisma-store.js";
-import authPlugin from "./middleware/auth.js";
 import { prisma } from "@bidwright/db";
-import { initRedis, closeRedis } from "./services/auth-service.js";
 import {
   relativePackageArchivePath,
   resolveApiPath,
@@ -530,16 +528,9 @@ export function buildServer() {
     logger: true
   });
 
-  // Initialize Redis for sessions
-  initRedis();
-
-  // Register auth middleware
-  app.register(authPlugin);
-
   // Prisma lifecycle
   app.addHook("onClose", async () => {
     await prisma.$disconnect();
-    await closeRedis();
   });
 
   app.register(cors, {
@@ -1572,7 +1563,7 @@ export function buildServer() {
 
     const packages = await apiStore.listPackages(projectId);
     const targetPackage =
-      parsed.data.packageId ? packages.find((entry) => entry.id === parsed.data.packageId) : packages[0];
+      parsed.data.packageId ? packages.find((entry: any) => entry.id === parsed.data.packageId) : packages[0];
 
     if (!targetPackage) {
       return reply.code(404).send({
