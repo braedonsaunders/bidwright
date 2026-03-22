@@ -22,6 +22,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@bidwright/domain": [
+        "../../packages/domain/src/index.ts"
       ]
     },
     "plugins": [

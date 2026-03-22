@@ -20,7 +20,7 @@ import {
   Label,
   Toggle,
 } from "@/components/ui";
-import type { PluginRecord } from "@/lib/api";
+import type { PluginRecord, PluginToolDefinition } from "@/lib/api";
 import { updatePlugin as apiUpdatePlugin } from "@/lib/api";
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger"> = {
@@ -167,7 +167,7 @@ export function PluginsPage({ initialPlugins }: { initialPlugins: PluginRecord[]
                         Tools ({plugin.toolDefinitions.length})
                       </p>
                       <div className="space-y-1.5">
-                        {plugin.toolDefinitions.map((tool) => (
+                        {plugin.toolDefinitions.map((tool: PluginToolDefinition) => (
                           <div
                             key={tool.id}
                             className="rounded-lg bg-panel2 px-3 py-2"
@@ -180,7 +180,7 @@ export function PluginsPage({ initialPlugins }: { initialPlugins: PluginRecord[]
                             </p>
                             {tool.parameters.length > 0 && (
                               <div className="mt-1.5 flex flex-wrap gap-1">
-                                {tool.parameters.map((param) => (
+                                {tool.parameters.map((param: PluginToolDefinition["parameters"][number]) => (
                                   <span
                                     key={param.name}
                                     className={cn(

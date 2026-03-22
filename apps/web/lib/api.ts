@@ -1366,6 +1366,9 @@ export async function deleteFileNode(projectId: string, nodeId: string) {
 // Plugins
 // ---------------------------------------------------------------------------
 
+// Import domain types for local use
+import type { Plugin as PluginRecord, PluginExecution as PluginExecutionRecord } from "@bidwright/domain";
+
 // Re-export domain types for the plugin system
 export type {
   Plugin as PluginRecord,
