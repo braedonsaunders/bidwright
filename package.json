@@ -17,7 +17,8 @@
     "db:push": "pnpm --filter @bidwright/db db:push",
     "db:seed": "pnpm --filter @bidwright/db db:seed",
     "db:migrate": "pnpm --filter @bidwright/db prisma migrate deploy",
-    "migrate:data": "tsx scripts/migrate-json-to-postgres.ts"
+    "migrate:data": "tsx scripts/migrate-json-to-postgres.ts",
+    "seed": "tsx scripts/seed-db.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["argon2", "msgpackr-extract"]

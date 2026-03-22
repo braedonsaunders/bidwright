@@ -5,7 +5,7 @@
  * Usage: pnpm migrate:data [--org-name "My Company"] [--org-slug "my-company"]
  */
 
-import { prisma as prismaClient } from '@bidwright/db';
+import { prisma as prismaClient } from '../packages/db/src/client.js';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 

@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
-export DATABASE_URL="${DATABASE_URL:-postgresql://bidwright:bidwright@localhost:5433/bidwright}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://bidwright:bidwright@localhost:5432/bidwright}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export DATA_DIR="${DATA_DIR:-$ROOT_DIR/data/bidwright-api}"
 
@@ -67,18 +67,14 @@ CREATE INDEX IF NOT EXISTS idx_vector_records_org ON vector_records (organizatio
 CREATE INDEX IF NOT EXISTS idx_vector_records_project ON vector_records (project_id);
 SQL
 
-# ── 4. Migrate existing data if state.json exists ─────────────────────
+# ── 4. Seed database if empty ──────────────────────────────────────────
 
-STATE_FILE="$ROOT_DIR/data/bidwright-api/state.json"
-if [ -f "$STATE_FILE" ]; then
-  # Check if data already migrated (any org exists)
-  ORG_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"Organization\";" 2>/dev/null || echo "0")
-  if [ "$ORG_COUNT" = "0" ]; then
-    echo "▸ Found state.json — migrating existing data to Postgres..."
-    DATABASE_URL="$DATABASE_URL" pnpm migrate:data || echo "  (migration skipped or failed — continuing)"
-  else
-    echo "▸ Data already migrated (found $ORG_COUNT org(s)), skipping."
-  fi
+ORG_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"Organization\";" 2>/dev/null || echo "0")
+if [ "$ORG_COUNT" = "0" ] || [ "$ORG_COUNT" = " 0" ]; then
+  echo "▸ Empty database — seeding with demo data..."
+  DATABASE_URL="$DATABASE_URL" pnpm seed || echo "  (seed skipped or failed — continuing)"
+else
+  echo "▸ Database has data ($ORG_COUNT org(s)), skipping seed."
 fi
 
 # ── 5. Launch all services ────────────────────────────────────────────
