@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 
 import {
-  apiStore,
+  createApiStore,
   type AdditionalLineItemPatchInput,
   type CatalogItemPatchInput,
   type CatalogPatchInput,
@@ -43,13 +43,18 @@ import {
   type CreatePluginInput,
   type CreateUserInput,
   type UserPatchInput
-} from "./persistent-store.js";
+} from "./prisma-store.js";
+import authPlugin from "./middleware/auth.js";
+import { prisma } from "@bidwright/db";
+import { initRedis, closeRedis } from "./services/auth-service.js";
 import {
   relativePackageArchivePath,
   resolveApiPath,
   sanitizeFileName
 } from "./paths.js";
 import { agentRoutes } from "./routes/agent-routes.js";
+import { knowledgeRoutes } from "./routes/knowledge-routes.js";
+import { datasetRoutes } from "./routes/dataset-routes.js";
 import { buildPdfDataPackage, generatePdfHtml } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import {
@@ -58,6 +63,9 @@ import {
   aiSuggestPhases,
   aiSuggestEquipment
 } from "./services/ai-service.js";
+
+const DEFAULT_ORG_ID = process.env.DEFAULT_ORG_ID || "default";
+const apiStore = createApiStore(DEFAULT_ORG_ID);
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
@@ -522,8 +530,16 @@ export function buildServer() {
     logger: true
   });
 
-  void apiStore.initialize().catch((error) => {
-    app.log.error(error);
+  // Initialize Redis for sessions
+  initRedis();
+
+  // Register auth middleware
+  app.register(authPlugin);
+
+  // Prisma lifecycle
+  app.addHook("onClose", async () => {
+    await prisma.$disconnect();
+    await closeRedis();
   });
 
   app.register(cors, {
@@ -2255,6 +2271,8 @@ export function buildServer() {
   });
 
   app.register(agentRoutes);
+  app.register(knowledgeRoutes);
+  app.register(datasetRoutes);
 
   return app;
 }

@@ -1,141 +1,662 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector", schema: "public")]
 }
 
+// ── Multi-tenancy Root ────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  settings         OrganizationSettings?
+  users            User[]
+  projects         Project[]
+  catalogs         Catalog[]
+  plugins          Plugin[]
+  entityCategories EntityCategory[]
+  conditionLibrary ConditionLibraryEntry[]
+  knowledgeBooks   KnowledgeBook[]
+  datasets         Dataset[]
+}
+
+model OrganizationSettings {
+  id             String       @id @default(cuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  general        Json         @default("{}")
+  email          Json         @default("{}")
+  defaults       Json         @default("{}")
+  integrations   Json         @default("{}")
+  updatedAt      DateTime     @updatedAt
+}
+
+// ── Users & Auth ──────────────────────────────────────────────────────────
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  name           String
+  role           String       @default("estimator")
+  active         Boolean      @default(true)
+  passwordHash   String       @default("")
+  lastLoginAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  activities Activity[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────
+
 model Project {
-  id          String         @id
-  name        String
-  customer    String
-  stage       String
-  estimator   String
-  dueDate     DateTime
-  documents   SourceDocument[]
-  quotes      Quote[]
-  aiRuns      AIRun[]
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  clientName       String       @default("")
+  location         String       @default("")
+  packageName      String       @default("")
+  packageUploadedAt String      @default("")
+  ingestionStatus  String       @default("queued")
+  summary          String       @default("")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  sourceDocuments SourceDocument[]
+  quotes          Quote[]
+  fileNodes       FileNode[]
+  aiRuns          AiRun[]
+  citations       Citation[]
+  activities      Activity[]
+  jobs            Job[]
+  packages        StoredPackage[]
+  ingestionJobs   IngestionJob[]
+  workspaceState  WorkspaceState?
+  pluginExecutions PluginExecution[]
+
+  @@index([organizationId])
 }
 
 model SourceDocument {
-  id          String   @id
-  projectId   String
-  name        String
-  kind        String
-  discipline  String
-  pages       Int
-  summary     String
-  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fileName      String
+  fileType      String   @default("")
+  documentType  String   @default("reference")
+  pageCount     Int      @default(0)
+  checksum      String   @default("")
+  storagePath   String   @default("")
+  extractedText String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  citations Citation[]
+
+  @@index([projectId])
 }
+
+// ── Quotes & Revisions ────────────────────────────────────────────────────
 
 model Quote {
-  id          String     @id
-  projectId    String
-  quoteNumber  String
-  title        String
-  project      Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  revisions    Revision[]
+  id                       String   @id @default(cuid())
+  projectId                String
+  project                  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  quoteNumber              String   @default("")
+  title                    String   @default("")
+  status                   String   @default("draft")
+  currentRevisionId        String   @default("")
+  customerExistingNew      String   @default("New")
+  customerId               String?
+  customerString           String   @default("")
+  customerContactId        String?
+  customerContactString    String   @default("")
+  customerContactEmailString String @default("")
+  departmentId             String?
+  userId                   String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  revisions QuoteRevision[]
+
+  @@index([projectId])
 }
 
-model Revision {
-  id             String      @id
-  quoteId         String
-  revisionNumber  Int
-  title           String
-  status          String
-  breakoutStyle   String
-  subtotal        Float      @default(0)
-  cost            Float      @default(0)
-  estimatedProfit Float      @default(0)
-  estimatedMargin Float      @default(0)
-  quote           Quote      @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+model QuoteRevision {
+  id                    String   @id @default(cuid())
+  quoteId               String
+  quote                 Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  revisionNumber        Int      @default(0)
+  title                 String   @default("")
+  description           String   @default("")
+  notes                 String   @default("")
+  breakoutStyle         String   @default("grand_total")
+  phaseWorksheetEnabled Boolean  @default(false)
+  useCalculatedTotal    Boolean  @default(false)
+  type                  String   @default("Firm")
+  scratchpad            String   @default("")
+  leadLetter            String   @default("")
+  dateEstimatedShip     String?
+  dateQuote             String?
+  dateDue               String?
+  dateWalkdown          String?
+  dateWorkStart         String?
+  dateWorkEnd           String?
+  shippingMethod        String   @default("")
+  shippingTerms         String   @default("")
+  freightOnBoard        String   @default("")
+  status                String   @default("Open")
+  defaultMarkup         Float    @default(0)
+  necaDifficulty        String   @default("")
+  followUpNote          String   @default("")
+  printEmptyNotesColumn Boolean  @default(false)
+  printCategory         String[] @default([])
+  printPhaseTotalOnly   Boolean  @default(false)
+  showOvertimeDoubletime Boolean @default(false)
+  grandTotal            Float    @default(0)
+  regHours              Float    @default(0)
+  overHours             Float    @default(0)
+  doubleHours           Float    @default(0)
+  subtotal              Float    @default(0)
+  cost                  Float    @default(0)
+  estimatedProfit       Float    @default(0)
+  estimatedMargin       Float    @default(0)
+  calculatedTotal       Float    @default(0)
+  totalHours            Float    @default(0)
+  breakoutPackage       Json     @default("[]")
+  calculatedCategoryTotals Json  @default("[]")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
   worksheets      Worksheet[]
   phases          Phase[]
   modifiers       Modifier[]
+  additionalLineItems AdditionalLineItem[]
   conditions      Condition[]
+  labourRates     LabourRate[]
   reportSections  ReportSection[]
+
+  @@index([quoteId])
 }
 
+// ── Worksheets & Items ────────────────────────────────────────────────────
+
 model Worksheet {
-  id         String     @id
+  id         String        @id @default(cuid())
   revisionId String
-  name       String
-  sortOrder  Int
-  revision   Revision   @relation(fields: [revisionId], references: [id], onDelete: Cascade)
-  items      WorksheetItem[]
+  revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name       String        @default("Worksheet 1")
+  order      Int           @default(0)
+
+  items WorksheetItem[]
+
+  @@index([revisionId])
 }
 
 model WorksheetItem {
-  id                String   @id
-  worksheetId       String
-  phaseId           String?
-  category          String
-  entityName        String
-  vendor            String?
-  description       String
-  quantity          Float
-  uom               String
-  cost              Float
-  markup            Float
-  price             Float
-  labourHoursReg    Float
-  labourHoursOver   Float
-  labourHoursDouble Float
-  worksheet         Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  id             String    @id @default(cuid())
+  worksheetId    String
+  worksheet      Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  phaseId        String?
+  category       String    @default("Material")
+  entityType     String    @default("Material")
+  entityName     String    @default("")
+  vendor         String?
+  description    String    @default("")
+  quantity       Float     @default(0)
+  uom            String    @default("EA")
+  cost           Float     @default(0)
+  markup         Float     @default(0)
+  price          Float     @default(0)
+  laborHourReg   Float     @default(0)
+  laborHourOver  Float     @default(0)
+  laborHourDouble Float    @default(0)
+  lineOrder      Int       @default(0)
+
+  @@index([worksheetId])
+  @@index([phaseId])
 }
+
+// ── Phases ────────────────────────────────────────────────────────────────
 
 model Phase {
-  id          String   @id
-  revisionId   String
-  number       String
-  name         String
-  description  String
-  sortOrder    Int
-  revision     Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  id          String        @id @default(cuid())
+  revisionId  String
+  revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  number      String        @default("")
+  name        String        @default("")
+  description String        @default("")
+  order       Int           @default(0)
+
+  @@index([revisionId])
 }
+
+// ── Modifiers ─────────────────────────────────────────────────────────────
 
 model Modifier {
-  id           String   @id
-  revisionId    String
-  name         String
-  type         String
-  appliesTo    String
-  percentage   Float?
-  amount       Float?
-  showOnQuote  Boolean  @default(true)
-  revision     Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
+  revisionId String
+  revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name       String        @default("")
+  type       String        @default("percentage")
+  appliesTo  String        @default("All")
+  percentage Float?
+  amount     Float?
+  show       String        @default("Yes")
+
+  @@index([revisionId])
 }
+
+// ── Additional Line Items ─────────────────────────────────────────────────
+
+model AdditionalLineItem {
+  id          String        @id @default(cuid())
+  revisionId  String
+  revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name        String        @default("")
+  description String?
+  type        String        @default("LineItemAdditional")
+  amount      Float         @default(0)
+
+  @@index([revisionId])
+}
+
+// ── Conditions ────────────────────────────────────────────────────────────
 
 model Condition {
-  id          String   @id
-  revisionId   String
-  type        String
-  value       String
-  sortOrder   Int
-  revision    Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
+  revisionId String
+  revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  type       String        @default("inclusion")
+  value      String        @default("")
+  order      Int           @default(0)
+
+  @@index([revisionId])
 }
+
+// ── Labour Rates ──────────────────────────────────────────────────────────
+
+model LabourRate {
+  id           String        @id @default(cuid())
+  revisionId   String
+  revision     QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name         String        @default("")
+  regularRate  Float         @default(0)
+  overtimeRate Float         @default(0)
+  doubleRate   Float         @default(0)
+
+  @@index([revisionId])
+}
+
+// ── Report Sections ───────────────────────────────────────────────────────
 
 model ReportSection {
-  id          String   @id
-  revisionId   String
-  title       String
-  content     String
-  sectionType String
-  sortOrder   Int
-  revision    Revision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  id              String        @id @default(cuid())
+  revisionId      String
+  revision        QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  sectionType     String        @default("text")
+  title           String        @default("")
+  content         String        @default("")
+  order           Int           @default(0)
+  parentSectionId String?
+
+  @@index([revisionId])
 }
 
-model AIRun {
-  id          String   @id
+// ── Jobs ──────────────────────────────────────────────────────────────────
+
+model Job {
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId     String   @default("")
+  name           String   @default("")
+  foreman        String   @default("")
+  projectManager String   @default("")
+  startDate      String?
+  shipDate       String?
+  poNumber       String   @default("")
+  poIssuer       String   @default("")
+  status         String   @default("Draft")
+  createdAt      DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ── File Nodes ────────────────────────────────────────────────────────────
+
+model FileNode {
+  id          String   @id @default(cuid())
   projectId   String
-  runType     String
-  status      String
-  summary     String
-  confidence  Float
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentId    String?
+  name        String
+  type        String   @default("file")
+  fileType    String?
+  size        Int?
+  documentId  String?
+  storagePath String?
+  metadata    Json     @default("{}")
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+
+  @@index([projectId])
+  @@index([parentId])
+}
+
+// ── AI Runs ───────────────────────────────────────────────────────────────
+
+model AiRun {
+  id            String   @id @default(cuid())
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId    String?
+  kind          String
+  status        String   @default("queued")
+  model         String   @default("")
+  promptVersion String   @default("")
+  input         Json     @default("{}")
+  output        Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+// ── Citations ─────────────────────────────────────────────────────────────
+
+model Citation {
+  id               String          @id @default(cuid())
+  projectId        String
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  aiRunId          String?
+  sourceDocumentId String?
+  sourceDocument   SourceDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  resourceType     String          @default("source_document")
+  resourceKey      String          @default("")
+  pageStart        Int?
+  pageEnd          Int?
+  excerpt          String          @default("")
+  confidence       Float           @default(0)
+
+  @@index([projectId])
+}
+
+// ── Activities ────────────────────────────────────────────────────────────
+
+model Activity {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId String?
+  type       String
+  data       Json     @default("{}")
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt  DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ── Catalogs ──────────────────────────────────────────────────────────────
+
+model Catalog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  kind           String
+  scope          String       @default("global")
+  projectId      String?
+  description    String       @default("")
+
+  items CatalogItem[]
+
+  @@index([organizationId])
+}
+
+model CatalogItem {
+  id        String  @id @default(cuid())
+  catalogId String
+  catalog   Catalog @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+  code      String  @default("")
+  name      String  @default("")
+  unit      String  @default("")
+  unitCost  Float   @default(0)
+  unitPrice Float   @default(0)
+  metadata  Json    @default("{}")
+
+  @@index([catalogId])
+}
+
+// ── Condition Library (global per-org) ────────────────────────────────────
+
+model ConditionLibraryEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  type           String
+  value          String
+
+  @@index([organizationId])
+}
+
+// ── Plugins ───────────────────────────────────────────────────────────────
+
+model Plugin {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                String
+  slug                String
+  icon                String?
+  category            String       @default("general")
+  description         String       @default("")
+  llmDescription      String?
+  version             String       @default("1.0.0")
+  author              String?
+  enabled             Boolean      @default(true)
+  config              Json         @default("{}")
+  configSchema        Json?
+  toolDefinitions     Json         @default("[]")
+  defaultOutputType   String?
+  supportedCategories String[]     @default([])
+  tags                String[]     @default([])
+  documentation       String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  executions PluginExecution[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+}
+
+model PluginExecution {
+  id                String   @id @default(cuid())
+  pluginId          String
+  plugin            Plugin   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  toolId            String
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId        String
+  worksheetId       String?
+  input             Json     @default("{}")
+  formState         Json?
+  output            Json     @default("{}")
+  appliedLineItemIds String[] @default([])
+  status            String   @default("pending")
+  error             String?
+  executedBy        String?
+  agentSessionId    String?
+  createdAt         DateTime @default(now())
+
+  @@index([projectId])
+  @@index([pluginId])
+}
+
+// ── Knowledge ─────────────────────────────────────────────────────────────
+
+model KnowledgeBook {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String       @default("")
+  category       String       @default("general")
+  scope          String       @default("global")
+  projectId      String?
+  pageCount      Int          @default(0)
+  chunkCount     Int          @default(0)
+  status         String       @default("uploading")
+  sourceFileName String       @default("")
+  sourceFileSize Int          @default(0)
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  chunks KnowledgeChunk[]
+
+  @@index([organizationId])
+}
+
+model KnowledgeChunk {
+  id           String        @id @default(cuid())
+  bookId       String
+  book         KnowledgeBook @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pageNumber   Int?
+  sectionTitle String        @default("")
+  text         String        @default("")
+  tokenCount   Int           @default(0)
+  order        Int           @default(0)
+  metadata     Json          @default("{}")
+
+  @@index([bookId])
+}
+
+// ── Datasets ──────────────────────────────────────────────────────────────
+
+model Dataset {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  description       String       @default("")
+  category          String       @default("custom")
+  scope             String       @default("global")
+  projectId         String?
+  columns           Json         @default("[]")
+  rowCount          Int          @default(0)
+  source            String       @default("manual")
+  sourceDescription String       @default("")
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  rows DatasetRow[]
+
+  @@index([organizationId])
+}
+
+model DatasetRow {
+  id        String   @id @default(cuid())
+  datasetId String
+  dataset   Dataset  @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  data      Json     @default("{}")
+  order     Int      @default(0)
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([datasetId])
+}
+
+// ── Entity Categories ─────────────────────────────────────────────────────
+
+model EntityCategory {
+  id              String       @id @default(cuid())
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name            String
+  entityType      String
+  shortform       String       @default("")
+  defaultUom      String       @default("EA")
+  validUoms       String[]     @default([])
+  editableFields  Json         @default("{}")
+  laborHourLabels Json         @default("{}")
+  calculationType String       @default("manual")
+
+  @@index([organizationId])
+}
+
+// ── Package & Ingestion Tracking ──────────────────────────────────────────
+
+model StoredPackage {
+  id               String   @id @default(cuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  packageName      String   @default("")
+  originalFileName String   @default("")
+  sourceKind       String   @default("project")
+  storagePath      String   @default("")
+  reportPath       String?
+  chunksPath       String?
+  checksum         String   @default("")
+  totalBytes       Int      @default(0)
+  status           String   @default("uploaded")
+  documentCount    Int      @default(0)
+  chunkCount       Int      @default(0)
+  documentIds      String[] @default([])
+  unknownFiles     String[] @default([])
+  uploadedAt       DateTime @default(now())
+  ingestedAt       DateTime?
+  updatedAt        DateTime @updatedAt
+  error            String?
+
+  @@index([projectId])
+}
+
+model IngestionJob {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  packageId   String?
+  kind        String
+  status      String    @default("queued")
+  progress    Int       @default(0)
+  input       Json      @default("{}")
+  output      Json?
+  error       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+  storagePath String?
+
+  @@index([projectId])
+}
+
+// ── Workspace State (UI preferences per project) ──────────────────────────
+
+model WorkspaceState {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  state     Json     @default("{}")
+  updatedAt DateTime @updatedAt
 }

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-export const apiDataRoot = path.resolve(repoRoot, "data", "bidwright-api");
+export const apiDataRoot = process.env.DATA_DIR || path.join(process.cwd(), "data", "bidwright-api");
 
 export function resolveApiPath(...segments: string[]) {
   return path.resolve(apiDataRoot, ...segments);

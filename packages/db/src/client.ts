@@ -1,27 +1,14 @@
-export type PrismaClientLike = {
-  [key: string]: unknown;
-  $disconnect?: () => Promise<void>;
-};
+import { PrismaClient } from "@prisma/client";
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __bidwrightPrismaPromise: Promise<PrismaClientLike> | undefined;
-}
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 
-export async function getPrismaClient(): Promise<PrismaClientLike> {
-  if (!globalThis.__bidwrightPrismaPromise) {
-    globalThis.__bidwrightPrismaPromise = import("@prisma/client").then((module) => {
-      const PrismaClientCtor = (module as { PrismaClient?: new () => PrismaClientLike }).PrismaClient;
+export const prisma =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+  });
 
-      if (!PrismaClientCtor) {
-        throw new Error(
-          "PrismaClient is unavailable. Run `pnpm approve-builds` and `pnpm db:generate` to enable Prisma locally."
-        );
-      }
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
-      return new PrismaClientCtor();
-    });
-  }
-
-  return globalThis.__bidwrightPrismaPromise;
-}
+export { PrismaClient };
+export type { Prisma } from "@prisma/client";

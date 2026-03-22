@@ -35,6 +35,10 @@ export interface WorkflowOrchestrator {
   execute<TInput, TOutput>(name: string, input: TInput, context: WorkerContext): Promise<TOutput>;
 }
 
+/**
+ * In-memory orchestrator — still used for task registration.
+ * BullMQ handles the queueing/dispatch layer; this provides the task registry.
+ */
 export class InMemoryWorkflowOrchestrator implements WorkflowOrchestrator {
   private readonly tasks = new Map<string, AgentTask<any, any>>();
 
@@ -44,6 +48,10 @@ export class InMemoryWorkflowOrchestrator implements WorkflowOrchestrator {
 
   has(name: string): boolean {
     return this.tasks.has(name);
+  }
+
+  getTask(name: string): AgentTask<any, any> | undefined {
+    return this.tasks.get(name);
   }
 
   async execute<TInput, TOutput>(name: string, input: TInput, context: WorkerContext): Promise<TOutput> {

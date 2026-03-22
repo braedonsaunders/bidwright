@@ -1,13 +1,14 @@
 import type { VectorHit, VectorRecord, VectorSearchOptions, VectorStore } from "./types.js";
 
 /**
- * PostgreSQL pgvector implementation.
+ * PostgreSQL pgvector implementation with multi-org isolation.
  * Requires a Postgres database with the pgvector extension and a vector_records table.
  *
  * Table DDL:
  * CREATE EXTENSION IF NOT EXISTS vector;
  * CREATE TABLE vector_records (
  *   id TEXT PRIMARY KEY,
+ *   organization_id TEXT NOT NULL,
  *   chunk_id TEXT NOT NULL,
  *   document_id TEXT NOT NULL,
  *   project_id TEXT,
@@ -18,23 +19,27 @@ import type { VectorHit, VectorRecord, VectorSearchOptions, VectorStore } from "
  *   created_at TIMESTAMPTZ DEFAULT now()
  * );
  * CREATE INDEX ON vector_records USING hnsw (embedding vector_cosine_ops);
+ * CREATE INDEX ON vector_records (organization_id);
  * CREATE INDEX ON vector_records (project_id);
  * CREATE INDEX ON vector_records (scope);
  */
 export class PgVectorStore implements VectorStore {
-  constructor(private queryFn: <T>(sql: string, params?: unknown[]) => Promise<T[]>) {}
+  constructor(
+    private queryFn: <T>(sql: string, params?: unknown[]) => Promise<T[]>,
+    private organizationId: string,
+  ) {}
 
   async upsert(records: VectorRecord[]): Promise<void> {
     for (const record of records) {
       const vectorStr = `[${record.embedding.join(",")}]`;
       await this.queryFn(
-        `INSERT INTO vector_records (id, chunk_id, document_id, project_id, scope, embedding, text, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6::vector, $7, $8::jsonb)
+        `INSERT INTO vector_records (id, organization_id, chunk_id, document_id, project_id, scope, embedding, text, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9::jsonb)
          ON CONFLICT (id) DO UPDATE SET
            embedding = EXCLUDED.embedding,
            text = EXCLUDED.text,
            metadata = EXCLUDED.metadata`,
-        [record.id, record.chunkId, record.documentId, record.projectId, record.scope, vectorStr, record.text, JSON.stringify(record.metadata)]
+        [record.id, this.organizationId, record.chunkId, record.documentId, record.projectId, record.scope, vectorStr, record.text, JSON.stringify(record.metadata)]
       );
     }
   }
@@ -48,9 +53,9 @@ export class PgVectorStore implements VectorStore {
     const limit = options.limit ?? 10;
     const minScore = options.minScore ?? 0.3;
 
-    const conditions: string[] = [];
-    const params: unknown[] = [vectorStr, limit];
-    let paramIdx = 3;
+    const conditions: string[] = [`organization_id = $3`];
+    const params: unknown[] = [vectorStr, limit, this.organizationId];
+    let paramIdx = 4;
 
     if (options.projectId) {
       conditions.push(`project_id = $${paramIdx}`);
@@ -64,7 +69,7 @@ export class PgVectorStore implements VectorStore {
       paramIdx++;
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
     const rows = await this.queryFn<{
       id: string;
@@ -87,7 +92,7 @@ export class PgVectorStore implements VectorStore {
 
     return rows
       .map((row) => {
-        const vectorScore = 1 - row.cosine_distance; // Convert distance to similarity
+        const vectorScore = 1 - row.cosine_distance;
         const keywordScore = computeKeywordScore(options.query, row.text);
         const hybridWeight = options.hybridWeight ?? 0.3;
         const score = (1 - hybridWeight) * vectorScore + hybridWeight * keywordScore;
@@ -99,7 +104,7 @@ export class PgVectorStore implements VectorStore {
             documentId: row.document_id,
             projectId: row.project_id,
             scope: row.scope as "project" | "library",
-            embedding: [], // Don't return embeddings in search results
+            embedding: [],
             text: row.text,
             metadata: row.metadata,
           },
@@ -113,15 +118,13 @@ export class PgVectorStore implements VectorStore {
   }
 
   async delete(filter: { projectId?: string; documentId?: string; chunkId?: string }): Promise<number> {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let idx = 1;
+    const conditions: string[] = [`organization_id = $1`];
+    const params: unknown[] = [this.organizationId];
+    let idx = 2;
 
     if (filter.projectId) { conditions.push(`project_id = $${idx++}`); params.push(filter.projectId); }
     if (filter.documentId) { conditions.push(`document_id = $${idx++}`); params.push(filter.documentId); }
     if (filter.chunkId) { conditions.push(`chunk_id = $${idx++}`); params.push(filter.chunkId); }
-
-    if (conditions.length === 0) return 0;
 
     const result = await this.queryFn<{ count: number }>(
       `WITH deleted AS (DELETE FROM vector_records WHERE ${conditions.join(" AND ")} RETURNING 1)
@@ -132,14 +135,14 @@ export class PgVectorStore implements VectorStore {
   }
 
   async count(filter?: { projectId?: string; scope?: string }): Promise<number> {
-    const conditions: string[] = [];
-    const params: unknown[] = [];
-    let idx = 1;
+    const conditions: string[] = [`organization_id = $1`];
+    const params: unknown[] = [this.organizationId];
+    let idx = 2;
 
     if (filter?.projectId) { conditions.push(`project_id = $${idx++}`); params.push(filter.projectId); }
     if (filter?.scope) { conditions.push(`scope = $${idx++}`); params.push(filter.scope); }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
     const result = await this.queryFn<{ count: number }>(
       `SELECT count(*)::int as count FROM vector_records ${whereClause}`,
       params

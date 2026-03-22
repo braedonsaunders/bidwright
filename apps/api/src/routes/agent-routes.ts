@@ -1,8 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { ToolRegistry, AgentLoop, buildSystemPrompt, type ToolExecutionContext, type AgentSession, type WorkspaceSnapshot } from "@bidwright/agent";
-import { quoteTools, systemTools } from "@bidwright/agent";
+import { quoteTools, systemTools, knowledgeTools, projectFileTools, datasetGenTools } from "@bidwright/agent";
 import { createLLMAdapter } from "@bidwright/agent";
-import { apiStore } from "../persistent-store.js";
+import { createApiStore } from "../prisma-store.js";
+
+const DEFAULT_ORG_ID = process.env.DEFAULT_ORG_ID || "default";
+const apiStore = createApiStore(DEFAULT_ORG_ID);
 
 // In-memory session storage
 const sessions = new Map<string, AgentSession>();
@@ -10,7 +13,7 @@ const sessions = new Map<string, AgentSession>();
 export async function agentRoutes(app: FastifyInstance) {
   // Build registry once
   const registry = new ToolRegistry();
-  registry.registerMany([...quoteTools, ...systemTools]);
+  registry.registerMany([...quoteTools, ...systemTools, ...knowledgeTools, ...projectFileTools, ...datasetGenTools]);
 
   app.post("/api/agent/sessions", async (request, reply) => {
     const body = request.body as { projectId: string; revisionId?: string; provider?: string; model?: string; apiKey?: string };

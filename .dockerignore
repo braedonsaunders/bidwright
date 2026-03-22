@@ -1,0 +1,6 @@
+node_modules
+.git
+data
+.env
+*.md
+.claude
