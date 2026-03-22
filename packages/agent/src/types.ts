@@ -38,6 +38,7 @@ export interface ToolExecutionContext {
   quoteId: string;
   userId: string;
   sessionId: string;
+  apiBaseUrl: string;
 }
 
 export interface Tool<TInput = unknown, TOutput = unknown> {

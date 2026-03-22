@@ -93,7 +93,7 @@ export function AgentChat({ projectId, open, onClose }: AgentChatProps) {
       const res = await fetch(`${API_BASE}/api/agent/sessions/${sid}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: content.trim() }),
+        body: JSON.stringify({ content: content.trim(), provider, model }),
       });
       const data = await res.json();
 

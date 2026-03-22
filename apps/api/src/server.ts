@@ -40,7 +40,9 @@ import {
   type CreateJobInput,
   type ImportProcessInput,
   type PluginPatchInput,
-  type CreatePluginInput
+  type CreatePluginInput,
+  type CreateUserInput,
+  type UserPatchInput
 } from "./persistent-store.js";
 import {
   relativePackageArchivePath,
@@ -1970,6 +1972,196 @@ export function buildServer() {
     return apiStore.listPluginExecutions(projectId);
   });
 
+  // ── Knowledge Book Routes ──────────────────────────────────────────
+
+  app.get("/knowledge/books", async (request) => {
+    const { projectId } = (request.query ?? {}) as { projectId?: string };
+    return apiStore.listKnowledgeBooks(projectId);
+  });
+
+  app.get("/knowledge/books/:bookId", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const book = await apiStore.getKnowledgeBook(bookId);
+    if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
+    return book;
+  });
+
+  app.post("/knowledge/books", async (request, reply) => {
+    const body = request.body as {
+      name: string; description: string;
+      category: string; scope: string;
+      projectId?: string | null;
+      sourceFileName: string; sourceFileSize: number;
+    };
+    const book = await apiStore.createKnowledgeBook(body as Parameters<typeof apiStore.createKnowledgeBook>[0]);
+    reply.code(201);
+    return book;
+  });
+
+  app.patch("/knowledge/books/:bookId", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const patch = request.body as Record<string, unknown>;
+    try {
+      return await apiStore.updateKnowledgeBook(bookId, patch as Parameters<typeof apiStore.updateKnowledgeBook>[1]);
+    } catch {
+      return reply.code(404).send({ message: "Knowledge book not found" });
+    }
+  });
+
+  app.delete("/knowledge/books/:bookId", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    try {
+      return await apiStore.deleteKnowledgeBook(bookId);
+    } catch {
+      return reply.code(404).send({ message: "Knowledge book not found" });
+    }
+  });
+
+  app.get("/knowledge/books/:bookId/chunks", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const book = await apiStore.getKnowledgeBook(bookId);
+    if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
+    return apiStore.listKnowledgeChunks(bookId);
+  });
+
+  app.post("/knowledge/books/:bookId/chunks", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const body = request.body as { pageNumber?: number | null; sectionTitle: string; text: string; tokenCount?: number; order?: number };
+    try {
+      const chunk = await apiStore.createKnowledgeChunk(bookId, body);
+      reply.code(201);
+      return chunk;
+    } catch {
+      return reply.code(404).send({ message: "Knowledge book not found" });
+    }
+  });
+
+  app.post("/knowledge/books/:bookId/chunks/batch", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const body = request.body as Array<{ pageNumber?: number | null; sectionTitle: string; text: string; tokenCount?: number; order?: number }>;
+    const book = await apiStore.getKnowledgeBook(bookId);
+    if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
+    const results = [];
+    for (const item of body) {
+      const chunk = await apiStore.createKnowledgeChunk(bookId, item);
+      results.push(chunk);
+    }
+    reply.code(201);
+    return results;
+  });
+
+  app.get("/knowledge/search", async (request) => {
+    const { q, bookId, limit } = (request.query ?? {}) as { q?: string; bookId?: string; limit?: string };
+    return apiStore.searchKnowledgeChunks(q ?? "", bookId, limit ? parseInt(limit, 10) : undefined);
+  });
+
+  // ── Dataset Routes ────────────────────────────────────────────────
+
+  app.get("/datasets", async (request) => {
+    const { projectId } = (request.query ?? {}) as { projectId?: string };
+    return apiStore.listDatasets(projectId);
+  });
+
+  app.get("/datasets/:datasetId", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const dataset = await apiStore.getDataset(datasetId);
+    if (!dataset) return reply.code(404).send({ message: "Dataset not found" });
+    return dataset;
+  });
+
+  app.post("/datasets", async (request, reply) => {
+    const body = request.body as Parameters<typeof apiStore.createDataset>[0];
+    const dataset = await apiStore.createDataset(body);
+    reply.code(201);
+    return dataset;
+  });
+
+  app.patch("/datasets/:datasetId", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const patch = request.body as Record<string, unknown>;
+    try {
+      return await apiStore.updateDataset(datasetId, patch as Parameters<typeof apiStore.updateDataset>[1]);
+    } catch {
+      return reply.code(404).send({ message: "Dataset not found" });
+    }
+  });
+
+  app.delete("/datasets/:datasetId", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    try {
+      return await apiStore.deleteDataset(datasetId);
+    } catch {
+      return reply.code(404).send({ message: "Dataset not found" });
+    }
+  });
+
+  app.get("/datasets/:datasetId/rows", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const { filter, sort, limit, offset } = (request.query ?? {}) as { filter?: string; sort?: string; limit?: string; offset?: string };
+    const dataset = await apiStore.getDataset(datasetId);
+    if (!dataset) return reply.code(404).send({ message: "Dataset not found" });
+    return apiStore.listDatasetRows(datasetId, filter, sort, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
+  });
+
+  app.post("/datasets/:datasetId/rows", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const body = request.body as { data: Record<string, unknown> };
+    try {
+      const row = await apiStore.createDatasetRow(datasetId, body.data ?? body);
+      reply.code(201);
+      return row;
+    } catch {
+      return reply.code(404).send({ message: "Dataset not found" });
+    }
+  });
+
+  app.post("/datasets/:datasetId/rows/batch", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const body = request.body as { rows: Array<Record<string, unknown>> };
+    try {
+      const rows = await apiStore.createDatasetRowsBatch(datasetId, body.rows ?? body);
+      reply.code(201);
+      return rows;
+    } catch {
+      return reply.code(404).send({ message: "Dataset not found" });
+    }
+  });
+
+  app.patch("/datasets/:datasetId/rows/:rowId", async (request, reply) => {
+    const { rowId } = request.params as { datasetId: string; rowId: string };
+    const body = request.body as { data: Record<string, unknown> };
+    try {
+      return await apiStore.updateDatasetRow(rowId, body.data ?? body);
+    } catch {
+      return reply.code(404).send({ message: "Dataset row not found" });
+    }
+  });
+
+  app.delete("/datasets/:datasetId/rows/:rowId", async (request, reply) => {
+    const { rowId } = request.params as { datasetId: string; rowId: string };
+    try {
+      return await apiStore.deleteDatasetRow(rowId);
+    } catch {
+      return reply.code(404).send({ message: "Dataset row not found" });
+    }
+  });
+
+  app.get("/datasets/:datasetId/search", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const { q } = (request.query ?? {}) as { q?: string };
+    const dataset = await apiStore.getDataset(datasetId);
+    if (!dataset) return reply.code(404).send({ message: "Dataset not found" });
+    return apiStore.searchDatasetRows(datasetId, q ?? "");
+  });
+
+  app.post("/datasets/:datasetId/query", async (request, reply) => {
+    const { datasetId } = request.params as { datasetId: string };
+    const { filters } = request.body as { filters: Array<{ column: string; op: string; value: unknown }> };
+    const dataset = await apiStore.getDataset(datasetId);
+    if (!dataset) return reply.code(404).send({ message: "Dataset not found" });
+    return apiStore.queryDataset(datasetId, filters as Parameters<typeof apiStore.queryDataset>[1]);
+  });
+
   // ── Settings Routes ──────────────────────────────────────────────────
 
   app.get("/settings", async () => apiStore.getSettings());
@@ -1977,6 +2169,81 @@ export function buildServer() {
   app.patch("/settings", async (request) => {
     const patch = request.body as Record<string, unknown>;
     return apiStore.updateSettings(patch as Parameters<typeof apiStore.updateSettings>[0]);
+  });
+
+  // ── Auth Routes ──────────────────────────────────────────────────────
+
+  app.post("/auth/login", async (request, reply) => {
+    const { email, password } = request.body as { email: string; password?: string };
+    if (!email) return reply.code(400).send({ message: "Email is required" });
+    try {
+      const result = await apiStore.login(email, password);
+      return result;
+    } catch (error) {
+      return reply.code(401).send({ message: error instanceof Error ? error.message : "Login failed" });
+    }
+  });
+
+  app.post("/auth/logout", async (request, reply) => {
+    const { token } = request.body as { token?: string };
+    const headerToken = (request.headers.authorization ?? "").replace("Bearer ", "");
+    const resolvedToken = token || headerToken;
+    if (!resolvedToken) return reply.code(400).send({ message: "Token is required" });
+    await apiStore.logout(resolvedToken);
+    return { ok: true };
+  });
+
+  app.get("/auth/me", async (request, reply) => {
+    const token = (request.headers.authorization ?? "").replace("Bearer ", "");
+    if (!token) return reply.code(401).send({ message: "Not authenticated" });
+    const user = await apiStore.validateToken(token);
+    if (!user) return reply.code(401).send({ message: "Invalid or expired token" });
+    return user;
+  });
+
+  // ── User Routes ─────────────────────────────────────────────────────
+
+  app.get("/users", async () => {
+    const users = await apiStore.listUsers();
+    return users.map(({ passwordHash, ...u }: any) => u);
+  });
+
+  app.post("/users", async (request, reply) => {
+    const body = request.body as CreateUserInput;
+    if (!body.email || !body.name || !body.role) {
+      return reply.code(400).send({ message: "email, name, and role are required" });
+    }
+    try {
+      const user = await apiStore.createUser(body);
+      const { passwordHash, ...safeUser } = user as any;
+      reply.code(201);
+      return safeUser;
+    } catch (error) {
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Create failed" });
+    }
+  });
+
+  app.patch("/users/:userId", async (request, reply) => {
+    const { userId } = request.params as { userId: string };
+    const patch = request.body as UserPatchInput;
+    try {
+      const user = await apiStore.updateUser(userId, patch);
+      const { passwordHash, ...safeUser } = user as any;
+      return safeUser;
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "User not found" });
+    }
+  });
+
+  app.delete("/users/:userId", async (request, reply) => {
+    const { userId } = request.params as { userId: string };
+    try {
+      const user = await apiStore.deleteUser(userId);
+      const { passwordHash, ...safeUser } = user as any;
+      return safeUser;
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "User not found" });
+    }
   });
 
   app.register(agentRoutes);

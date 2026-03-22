@@ -44,6 +44,7 @@ import {
   Textarea,
   Toggle,
 } from "@/components/ui";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -390,11 +391,11 @@ function GeneralSubTab({
           {/* Description */}
           <div>
             <Label>Description / Scope of Work</Label>
-            <Textarea
-              rows={5}
+            <RichTextEditor
               value={revDraft.description}
-              onChange={(e) => setRevDraft((d) => ({ ...d, description: e.target.value }))}
+              onChange={(html) => setRevDraft((d) => ({ ...d, description: html }))}
               placeholder="Scope of work description..."
+              minHeight="100px"
             />
           </div>
         </CardBody>
@@ -480,11 +481,11 @@ function NotesSubTab({
           </Button>
         </CardHeader>
         <CardBody>
-          <Textarea
-            rows={6}
+          <RichTextEditor
             value={revDraft.notes}
-            onChange={(e) => setRevDraft((d) => ({ ...d, notes: e.target.value }))}
+            onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
             placeholder="General notes..."
+            minHeight="100px"
           />
         </CardBody>
       </Card>

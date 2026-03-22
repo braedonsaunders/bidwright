@@ -42,6 +42,7 @@ import {
   Select,
   Textarea,
 } from "@/components/ui";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -414,12 +415,11 @@ function LeadLetterTab({
         </Button>
       </CardHeader>
       <CardBody>
-        <Textarea
+        <RichTextEditor
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(html) => setValue(html)}
           placeholder="Enter lead letter content..."
-          rows={16}
-          className="font-mono"
+          minHeight="280px"
         />
       </CardBody>
     </Card>
@@ -465,12 +465,11 @@ function ScratchpadTab({
         </Button>
       </CardHeader>
       <CardBody>
-        <Textarea
+        <RichTextEditor
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={(html) => setValue(html)}
           placeholder="Estimator notes and scratch work..."
-          rows={16}
-          className="font-mono"
+          minHeight="280px"
         />
       </CardBody>
     </Card>

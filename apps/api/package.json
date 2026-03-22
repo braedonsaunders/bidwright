@@ -10,14 +10,17 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@bidwright/agent": "workspace:*",
     "@bidwright/ingestion": "workspace:*",
     "@bidwright/domain": "workspace:*",
     "@fastify/multipart": "^9.3.0",
     "fastify": "^5.1.0",
     "@fastify/cors": "^10.0.2",
+    "nodemailer": "^6.9.16",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/nodemailer": "^6.4.17",
     "tsx": "^4.19.2"
   }
 }

@@ -314,11 +314,97 @@ export interface PluginExecution {
   createdAt: string;
 }
 
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "estimator" | "viewer";
+  active: boolean;
+  passwordHash: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthSession {
+  id: string;
+  userId: string;
+  token: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+}
+
+// ── Knowledge Base ──
+
+export interface KnowledgeBook {
+  id: string;
+  name: string;
+  description: string;
+  category: "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general";
+  scope: "global" | "project";
+  projectId: string | null;
+  pageCount: number;
+  chunkCount: number;
+  status: "uploading" | "processing" | "indexed" | "failed";
+  sourceFileName: string;
+  sourceFileSize: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeChunk {
+  id: string;
+  bookId: string;
+  pageNumber: number | null;
+  sectionTitle: string;
+  text: string;
+  tokenCount: number;
+  order: number;
+  metadata: Record<string, unknown>;
+}
+
+// ── Datasets (structured tabular data) ──
+
+export interface Dataset {
+  id: string;
+  name: string;
+  description: string;
+  category: "labour_units" | "equipment_rates" | "material_prices" | "productivity" | "burden_rates" | "custom";
+  scope: "global" | "project";
+  projectId: string | null;
+  columns: DatasetColumn[];
+  rowCount: number;
+  source: "manual" | "import" | "ai_generated" | "plugin";
+  sourceDescription: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DatasetColumn {
+  key: string;
+  name: string;
+  type: "text" | "number" | "currency" | "percentage" | "boolean" | "select";
+  required: boolean;
+  options?: string[];  // for select type
+  unit?: string;       // e.g., "$/hr", "hrs/unit", "lbs/ft"
+}
+
+export interface DatasetRow {
+  id: string;
+  datasetId: string;
+  data: Record<string, unknown>;  // keyed by column key
+  order: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface BidwrightStore {
@@ -344,6 +430,12 @@ export interface BidwrightStore {
   fileNodes: FileNode[];
   plugins: Plugin[];
   pluginExecutions: PluginExecution[];
+  users: User[];
+  authSessions: AuthSession[];
+  knowledgeBooks: KnowledgeBook[];
+  knowledgeChunks: KnowledgeChunk[];
+  datasets: Dataset[];
+  datasetRows: DatasetRow[];
 }
 
 export interface BreakoutEntry {

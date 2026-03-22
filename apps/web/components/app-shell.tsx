@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  BookOpen,
   ChevronRight,
   FileText,
   FolderOpen,
@@ -14,6 +15,7 @@ import {
   Puzzle,
   Search,
   Settings,
+  TrendingUp,
   Sun,
   User,
 } from "lucide-react";
@@ -27,7 +29,9 @@ const navItems = [
   { href: "/intake", label: "Intake", icon: PackageOpen },
   { href: "/quotes", label: "Quotes", icon: FileText },
   { href: "/items", label: "Items", icon: Package },
+  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
   { href: "/plugins", label: "Plugins", icon: Puzzle },
+  { href: "/performance", label: "Performance", icon: TrendingUp },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

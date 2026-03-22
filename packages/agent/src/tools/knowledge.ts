@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { Tool, ToolExecutionContext, ToolResult } from "../types.js";
 
-type KnowledgeOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<ToolResult>;
+type KnowledgeOperationResult = { success: boolean; data?: unknown; error?: string; citations?: ToolResult["citations"]; sideEffects?: string[]; duration_ms?: number };
+type KnowledgeOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<KnowledgeOperationResult>;
 
 function createKnowledgeTool(def: {
   id: string;
@@ -301,6 +302,188 @@ export const indexDocumentTool = createKnowledgeTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 16. knowledge.searchBooks
+// ──────────────────────────────────────────────────────────────
+export const searchBooksTool = createKnowledgeTool({
+  id: "knowledge.searchBooks",
+  name: "Search Knowledge Books",
+  description: "Search knowledge books by text query. Returns matching chunks across all indexed books or a specific book.",
+  inputSchema: z.object({
+    query: z.string().describe("Text search query"),
+    bookId: z.string().optional().describe("Limit search to a specific book"),
+    limit: z.number().optional().default(20).describe("Maximum results to return"),
+  }),
+  tags: ["knowledge", "books", "search", "read"],
+}, async (ctx, input) => {
+  const params = new URLSearchParams({ q: String(input.query) });
+  if (input.bookId) params.set("bookId", String(input.bookId));
+  if (input.limit) params.set("limit", String(input.limit));
+  try {
+    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 17. knowledge.getBookChunks
+// ──────────────────────────────────────────────────────────────
+export const getBookChunksTool = createKnowledgeTool({
+  id: "knowledge.getBookChunks",
+  name: "Get Book Chunks",
+  description: "Get all text chunks from a specific knowledge book.",
+  inputSchema: z.object({
+    bookId: z.string().describe("ID of the knowledge book"),
+  }),
+  tags: ["knowledge", "books", "chunks", "read"],
+}, async (ctx, input) => {
+  try {
+    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 18. knowledge.queryDataset
+// ──────────────────────────────────────────────────────────────
+export const queryDatasetTool = createKnowledgeTool({
+  id: "knowledge.queryDataset",
+  name: "Query Dataset",
+  description: "Query a dataset with structured filters. Use this to look up NECA labour hours, equipment rates, material prices, etc.",
+  inputSchema: z.object({
+    datasetId: z.string().describe("ID of the dataset to query"),
+    filters: z.array(z.object({
+      column: z.string().describe("Column key to filter on"),
+      op: z.enum(["eq", "gt", "lt", "gte", "lte", "contains"]).describe("Comparison operator"),
+      value: z.unknown().describe("Value to compare against"),
+    })).describe("Array of filter conditions"),
+  }),
+  tags: ["knowledge", "dataset", "query", "read"],
+}, async (ctx, input) => {
+  try {
+    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: input.filters }),
+    });
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 19. knowledge.searchDataset
+// ──────────────────────────────────────────────────────────────
+export const searchDatasetTool = createKnowledgeTool({
+  id: "knowledge.searchDataset",
+  name: "Search Dataset",
+  description: "Text search across all rows in a dataset.",
+  inputSchema: z.object({
+    datasetId: z.string().describe("ID of the dataset to search"),
+    query: z.string().describe("Text search query"),
+  }),
+  tags: ["knowledge", "dataset", "search", "read"],
+}, async (ctx, input) => {
+  try {
+    const params = new URLSearchParams({ q: String(input.query) });
+    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/search?${params.toString()}`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 20. knowledge.listDatasets
+// ──────────────────────────────────────────────────────────────
+export const listDatasetsTool = createKnowledgeTool({
+  id: "knowledge.listDatasets",
+  name: "List Datasets",
+  description: "List all available datasets with their column definitions. Helps the agent discover what structured data is available (NECA hours, equipment rates, etc.).",
+  inputSchema: z.object({
+    projectId: z.string().optional().describe("Optionally filter to datasets for a specific project"),
+  }),
+  tags: ["knowledge", "dataset", "list", "read"],
+}, async (ctx, input) => {
+  try {
+    const params = input.projectId ? `?projectId=${input.projectId}` : "";
+    const res = await fetch(`${ctx.apiBaseUrl}/datasets${params}`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 21. knowledge.addDatasetRow
+// ──────────────────────────────────────────────────────────────
+export const addDatasetRowTool = createKnowledgeTool({
+  id: "knowledge.addDatasetRow",
+  name: "Add Dataset Row",
+  description: "Add a row to a dataset. The agent can use this to populate data from research, calculations, or external sources.",
+  inputSchema: z.object({
+    datasetId: z.string().describe("ID of the dataset to add a row to"),
+    data: z.record(z.unknown()).describe("Row data keyed by column key"),
+  }),
+  mutates: true,
+  tags: ["knowledge", "dataset", "create", "write"],
+}, async (ctx, input) => {
+  try {
+    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/rows`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: input.data }),
+    });
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 22. knowledge.addKnowledgeChunk
+// ──────────────────────────────────────────────────────────────
+export const addKnowledgeChunkTool = createKnowledgeTool({
+  id: "knowledge.addKnowledgeChunk",
+  name: "Add Knowledge Chunk",
+  description: "Add a text chunk to a knowledge book. The agent can use this to extract and store knowledge from research or conversations.",
+  inputSchema: z.object({
+    bookId: z.string().describe("ID of the knowledge book to add the chunk to"),
+    sectionTitle: z.string().describe("Title or heading for this chunk"),
+    text: z.string().describe("The text content to store"),
+    pageNumber: z.number().optional().describe("Page number in the source document"),
+  }),
+  mutates: true,
+  tags: ["knowledge", "books", "create", "write"],
+}, async (ctx, input) => {
+  try {
+    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sectionTitle: input.sectionTitle,
+        text: input.text,
+        pageNumber: input.pageNumber ?? null,
+      }),
+    });
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
 // Export all tools as array
 // ──────────────────────────────────────────────────────────────
 export const knowledgeTools: Tool[] = [
@@ -319,4 +502,11 @@ export const knowledgeTools: Tool[] = [
   getCitationContextTool,
   ingestDocumentTool,
   indexDocumentTool,
+  searchBooksTool,
+  getBookChunksTool,
+  queryDatasetTool,
+  searchDatasetTool,
+  listDatasetsTool,
+  addDatasetRowTool,
+  addKnowledgeChunkTool,
 ];

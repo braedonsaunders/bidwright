@@ -1416,3 +1416,298 @@ export async function updateSettings(patch: Partial<AppSettingsRecord>) {
     body: JSON.stringify(patch),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "estimator" | "viewer";
+  active: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export async function login(email: string, password?: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function logout(): Promise<{ ok: boolean }> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") ?? "" : "";
+  return apiRequest<{ ok: boolean }>("/auth/logout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ token }),
+  });
+}
+
+export async function getCurrentUser(): Promise<AuthUser> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") ?? "" : "";
+  return apiRequest<AuthUser>("/auth/me", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function listUsers(): Promise<AuthUser[]> {
+  return apiRequest<AuthUser[]>("/users");
+}
+
+export async function createUser(input: { email: string; name: string; role: "admin" | "estimator" | "viewer"; password?: string }): Promise<AuthUser> {
+  return apiRequest<AuthUser>("/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateUser(userId: string, patch: Partial<{ email: string; name: string; role: "admin" | "estimator" | "viewer"; active: boolean; password: string }>): Promise<AuthUser> {
+  return apiRequest<AuthUser>(`/users/${userId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteUser(userId: string): Promise<AuthUser> {
+  return apiRequest<AuthUser>(`/users/${userId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Books
+// ---------------------------------------------------------------------------
+
+export interface KnowledgeBookRecord {
+  id: string;
+  name: string;
+  description: string;
+  category: "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general";
+  scope: "global" | "project";
+  projectId: string | null;
+  pageCount: number;
+  chunkCount: number;
+  status: "uploading" | "processing" | "indexed" | "failed";
+  sourceFileName: string;
+  sourceFileSize: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeChunkRecord {
+  id: string;
+  bookId: string;
+  pageNumber: number | null;
+  sectionTitle: string;
+  text: string;
+  tokenCount: number;
+  order: number;
+  metadata: Record<string, unknown>;
+}
+
+export async function listKnowledgeBooks(projectId?: string) {
+  const params = projectId ? `?projectId=${projectId}` : "";
+  return apiRequest<KnowledgeBookRecord[]>(`/knowledge/books${params}`);
+}
+
+export async function getKnowledgeBook(bookId: string) {
+  return apiRequest<KnowledgeBookRecord>(`/knowledge/books/${bookId}`);
+}
+
+export async function createKnowledgeBook(input: {
+  name: string; description: string;
+  category: KnowledgeBookRecord["category"]; scope: KnowledgeBookRecord["scope"];
+  projectId?: string | null; sourceFileName: string; sourceFileSize: number;
+}) {
+  return apiRequest<KnowledgeBookRecord>("/knowledge/books", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateKnowledgeBook(bookId: string, patch: Partial<KnowledgeBookRecord>) {
+  return apiRequest<KnowledgeBookRecord>(`/knowledge/books/${bookId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteKnowledgeBook(bookId: string) {
+  return apiRequest<KnowledgeBookRecord>(`/knowledge/books/${bookId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listKnowledgeChunks(bookId: string) {
+  return apiRequest<KnowledgeChunkRecord[]>(`/knowledge/books/${bookId}/chunks`);
+}
+
+export async function createKnowledgeChunk(bookId: string, input: {
+  pageNumber?: number | null; sectionTitle: string; text: string; tokenCount?: number; order?: number;
+}) {
+  return apiRequest<KnowledgeChunkRecord>(`/knowledge/books/${bookId}/chunks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createKnowledgeChunksBatch(bookId: string, chunks: Array<{
+  pageNumber?: number | null; sectionTitle: string; text: string; tokenCount?: number; order?: number;
+}>) {
+  return apiRequest<KnowledgeChunkRecord[]>(`/knowledge/books/${bookId}/chunks/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chunks),
+  });
+}
+
+export async function searchKnowledge(query: string, bookId?: string, limit?: number) {
+  const params = new URLSearchParams({ q: query });
+  if (bookId) params.set("bookId", bookId);
+  if (limit) params.set("limit", String(limit));
+  return apiRequest<KnowledgeChunkRecord[]>(`/knowledge/search?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Datasets
+// ---------------------------------------------------------------------------
+
+export interface DatasetColumnRecord {
+  key: string;
+  name: string;
+  type: "text" | "number" | "currency" | "percentage" | "boolean" | "select";
+  required: boolean;
+  options?: string[];
+  unit?: string;
+}
+
+export interface DatasetRecord {
+  id: string;
+  name: string;
+  description: string;
+  category: "labour_units" | "equipment_rates" | "material_prices" | "productivity" | "burden_rates" | "custom";
+  scope: "global" | "project";
+  projectId: string | null;
+  columns: DatasetColumnRecord[];
+  rowCount: number;
+  source: "manual" | "import" | "ai_generated" | "plugin";
+  sourceDescription: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DatasetRowRecord {
+  id: string;
+  datasetId: string;
+  data: Record<string, unknown>;
+  order: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listDatasets(projectId?: string) {
+  const params = projectId ? `?projectId=${projectId}` : "";
+  return apiRequest<DatasetRecord[]>(`/datasets${params}`);
+}
+
+export async function getDataset(datasetId: string) {
+  return apiRequest<DatasetRecord>(`/datasets/${datasetId}`);
+}
+
+export async function createDataset(input: {
+  name: string; description: string;
+  category: DatasetRecord["category"]; scope: DatasetRecord["scope"];
+  projectId?: string | null; columns: DatasetColumnRecord[];
+  source?: DatasetRecord["source"]; sourceDescription?: string;
+}) {
+  return apiRequest<DatasetRecord>("/datasets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateDataset(datasetId: string, patch: Partial<DatasetRecord>) {
+  return apiRequest<DatasetRecord>(`/datasets/${datasetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteDataset(datasetId: string) {
+  return apiRequest<DatasetRecord>(`/datasets/${datasetId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listDatasetRows(datasetId: string, opts?: { filter?: string; sort?: string; limit?: number; offset?: number }) {
+  const params = new URLSearchParams();
+  if (opts?.filter) params.set("filter", opts.filter);
+  if (opts?.sort) params.set("sort", opts.sort);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return apiRequest<{ rows: DatasetRowRecord[]; total: number }>(`/datasets/${datasetId}/rows${qs ? `?${qs}` : ""}`);
+}
+
+export async function createDatasetRow(datasetId: string, data: Record<string, unknown>) {
+  return apiRequest<DatasetRowRecord>(`/datasets/${datasetId}/rows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data }),
+  });
+}
+
+export async function createDatasetRowsBatch(datasetId: string, rows: Array<Record<string, unknown>>) {
+  return apiRequest<DatasetRowRecord[]>(`/datasets/${datasetId}/rows/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows }),
+  });
+}
+
+export async function updateDatasetRow(datasetId: string, rowId: string, data: Record<string, unknown>) {
+  return apiRequest<DatasetRowRecord>(`/datasets/${datasetId}/rows/${rowId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data }),
+  });
+}
+
+export async function deleteDatasetRow(datasetId: string, rowId: string) {
+  return apiRequest<DatasetRowRecord>(`/datasets/${datasetId}/rows/${rowId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function searchDatasetRows(datasetId: string, query: string) {
+  const params = new URLSearchParams({ q: query });
+  return apiRequest<DatasetRowRecord[]>(`/datasets/${datasetId}/search?${params.toString()}`);
+}
+
+export async function queryDataset(datasetId: string, filters: Array<{ column: string; op: string; value: unknown }>) {
+  return apiRequest<DatasetRowRecord[]>(`/datasets/${datasetId}/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters }),
+  });
+}

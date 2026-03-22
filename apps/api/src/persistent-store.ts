@@ -9,6 +9,7 @@ import type {
   Activity,
   AdditionalLineItem,
   AppSettings,
+  AuthSession,
   BidwrightStore,
   Catalog,
   CatalogItem,
@@ -27,7 +28,12 @@ import type {
   QuoteRevision,
   ReportSection,
   SourceDocument,
-  WorksheetItem
+  User,
+  WorksheetItem,
+  KnowledgeBook,
+  KnowledgeChunk,
+  Dataset,
+  DatasetRow,
 } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 import { ingestCustomerPackage } from "@bidwright/ingestion";
@@ -562,6 +568,10 @@ function normalizeState(rawState: Partial<ApiStateFile> | undefined): ApiStateFi
   if (!Array.isArray(store.fileNodes)) store.fileNodes = [];
   if (!Array.isArray(store.plugins)) store.plugins = [];
   if (!Array.isArray(store.pluginExecutions)) store.pluginExecutions = [];
+  if (!Array.isArray(store.knowledgeBooks)) store.knowledgeBooks = [];
+  if (!Array.isArray(store.knowledgeChunks)) store.knowledgeChunks = [];
+  if (!Array.isArray(store.datasets)) store.datasets = [];
+  if (!Array.isArray(store.datasetRows)) store.datasetRows = [];
 
   const packages = Array.isArray(rawState?.packages) ? rawState!.packages : [];
   const jobs = Array.isArray(rawState?.jobs) ? rawState!.jobs : [];
@@ -3068,6 +3078,458 @@ export class BidwrightApiStore {
       return structuredClone(state.settings);
     });
   }
+
+  // ── Users ──────────────────────────────────────────────────────────────
+
+  async listUsers(): Promise<User[]> {
+    await this.ensureLoaded();
+    return structuredClone(this.snapshot().store.users ?? []);
+  }
+
+  async getUser(userId: string): Promise<User | null> {
+    await this.ensureLoaded();
+    const user = (this.snapshot().store.users ?? []).find((u) => u.id === userId);
+    return user ? structuredClone(user) : null;
+  }
+
+  async createUser(input: CreateUserInput): Promise<User> {
+    return this.runMutation(async (state) => {
+      if (!state.store.users) state.store.users = [];
+      const existing = state.store.users.find((u) => u.email === input.email);
+      if (existing) throw new Error(`User with email ${input.email} already exists`);
+      const now = isoNow();
+      const user: User = {
+        id: createId("user"),
+        email: input.email,
+        name: input.name,
+        role: input.role,
+        active: true,
+        passwordHash: input.password ?? "",
+        lastLoginAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.store.users.push(user);
+      return structuredClone(user);
+    });
+  }
+
+  async updateUser(userId: string, patch: UserPatchInput): Promise<User> {
+    return this.runMutation(async (state) => {
+      if (!state.store.users) state.store.users = [];
+      const user = state.store.users.find((u) => u.id === userId);
+      if (!user) throw new Error(`User ${userId} not found`);
+      if (patch.email !== undefined) user.email = patch.email;
+      if (patch.name !== undefined) user.name = patch.name;
+      if (patch.role !== undefined) user.role = patch.role;
+      if (patch.active !== undefined) user.active = patch.active;
+      if (patch.password !== undefined) user.passwordHash = patch.password;
+      user.updatedAt = isoNow();
+      return structuredClone(user);
+    });
+  }
+
+  async deleteUser(userId: string): Promise<User> {
+    return this.runMutation(async (state) => {
+      if (!state.store.users) state.store.users = [];
+      const user = state.store.users.find((u) => u.id === userId);
+      if (!user) throw new Error(`User ${userId} not found`);
+      state.store.users = state.store.users.filter((u) => u.id !== userId);
+      if (!state.store.authSessions) state.store.authSessions = [];
+      state.store.authSessions = state.store.authSessions.filter((s) => s.userId !== userId);
+      return structuredClone(user);
+    });
+  }
+
+  // ── Auth ───────────────────────────────────────────────────────────────
+
+  async login(email: string, password?: string): Promise<{ token: string; user: Omit<User, "passwordHash"> }> {
+    return this.runMutation(async (state) => {
+      if (!state.store.users) state.store.users = [];
+      const user = state.store.users.find((u) => u.email === email);
+      if (!user) throw new Error("Invalid credentials");
+      if (!user.active) throw new Error("Account disabled");
+
+      // In dev mode, skip password check if passwordHash is empty
+      if (user.passwordHash && password !== user.passwordHash) {
+        throw new Error("Invalid credentials");
+      }
+
+      if (!state.store.authSessions) state.store.authSessions = [];
+      const token = randomUUID();
+      const session: AuthSession = {
+        id: createId("session"),
+        userId: user.id,
+        token,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+        createdAt: isoNow(),
+      };
+      state.store.authSessions.push(session);
+      user.lastLoginAt = isoNow();
+      user.updatedAt = isoNow();
+
+      const { passwordHash, ...safeUser } = user;
+      return { token, user: structuredClone(safeUser) };
+    });
+  }
+
+  async validateToken(token: string): Promise<Omit<User, "passwordHash"> | null> {
+    await this.ensureLoaded();
+    const sessions = this.snapshot().store.authSessions ?? [];
+    const session = sessions.find((s) => s.token === token);
+    if (!session) return null;
+    if (new Date(session.expiresAt) < new Date()) return null;
+    const users = this.snapshot().store.users ?? [];
+    const user = users.find((u) => u.id === session.userId);
+    if (!user || !user.active) return null;
+    const { passwordHash, ...safeUser } = user;
+    return structuredClone(safeUser);
+  }
+
+  async logout(token: string): Promise<void> {
+    return this.runMutation(async (state) => {
+      if (!state.store.authSessions) state.store.authSessions = [];
+      state.store.authSessions = state.store.authSessions.filter((s) => s.token !== token);
+    });
+  }
+
+  // ── Knowledge Books ──────────────────────────────────────────────────
+
+  async listKnowledgeBooks(projectId?: string): Promise<KnowledgeBook[]> {
+    await this.ensureLoaded();
+    const books = this.snapshot().store.knowledgeBooks;
+    if (projectId) {
+      return books.filter((b) => b.projectId === projectId || b.scope === "global");
+    }
+    return books;
+  }
+
+  async getKnowledgeBook(bookId: string): Promise<KnowledgeBook | null> {
+    await this.ensureLoaded();
+    return this.snapshot().store.knowledgeBooks.find((b) => b.id === bookId) ?? null;
+  }
+
+  async createKnowledgeBook(input: {
+    name: string;
+    description: string;
+    category: KnowledgeBook["category"];
+    scope: KnowledgeBook["scope"];
+    projectId?: string | null;
+    sourceFileName: string;
+    sourceFileSize: number;
+  }): Promise<KnowledgeBook> {
+    return this.runMutation(async (state) => {
+      const now = isoNow();
+      const book: KnowledgeBook = {
+        id: createId("kb"),
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        scope: input.scope,
+        projectId: input.projectId ?? null,
+        pageCount: 0,
+        chunkCount: 0,
+        status: "uploading",
+        sourceFileName: input.sourceFileName,
+        sourceFileSize: input.sourceFileSize,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.store.knowledgeBooks.push(book);
+      return structuredClone(book);
+    });
+  }
+
+  async updateKnowledgeBook(bookId: string, patch: Partial<Pick<KnowledgeBook, "name" | "description" | "category" | "scope" | "projectId" | "status" | "pageCount" | "chunkCount" | "metadata">>): Promise<KnowledgeBook> {
+    return this.runMutation(async (state) => {
+      const book = state.store.knowledgeBooks.find((b) => b.id === bookId);
+      if (!book) throw new Error(`Knowledge book ${bookId} not found`);
+      if (patch.name !== undefined) book.name = patch.name;
+      if (patch.description !== undefined) book.description = patch.description;
+      if (patch.category !== undefined) book.category = patch.category;
+      if (patch.scope !== undefined) book.scope = patch.scope;
+      if (patch.projectId !== undefined) book.projectId = patch.projectId;
+      if (patch.status !== undefined) book.status = patch.status;
+      if (patch.pageCount !== undefined) book.pageCount = patch.pageCount;
+      if (patch.chunkCount !== undefined) book.chunkCount = patch.chunkCount;
+      if (patch.metadata !== undefined) book.metadata = { ...book.metadata, ...patch.metadata };
+      book.updatedAt = isoNow();
+      return structuredClone(book);
+    });
+  }
+
+  async deleteKnowledgeBook(bookId: string): Promise<KnowledgeBook> {
+    return this.runMutation(async (state) => {
+      const book = state.store.knowledgeBooks.find((b) => b.id === bookId);
+      if (!book) throw new Error(`Knowledge book ${bookId} not found`);
+      state.store.knowledgeBooks = state.store.knowledgeBooks.filter((b) => b.id !== bookId);
+      state.store.knowledgeChunks = state.store.knowledgeChunks.filter((c) => c.bookId !== bookId);
+      return structuredClone(book);
+    });
+  }
+
+  async listKnowledgeChunks(bookId: string): Promise<KnowledgeChunk[]> {
+    await this.ensureLoaded();
+    return this.snapshot().store.knowledgeChunks
+      .filter((c) => c.bookId === bookId)
+      .sort((a, b) => a.order - b.order);
+  }
+
+  async createKnowledgeChunk(bookId: string, input: {
+    pageNumber?: number | null;
+    sectionTitle: string;
+    text: string;
+    tokenCount?: number;
+    order?: number;
+  }): Promise<KnowledgeChunk> {
+    return this.runMutation(async (state) => {
+      const book = state.store.knowledgeBooks.find((b) => b.id === bookId);
+      if (!book) throw new Error(`Knowledge book ${bookId} not found`);
+      const existingChunks = state.store.knowledgeChunks.filter((c) => c.bookId === bookId);
+      const chunk: KnowledgeChunk = {
+        id: createId("kc"),
+        bookId,
+        pageNumber: input.pageNumber ?? null,
+        sectionTitle: input.sectionTitle,
+        text: input.text,
+        tokenCount: input.tokenCount ?? Math.ceil(input.text.length / 4),
+        order: input.order ?? existingChunks.length,
+        metadata: {},
+      };
+      state.store.knowledgeChunks.push(chunk);
+      book.chunkCount = existingChunks.length + 1;
+      book.updatedAt = isoNow();
+      return structuredClone(chunk);
+    });
+  }
+
+  async searchKnowledgeChunks(query: string, bookId?: string, limit = 20): Promise<KnowledgeChunk[]> {
+    await this.ensureLoaded();
+    const lowerQuery = query.toLowerCase();
+    let chunks = this.snapshot().store.knowledgeChunks;
+    if (bookId) {
+      chunks = chunks.filter((c) => c.bookId === bookId);
+    }
+    return chunks
+      .filter((c) => c.text.toLowerCase().includes(lowerQuery) || c.sectionTitle.toLowerCase().includes(lowerQuery))
+      .slice(0, limit);
+  }
+
+  // ── Datasets ─────────────────────────────────────────────────────────
+
+  async listDatasets(projectId?: string): Promise<Dataset[]> {
+    await this.ensureLoaded();
+    const datasets = this.snapshot().store.datasets;
+    if (projectId) {
+      return datasets.filter((d) => d.projectId === projectId || d.scope === "global");
+    }
+    return datasets;
+  }
+
+  async getDataset(datasetId: string): Promise<Dataset | null> {
+    await this.ensureLoaded();
+    return this.snapshot().store.datasets.find((d) => d.id === datasetId) ?? null;
+  }
+
+  async createDataset(input: {
+    name: string;
+    description: string;
+    category: Dataset["category"];
+    scope: Dataset["scope"];
+    projectId?: string | null;
+    columns: Dataset["columns"];
+    source?: Dataset["source"];
+    sourceDescription?: string;
+  }): Promise<Dataset> {
+    return this.runMutation(async (state) => {
+      const now = isoNow();
+      const dataset: Dataset = {
+        id: createId("ds"),
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        scope: input.scope,
+        projectId: input.projectId ?? null,
+        columns: input.columns,
+        rowCount: 0,
+        source: input.source ?? "manual",
+        sourceDescription: input.sourceDescription ?? "",
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.store.datasets.push(dataset);
+      return structuredClone(dataset);
+    });
+  }
+
+  async updateDataset(datasetId: string, patch: Partial<Pick<Dataset, "name" | "description" | "category" | "scope" | "projectId" | "columns" | "source" | "sourceDescription">>): Promise<Dataset> {
+    return this.runMutation(async (state) => {
+      const dataset = state.store.datasets.find((d) => d.id === datasetId);
+      if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
+      if (patch.name !== undefined) dataset.name = patch.name;
+      if (patch.description !== undefined) dataset.description = patch.description;
+      if (patch.category !== undefined) dataset.category = patch.category;
+      if (patch.scope !== undefined) dataset.scope = patch.scope;
+      if (patch.projectId !== undefined) dataset.projectId = patch.projectId;
+      if (patch.columns !== undefined) dataset.columns = patch.columns;
+      if (patch.source !== undefined) dataset.source = patch.source;
+      if (patch.sourceDescription !== undefined) dataset.sourceDescription = patch.sourceDescription;
+      dataset.updatedAt = isoNow();
+      return structuredClone(dataset);
+    });
+  }
+
+  async deleteDataset(datasetId: string): Promise<Dataset> {
+    return this.runMutation(async (state) => {
+      const dataset = state.store.datasets.find((d) => d.id === datasetId);
+      if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
+      state.store.datasets = state.store.datasets.filter((d) => d.id !== datasetId);
+      state.store.datasetRows = state.store.datasetRows.filter((r) => r.datasetId !== datasetId);
+      return structuredClone(dataset);
+    });
+  }
+
+  async listDatasetRows(datasetId: string, filter?: string, sort?: string, limit = 100, offset = 0): Promise<{ rows: DatasetRow[]; total: number }> {
+    await this.ensureLoaded();
+    let rows = this.snapshot().store.datasetRows.filter((r) => r.datasetId === datasetId);
+
+    if (filter) {
+      const lowerFilter = filter.toLowerCase();
+      rows = rows.filter((r) => JSON.stringify(r.data).toLowerCase().includes(lowerFilter));
+    }
+
+    if (sort) {
+      const desc = sort.startsWith("-");
+      const key = desc ? sort.slice(1) : sort;
+      rows = [...rows].sort((a, b) => {
+        const aVal = a.data[key];
+        const bVal = b.data[key];
+        if (typeof aVal === "number" && typeof bVal === "number") return desc ? bVal - aVal : aVal - bVal;
+        return desc ? String(bVal ?? "").localeCompare(String(aVal ?? "")) : String(aVal ?? "").localeCompare(String(bVal ?? ""));
+      });
+    } else {
+      rows = [...rows].sort((a, b) => a.order - b.order);
+    }
+
+    const total = rows.length;
+    return { rows: rows.slice(offset, offset + limit), total };
+  }
+
+  async getDatasetRow(rowId: string): Promise<DatasetRow | null> {
+    await this.ensureLoaded();
+    return this.snapshot().store.datasetRows.find((r) => r.id === rowId) ?? null;
+  }
+
+  async createDatasetRow(datasetId: string, data: Record<string, unknown>): Promise<DatasetRow> {
+    return this.runMutation(async (state) => {
+      const dataset = state.store.datasets.find((d) => d.id === datasetId);
+      if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
+      const existingRows = state.store.datasetRows.filter((r) => r.datasetId === datasetId);
+      const now = isoNow();
+      const row: DatasetRow = {
+        id: createId("dr"),
+        datasetId,
+        data,
+        order: existingRows.length,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.store.datasetRows.push(row);
+      dataset.rowCount = existingRows.length + 1;
+      dataset.updatedAt = now;
+      return structuredClone(row);
+    });
+  }
+
+  async createDatasetRowsBatch(datasetId: string, rows: Array<Record<string, unknown>>): Promise<DatasetRow[]> {
+    return this.runMutation(async (state) => {
+      const dataset = state.store.datasets.find((d) => d.id === datasetId);
+      if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
+      const existingCount = state.store.datasetRows.filter((r) => r.datasetId === datasetId).length;
+      const now = isoNow();
+      const created: DatasetRow[] = rows.map((data, i) => ({
+        id: createId("dr"),
+        datasetId,
+        data,
+        order: existingCount + i,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      }));
+      state.store.datasetRows.push(...created);
+      dataset.rowCount = existingCount + created.length;
+      dataset.updatedAt = now;
+      return structuredClone(created);
+    });
+  }
+
+  async updateDatasetRow(rowId: string, data: Record<string, unknown>): Promise<DatasetRow> {
+    return this.runMutation(async (state) => {
+      const row = state.store.datasetRows.find((r) => r.id === rowId);
+      if (!row) throw new Error(`Dataset row ${rowId} not found`);
+      row.data = { ...row.data, ...data };
+      row.updatedAt = isoNow();
+      return structuredClone(row);
+    });
+  }
+
+  async deleteDatasetRow(rowId: string): Promise<DatasetRow> {
+    return this.runMutation(async (state) => {
+      const row = state.store.datasetRows.find((r) => r.id === rowId);
+      if (!row) throw new Error(`Dataset row ${rowId} not found`);
+      state.store.datasetRows = state.store.datasetRows.filter((r) => r.id !== rowId);
+      const dataset = state.store.datasets.find((d) => d.id === row.datasetId);
+      if (dataset) {
+        dataset.rowCount = state.store.datasetRows.filter((r) => r.datasetId === row.datasetId).length;
+        dataset.updatedAt = isoNow();
+      }
+      return structuredClone(row);
+    });
+  }
+
+  async searchDatasetRows(datasetId: string, query: string): Promise<DatasetRow[]> {
+    await this.ensureLoaded();
+    const lowerQuery = query.toLowerCase();
+    return this.snapshot().store.datasetRows
+      .filter((r) => r.datasetId === datasetId && JSON.stringify(r.data).toLowerCase().includes(lowerQuery));
+  }
+
+  async queryDataset(datasetId: string, filters: Array<{ column: string; op: "eq" | "gt" | "lt" | "gte" | "lte" | "contains"; value: unknown }>): Promise<DatasetRow[]> {
+    await this.ensureLoaded();
+    return this.snapshot().store.datasetRows
+      .filter((r) => r.datasetId === datasetId)
+      .filter((r) => {
+        return filters.every((f) => {
+          const val = r.data[f.column];
+          switch (f.op) {
+            case "eq": return val === f.value;
+            case "gt": return typeof val === "number" && typeof f.value === "number" && val > f.value;
+            case "lt": return typeof val === "number" && typeof f.value === "number" && val < f.value;
+            case "gte": return typeof val === "number" && typeof f.value === "number" && val >= f.value;
+            case "lte": return typeof val === "number" && typeof f.value === "number" && val <= f.value;
+            case "contains": return String(val ?? "").toLowerCase().includes(String(f.value).toLowerCase());
+            default: return true;
+          }
+        });
+      });
+  }
+}
+
+export interface CreateUserInput {
+  email: string;
+  name: string;
+  role: "admin" | "estimator" | "viewer";
+  password?: string;
+}
+
+export interface UserPatchInput {
+  email?: string;
+  name?: string;
+  role?: "admin" | "estimator" | "viewer";
+  active?: boolean;
+  password?: string;
 }
 
 export const apiStore = new BidwrightApiStore();

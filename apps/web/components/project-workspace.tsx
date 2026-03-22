@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Copy,
   FileText,
+  GitCompareArrows,
   Layers3,
   MessageSquareText,
   Plus,
@@ -65,7 +66,10 @@ import { AIReviewQueue } from "@/components/ai-review-queue";
 import { SetupTab } from "@/components/workspace/setup-tab";
 import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
+import { TakeoffTab } from "@/components/workspace/takeoff-tab";
+import { ScheduleTab } from "@/components/workspace/schedule-tab";
 import { TotalsBar } from "@/components/workspace/totals-bar";
+import { RevisionCompare } from "@/components/workspace/revision-compare";
 import {
   ConfirmModal,
   CreateWorksheetModal,
@@ -104,7 +108,7 @@ import { cn } from "@/lib/utils";
 /* ─── Types ─── */
 
 type WorkspaceTab = "setup" | "estimate" | "summarize" | "documentation" | "knowledge" | "activity";
-type EstimateSubTab = "worksheets" | "phases";
+type EstimateSubTab = "worksheets" | "phases" | "takeoff" | "schedule";
 
 type ItemDraft = {
   mode: "create" | "edit";
@@ -145,7 +149,8 @@ type ModalState =
   | "aiPhases"
   | "aiEquipment"
   | "activity"
-  | "pdf";
+  | "pdf"
+  | "compare";
 
 /* ─── Constants ─── */
 
@@ -270,6 +275,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       case "aiEquipment": setModal("aiEquipment"); setAiEquipResult(null); break;
       case "activity": loadActivities(); break;
       case "pdf": setModal("pdf"); break;
+      case "compare": setModal("compare"); break;
     }
   }
 
@@ -425,6 +431,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </div>
           </div>
 
+          <Button size="sm" variant="secondary" onClick={() => handleAction("compare")}>
+            <GitCompareArrows className="h-3 w-3" /> Compare
+          </Button>
+
           <Button size="sm" variant="accent" onClick={() => setChatOpen(true)}>
             <Sparkles className="h-3 w-3" /> AI
           </Button>
@@ -500,12 +510,12 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         <div className="space-y-4">
           {/* Estimate sub-tabs */}
           <div className="flex gap-1">
-            {(["worksheets", "phases"] as const).map((st) => (
+            {(["worksheets", "phases", "takeoff", "schedule"] as const).map((st) => (
               <button key={st} onClick={() => setEstimateSubTab(st)}
                 className={cn("px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
                   estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
                 )}>
-                {st === "worksheets" ? "Worksheets" : "Phases"}
+                {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
               </button>
             ))}
           </div>
@@ -516,6 +526,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
           {estimateSubTab === "phases" && (
             <PhasesTab workspace={workspace} onApply={apply} onError={setError} />
+          )}
+
+          {estimateSubTab === "takeoff" && (
+            <TakeoffTab workspace={workspace} />
+          )}
+
+          {estimateSubTab === "schedule" && (
+            <ScheduleTab workspace={workspace} />
           )}
         </div>
       )}
@@ -708,6 +726,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           window.open(url, "_blank");
           closeModal();
         }} />
+
+      <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 
       <AgentChat projectId={workspace.project.id} open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
