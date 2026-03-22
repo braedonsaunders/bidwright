@@ -108,7 +108,7 @@ export interface ApiStateFile {
   settings: AppSettings;
 }
 
-export type PluginPatchInput = Partial<Pick<Plugin, "name" | "description" | "enabled" | "config">>;
+export type PluginPatchInput = Partial<Pick<Plugin, "name" | "description" | "enabled" | "config" | "configSchema" | "toolDefinitions" | "tags" | "supportedCategories" | "defaultOutputType" | "llmDescription" | "documentation" | "icon" | "author">>;
 
 export type CreatePluginInput = Omit<Plugin, "id" | "createdAt" | "updatedAt">;
 
@@ -981,6 +981,11 @@ export class BidwrightApiStore {
     await this.ensureLoaded();
     const runs = this.snapshot().store.aiRuns;
     return projectId ? runs.filter((entry) => entry.projectId === projectId) : runs;
+  }
+
+  async listEntityCategories() {
+    await this.ensureLoaded();
+    return this.snapshot().store.entityCategories;
   }
 
   async listCatalogs() {
@@ -3004,6 +3009,15 @@ export class BidwrightApiStore {
       if (patch.description !== undefined) plugin.description = patch.description;
       if (patch.enabled !== undefined) plugin.enabled = patch.enabled;
       if (patch.config !== undefined) plugin.config = { ...plugin.config, ...patch.config };
+      if (patch.configSchema !== undefined) plugin.configSchema = patch.configSchema;
+      if (patch.toolDefinitions !== undefined) plugin.toolDefinitions = patch.toolDefinitions;
+      if (patch.tags !== undefined) plugin.tags = patch.tags;
+      if (patch.supportedCategories !== undefined) plugin.supportedCategories = patch.supportedCategories;
+      if (patch.defaultOutputType !== undefined) plugin.defaultOutputType = patch.defaultOutputType;
+      if (patch.llmDescription !== undefined) plugin.llmDescription = patch.llmDescription;
+      if (patch.documentation !== undefined) plugin.documentation = patch.documentation;
+      if (patch.icon !== undefined) plugin.icon = patch.icon;
+      if (patch.author !== undefined) plugin.author = patch.author;
       plugin.updatedAt = isoNow();
       return plugin;
     });
@@ -3021,7 +3035,14 @@ export class BidwrightApiStore {
     });
   }
 
-  async executePlugin(pluginId: string, projectId: string, revisionId: string, input: Record<string, unknown>) {
+  async executePlugin(
+    pluginId: string,
+    toolId: string,
+    projectId: string,
+    revisionId: string,
+    input: Record<string, unknown>,
+    opts?: { worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string },
+  ) {
     return this.runMutation(async (state) => {
       const plugin = state.store.plugins.find((p) => p.id === pluginId);
       if (!plugin) {
@@ -3031,15 +3052,28 @@ export class BidwrightApiStore {
       if (!project) {
         throw new Error(`Project ${projectId} not found`);
       }
+      const toolDef = plugin.toolDefinitions.find((t) => t.id === toolId);
 
       const execution: PluginExecution = {
         id: createId("pexec"),
         pluginId,
+        toolId,
         projectId,
         revisionId,
+        worksheetId: opts?.worksheetId,
         input,
-        output: { message: `Executed ${plugin.name} with provided input` },
+        formState: opts?.formState,
+        output: {
+          type: toolDef?.outputType ?? plugin.defaultOutputType ?? "summary",
+          displayText: `Executed ${toolDef?.name ?? plugin.name} with provided input`,
+          summary: {
+            title: toolDef?.name ?? plugin.name,
+            sections: Object.entries(input).map(([k, v]) => ({ label: k, value: String(v), format: "text" as const })),
+          },
+        },
         status: "complete",
+        executedBy: opts?.executedBy ?? "user",
+        agentSessionId: opts?.agentSessionId,
         createdAt: isoNow(),
       };
       state.store.pluginExecutions.push(execution);

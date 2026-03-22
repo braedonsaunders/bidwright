@@ -282,35 +282,307 @@ export interface FileNode {
   createdBy?: string;
 }
 
+// ── Plugin UI Schema ──────────────────────────────────────────────────────
+// Declarative schema system for rendering complex interactive plugin UIs.
+// LLMs can read, populate, and invoke these schemas directly.
+
+export type PluginFieldType =
+  | "text" | "number" | "currency" | "percentage" | "boolean"
+  | "select" | "multi-select" | "radio" | "slider" | "date"
+  | "textarea" | "rich-text" | "hidden" | "computed" | "search";
+
+export interface PluginFieldOption {
+  value: string;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+}
+
+export interface PluginFieldValidation {
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  patternMessage?: string;
+  required?: boolean;
+  custom?: string; // expression evaluated at runtime
+}
+
+export interface PluginFieldConditional {
+  field: string;       // field id to watch
+  operator: "eq" | "neq" | "gt" | "lt" | "gte" | "lte" | "in" | "not_in" | "contains" | "truthy" | "falsy";
+  value?: unknown;
+  action: "show" | "hide" | "enable" | "disable" | "set_value" | "set_options";
+  actionValue?: unknown;
+}
+
+export interface PluginField {
+  id: string;
+  type: PluginFieldType;
+  label: string;
+  description?: string;
+  placeholder?: string;
+  defaultValue?: unknown;
+  options?: PluginFieldOption[];            // for select/multi-select/radio
+  optionsSource?: {                         // dynamic options from dataset or API
+    type: "dataset" | "api" | "cascade";
+    datasetId?: string;
+    column?: string;
+    endpoint?: string;
+    dependsOn?: string;                     // cascade: parent field id
+    parentColumn?: string;                  // cascade: filter by parent value
+  };
+  validation?: PluginFieldValidation;
+  conditionals?: PluginFieldConditional[];  // show/hide/modify based on other fields
+  computation?: {                           // computed fields
+    formula: string;                        // e.g., "quantity * hoursPerUnit * difficultyFactor"
+    dependencies: string[];                 // field ids used in formula
+    format?: string;                        // display format: "number", "currency", "hours"
+  };
+  searchConfig?: {                          // for "search" type fields
+    endpoint: string;
+    queryParam: string;
+    displayField: string;
+    valueField: string;
+    resultFields?: string[];
+  };
+  width?: "full" | "half" | "third" | "quarter";
+  group?: string;                           // group fields visually
+  order?: number;
+}
+
+export interface PluginTableColumn {
+  id: string;
+  label: string;
+  type: PluginFieldType;
+  width?: string;                           // CSS width
+  editable?: boolean;
+  options?: PluginFieldOption[];
+  computation?: {
+    formula: string;
+    dependencies: string[];
+    format?: string;
+  };
+  aggregate?: "sum" | "avg" | "min" | "max" | "count";
+  defaultValue?: unknown;
+}
+
+export interface PluginTable {
+  id: string;
+  label: string;
+  description?: string;
+  columns: PluginTableColumn[];
+  defaultRows?: Record<string, unknown>[];   // pre-populated rows
+  minRows?: number;
+  maxRows?: number;
+  allowAddRow?: boolean;
+  allowDeleteRow?: boolean;
+  allowReorder?: boolean;
+  rowTemplate?: Record<string, unknown>;     // template for new rows
+  totalsRow?: boolean;                       // show aggregation totals
+}
+
+export interface PluginScoringCriterion {
+  id: string;
+  label: string;
+  description?: string;
+  weight: number;
+  scale: { min: number; max: number; step: number; labels?: Record<number, string> };
+}
+
+export interface PluginScoring {
+  id: string;
+  label: string;
+  description?: string;
+  criteria: PluginScoringCriterion[];
+  resultMapping: Array<{
+    minScore: number;
+    maxScore: number;
+    label: string;
+    value: string;
+    color?: string;
+    description?: string;
+  }>;
+  outputField?: string;  // which revision/item field to write the result to
+}
+
+export interface PluginFieldGroup {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+  collapsible?: boolean;
+  defaultCollapsed?: boolean;
+  order?: number;
+}
+
+export interface PluginUISection {
+  id: string;
+  type: "fields" | "table" | "scoring" | "search" | "preview" | "summary" | "custom";
+  label?: string;
+  description?: string;
+  order?: number;
+  fields?: PluginField[];
+  table?: PluginTable;
+  scoring?: PluginScoring;
+  conditionals?: PluginFieldConditional[];
+}
+
+export interface PluginUISchema {
+  sections: PluginUISection[];
+  groups?: PluginFieldGroup[];
+  layout?: "single" | "tabs" | "wizard" | "accordion";
+  submitLabel?: string;
+  cancelLabel?: string;
+  showPreview?: boolean;
+}
+
+// ── Plugin Output Types ───────────────────────────────────────────────────
+// Standardized output formats that plugins produce. The system knows how to
+// consume each type and apply it to the estimate.
+
+export interface PluginOutputLineItem {
+  category: string;        // Labour, Equipment, Material, Travel & Per Diem, etc.
+  entityType: string;      // LabourClass, Material, Equipment, etc.
+  entityName: string;
+  vendor?: string;
+  description: string;
+  quantity: number;
+  uom: string;
+  cost?: number;
+  markup?: number;
+  price?: number;
+  laborHourReg?: number;
+  laborHourOver?: number;
+  laborHourDouble?: number;
+  phaseId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PluginOutputWorksheet {
+  name: string;
+  items: PluginOutputLineItem[];
+}
+
+export interface PluginOutputTextContent {
+  targetField: string;     // e.g., "revision.notes", "revision.scratchpad", "revision.leadLetter"
+  content: string;
+  format: "plain" | "markdown" | "html";
+  mode: "replace" | "append" | "prepend";
+}
+
+export interface PluginOutputRevisionPatch {
+  field: string;           // e.g., "necaDifficulty", "defaultMarkup"
+  value: unknown;
+}
+
+export interface PluginOutputScore {
+  criterionId: string;
+  label: string;
+  score: number;
+  maxScore: number;
+  weight: number;
+}
+
+export interface PluginOutputSummary {
+  title: string;
+  sections: Array<{
+    label: string;
+    value: string | number;
+    format?: "text" | "number" | "currency" | "percentage" | "hours";
+  }>;
+}
+
+export interface PluginOutput {
+  type: "line_items" | "worksheet" | "text_content" | "revision_patch" | "score" | "summary" | "composite";
+  lineItems?: PluginOutputLineItem[];
+  worksheet?: PluginOutputWorksheet;
+  textContent?: PluginOutputTextContent;
+  revisionPatches?: PluginOutputRevisionPatch[];
+  scores?: PluginOutputScore[];
+  summary?: PluginOutputSummary;
+  displayText?: string;    // human-readable summary of what was produced
+  children?: PluginOutput[]; // for "composite" type - multiple outputs
+}
+
+// ── Plugin Tool Definition (enhanced) ─────────────────────────────────────
+
+export interface PluginToolDefinition {
+  id: string;
+  name: string;
+  description: string;
+  llmDescription?: string;       // richer description for LLM context
+  parameters: Array<{
+    name: string;
+    type: string;
+    description: string;
+    required: boolean;
+    enum?: string[];
+    default?: unknown;
+  }>;
+  outputType: PluginOutput["type"];
+  ui?: PluginUISchema;           // declarative UI for this tool
+  requiresConfirmation?: boolean;
+  mutates?: boolean;
+  tags?: string[];
+}
+
+// ── Plugin Config Schema ──────────────────────────────────────────────────
+
+export interface PluginConfigField {
+  key: string;
+  label: string;
+  type: "text" | "password" | "number" | "boolean" | "select" | "url";
+  description?: string;
+  required?: boolean;
+  defaultValue?: unknown;
+  options?: PluginFieldOption[];
+  placeholder?: string;
+  validation?: PluginFieldValidation;
+}
+
+// ── Plugin (fully expanded) ───────────────────────────────────────────────
+
 export interface Plugin {
   id: string;
   name: string;
   slug: string;
+  icon?: string;
   category: "labour" | "equipment" | "material" | "travel" | "general";
   description: string;
+  llmDescription?: string;        // richer description for LLM tool discovery
   version: string;
+  author?: string;
   enabled: boolean;
   config: Record<string, unknown>;
-  uiComponentPath?: string;
-  toolDefinitions: Array<{
-    id: string;
-    name: string;
-    description: string;
-    parameters: Array<{ name: string; type: string; description: string; required: boolean }>;
-  }>;
+  configSchema?: PluginConfigField[];
+  toolDefinitions: PluginToolDefinition[];
+  defaultOutputType?: PluginOutput["type"];
+  supportedCategories?: string[];  // which line item categories this plugin can produce
+  tags?: string[];
+  documentation?: string;         // markdown documentation
   createdAt: string;
   updatedAt: string;
 }
 
+// ── Plugin Execution (fully expanded) ─────────────────────────────────────
+
 export interface PluginExecution {
   id: string;
   pluginId: string;
+  toolId: string;
   projectId: string;
   revisionId: string;
+  worksheetId?: string;
   input: Record<string, unknown>;
-  output: Record<string, unknown>;
+  formState?: Record<string, unknown>;  // full UI form state for re-population
+  output: PluginOutput;
+  appliedLineItemIds?: string[];        // IDs of line items created by this execution
   status: "pending" | "running" | "complete" | "failed";
   error?: string;
+  executedBy?: "user" | "agent";
+  agentSessionId?: string;
   createdAt: string;
 }
 
@@ -407,6 +679,30 @@ export interface DatasetRow {
   updatedAt: string;
 }
 
+export interface EntityCategory {
+  id: string;
+  name: string;
+  entityType: string;
+  shortform: string;
+  defaultUom: string;
+  validUoms: string[];
+  editableFields: {
+    quantity: boolean;
+    cost: boolean;
+    markup: boolean;
+    price: boolean;
+    laborHourReg: boolean;
+    laborHourOver: boolean;
+    laborHourDouble: boolean;
+  };
+  laborHourLabels: {
+    reg: string;
+    over: string;
+    double: string;
+  };
+  calculationType: "auto_labour" | "auto_equipment" | "auto_stock" | "auto_consumable" | "direct_price" | "manual";
+}
+
 export interface BidwrightStore {
   projects: Project[];
   sourceDocuments: SourceDocument[];
@@ -436,6 +732,7 @@ export interface BidwrightStore {
   knowledgeChunks: KnowledgeChunk[];
   datasets: Dataset[];
   datasetRows: DatasetRow[];
+  entityCategories: EntityCategory[];
 }
 
 export interface BreakoutEntry {

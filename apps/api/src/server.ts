@@ -1370,6 +1370,8 @@ export function buildServer() {
     return job;
   });
 
+  app.get("/entity-categories", async () => apiStore.listEntityCategories());
+
   app.get("/catalogs", async () => apiStore.listCatalogs());
 
   app.post("/catalogs", async (request, reply) => {
@@ -1953,9 +1955,15 @@ export function buildServer() {
 
   app.post("/plugins/:pluginId/execute", async (request, reply) => {
     const { pluginId } = request.params as { pluginId: string };
-    const { projectId, revisionId, input } = request.body as { projectId: string; revisionId: string; input: Record<string, unknown> };
+    const body = request.body as {
+      toolId?: string; projectId: string; revisionId: string; input: Record<string, unknown>;
+      worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string;
+    };
     try {
-      const execution = await apiStore.executePlugin(pluginId, projectId, revisionId, input ?? {});
+      const execution = await apiStore.executePlugin(
+        pluginId, body.toolId ?? pluginId, body.projectId, body.revisionId, body.input ?? {},
+        { worksheetId: body.worksheetId, formState: body.formState, executedBy: body.executedBy, agentSessionId: body.agentSessionId },
+      );
       reply.code(201);
       return execution;
     } catch (error) {

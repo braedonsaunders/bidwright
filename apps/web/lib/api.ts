@@ -406,6 +406,38 @@ export interface WorkspaceResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Entity Categories
+// ---------------------------------------------------------------------------
+
+export interface EntityCategory {
+  id: string;
+  name: string;
+  entityType: string;
+  shortform: string;
+  defaultUom: string;
+  validUoms: string[];
+  editableFields: {
+    quantity: boolean;
+    cost: boolean;
+    markup: boolean;
+    price: boolean;
+    laborHourReg: boolean;
+    laborHourOver: boolean;
+    laborHourDouble: boolean;
+  };
+  laborHourLabels: {
+    reg: string;
+    over: string;
+    double: string;
+  };
+  calculationType: "auto_labour" | "auto_equipment" | "auto_stock" | "auto_consumable" | "direct_price" | "manual";
+}
+
+export async function getEntityCategories() {
+  return apiRequest<EntityCategory[]>("/entity-categories");
+}
+
+// ---------------------------------------------------------------------------
 // Read-only queries
 // ---------------------------------------------------------------------------
 
@@ -1334,37 +1366,32 @@ export async function deleteFileNode(projectId: string, nodeId: string) {
 // Plugins
 // ---------------------------------------------------------------------------
 
-export interface PluginRecord {
-  id: string;
-  name: string;
-  slug: string;
-  category: "labour" | "equipment" | "material" | "travel" | "general";
-  description: string;
-  version: string;
-  enabled: boolean;
-  config: Record<string, unknown>;
-  uiComponentPath?: string;
-  toolDefinitions: Array<{
-    id: string;
-    name: string;
-    description: string;
-    parameters: Array<{ name: string; type: string; description: string; required: boolean }>;
-  }>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PluginExecutionRecord {
-  id: string;
-  pluginId: string;
-  projectId: string;
-  revisionId: string;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-  status: "pending" | "running" | "complete" | "failed";
-  error?: string;
-  createdAt: string;
-}
+// Re-export domain types for the plugin system
+export type {
+  Plugin as PluginRecord,
+  PluginExecution as PluginExecutionRecord,
+  PluginToolDefinition,
+  PluginUISchema,
+  PluginUISection,
+  PluginField,
+  PluginFieldOption,
+  PluginFieldType,
+  PluginFieldValidation,
+  PluginFieldConditional,
+  PluginTable,
+  PluginTableColumn,
+  PluginScoring,
+  PluginScoringCriterion,
+  PluginFieldGroup,
+  PluginOutput,
+  PluginOutputLineItem,
+  PluginOutputWorksheet,
+  PluginOutputTextContent,
+  PluginOutputRevisionPatch,
+  PluginOutputScore,
+  PluginOutputSummary,
+  PluginConfigField,
+} from "@bidwright/domain";
 
 export async function listPlugins() {
   return apiRequest<PluginRecord[]>("/plugins");
@@ -1374,7 +1401,7 @@ export async function getPlugin(pluginId: string) {
   return apiRequest<PluginRecord>(`/plugins/${pluginId}`);
 }
 
-export async function updatePlugin(pluginId: string, patch: Partial<Pick<PluginRecord, "name" | "description" | "enabled" | "config">>) {
+export async function updatePlugin(pluginId: string, patch: Record<string, unknown>) {
   return apiRequest<PluginRecord>(`/plugins/${pluginId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1382,11 +1409,30 @@ export async function updatePlugin(pluginId: string, patch: Partial<Pick<PluginR
   });
 }
 
-export async function executePlugin(pluginId: string, projectId: string, revisionId: string, input: Record<string, unknown>) {
+export async function createPlugin(input: Record<string, unknown>) {
+  return apiRequest<PluginRecord>("/plugins", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deletePlugin(pluginId: string) {
+  return apiRequest<PluginRecord>(`/plugins/${pluginId}`, { method: "DELETE" });
+}
+
+export async function executePlugin(
+  pluginId: string,
+  toolId: string,
+  projectId: string,
+  revisionId: string,
+  input: Record<string, unknown>,
+  opts?: { worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string },
+) {
   return apiRequest<PluginExecutionRecord>(`/plugins/${pluginId}/execute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ projectId, revisionId, input }),
+    body: JSON.stringify({ toolId, projectId, revisionId, input, ...opts }),
   });
 }
 

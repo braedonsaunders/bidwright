@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Copy,
   GripVertical,
   MoreHorizontal,
@@ -12,6 +14,7 @@ import {
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
+  EntityCategory,
   ProjectWorkspaceData,
   WorkspaceResponse,
   WorkspaceWorksheet,
@@ -22,6 +25,7 @@ import {
   createWorksheetItem,
   deleteWorksheet,
   deleteWorksheetItem,
+  getEntityCategories,
   updateWorksheet,
   updateWorksheetItem,
 } from "@/lib/api";
@@ -77,23 +81,6 @@ type WorksheetTabId = string | "all" | "summary";
 
 /* ─── Constants ─── */
 
-const CATEGORIES = [
-  "Labour",
-  "Equipment",
-  "Stock Items",
-  "Material",
-  "Consumables",
-  "Other Charges",
-  "Travel & Per Diem",
-  "Subcontractors",
-  "Rental Equipment",
-];
-
-const UOM_OPTIONS = [
-  "EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS",
-  "CY", "LB", "TON", "GAL", "SET", "LOT", "IN", "M", "CM",
-];
-
 const CATEGORY_COLORS: Record<string, string> = {
   Labour: "info",
   Equipment: "warning",
@@ -106,33 +93,20 @@ const CATEGORY_COLORS: Record<string, string> = {
   "Rental Equipment": "warning",
 };
 
-/* ─── Cell editability rules ─── */
-
-function isCellDisabled(category: string, column: EditableColumn): boolean {
-  switch (category) {
-    case "Labour":
-      if (column === "cost" || column === "markup" || column === "price") return true;
-      break;
-    case "Equipment":
-      if (column === "laborHourOver" || column === "laborHourDouble") return true;
-      break;
-    case "Other Charges":
-      if (
-        column === "quantity" ||
-        column === "cost" ||
-        column === "markup" ||
-        column === "laborHourReg" ||
-        column === "laborHourOver" ||
-        column === "laborHourDouble"
-      )
-        return true;
-      break;
-    case "Stock Items":
-      if (column === "laborHourDouble" || column === "cost" || column === "price") return true;
-      break;
-  }
-  return false;
-}
+const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
+  "entityName",
+  "vendor",
+  "description",
+  "quantity",
+  "uom",
+  "laborHourReg",
+  "laborHourOver",
+  "laborHourDouble",
+  "cost",
+  "markup",
+  "price",
+  "phaseId",
+];
 
 /* ─── Helpers ─── */
 
@@ -149,10 +123,187 @@ function findWs(workspace: ProjectWorkspaceData, id: string) {
   return (workspace.worksheets ?? []).find((w) => w.id === id) ?? null;
 }
 
+function findCategoryForRow(
+  row: WorkspaceWorksheetItem,
+  categories: EntityCategory[]
+): EntityCategory | undefined {
+  return categories.find((c) => c.name === row.category);
+}
+
+function isCellDisabledByCategory(
+  category: EntityCategory | undefined,
+  column: EditableColumn
+): boolean {
+  if (!category) return false;
+  if (column === "entityName" || column === "vendor" || column === "description" || column === "phaseId") {
+    return false;
+  }
+  const fieldMap: Record<string, keyof EntityCategory["editableFields"]> = {
+    quantity: "quantity",
+    cost: "cost",
+    markup: "markup",
+    price: "price",
+    laborHourReg: "laborHourReg",
+    laborHourOver: "laborHourOver",
+    laborHourDouble: "laborHourDouble",
+  };
+  const field = fieldMap[column];
+  if (!field) return false;
+  return !category.editableFields[field];
+}
+
+function getLaborColumnLabel(
+  column: "laborHourReg" | "laborHourOver" | "laborHourDouble",
+  category: EntityCategory | undefined
+): string {
+  if (!category) {
+    return column === "laborHourReg" ? "Reg Hrs" : column === "laborHourOver" ? "OT Hrs" : "DT Hrs";
+  }
+  const map = { laborHourReg: "reg", laborHourOver: "over", laborHourDouble: "double" } as const;
+  const label = category.laborHourLabels[map[column]];
+  return label || (column === "laborHourReg" ? "Reg Hrs" : column === "laborHourOver" ? "OT Hrs" : "DT Hrs");
+}
+
+/** Build entity dropdown options grouped by category */
+function buildEntityOptions(
+  workspace: ProjectWorkspaceData,
+  categories: EntityCategory[]
+): Array<{
+  categoryName: string;
+  categoryId: string;
+  entityType: string;
+  defaultUom: string;
+  items: Array<{ label: string; value: string }>;
+}> {
+  const groups: Array<{
+    categoryName: string;
+    categoryId: string;
+    entityType: string;
+    defaultUom: string;
+    items: Array<{ label: string; value: string }>;
+  }> = [];
+
+  for (const cat of categories) {
+    const items: Array<{ label: string; value: string }> = [];
+
+    if (cat.name === "Labour") {
+      // Labour rates from the project
+      for (const lr of workspace.labourRates ?? []) {
+        items.push({ label: lr.name, value: lr.name });
+      }
+      // Also include labor catalog items
+      for (const catalog of workspace.catalogs ?? []) {
+        if (catalog.kind === "labor") {
+          for (const ci of catalog.items ?? []) {
+            if (!items.some((i) => i.value === ci.name)) {
+              items.push({ label: ci.name, value: ci.name });
+            }
+          }
+        }
+      }
+      if (items.length === 0) {
+        items.push({ label: "Labour", value: "Labour" });
+      }
+    } else if (cat.name === "Equipment") {
+      for (const catalog of workspace.catalogs ?? []) {
+        if (catalog.kind === "equipment") {
+          for (const ci of catalog.items ?? []) {
+            items.push({ label: ci.name, value: ci.name });
+          }
+        }
+      }
+      if (items.length === 0) {
+        items.push({ label: "Equipment", value: "Equipment" });
+      }
+    } else if (cat.name === "Stock Items" || cat.name === "Consumables") {
+      for (const catalog of workspace.catalogs ?? []) {
+        if (catalog.kind === "materials") {
+          for (const ci of catalog.items ?? []) {
+            items.push({ label: ci.name, value: ci.name });
+          }
+        }
+      }
+      if (items.length === 0) {
+        items.push({ label: cat.name, value: cat.name });
+      }
+    } else {
+      // Material, Other Charges, Travel, Subcontractors, Rental
+      items.push({ label: cat.name, value: cat.name });
+    }
+
+    groups.push({
+      categoryName: cat.name,
+      categoryId: cat.id,
+      entityType: cat.entityType,
+      defaultUom: cat.defaultUom,
+      items,
+    });
+  }
+
+  return groups;
+}
+
+/** Group rows by category */
+function groupRowsByCategory(
+  rows: WorkspaceWorksheetItem[],
+  categories: EntityCategory[]
+): Array<{
+  category: string;
+  catDef: EntityCategory | undefined;
+  items: WorkspaceWorksheetItem[];
+  totalPrice: number;
+}> {
+  const catOrder = categories.map((c) => c.name);
+  const grouped: Record<string, WorkspaceWorksheetItem[]> = {};
+
+  for (const row of rows) {
+    const cat = row.category || "Uncategorized";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(row);
+  }
+
+  // Sort groups by category order
+  const result: Array<{
+    category: string;
+    catDef: EntityCategory | undefined;
+    items: WorkspaceWorksheetItem[];
+    totalPrice: number;
+  }> = [];
+
+  for (const catName of catOrder) {
+    if (grouped[catName]) {
+      const items = grouped[catName].sort((a, b) => a.lineOrder - b.lineOrder);
+      result.push({
+        category: catName,
+        catDef: categories.find((c) => c.name === catName),
+        items,
+        totalPrice: items.reduce((s, r) => s + r.price, 0),
+      });
+      delete grouped[catName];
+    }
+  }
+
+  // Any remaining categories not in the entity categories list
+  for (const [catName, items] of Object.entries(grouped)) {
+    const sorted = items.sort((a, b) => a.lineOrder - b.lineOrder);
+    result.push({
+      category: catName,
+      catDef: undefined,
+      items: sorted,
+      totalPrice: sorted.reduce((s, r) => s + r.price, 0),
+    });
+  }
+
+  return result;
+}
+
 /* ─── Component ─── */
 
 export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
+
+  // Entity categories loaded from API
+  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
 
   // Tab state
   const [activeTab, setActiveTab] = useState<WorksheetTabId>(
@@ -164,6 +315,11 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   const [editValue, setEditValue] = useState("");
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null>(null);
 
+  // Entity dropdown state
+  const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
+  const [entitySearchTerm, setEntitySearchTerm] = useState("");
+  const entitySearchRef = useRef<HTMLInputElement | null>(null);
+
   // Filter state
   const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -172,7 +328,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   // Context menu
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
-  // Tab menu (rename/delete)
+  // Tab menu
   const [tabMenu, setTabMenu] = useState<{ wsId: string; x: number; y: number } | null>(null);
 
   // Modals
@@ -187,8 +343,26 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   // Selected row
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
 
-  // Column visibility
-  const [hiddenColumns, setHiddenColumns] = useState<Set<EditableColumn>>(new Set());
+  // Collapsed category groups
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+
+  // Inline tab rename
+  const [inlineRenameWsId, setInlineRenameWsId] = useState<string | null>(null);
+  const [inlineRenameName, setInlineRenameName] = useState("");
+  const inlineRenameRef = useRef<HTMLInputElement | null>(null);
+
+  // Load entity categories on mount
+  useEffect(() => {
+    let cancelled = false;
+    getEntityCategories()
+      .then((cats) => {
+        if (!cancelled) setEntityCategories(cats);
+      })
+      .catch(() => {
+        // Silently fail; categories will be empty
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // Sync active tab when worksheets change
   useEffect(() => {
@@ -196,6 +370,29 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       setActiveTab(workspace.worksheets[0]?.id ?? "all");
     }
   }, [workspace.worksheets, activeTab]);
+
+  // Focus entity search when dropdown opens
+  useEffect(() => {
+    if (entityDropdownRowId) {
+      setTimeout(() => entitySearchRef.current?.focus(), 0);
+    }
+  }, [entityDropdownRowId]);
+
+  // Focus inline rename input
+  useEffect(() => {
+    if (inlineRenameWsId) {
+      setTimeout(() => {
+        inlineRenameRef.current?.focus();
+        inlineRenameRef.current?.select();
+      }, 0);
+    }
+  }, [inlineRenameWsId]);
+
+  // Entity dropdown options
+  const entityOptions = useMemo(
+    () => buildEntityOptions(workspace, entityCategories),
+    [workspace, entityCategories]
+  );
 
   // Get visible rows
   const visibleRows = useMemo(() => {
@@ -228,20 +425,28 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     return rows;
   }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets]);
 
+  // Grouped rows
+  const groupedRows = useMemo(
+    () => groupRowsByCategory(visibleRows, entityCategories),
+    [visibleRows, entityCategories]
+  );
+
   // Summary data
   const summaryData = useMemo(() => {
     const allItems = (workspace.worksheets ?? []).flatMap((w) => w.items);
-    const byCategory: Record<string, { count: number; cost: number; price: number; hours: number }> = {};
+    const byCategory: Record<string, { count: number; cost: number; price: number; regHrs: number; otHrs: number; dtHrs: number }> = {};
 
     for (const item of allItems) {
       const cat = item.category || "Uncategorized";
       if (!byCategory[cat]) {
-        byCategory[cat] = { count: 0, cost: 0, price: 0, hours: 0 };
+        byCategory[cat] = { count: 0, cost: 0, price: 0, regHrs: 0, otHrs: 0, dtHrs: 0 };
       }
       byCategory[cat].count++;
       byCategory[cat].cost += item.cost * item.quantity;
       byCategory[cat].price += item.price;
-      byCategory[cat].hours += item.laborHourReg + item.laborHourOver + item.laborHourDouble;
+      byCategory[cat].regHrs += item.laborHourReg;
+      byCategory[cat].otHrs += item.laborHourOver;
+      byCategory[cat].dtHrs += item.laborHourDouble;
     }
 
     return byCategory;
@@ -252,10 +457,9 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     return {
       cost: visibleRows.reduce((sum, r) => sum + r.cost * r.quantity, 0),
       price: visibleRows.reduce((sum, r) => sum + r.price, 0),
-      hours: visibleRows.reduce(
-        (sum, r) => sum + r.laborHourReg + r.laborHourOver + r.laborHourDouble,
-        0
-      ),
+      regHrs: visibleRows.reduce((sum, r) => sum + r.laborHourReg, 0),
+      otHrs: visibleRows.reduce((sum, r) => sum + r.laborHourOver, 0),
+      dtHrs: visibleRows.reduce((sum, r) => sum + r.laborHourDouble, 0),
       count: visibleRows.length,
     };
   }, [visibleRows]);
@@ -265,7 +469,16 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   function startEditing(rowId: string, column: EditableColumn, currentValue: string | number) {
     const row = visibleRows.find((r) => r.id === rowId);
     if (!row) return;
-    if (isCellDisabled(row.category, column)) return;
+
+    const catDef = findCategoryForRow(row, entityCategories);
+    if (isCellDisabledByCategory(catDef, column)) return;
+
+    // Entity name uses the dropdown instead
+    if (column === "entityName") {
+      setEntityDropdownRowId(rowId);
+      setEntitySearchTerm("");
+      return;
+    }
 
     let val: string;
     if (column === "markup") {
@@ -278,7 +491,6 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     setEditValue(val);
     setSelectedRowId(rowId);
 
-    // Focus the input after render
     setTimeout(() => {
       editInputRef.current?.focus();
       if (editInputRef.current && "select" in editInputRef.current) {
@@ -296,7 +508,6 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       return;
     }
 
-    // Build patch
     let patch: Record<string, unknown> = {};
     const currentVal = row[column as keyof WorkspaceWorksheetItem];
 
@@ -352,35 +563,109 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     setEditingCell(null);
   }
 
+  /** Advance to next editable cell in tab order, skipping disabled ones */
+  function advanceToNextCell(rowId: string, column: EditableColumn) {
+    const row = visibleRows.find((r) => r.id === rowId);
+    if (!row) return;
+    const catDef = findCategoryForRow(row, entityCategories);
+
+    const colIdx = EDITABLE_COLUMNS_ORDER.indexOf(column);
+    // Try remaining columns in current row
+    for (let i = colIdx + 1; i < EDITABLE_COLUMNS_ORDER.length; i++) {
+      const nextCol = EDITABLE_COLUMNS_ORDER[i];
+      if (!isCellDisabledByCategory(catDef, nextCol)) {
+        const rawVal = row[nextCol as keyof WorkspaceWorksheetItem];
+        startEditing(rowId, nextCol, rawVal as string | number);
+        return;
+      }
+    }
+    // Move to next row, first editable column
+    const rowIdx = visibleRows.indexOf(row);
+    if (rowIdx < visibleRows.length - 1) {
+      const nextRow = visibleRows[rowIdx + 1];
+      const nextCatDef = findCategoryForRow(nextRow, entityCategories);
+      for (const col of EDITABLE_COLUMNS_ORDER) {
+        if (!isCellDisabledByCategory(nextCatDef, col)) {
+          const rawVal = nextRow[col as keyof WorkspaceWorksheetItem];
+          startEditing(nextRow.id, col, rawVal as string | number);
+          return;
+        }
+      }
+    }
+  }
+
   function handleCellKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      commitEdit();
+      if (editingCell) {
+        const { rowId, column } = editingCell;
+        commitEdit();
+        // Move down to same column in next row
+        const rowIdx = visibleRows.findIndex((r) => r.id === rowId);
+        if (rowIdx >= 0 && rowIdx < visibleRows.length - 1) {
+          const nextRow = visibleRows[rowIdx + 1];
+          const rawVal = nextRow[column as keyof WorkspaceWorksheetItem];
+          setTimeout(() => startEditing(nextRow.id, column, rawVal as string | number), 0);
+        }
+      }
     } else if (e.key === "Escape") {
       cancelEdit();
     } else if (e.key === "Tab") {
       e.preventDefault();
-      commitEdit();
-      // Could advance to next cell here
+      if (editingCell) {
+        const { rowId, column } = editingCell;
+        commitEdit();
+        setTimeout(() => advanceToNextCell(rowId, column), 0);
+      }
     }
+  }
+
+  // ─── Entity selection ───
+
+  function handleEntitySelect(
+    rowId: string,
+    entityName: string,
+    categoryName: string,
+    entityType: string,
+    defaultUom: string
+  ) {
+    setEntityDropdownRowId(null);
+    setEntitySearchTerm("");
+
+    startTransition(async () => {
+      try {
+        const next = await updateWorksheetItem(workspace.project.id, rowId, {
+          entityName,
+          category: categoryName,
+          entityType,
+          uom: defaultUom,
+        });
+        onApply(next);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Save failed.");
+      }
+    });
   }
 
   // ─── Row operations ───
 
-  function addNewItem() {
+  function addNewItem(categoryOverride?: string) {
     const wsId = activeTab !== "all" && activeTab !== "summary" ? activeTab : workspace.worksheets[0]?.id;
     if (!wsId) return;
 
     const ws = findWs(workspace, wsId);
     if (!ws) return;
 
+    const catName = categoryOverride ?? "Material";
+    const catDef = entityCategories.find((c) => c.name === catName);
+
     const payload: CreateWorksheetItemInput = {
-      category: "Material",
-      entityType: "Material",
+      category: catName,
+      entityType: catDef?.entityType ?? "Material",
       entityName: "New Item",
       description: "",
       quantity: 1,
-      uom: "EA",
+      uom: catDef?.defaultUom ?? "EA",
       cost: 0,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: 0,
@@ -451,17 +736,24 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     setSelectedRowId(rowId);
   }
 
-  // Close context menu on click anywhere
   useEffect(() => {
     function close() {
       setContextMenu(null);
       setTabMenu(null);
+      if (entityDropdownRowId) {
+        setEntityDropdownRowId(null);
+      }
     }
-    if (contextMenu || tabMenu) {
-      document.addEventListener("click", close);
-      return () => document.removeEventListener("click", close);
+    if (contextMenu || tabMenu || entityDropdownRowId) {
+      const timer = setTimeout(() => {
+        document.addEventListener("click", close);
+      }, 0);
+      return () => {
+        clearTimeout(timer);
+        document.removeEventListener("click", close);
+      };
     }
-  }, [contextMenu, tabMenu]);
+  }, [contextMenu, tabMenu, entityDropdownRowId]);
 
   // ─── Worksheet operations ───
 
@@ -481,16 +773,19 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     });
   }
 
-  function handleRenameWorksheet() {
-    if (!renameWsId || !renameWsName.trim()) return;
+  function handleInlineRenameCommit() {
+    if (!inlineRenameWsId || !inlineRenameName.trim()) {
+      setInlineRenameWsId(null);
+      return;
+    }
+    const wsId = inlineRenameWsId;
+    const name = inlineRenameName.trim();
+    setInlineRenameWsId(null);
+
     startTransition(async () => {
       try {
-        const next = await updateWorksheet(workspace.project.id, renameWsId, {
-          name: renameWsName.trim(),
-        });
+        const next = await updateWorksheet(workspace.project.id, wsId, { name });
         onApply(next);
-        setRenameWsId(null);
-        setRenameWsName("");
       } catch (e) {
         onError(e instanceof Error ? e.message : "Rename failed.");
       }
@@ -536,26 +831,21 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     });
   }
 
-  // ─── Column visibility ───
+  // ─── Category group toggle ───
 
-  function toggleColumn(col: EditableColumn) {
-    setHiddenColumns((prev) => {
+  function toggleCategoryCollapse(cat: string) {
+    setCollapsedCategories((prev) => {
       const next = new Set(prev);
-      if (next.has(col)) {
-        next.delete(col);
+      if (next.has(cat)) {
+        next.delete(cat);
       } else {
-        next.add(col);
+        next.add(cat);
       }
       return next;
     });
   }
 
-  const isColVisible = useCallback(
-    (col: EditableColumn) => !hiddenColumns.has(col),
-    [hiddenColumns]
-  );
-
-  // ─── Render helpers ───
+  // ─── Render cell helpers ───
 
   function renderEditableCell(
     row: WorkspaceWorksheetItem,
@@ -564,10 +854,12 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     className?: string
   ) {
     const isEditing = editingCell?.rowId === row.id && editingCell?.column === column;
-    const disabled = isCellDisabled(row.category, column);
+    const catDef = findCategoryForRow(row, entityCategories);
+    const disabled = isCellDisabledByCategory(catDef, column);
 
     if (isEditing) {
       if (column === "uom") {
+        const validUoms = catDef?.validUoms ?? ["EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS"];
         return (
           <td className={cn("border-b border-line px-1 py-0.5", className)}>
             <select
@@ -576,7 +868,6 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
               value={editValue}
               onChange={(e) => {
                 setEditValue(e.target.value);
-                // Auto-commit selects
                 const val = e.target.value;
                 setEditingCell(null);
                 startTransition(async () => {
@@ -591,7 +882,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
               onBlur={commitEdit}
               onKeyDown={handleCellKeyDown}
             >
-              {UOM_OPTIONS.map((u) => (
+              {validUoms.map((u) => (
                 <option key={u} value={u}>
                   {u}
                 </option>
@@ -662,11 +953,97 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       );
     }
 
+    // Entity name cell - show dropdown trigger
+    if (column === "entityName") {
+      const isDropdownOpen = entityDropdownRowId === row.id;
+      return (
+        <td
+          className={cn(
+            "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors relative",
+            "hover:bg-accent/5",
+            className
+          )}
+          onClick={(e) => {
+            e.stopPropagation();
+            setEntityDropdownRowId(isDropdownOpen ? null : row.id);
+            setEntitySearchTerm("");
+            setSelectedRowId(row.id);
+          }}
+        >
+          <div className="flex items-center gap-1">
+            <Badge
+              tone={(CATEGORY_COLORS[row.category] ?? "default") as "default" | "success" | "warning" | "danger" | "info"}
+              className="text-[9px] px-1 py-0"
+            >
+              {findCategoryForRow(row, entityCategories)?.shortform ?? row.category.charAt(0)}
+            </Badge>
+            <span className="truncate">{row.entityName}</span>
+          </div>
+          {/* Entity dropdown */}
+          {isDropdownOpen && (
+            <div
+              className="absolute left-0 top-full z-50 mt-1 w-72 rounded-lg border border-line bg-panel shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="p-2 border-b border-line">
+                <input
+                  ref={entitySearchRef}
+                  type="text"
+                  className="w-full h-7 rounded border border-line bg-bg px-2 text-xs outline-none focus:border-accent/50"
+                  placeholder="Search entities..."
+                  value={entitySearchTerm}
+                  onChange={(e) => setEntitySearchTerm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setEntityDropdownRowId(null);
+                    }
+                  }}
+                />
+              </div>
+              <div className="max-h-64 overflow-y-auto py-1">
+                {entityOptions.map((group) => {
+                  const q = entitySearchTerm.toLowerCase();
+                  const filtered = q
+                    ? group.items.filter((it) => it.label.toLowerCase().includes(q))
+                    : group.items;
+                  if (filtered.length === 0 && q) return null;
+                  return (
+                    <div key={group.categoryId}>
+                      <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/35 tracking-wider bg-panel2/40">
+                        {group.categoryName}
+                      </div>
+                      {filtered.map((item) => (
+                        <button
+                          key={`${group.categoryId}-${item.value}`}
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition-colors"
+                          onClick={() =>
+                            handleEntitySelect(
+                              row.id,
+                              item.value,
+                              group.categoryName,
+                              group.entityType,
+                              group.defaultUom
+                            )
+                          }
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </td>
+      );
+    }
+
     return (
       <td
         className={cn(
           "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors",
-          disabled ? "text-fg/25 cursor-not-allowed" : "hover:bg-accent/5",
+          disabled ? "text-fg/25 cursor-not-allowed opacity-40" : "hover:bg-accent/5",
           className
         )}
         onClick={() => {
@@ -703,6 +1080,10 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
           <button
             key={ws.id}
             onClick={() => setActiveTab(ws.id)}
+            onDoubleClick={() => {
+              setInlineRenameWsId(ws.id);
+              setInlineRenameName(ws.name);
+            }}
             onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
             className={cn(
               "group px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
@@ -711,8 +1092,30 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                 : "border-transparent text-fg/40 hover:text-fg/60"
             )}
           >
-            {ws.name}
-            <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
+            {inlineRenameWsId === ws.id ? (
+              <input
+                ref={inlineRenameRef}
+                type="text"
+                className="w-24 h-5 bg-bg border border-accent/50 rounded px-1 text-xs outline-none"
+                value={inlineRenameName}
+                onChange={(e) => setInlineRenameName(e.target.value)}
+                onBlur={handleInlineRenameCommit}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleInlineRenameCommit();
+                  } else if (e.key === "Escape") {
+                    setInlineRenameWsId(null);
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <>
+                {ws.name}
+                <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
+              </>
+            )}
           </button>
         ))}
 
@@ -738,6 +1141,21 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
         >
           <Plus className="h-3.5 w-3.5" />
         </button>
+
+        {/* Toolbar inline with tabs */}
+        {activeTab !== "summary" && (
+          <div className="ml-auto flex items-center gap-2">
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-fg/30" />
+              <Input className="pl-7 h-7 w-40 text-[11px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+            </div>
+            <Select className="w-28 h-7 text-[11px]" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+              <option value="">All types</option>
+              {entityCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </Select>
+            <Button size="xs" onClick={() => addNewItem()} disabled={isPending}><Plus className="h-3 w-3" /> Item</Button>
+          </div>
+        )}
       </div>
 
       {/* ─── Summary View ─── */}
@@ -755,7 +1173,9 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                     <th className="border-b border-line px-3 py-2 text-right">Items</th>
                     <th className="border-b border-line px-3 py-2 text-right">Cost</th>
                     <th className="border-b border-line px-3 py-2 text-right">Price</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Hours</th>
+                    <th className="border-b border-line px-3 py-2 text-right">Units 1</th>
+                    <th className="border-b border-line px-3 py-2 text-right">Units 2</th>
+                    <th className="border-b border-line px-3 py-2 text-right">Units 3</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -776,7 +1196,13 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                         {formatMoney(data.price)}
                       </td>
                       <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {data.hours.toLocaleString()}
+                        {data.regHrs > 0 ? data.regHrs.toLocaleString() : "--"}
+                      </td>
+                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
+                        {data.otHrs > 0 ? data.otHrs.toLocaleString() : "--"}
+                      </td>
+                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
+                        {data.dtHrs > 0 ? data.dtHrs.toLocaleString() : "--"}
                       </td>
                     </tr>
                   ))}
@@ -794,9 +1220,13 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                       {formatMoney(Object.values(summaryData).reduce((s, d) => s + d.price, 0))}
                     </td>
                     <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {Object.values(summaryData)
-                        .reduce((s, d) => s + d.hours, 0)
-                        .toLocaleString()}
+                      {Object.values(summaryData).reduce((s, d) => s + d.regHrs, 0).toLocaleString()}
+                    </td>
+                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
+                      {Object.values(summaryData).reduce((s, d) => s + d.otHrs, 0).toLocaleString()}
+                    </td>
+                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
+                      {Object.values(summaryData).reduce((s, d) => s + d.dtHrs, 0).toLocaleString()}
                     </td>
                   </tr>
                 </tfoot>
@@ -806,549 +1236,139 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
         </Card>
       )}
 
-      {/* ─── Toolbar ─── */}
+      {/* ─── Grid ─── */}
       {activeTab !== "summary" && (
         <>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
-              <Input
-                className="pl-8 h-8 text-xs"
-                placeholder="Search items..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              {searchTerm && (
-                <button
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-fg/30 hover:text-fg"
-                  onClick={() => setSearchTerm("")}
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-
-            <Select
-              className="w-36 h-8 text-xs"
-              value={categoryFilter}
-              onChange={(e) => setCategoryFilter(e.target.value)}
-            >
-              <option value="">All categories</option>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </Select>
-
-            <Select
-              className="w-36 h-8 text-xs"
-              value={phaseFilter}
-              onChange={(e) => setPhaseFilter(e.target.value)}
-            >
-              <option value="">All phases</option>
-              {(workspace.phases ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.number} - {p.name}
-                </option>
-              ))}
-            </Select>
-
-            {/* Column visibility dropdown */}
-            <div className="relative group">
-              <Button size="xs" variant="ghost" className="h-8 text-[11px]">
-                Columns
-              </Button>
-              <div className="absolute right-0 top-full z-30 mt-1 hidden group-hover:block w-44 rounded-lg border border-line bg-panel shadow-lg py-1 text-xs">
-                {(
-                  [
-                    ["entityName", "Entity Name"],
-                    ["vendor", "Vendor"],
-                    ["description", "Description"],
-                    ["quantity", "Qty"],
-                    ["uom", "UOM"],
-                    ["laborHourReg", "Reg Hrs"],
-                    ["laborHourOver", "OT Hrs"],
-                    ["laborHourDouble", "DT Hrs"],
-                    ["cost", "Cost"],
-                    ["markup", "Markup"],
-                    ["price", "Price"],
-                    ["phaseId", "Phase"],
-                  ] as [EditableColumn, string][]
-                ).map(([col, label]) => (
-                  <label
-                    key={col}
-                    className="flex items-center gap-2 px-3 py-1 hover:bg-panel2/60 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isColVisible(col)}
-                      onChange={() => toggleColumn(col)}
-                      className="rounded"
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <Button size="sm" onClick={addNewItem} disabled={isPending} className="h-8">
-              <Plus className="h-3 w-3" /> Add item
-            </Button>
-          </div>
-
-          {/* ─── Data Grid ─── */}
-          <div className="overflow-x-auto rounded-lg border border-line">
-            <table className="w-full text-xs">
-              <thead className="bg-panel2/60 text-[10px] font-medium uppercase text-fg/35 sticky top-0 z-10">
-                <tr>
-                  <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left w-8">#</th>
-                  {isColVisible("entityName") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left min-w-[160px]">
-                      Entity Name
-                    </th>
-                  )}
-                  {isColVisible("vendor") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left min-w-[100px]">
-                      Vendor
-                    </th>
-                  )}
-                  {isColVisible("description") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left min-w-[140px]">
-                      Description
-                    </th>
-                  )}
-                  <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left w-16">
-                    Category
-                  </th>
-                  {isColVisible("quantity") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-16">
-                      Qty
-                    </th>
-                  )}
-                  {isColVisible("uom") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left w-14">
-                      UOM
-                    </th>
-                  )}
-                  {isColVisible("laborHourReg") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-16">
-                      Reg Hrs
-                    </th>
-                  )}
-                  {isColVisible("laborHourOver") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-16">
-                      OT Hrs
-                    </th>
-                  )}
-                  {isColVisible("laborHourDouble") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-16">
-                      DT Hrs
-                    </th>
-                  )}
-                  {isColVisible("cost") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-20">
-                      Cost
-                    </th>
-                  )}
-                  {isColVisible("markup") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-16">
-                      Markup
-                    </th>
-                  )}
-                  {isColVisible("price") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-right w-24">
-                      Price
-                    </th>
-                  )}
-                  {isColVisible("phaseId") && (
-                    <th className="whitespace-nowrap border-b border-line px-2 py-2 text-left w-24">
-                      Phase
-                    </th>
-                  )}
-                  <th className="whitespace-nowrap border-b border-line px-1 py-2 w-16"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row) => {
-                  const wsName =
-                    activeTab === "all"
-                      ? (workspace.worksheets ?? []).find((w) => w.id === row.worksheetId)?.name
-                      : undefined;
-                  const isSelected = selectedRowId === row.id;
-                  const phase = row.phaseId
-                    ? (workspace.phases ?? []).find((p) => p.id === row.phaseId)
-                    : null;
-
-                  return (
-                    <tr
-                      key={row.id}
-                      className={cn(
-                        "transition-colors",
-                        isSelected ? "bg-accent/8" : "hover:bg-panel2/30"
-                      )}
-                      onClick={() => setSelectedRowId(row.id)}
-                      onContextMenu={(e) => handleContextMenu(e, row.id)}
-                    >
-                      {/* Line order / drag handle */}
-                      <td className="border-b border-line px-1 py-1.5 text-fg/30 text-center">
-                        <div className="flex items-center gap-0.5">
-                          <GripVertical className="h-3 w-3 text-fg/15 cursor-grab" />
-                          <span className="text-[10px]">{row.lineOrder}</span>
-                        </div>
-                      </td>
-
-                      {/* Entity Name */}
-                      {isColVisible("entityName") &&
-                        renderEditableCell(row, "entityName", (
-                          <div>
-                            <div className="font-medium text-fg">{row.entityName}</div>
-                            {wsName && (
-                              <div className="text-[10px] text-fg/25 mt-0.5">{wsName}</div>
-                            )}
-                          </div>
-                        ))}
-
-                      {/* Vendor */}
-                      {isColVisible("vendor") &&
-                        renderEditableCell(
-                          row,
-                          "vendor",
-                          <span className="text-fg/60">{row.vendor || "-"}</span>
-                        )}
-
-                      {/* Description */}
-                      {isColVisible("description") && (
-                        <td
-                          className="border-b border-line px-2 py-1.5 text-fg/50 cursor-pointer hover:bg-accent/5 max-w-[200px]"
-                          onClick={() => startEditing(row.id, "description", row.description)}
-                          onDoubleClick={() => handleDescDoubleClick(row.id, row.description)}
-                        >
-                          {editingCell?.rowId === row.id && editingCell?.column === "description" ? (
-                            <input
-                              ref={(el) => { editInputRef.current = el; }}
-                              type="text"
-                              className="h-6 w-full rounded border border-accent/50 bg-bg px-1 text-xs outline-none"
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              onBlur={commitEdit}
-                              onKeyDown={handleCellKeyDown}
-                            />
-                          ) : (
-                            <span className="line-clamp-1 text-xs">{row.description || "-"}</span>
-                          )}
-                        </td>
-                      )}
-
-                      {/* Category (read-only) */}
-                      <td className="border-b border-line px-2 py-1.5">
-                        <Badge
-                          tone={
-                            (CATEGORY_COLORS[row.category] ?? "default") as
-                              | "default"
-                              | "success"
-                              | "warning"
-                              | "danger"
-                              | "info"
-                          }
-                        >
-                          {row.category}
-                        </Badge>
-                      </td>
-
-                      {/* Qty */}
-                      {isColVisible("quantity") &&
-                        renderEditableCell(
-                          row,
-                          "quantity",
-                          <span className="tabular-nums text-right block">{row.quantity.toLocaleString()}</span>,
-                          "text-right"
-                        )}
-
-                      {/* UOM */}
-                      {isColVisible("uom") &&
-                        renderEditableCell(
-                          row,
-                          "uom",
-                          <span className="text-fg/60">{row.uom}</span>
-                        )}
-
-                      {/* Reg Hrs */}
-                      {isColVisible("laborHourReg") &&
-                        renderEditableCell(
-                          row,
-                          "laborHourReg",
-                          <span className="tabular-nums text-right block">
-                            {row.laborHourReg || "-"}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* OT Hrs */}
-                      {isColVisible("laborHourOver") &&
-                        renderEditableCell(
-                          row,
-                          "laborHourOver",
-                          <span className="tabular-nums text-right block">
-                            {row.laborHourOver || "-"}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* DT Hrs */}
-                      {isColVisible("laborHourDouble") &&
-                        renderEditableCell(
-                          row,
-                          "laborHourDouble",
-                          <span className="tabular-nums text-right block">
-                            {row.laborHourDouble || "-"}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* Cost */}
-                      {isColVisible("cost") &&
-                        renderEditableCell(
-                          row,
-                          "cost",
-                          <span className="tabular-nums text-right block">
-                            {formatMoney(row.cost, 2)}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* Markup */}
-                      {isColVisible("markup") &&
-                        renderEditableCell(
-                          row,
-                          "markup",
-                          <span className="tabular-nums text-right block">
-                            {formatPercent(row.markup, 1)}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* Price */}
-                      {isColVisible("price") &&
-                        renderEditableCell(
-                          row,
-                          "price",
-                          <span className="tabular-nums text-right block font-semibold">
-                            {formatMoney(row.price, 2)}
-                          </span>,
-                          "text-right"
-                        )}
-
-                      {/* Phase */}
-                      {isColVisible("phaseId") &&
-                        renderEditableCell(
-                          row,
-                          "phaseId",
-                          <span className="text-fg/50 text-[11px]">
-                            {phase ? `${phase.number} - ${phase.name}` : "-"}
-                          </span>
-                        )}
-
-                      {/* Actions */}
-                      <td className="border-b border-line px-1 py-1.5">
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            className="p-1 text-fg/25 hover:text-fg/60 transition-colors"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              duplicateRow(row.id);
-                            }}
-                            title="Duplicate"
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
-                          <button
-                            className="p-1 text-fg/25 hover:text-danger transition-colors"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteRow(row.id);
-                            }}
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {visibleRows.length === 0 && (
+          {visibleRows.length === 0 ? (
+            <EmptyState>
+              No line items found.{" "}
+              <button className="text-accent hover:underline" onClick={() => addNewItem()}>
+                Add one
+              </button>
+            </EmptyState>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-line">
+              <table className="w-full text-sm">
+                <thead className="bg-panel2/60 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
-                    <td
-                      colSpan={20}
-                      className="px-3 py-8 text-center text-xs text-fg/30"
-                    >
-                      {searchTerm || categoryFilter || phaseFilter
-                        ? "No items match filters"
-                        : "No line items yet. Click \"Add item\" to begin."}
-                    </td>
+                    <th className="border-b border-line px-2 py-2 text-left w-8">#</th>
+                    <th className="border-b border-line px-2 py-2 text-left min-w-[200px]">Entity Name</th>
+                    <th className="border-b border-line px-2 py-2 text-left min-w-[100px]">Vendor</th>
+                    <th className="border-b border-line px-2 py-2 text-left min-w-[160px]">Description</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-16">Qty</th>
+                    <th className="border-b border-line px-2 py-2 text-center w-14">UOM</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 1</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 2</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 3</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-20">Cost</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-16">Markup</th>
+                    <th className="border-b border-line px-2 py-2 text-right w-24">Price</th>
+                    <th className="border-b border-line px-2 py-2 text-left w-24">Phase</th>
+                    <th className="border-b border-line px-2 py-2 text-center w-10"></th>
                   </tr>
-                )}
-              </tbody>
-
-              {/* Footer with totals */}
-              <tfoot className="bg-panel2/40 text-[11px] font-medium">
-                <tr>
-                  <td className="border-t border-line px-2 py-2"></td>
-                  {isColVisible("entityName") && (
-                    <td className="border-t border-line px-2 py-2 text-fg/50">
-                      {totals.count} item{totals.count !== 1 ? "s" : ""}
+                </thead>
+                <tbody>
+                  {groupedRows.map((group) => {
+                    const isCollapsed = collapsedCategories.has(group.category);
+                    return (
+                      <GroupRows
+                        key={group.category}
+                        group={group}
+                        isCollapsed={isCollapsed}
+                        onToggleCollapse={() => toggleCategoryCollapse(group.category)}
+                        selectedRowId={selectedRowId}
+                        onSelectRow={setSelectedRowId}
+                        onContextMenu={handleContextMenu}
+                        onDescDoubleClick={handleDescDoubleClick}
+                        renderEditableCell={renderEditableCell}
+                        entityCategories={entityCategories}
+                        workspace={workspace}
+                      />
+                    );
+                  })}
+                </tbody>
+                {/* ─── Totals footer ─── */}
+                <tfoot className="bg-panel2/40 text-xs font-medium sticky bottom-0">
+                  <tr>
+                    <td className="border-t border-line px-2 py-2" colSpan={2}>
+                      <span className="text-fg/50">{totals.count} items</span>
                     </td>
-                  )}
-                  {isColVisible("vendor") && <td className="border-t border-line px-2 py-2"></td>}
-                  {isColVisible("description") && (
-                    <td className="border-t border-line px-2 py-2"></td>
-                  )}
-                  <td className="border-t border-line px-2 py-2"></td>
-                  {isColVisible("quantity") && <td className="border-t border-line px-2 py-2"></td>}
-                  {isColVisible("uom") && <td className="border-t border-line px-2 py-2"></td>}
-                  {isColVisible("laborHourReg") && (
-                    <td className="border-t border-line px-2 py-2"></td>
-                  )}
-                  {isColVisible("laborHourOver") && (
-                    <td className="border-t border-line px-2 py-2"></td>
-                  )}
-                  {isColVisible("laborHourDouble") && (
-                    <td className="border-t border-line px-2 py-2"></td>
-                  )}
-                  {isColVisible("cost") && (
+                    <td className="border-t border-line px-2 py-2" />
+                    <td className="border-t border-line px-2 py-2" />
+                    <td className="border-t border-line px-2 py-2" />
+                    <td className="border-t border-line px-2 py-2" />
+                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                      {totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}
+                    </td>
+                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                      {totals.otHrs > 0 ? totals.otHrs.toLocaleString() : ""}
+                    </td>
+                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                      {totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : ""}
+                    </td>
                     <td className="border-t border-line px-2 py-2 text-right tabular-nums">
                       {formatMoney(totals.cost)}
                     </td>
-                  )}
-                  {isColVisible("markup") && <td className="border-t border-line px-2 py-2"></td>}
-                  {isColVisible("price") && (
+                    <td className="border-t border-line px-2 py-2" />
                     <td className="border-t border-line px-2 py-2 text-right tabular-nums font-semibold">
                       {formatMoney(totals.price)}
                     </td>
-                  )}
-                  {isColVisible("phaseId") && <td className="border-t border-line px-2 py-2"></td>}
-                  <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                    {totals.hours.toLocaleString()} hrs
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+                    <td className="border-t border-line px-2 py-2" />
+                    <td className="border-t border-line px-2 py-2" />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
         </>
       )}
 
-      {/* ─── Context Menu ─── */}
+      {/* ─── Context menu ─── */}
       {contextMenu && (
         <div
-          className="fixed z-50 min-w-[160px] rounded-lg border border-line bg-panel shadow-lg py-1 text-xs"
+          className="fixed z-50 rounded-lg border border-line bg-panel shadow-xl py-1 text-xs min-w-[140px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
-            className="block w-full px-3 py-1.5 text-left hover:bg-panel2/60"
-            onClick={() => {
-              const row = visibleRows.find((r) => r.id === contextMenu.rowId);
-              if (row) {
-                startEditing(row.id, "entityName", row.entityName);
-              }
-              setContextMenu(null);
-            }}
-          >
-            Edit
-          </button>
-          <button
-            className="block w-full px-3 py-1.5 text-left hover:bg-panel2/60"
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
             onClick={() => {
               duplicateRow(contextMenu.rowId);
               setContextMenu(null);
             }}
           >
-            Duplicate
+            <Copy className="h-3 w-3" /> Duplicate
           </button>
-          <div className="h-px bg-line mx-2 my-1" />
-          {workspace.worksheets.length > 1 && (
-            <div className="px-3 py-1 text-[10px] font-medium uppercase text-fg/30">
-              Move to Worksheet
-            </div>
-          )}
-          {workspace.worksheets
-            .filter((ws) => {
-              const row = visibleRows.find((r) => r.id === contextMenu.rowId);
-              return row && ws.id !== row.worksheetId;
-            })
-            .map((ws) => (
-              <button
-                key={ws.id}
-                className="block w-full px-3 py-1.5 text-left hover:bg-panel2/60"
-                onClick={() => {
-                  const row = visibleRows.find((r) => r.id === contextMenu.rowId);
-                  if (!row) return;
-                  // Move = create in new ws + delete from old
-                  const payload: CreateWorksheetItemInput = {
-                    phaseId: row.phaseId ?? null,
-                    category: row.category,
-                    entityType: row.entityType,
-                    entityName: row.entityName,
-                    vendor: row.vendor ?? null,
-                    description: row.description,
-                    quantity: row.quantity,
-                    uom: row.uom,
-                    cost: row.cost,
-                    markup: row.markup,
-                    price: row.price,
-                    laborHourReg: row.laborHourReg,
-                    laborHourOver: row.laborHourOver,
-                    laborHourDouble: row.laborHourDouble,
-                  };
-                  startTransition(async () => {
-                    try {
-                      await createWorksheetItem(workspace.project.id, ws.id, payload);
-                      const next = await deleteWorksheetItem(workspace.project.id, row.id);
-                      onApply(next);
-                    } catch (e) {
-                      onError(e instanceof Error ? e.message : "Move failed.");
-                    }
-                  });
-                  setContextMenu(null);
-                }}
-              >
-                {ws.name}
-              </button>
-            ))}
-          <div className="h-px bg-line mx-2 my-1" />
           <button
-            className="block w-full px-3 py-1.5 text-left text-danger hover:bg-panel2/60"
+            className="w-full text-left px-3 py-1.5 hover:bg-danger/10 text-danger flex items-center gap-2"
             onClick={() => {
               deleteRow(contextMenu.rowId);
               setContextMenu(null);
             }}
           >
-            Delete
+            <Trash2 className="h-3 w-3" /> Delete
           </button>
         </div>
       )}
 
-      {/* ─── Tab Context Menu ─── */}
+      {/* ─── Tab context menu ─── */}
       {tabMenu && (
         <div
-          className="fixed z-50 min-w-[140px] rounded-lg border border-line bg-panel shadow-lg py-1 text-xs"
+          className="fixed z-50 rounded-lg border border-line bg-panel shadow-xl py-1 text-xs min-w-[140px]"
           style={{ left: tabMenu.x, top: tabMenu.y }}
         >
           <button
-            className="block w-full px-3 py-1.5 text-left hover:bg-panel2/60"
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60"
             onClick={() => {
+              setInlineRenameWsId(tabMenu.wsId);
               const ws = findWs(workspace, tabMenu.wsId);
-              if (ws) {
-                setRenameWsId(ws.id);
-                setRenameWsName(ws.name);
-              }
+              setInlineRenameName(ws?.name ?? "");
               setTabMenu(null);
             }}
           >
             Rename
           </button>
           <button
-            className="block w-full px-3 py-1.5 text-left text-danger hover:bg-panel2/60"
+            className="w-full text-left px-3 py-1.5 hover:bg-danger/10 text-danger"
             onClick={() => {
               handleDeleteWorksheet(tabMenu.wsId);
               setTabMenu(null);
@@ -1360,23 +1380,22 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
         </div>
       )}
 
-      {/* ─── New Worksheet Modal ─── */}
-      <ModalBackdrop open={showNewWsModal} onClose={() => setShowNewWsModal(false)} size="sm">
-        <Card>
-          <CardHeader>
-            <CardTitle>New Worksheet</CardTitle>
-          </CardHeader>
-          <CardBody className="space-y-3">
+      {/* ─── New Worksheet modal ─── */}
+      {showNewWsModal && (
+        <ModalBackdrop open={showNewWsModal} onClose={() => setShowNewWsModal(false)}>
+          <div className="w-80">
+            <h4 className="text-sm font-semibold mb-3">New Worksheet</h4>
             <Input
-              placeholder="Worksheet name"
+              autoFocus
+              className="mb-3"
+              placeholder="Worksheet name..."
               value={newWsName}
               onChange={(e) => setNewWsName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreateWorksheet();
               }}
-              autoFocus
             />
-            <div className="flex gap-2 justify-end">
+            <div className="flex justify-end gap-2">
               <Button size="sm" variant="ghost" onClick={() => setShowNewWsModal(false)}>
                 Cancel
               </Button>
@@ -1384,74 +1403,23 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                 Create
               </Button>
             </div>
-          </CardBody>
-        </Card>
-      </ModalBackdrop>
+          </div>
+        </ModalBackdrop>
+      )}
 
-      {/* ─── Rename Worksheet Modal ─── */}
-      <ModalBackdrop
-        open={renameWsId !== null}
-        onClose={() => {
-          setRenameWsId(null);
-          setRenameWsName("");
-        }}
-        size="sm"
-      >
-        <Card>
-          <CardHeader>
-            <CardTitle>Rename Worksheet</CardTitle>
-          </CardHeader>
-          <CardBody className="space-y-3">
-            <Input
-              placeholder="Worksheet name"
-              value={renameWsName}
-              onChange={(e) => setRenameWsName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameWorksheet();
-              }}
-              autoFocus
-            />
-            <div className="flex gap-2 justify-end">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setRenameWsId(null);
-                  setRenameWsName("");
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleRenameWorksheet}
-                disabled={!renameWsName.trim() || isPending}
-              >
-                Rename
-              </Button>
-            </div>
-          </CardBody>
-        </Card>
-      </ModalBackdrop>
-
-      {/* ─── Description Popup ─── */}
-      <ModalBackdrop
-        open={descPopup !== null}
-        onClose={() => setDescPopup(null)}
-        size="md"
-      >
-        <Card>
-          <CardHeader>
-            <CardTitle>Edit Description</CardTitle>
-          </CardHeader>
-          <CardBody className="space-y-3">
+      {/* ─── Description popup ─── */}
+      {descPopup && (
+        <ModalBackdrop open={!!descPopup} onClose={() => setDescPopup(null)}>
+          <div className="w-96">
+            <h4 className="text-sm font-semibold mb-3">Edit Description</h4>
             <textarea
-              className="min-h-32 w-full rounded-lg border border-line bg-bg/50 px-3 py-2 text-sm text-fg outline-none transition-colors placeholder:text-fg/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
-              value={descPopup?.value ?? ""}
-              onChange={(e) => setDescPopup((p) => (p ? { ...p, value: e.target.value } : p))}
               autoFocus
+              rows={5}
+              className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent/50 resize-y"
+              value={descPopup.value}
+              onChange={(e) => setDescPopup({ ...descPopup, value: e.target.value })}
             />
-            <div className="flex gap-2 justify-end">
+            <div className="flex justify-end gap-2 mt-3">
               <Button size="sm" variant="ghost" onClick={() => setDescPopup(null)}>
                 Cancel
               </Button>
@@ -1459,9 +1427,199 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                 Save
               </Button>
             </div>
-          </CardBody>
-        </Card>
-      </ModalBackdrop>
+          </div>
+        </ModalBackdrop>
+      )}
     </div>
+  );
+}
+
+/* ─── GroupRows sub-component ─── */
+
+function GroupRows({
+  group,
+  isCollapsed,
+  onToggleCollapse,
+  selectedRowId,
+  onSelectRow,
+  onContextMenu,
+  onDescDoubleClick,
+  renderEditableCell,
+  entityCategories,
+  workspace,
+}: {
+  group: {
+    category: string;
+    catDef: EntityCategory | undefined;
+    items: WorkspaceWorksheetItem[];
+    totalPrice: number;
+  };
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+  selectedRowId: string | null;
+  onSelectRow: (id: string) => void;
+  onContextMenu: (e: React.MouseEvent, rowId: string) => void;
+  onDescDoubleClick: (rowId: string, desc: string) => void;
+  renderEditableCell: (
+    row: WorkspaceWorksheetItem,
+    column: EditableColumn,
+    displayValue: React.ReactNode,
+    className?: string
+  ) => React.ReactNode;
+  entityCategories: EntityCategory[];
+  workspace: ProjectWorkspaceData;
+}) {
+  const catDef = group.catDef;
+  const regLabel = catDef ? catDef.laborHourLabels.reg : "";
+  const overLabel = catDef ? catDef.laborHourLabels.over : "";
+  const doubleLabel = catDef ? catDef.laborHourLabels.double : "";
+
+  return (
+    <>
+      {/* Category group header */}
+      <tr
+        className="bg-panel2/30 cursor-pointer hover:bg-panel2/50 transition-colors"
+        onClick={onToggleCollapse}
+      >
+        <td colSpan={14} className="border-b border-line px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            {isCollapsed ? (
+              <ChevronRight className="h-3.5 w-3.5 text-fg/40" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
+            )}
+            <Badge
+              tone={(CATEGORY_COLORS[group.category] ?? "default") as "default" | "success" | "warning" | "danger" | "info"}
+            >
+              {group.category}
+            </Badge>
+            <span className="text-[11px] text-fg/40">
+              {group.items.length} item{group.items.length !== 1 ? "s" : ""}
+            </span>
+            <span className="ml-auto text-xs font-medium tabular-nums text-fg/60">
+              {formatMoney(group.totalPrice)}
+            </span>
+          </div>
+        </td>
+      </tr>
+      {/* Items */}
+      {!isCollapsed &&
+        group.items.map((row, idx) => {
+          const isSelected = selectedRowId === row.id;
+          const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
+
+          return (
+            <tr
+              key={row.id}
+              className={cn(
+                "transition-colors",
+                isSelected ? "bg-accent/5" : "hover:bg-panel2/15"
+              )}
+              onClick={() => onSelectRow(row.id)}
+              onContextMenu={(e) => onContextMenu(e, row.id)}
+            >
+              {/* Row number */}
+              <td className="border-b border-line px-2 py-2 text-[10px] text-fg/25 tabular-nums">
+                {idx + 1}
+              </td>
+
+              {/* Entity Name (with dropdown) */}
+              {renderEditableCell(row, "entityName", row.entityName, "min-w-[200px]")}
+
+              {/* Vendor */}
+              {renderEditableCell(row, "vendor", row.vendor ?? "", "min-w-[100px]")}
+
+              {/* Description */}
+              <td
+                className="border-b border-line px-2 py-2 text-xs cursor-pointer hover:bg-accent/5 min-w-[160px] max-w-[200px] truncate"
+                onClick={() => onDescDoubleClick(row.id, row.description)}
+                title={row.description}
+              >
+                {row.description || <span className="text-fg/20 italic">Add description...</span>}
+              </td>
+
+              {/* Quantity */}
+              {renderEditableCell(
+                row,
+                "quantity",
+                <span className="tabular-nums">{row.quantity}</span>,
+                "text-right"
+              )}
+
+              {/* UOM */}
+              {renderEditableCell(row, "uom", row.uom, "text-center")}
+
+              {/* Labour Hours - dynamic labels */}
+              {renderEditableCell(
+                row,
+                "laborHourReg",
+                <span className="tabular-nums">{row.laborHourReg || "--"}</span>,
+                "text-right"
+              )}
+              {renderEditableCell(
+                row,
+                "laborHourOver",
+                <span className="tabular-nums">{row.laborHourOver || "--"}</span>,
+                "text-right"
+              )}
+              {renderEditableCell(
+                row,
+                "laborHourDouble",
+                <span className="tabular-nums">{row.laborHourDouble || "--"}</span>,
+                "text-right"
+              )}
+
+              {/* Cost */}
+              {renderEditableCell(
+                row,
+                "cost",
+                <span className="tabular-nums">{formatMoney(row.cost, 2)}</span>,
+                "text-right"
+              )}
+
+              {/* Markup */}
+              {renderEditableCell(
+                row,
+                "markup",
+                <span className="tabular-nums">{formatPercent(row.markup)}</span>,
+                "text-right"
+              )}
+
+              {/* Price */}
+              {renderEditableCell(
+                row,
+                "price",
+                <span className="tabular-nums font-medium">{formatMoney(row.price)}</span>,
+                "text-right"
+              )}
+
+              {/* Phase */}
+              {renderEditableCell(
+                row,
+                "phaseId",
+                phase ? (
+                  <span className="text-fg/60">{phase.number}</span>
+                ) : (
+                  <span className="text-fg/20">--</span>
+                ),
+                "text-left"
+              )}
+
+              {/* Actions */}
+              <td className="border-b border-line px-1 py-2 text-center">
+                <button
+                  className="p-1 rounded hover:bg-panel2/60 text-fg/30 hover:text-fg/60 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onContextMenu(e, row.id);
+                  }}
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+    </>
   );
 }
