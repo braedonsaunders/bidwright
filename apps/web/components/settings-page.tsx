@@ -137,27 +137,109 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as Partial<AllSettings>;
+    // Load from API first, fall back to localStorage
+    apiGetSettings()
+      .then((apiSettings) => {
         setSettings((prev) => ({
-          general: { ...prev.general, ...parsed.general },
-          email: { ...prev.email, ...parsed.email },
-          defaults: { ...prev.defaults, ...parsed.defaults },
-          users: parsed.users ?? prev.users,
-          integrations: { ...prev.integrations, ...parsed.integrations },
+          general: {
+            ...prev.general,
+            organizationName: apiSettings.general.orgName || prev.general.organizationName,
+            address: apiSettings.general.address || prev.general.address,
+            phone: apiSettings.general.phone || prev.general.phone,
+            website: apiSettings.general.website || prev.general.website,
+            logoUrl: apiSettings.general.logoUrl || prev.general.logoUrl,
+          },
+          email: {
+            ...prev.email,
+            smtpHost: apiSettings.email.host || prev.email.smtpHost,
+            smtpPort: String(apiSettings.email.port) || prev.email.smtpPort,
+            smtpUsername: apiSettings.email.username || prev.email.smtpUsername,
+            smtpPassword: apiSettings.email.password || prev.email.smtpPassword,
+            fromAddress: apiSettings.email.fromAddress || prev.email.fromAddress,
+            fromName: apiSettings.email.fromName || prev.email.fromName,
+          },
+          defaults: {
+            ...prev.defaults,
+            defaultMarkup: apiSettings.defaults.defaultMarkup ?? prev.defaults.defaultMarkup,
+            defaultBreakoutStyle: apiSettings.defaults.breakoutStyle || prev.defaults.defaultBreakoutStyle,
+            defaultQuoteType: apiSettings.defaults.quoteType || prev.defaults.defaultQuoteType,
+          },
+          users: prev.users,
+          integrations: {
+            ...prev.integrations,
+            openaiApiKey: apiSettings.integrations.openaiKey || prev.integrations.openaiApiKey,
+            anthropicApiKey: apiSettings.integrations.anthropicKey || prev.integrations.anthropicApiKey,
+            llmProvider: apiSettings.integrations.llmProvider || prev.integrations.llmProvider,
+            llmModel: apiSettings.integrations.llmModel || prev.integrations.llmModel,
+          },
         }));
-      }
-    } catch {
-      // use defaults
-    }
+      })
+      .catch(() => {
+        // Fall back to localStorage
+        try {
+          const stored = localStorage.getItem(STORAGE_KEY);
+          if (stored) {
+            const parsed = JSON.parse(stored) as Partial<AllSettings>;
+            setSettings((prev) => ({
+              general: { ...prev.general, ...parsed.general },
+              email: { ...prev.email, ...parsed.email },
+              defaults: { ...prev.defaults, ...parsed.defaults },
+              users: parsed.users ?? prev.users,
+              integrations: { ...prev.integrations, ...parsed.integrations },
+            }));
+          }
+        } catch {
+          // use defaults
+        }
+      });
   }, []);
 
   const save = useCallback(() => {
+    // Save to localStorage as backup
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+
+    // Save to API
+    const apiPayload: Partial<AppSettingsRecord> = {
+      general: {
+        orgName: settings.general.organizationName,
+        address: settings.general.address,
+        phone: settings.general.phone,
+        website: settings.general.website,
+        logoUrl: settings.general.logoUrl,
+      },
+      email: {
+        host: settings.email.smtpHost,
+        port: parseInt(settings.email.smtpPort, 10) || 587,
+        username: settings.email.smtpUsername,
+        password: settings.email.smtpPassword,
+        fromAddress: settings.email.fromAddress,
+        fromName: settings.email.fromName,
+      },
+      defaults: {
+        defaultMarkup: settings.defaults.defaultMarkup,
+        breakoutStyle: settings.defaults.defaultBreakoutStyle,
+        quoteType: settings.defaults.defaultQuoteType,
+      },
+      integrations: {
+        openaiKey: settings.integrations.openaiApiKey,
+        anthropicKey: settings.integrations.anthropicApiKey,
+        openrouterKey: "",
+        geminiKey: "",
+        llmProvider: settings.integrations.llmProvider,
+        llmModel: settings.integrations.llmModel,
+      },
+    };
+
+    apiUpdateSettings(apiPayload)
+      .then(() => {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      })
+      .catch(() => {
+        // Still mark as saved since localStorage succeeded
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      });
   }, [settings]);
 
   const updateGeneral = (patch: Partial<GeneralSettings>) =>
