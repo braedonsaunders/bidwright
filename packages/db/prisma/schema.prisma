@@ -1,12 +1,10 @@
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["postgresqlExtensions"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider   = "postgresql"
-  url        = env("DATABASE_URL")
-  extensions = [pgvector(map: "vector", schema: "public")]
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ── Multi-tenancy Root ────────────────────────────────────────────────────
@@ -37,6 +35,7 @@ model OrganizationSettings {
   email          Json         @default("{}")
   defaults       Json         @default("{}")
   integrations   Json         @default("{}")
+  brand          Json         @default("{}")
   updatedAt      DateTime     @updatedAt
 }
 

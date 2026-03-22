@@ -5,7 +5,8 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.30.3",
   "scripts": {
-    "dev": "pnpm --parallel --filter @bidwright/web --filter @bidwright/api --filter @bidwright/worker dev",
+    "dev": "bash scripts/dev-start.sh",
+    "dev:apps": "pnpm --parallel --filter @bidwright/web --filter @bidwright/api --filter @bidwright/worker dev",
     "dev:web": "pnpm --filter @bidwright/web dev",
     "dev:api": "pnpm --filter @bidwright/api dev",
     "dev:worker": "pnpm --filter @bidwright/worker dev",
