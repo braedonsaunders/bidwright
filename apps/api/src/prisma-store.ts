@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { hashPassword, verifyPassword } from "./services/auth-service.js";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -390,6 +391,7 @@ export interface CreateFileNodeInput {
   parentId?: string | null;
   name: string;
   type: "file" | "directory";
+  scope?: "project" | "knowledge";
   fileType?: string;
   size?: number;
   documentId?: string;
@@ -401,6 +403,34 @@ export interface CreateFileNodeInput {
 export interface FileNodePatchInput {
   name?: string;
   parentId?: string | null;
+}
+
+export interface CreateTakeoffAnnotationInput {
+  documentId: string;
+  pageNumber: number;
+  annotationType: string;
+  label?: string;
+  color?: string;
+  lineThickness?: number;
+  visible?: boolean;
+  groupName?: string;
+  points?: Array<{ x: number; y: number }>;
+  measurement?: Record<string, unknown>;
+  calibration?: { pixelsPerUnit: number; unit: string } | null;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+}
+
+export interface TakeoffAnnotationPatchInput {
+  label?: string;
+  color?: string;
+  lineThickness?: number;
+  visible?: boolean;
+  groupName?: string;
+  points?: Array<{ x: number; y: number }>;
+  measurement?: Record<string, unknown>;
+  calibration?: { pixelsPerUnit: number; unit: string } | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ImportPreviewResult {
@@ -432,11 +462,19 @@ export interface UserPatchInput {
 
 // ── Default Settings ──────────────────────────────────────────────────────────
 
+const DEFAULT_BRAND: AppSettings["brand"] = {
+  companyName: "", tagline: "", industry: "", description: "",
+  services: [], targetMarkets: [], brandVoice: "",
+  colors: { primary: "", secondary: "", accent: "" },
+  logoUrl: "", socialLinks: {}, websiteUrl: "", lastCapturedAt: null,
+};
+
 const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
-  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm" },
+  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1 },
   integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514" },
+  brand: DEFAULT_BRAND,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -672,7 +710,29 @@ function mapJob(j: any): Job {
 }
 
 function mapFileNode(n: any): FileNode {
-  return { id: n.id, projectId: n.projectId, parentId: n.parentId ?? null, name: n.name, type: n.type as FileNode["type"], fileType: n.fileType ?? undefined, size: n.size ?? undefined, documentId: n.documentId ?? undefined, storagePath: n.storagePath ?? undefined, metadata: (n.metadata as Record<string, unknown>) ?? {}, createdAt: toISO(n.createdAt), updatedAt: toISO(n.updatedAt), createdBy: n.createdBy ?? undefined };
+  return { id: n.id, projectId: n.projectId, parentId: n.parentId ?? null, name: n.name, type: n.type as FileNode["type"], scope: n.scope ?? "project", fileType: n.fileType ?? undefined, size: n.size ?? undefined, documentId: n.documentId ?? undefined, storagePath: n.storagePath ?? undefined, metadata: (n.metadata as Record<string, unknown>) ?? {}, createdAt: toISO(n.createdAt), updatedAt: toISO(n.updatedAt), createdBy: n.createdBy ?? undefined };
+}
+
+function mapTakeoffAnnotation(a: any) {
+  return {
+    id: a.id,
+    projectId: a.projectId,
+    documentId: a.documentId,
+    pageNumber: a.pageNumber,
+    annotationType: a.annotationType,
+    label: a.label ?? "",
+    color: a.color ?? "#3b82f6",
+    lineThickness: a.lineThickness ?? 4,
+    visible: a.visible ?? true,
+    groupName: a.groupName ?? "",
+    points: (a.points as Array<{ x: number; y: number }>) ?? [],
+    measurement: (a.measurement as Record<string, unknown>) ?? {},
+    calibration: a.calibration ?? null,
+    metadata: (a.metadata as Record<string, unknown>) ?? {},
+    createdBy: a.createdBy ?? undefined,
+    createdAt: toISO(a.createdAt),
+    updatedAt: toISO(a.updatedAt),
+  };
 }
 
 function mapPlugin(p: any): Plugin {
@@ -1135,14 +1195,24 @@ export class PrismaApiStore {
     });
 
     const projectIds = projects.map((p) => p.id);
-    const [packages, jobs, workspaceStates] = await Promise.all([
+    const [packages, jobs, workspaceStates, quotes, revisions] = await Promise.all([
       this.db.storedPackage.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.ingestionJob.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.workspaceState.findMany({ where: { projectId: { in: projectIds } } }),
+      this.db.quote.findMany({ where: { projectId: { in: projectIds } } }),
+      this.db.quoteRevision.findMany({
+        where: { quote: { projectId: { in: projectIds } } },
+      }),
     ]);
 
     return projects.map((p) => {
       const mapped = mapProject(p);
+      const quote = quotes.find((q) => q.projectId === p.id);
+      const revision = quote
+        ? revisions.find((r) => r.id === quote.currentRevisionId) ??
+          revisions.filter((r) => r.quoteId === quote.id).sort((a, b) => b.revisionNumber - a.revisionNumber)[0]
+        : undefined;
+
       return {
         ...mapped,
         packageCount: packages.filter((pkg) => pkg.projectId === p.id).length,
@@ -1150,6 +1220,20 @@ export class PrismaApiStore {
         workspaceState: workspaceStates.find((ws) => ws.projectId === p.id)
           ? mapWorkspaceState(workspaceStates.find((ws) => ws.projectId === p.id))
           : null,
+        quote: quote ? {
+          id: quote.id,
+          quoteNumber: quote.quoteNumber,
+          title: quote.title,
+          status: quote.status,
+          currentRevisionId: quote.currentRevisionId,
+        } : null,
+        latestRevision: revision ? {
+          id: revision.id,
+          revisionNumber: revision.revisionNumber,
+          subtotal: revision.subtotal,
+          estimatedProfit: revision.estimatedProfit,
+          estimatedMargin: revision.estimatedMargin,
+        } : null,
       };
     });
   }
@@ -3155,11 +3239,14 @@ export class PrismaApiStore {
 
   // ── File Node CRUD ─────────────────────────────────────────────────────
 
-  async listFileNodes(projectId: string, parentId?: string | null) {
+  async listFileNodes(projectId: string, parentId?: string | null, scope?: string) {
     await this.requireProject(projectId);
     const where: any = { projectId };
     if (parentId !== undefined) {
       where.parentId = parentId ?? null;
+    }
+    if (scope) {
+      where.scope = scope;
     }
     const nodes = await this.db.fileNode.findMany({ where });
     return nodes.map(mapFileNode);
@@ -3187,6 +3274,7 @@ export class PrismaApiStore {
         parentId: input.parentId ?? null,
         name: input.name,
         type: input.type,
+        scope: input.scope ?? "project",
         fileType: input.fileType,
         size: input.size,
         documentId: input.documentId,
@@ -3237,10 +3325,75 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
-  async getFileTree(projectId: string) {
+  async getFileTree(projectId: string, scope?: string) {
     await this.requireProject(projectId);
-    const nodes = await this.db.fileNode.findMany({ where: { projectId } });
+    const where: any = { projectId };
+    if (scope) where.scope = scope;
+    const nodes = await this.db.fileNode.findMany({ where });
     return nodes.map(mapFileNode);
+  }
+
+  // ── Takeoff Annotation CRUD ──────────────────────────────────────────
+
+  async listTakeoffAnnotations(projectId: string, documentId?: string, pageNumber?: number) {
+    await this.requireProject(projectId);
+    const where: any = { projectId };
+    if (documentId) where.documentId = documentId;
+    if (pageNumber !== undefined) where.pageNumber = pageNumber;
+    const rows = await this.db.takeoffAnnotation.findMany({ where, orderBy: { createdAt: "asc" } });
+    return rows.map(mapTakeoffAnnotation);
+  }
+
+  async createTakeoffAnnotation(projectId: string, input: CreateTakeoffAnnotationInput) {
+    await this.requireProject(projectId);
+    const annotation = await this.db.takeoffAnnotation.create({
+      data: {
+        id: createId("takeoff"),
+        projectId,
+        documentId: input.documentId,
+        pageNumber: input.pageNumber,
+        annotationType: input.annotationType,
+        label: input.label ?? "",
+        color: input.color ?? "#3b82f6",
+        lineThickness: input.lineThickness ?? 4,
+        visible: input.visible ?? true,
+        groupName: input.groupName ?? "",
+        points: (input.points ?? []) as any,
+        measurement: (input.measurement ?? {}) as any,
+        calibration: input.calibration !== undefined ? (input.calibration as any) : undefined,
+        metadata: (input.metadata ?? {}) as any,
+        createdBy: input.createdBy,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return mapTakeoffAnnotation(annotation);
+  }
+
+  async updateTakeoffAnnotation(annotationId: string, patch: TakeoffAnnotationPatchInput) {
+    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
+    if (!annotation) throw new Error(`Takeoff annotation ${annotationId} not found`);
+
+    const data: any = { updatedAt: new Date() };
+    if (patch.label !== undefined) data.label = patch.label;
+    if (patch.color !== undefined) data.color = patch.color;
+    if (patch.lineThickness !== undefined) data.lineThickness = patch.lineThickness;
+    if (patch.visible !== undefined) data.visible = patch.visible;
+    if (patch.groupName !== undefined) data.groupName = patch.groupName;
+    if (patch.points !== undefined) data.points = patch.points as any;
+    if (patch.measurement !== undefined) data.measurement = patch.measurement as any;
+    if (patch.calibration !== undefined) data.calibration = patch.calibration as any;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
+
+    const updated = await this.db.takeoffAnnotation.update({ where: { id: annotationId }, data });
+    return mapTakeoffAnnotation(updated);
+  }
+
+  async deleteTakeoffAnnotation(annotationId: string) {
+    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
+    if (!annotation) throw new Error(`Takeoff annotation ${annotationId} not found`);
+    await this.db.takeoffAnnotation.delete({ where: { id: annotationId } });
+    return { deleted: true };
   }
 
   async listAllJobs() {
@@ -3507,6 +3660,7 @@ export class PrismaApiStore {
       email: (settings.email as any) ?? DEFAULT_SETTINGS.email,
       defaults: (settings.defaults as any) ?? DEFAULT_SETTINGS.defaults,
       integrations: (settings.integrations as any) ?? DEFAULT_SETTINGS.integrations,
+      brand: (settings.brand as any) ?? DEFAULT_BRAND,
     } as AppSettings;
   }
 
@@ -3518,6 +3672,7 @@ export class PrismaApiStore {
       email: patch.email ? { ...existing.email, ...patch.email } : existing.email,
       defaults: patch.defaults ? { ...existing.defaults, ...patch.defaults } : existing.defaults,
       integrations: patch.integrations ? { ...existing.integrations, ...patch.integrations } : existing.integrations,
+      brand: patch.brand ? { ...existing.brand, ...patch.brand } : existing.brand,
     };
 
     await this.db.organizationSettings.upsert({
@@ -3528,6 +3683,7 @@ export class PrismaApiStore {
         email: merged.email as any,
         defaults: merged.defaults as any,
         integrations: merged.integrations as any,
+        brand: merged.brand as any,
         updatedAt: new Date(),
       },
       update: {
@@ -3535,6 +3691,7 @@ export class PrismaApiStore {
         email: merged.email as any,
         defaults: merged.defaults as any,
         integrations: merged.integrations as any,
+        brand: merged.brand as any,
         updatedAt: new Date(),
       },
     });
@@ -3566,7 +3723,7 @@ export class PrismaApiStore {
         name: input.name,
         role: input.role,
         active: true,
-        passwordHash: input.password ?? "",
+        passwordHash: input.password ? await hashPassword(input.password) : "",
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -3583,7 +3740,7 @@ export class PrismaApiStore {
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.role !== undefined) data.role = patch.role;
     if (patch.active !== undefined) data.active = patch.active;
-    if (patch.password !== undefined) data.passwordHash = patch.password;
+    if (patch.password !== undefined) data.passwordHash = await hashPassword(patch.password);
 
     const updated = await this.db.user.update({ where: { id: userId }, data });
     return mapUser(updated);
@@ -3609,7 +3766,10 @@ export class PrismaApiStore {
     if (!user) throw new Error("Invalid credentials");
     if (!user.active) throw new Error("Account disabled");
 
-    if (user.passwordHash && password !== user.passwordHash) {
+    if (user.passwordHash && password) {
+      const valid = await verifyPassword(password, user.passwordHash);
+      if (!valid) throw new Error("Invalid credentials");
+    } else if (user.passwordHash && !password) {
       throw new Error("Invalid credentials");
     }
 

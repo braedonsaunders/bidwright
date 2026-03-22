@@ -27,10 +27,10 @@ export function ProjectDashboard({
   catalogs: CatalogSummary[];
 }) {
   const pipelineCount = projects.filter((p) => p.ingestionStatus !== "closed").length;
-  const totalValue = projects.reduce((sum, p) => sum + p.latestRevision.subtotal, 0);
-  const totalProfit = projects.reduce((sum, p) => sum + p.latestRevision.estimatedProfit, 0);
+  const totalValue = projects.reduce((sum, p) => sum + (p.latestRevision?.subtotal ?? 0), 0);
+  const totalProfit = projects.reduce((sum, p) => sum + (p.latestRevision?.estimatedProfit ?? 0), 0);
   const avgMargin = projects.length
-    ? projects.reduce((sum, p) => sum + p.latestRevision.estimatedMargin, 0) / projects.length
+    ? projects.reduce((sum, p) => sum + (p.latestRevision?.estimatedMargin ?? 0), 0) / projects.length
     : 0;
 
   return (
@@ -81,11 +81,11 @@ export function ProjectDashboard({
 
                     <div className="hidden sm:flex items-center gap-6 text-right">
                       <div>
-                        <div className="text-sm font-medium">{formatMoney(project.latestRevision.subtotal)}</div>
+                        <div className="text-sm font-medium">{formatMoney(project.latestRevision?.subtotal ?? 0)}</div>
                         <div className="text-[11px] text-fg/35">subtotal</div>
                       </div>
                       <div>
-                        <div className="text-sm font-medium">{formatPercent(project.latestRevision.estimatedMargin, 0)}</div>
+                        <div className="text-sm font-medium">{formatPercent(project.latestRevision?.estimatedMargin ?? 0, 0)}</div>
                         <div className="text-[11px] text-fg/35">margin</div>
                       </div>
                       <ArrowRight className="h-3.5 w-3.5 text-fg/25" />

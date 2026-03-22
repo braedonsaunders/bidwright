@@ -116,12 +116,12 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
           cmp = a.quote.status.localeCompare(b.quote.status);
           break;
         case "subtotal":
-          cmp = a.latestRevision.subtotal - b.latestRevision.subtotal;
+          cmp = a.latestRevision?.subtotal - b.latestRevision?.subtotal;
           break;
         case "margin":
           cmp =
-            a.latestRevision.estimatedMargin -
-            b.latestRevision.estimatedMargin;
+            a.latestRevision?.estimatedMargin -
+            b.latestRevision?.estimatedMargin;
           break;
         case "updated":
           cmp =
@@ -136,13 +136,13 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
   }, [projects, search, statusFilter, sortKey, sortDir]);
 
   const totalValue = projects.reduce(
-    (sum, p) => sum + p.latestRevision.subtotal,
+    (sum, p) => sum + p.latestRevision?.subtotal,
     0
   );
   const avgMargin =
     projects.length > 0
       ? projects.reduce(
-          (sum, p) => sum + p.latestRevision.estimatedMargin,
+          (sum, p) => sum + p.latestRevision?.estimatedMargin,
           0
         ) / projects.length
       : 0;
@@ -315,11 +315,11 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
                       </Badge>
                     </td>
                     <td className="px-5 py-3 text-right text-xs font-medium text-fg/80">
-                      {formatMoney(project.latestRevision.subtotal)}
+                      {formatMoney(project.latestRevision?.subtotal)}
                     </td>
                     <td className="px-5 py-3 text-right text-xs text-fg/60">
                       {formatPercent(
-                        project.latestRevision.estimatedMargin
+                        project.latestRevision?.estimatedMargin
                       )}
                     </td>
                     <td className="px-5 py-3 text-xs text-fg/50">

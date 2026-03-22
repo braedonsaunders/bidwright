@@ -13,6 +13,9 @@ cd "$ROOT_DIR"
 export DATABASE_URL="${DATABASE_URL:-postgresql://bidwright:bidwright@localhost:5432/bidwright}"
 export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
 export DATA_DIR="${DATA_DIR:-$ROOT_DIR/data/bidwright-api}"
+export DEFAULT_ORG_ID="${DEFAULT_ORG_ID:-org-bidwright-seed}"
+export API_PORT="${API_PORT:-4001}"
+export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://localhost:4001}"
 
 # ── 0. Cleanup function ───────────────────────────────────────────────
 

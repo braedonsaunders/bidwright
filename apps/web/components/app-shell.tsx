@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
   ChevronRight,
@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProjectListItem } from "@/lib/api";
+import { searchTools } from "@/lib/api";
 import { formatCompactMoney } from "@/lib/format";
 import { Badge, Button, Input, Separator } from "@/components/ui";
 
@@ -80,6 +81,45 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{ id: string; name: string; description: string; pluginId: string }>>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+
+  // Filter sidebar projects by search query
+  const filteredProjects = searchQuery.trim()
+    ? projects.filter((p) =>
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.clientName?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : projects;
+
+  const handleSearchSubmit = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      setSearchOpen(false);
+      return;
+    }
+    try {
+      const results = await searchTools(query);
+      setSearchResults(results);
+      setSearchOpen(true);
+    } catch {
+      setSearchResults([]);
+      setSearchOpen(false);
+    }
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
@@ -115,14 +155,14 @@ export function AppShell({
             );
           })}
 
-          {projects.length > 0 && (
+          {filteredProjects.length > 0 && (
             <>
               <div className="px-3 pb-1 pt-5">
                 <span className="text-[11px] font-medium uppercase tracking-wider text-fg/30">
-                  Projects
+                  Projects{searchQuery.trim() ? ` (${filteredProjects.length})` : ""}
                 </span>
               </div>
-              {projects.slice(0, 6).map((project) => {
+              {filteredProjects.slice(0, 6).map((project) => {
                 const active = pathname.startsWith(`/projects/${project.id}`);
                 return (
                   <Link
@@ -150,7 +190,7 @@ export function AppShell({
           <div className="border-t border-line px-4 py-3">
             <div className="flex items-center justify-between text-xs text-fg/40">
               <span>Active</span>
-              <span>{formatCompactMoney(projects[0].latestRevision.subtotal)}</span>
+              <span>{formatCompactMoney(projects[0].latestRevision?.subtotal ?? 0)}</span>
             </div>
             <Link
               href={`/projects/${projects[0].id}`}
@@ -177,9 +217,52 @@ export function AppShell({
       {/* Main content */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex items-center gap-3 border-b border-line bg-panel px-5 py-3">
-          <div className="relative flex-1 max-w-md">
+          <div ref={searchRef} className="relative flex-1 max-w-md">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-            <Input className="h-8 pl-8 text-xs" placeholder="Search projects, quotes, or specs..." />
+            <Input
+              className="h-8 pl-8 text-xs"
+              placeholder="Search projects, quotes, or specs..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (!e.target.value.trim()) {
+                  setSearchResults([]);
+                  setSearchOpen(false);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  handleSearchSubmit(searchQuery);
+                }
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                }
+              }}
+            />
+            {searchOpen && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
+                <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
+                  Tools ({searchResults.length})
+                </div>
+                {searchResults.map((result) => (
+                  <div
+                    key={result.id}
+                    className="flex flex-col gap-0.5 border-t border-line/50 px-3 py-2 text-xs hover:bg-panel2 cursor-pointer"
+                    onClick={() => setSearchOpen(false)}
+                  >
+                    <span className="font-medium text-fg/80">{result.name}</span>
+                    {result.description && (
+                      <span className="text-[11px] text-fg/40 truncate">{result.description}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {searchOpen && searchResults.length === 0 && searchQuery.trim() && (
+              <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel shadow-lg px-3 py-3 text-xs text-fg/40">
+                No tools found for &quot;{searchQuery}&quot;
+              </div>
+            )}
           </div>
           <button
             onClick={toggle}

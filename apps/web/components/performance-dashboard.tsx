@@ -78,17 +78,17 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
 
   const kpis = useMemo(() => {
     const totalEstimatedValue = filtered.reduce(
-      (sum, p) => sum + (p.latestRevision.subtotal ?? 0),
+      (sum, p) => sum + (p.latestRevision?.subtotal ?? 0),
       0
     );
     const totalEstimatedProfit = filtered.reduce(
-      (sum, p) => sum + (p.latestRevision.estimatedProfit ?? 0),
+      (sum, p) => sum + (p.latestRevision?.estimatedProfit ?? 0),
       0
     );
     const avgMargin =
       filtered.length > 0
         ? filtered.reduce(
-            (sum, p) => sum + (p.latestRevision.estimatedMargin ?? 0),
+            (sum, p) => sum + (p.latestRevision?.estimatedMargin ?? 0),
             0
           ) / filtered.length
         : 0;
@@ -104,13 +104,13 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
 
   const chartData = useMemo(() => {
     return filtered
-      .filter((p) => p.latestRevision.subtotal > 0)
+      .filter((p) => p.latestRevision?.subtotal > 0)
       .slice(0, 20)
       .map((p) => ({
         id: p.id,
         label: p.quote.quoteNumber || p.name,
-        margin: p.latestRevision.estimatedMargin ?? 0,
-        profit: p.latestRevision.estimatedProfit ?? 0,
+        margin: p.latestRevision?.estimatedMargin ?? 0,
+        profit: p.latestRevision?.estimatedProfit ?? 0,
       }));
   }, [filtered]);
 
@@ -327,27 +327,27 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
                       {p.clientName || "—"}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/70 text-right font-mono">
-                      {formatMoney(p.latestRevision.subtotal)}
+                      {formatMoney(p.latestRevision?.subtotal)}
                     </td>
                     <td
                       className={cn(
                         "px-4 py-2.5 text-xs text-right font-mono",
-                        p.latestRevision.estimatedProfit >= 0
+                        p.latestRevision?.estimatedProfit >= 0
                           ? "text-success"
                           : "text-danger"
                       )}
                     >
-                      {formatMoney(p.latestRevision.estimatedProfit)}
+                      {formatMoney(p.latestRevision?.estimatedProfit)}
                     </td>
                     <td
                       className={cn(
                         "px-4 py-2.5 text-xs text-right font-mono",
-                        p.latestRevision.estimatedMargin >= 0
+                        p.latestRevision?.estimatedMargin >= 0
                           ? "text-success"
                           : "text-danger"
                       )}
                     >
-                      {formatPercent(p.latestRevision.estimatedMargin)}
+                      {formatPercent(p.latestRevision?.estimatedMargin)}
                     </td>
                     <td className="px-4 py-2.5">
                       <Badge tone={statusTone(p.quote.status)}>
