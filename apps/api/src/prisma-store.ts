@@ -1381,14 +1381,7 @@ export class PrismaApiStore {
       },
     });
 
-    await this.db.worksheet.create({
-      data: {
-        id: worksheetId,
-        revisionId,
-        name: "Estimate",
-        order: 1,
-      },
-    });
+    // No default worksheet — the agent or user creates worksheets as needed
 
     return { quoteId, revisionId, worksheetId };
   }
@@ -2480,20 +2473,13 @@ export class PrismaApiStore {
         },
       });
 
-      await tx.worksheet.create({
-        data: {
-          id: worksheetId,
-          revisionId,
-          name: "Estimate",
-          order: 1,
-        },
-      });
+      // No default worksheet — the agent or user creates worksheets as needed
 
       const wsState = {
         activeTab: "overview",
         selectedQuoteId: quoteId,
         selectedRevisionId: revisionId,
-        selectedWorksheetId: worksheetId,
+        selectedWorksheetId: null,
         selectedDocumentId: null,
         openDocumentIds: [],
         filters: { documentKinds: [], search: "" },
