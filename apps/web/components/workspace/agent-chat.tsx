@@ -961,105 +961,67 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
             )}
 
-            {/* Unified chronological stream from backend events */}
+            {/* Unified chronological stream — all events from DB in order */}
             {(() => {
-              type TimelineItem =
-                | { kind: "message"; id: string; role: "user" | "assistant"; content: string; toolCalls?: ToolCallEntry[] }
-                | { kind: "toolcall"; id: string; tc: ToolCallEntry };
-
-              const timeline: TimelineItem[] = [];
-
-              // Chat messages (from direct chat — these are always in order)
-              for (const msg of messages) {
-                timeline.push({ kind: "message", id: msg.id, role: msg.role, content: msg.content, toolCalls: msg.toolCalls });
-              }
-
-              // Intake events from DB (CLI format: type=tool_call/message/thinking/status, or legacy: type=tool/message with seq)
+              // Build timeline from ALL event types, in order (DB events are chronological)
               const events: any[] = (intakeStatus as any)?.events ?? [];
-              for (let i = 0; i < events.length; i++) {
-                const evt = events[i];
-                const evtType = evt.type;
-                const evtId = evt.seq != null ? `evt-${evt.seq}` : `evt-${i}`;
 
-                if (evtType === "message") {
+              return events.map((evt: any, i: number) => {
+                const t = evt.type;
+                const key = `evt-${i}`;
+
+                // Thinking block
+                if (t === "thinking") {
                   const content = evt.data?.content;
-                  if (content && !content.includes("[Context limit")) {
-                    timeline.push({ kind: "message", id: evtId, role: evt.data?.role ?? "assistant", content });
-                  }
-                } else if (evtType === "tool" || evtType === "tool_call") {
-                  const toolId = evt.data?.toolId || evt.data?.toolName || "unknown";
-                  timeline.push({
-                    kind: "toolcall",
-                    id: `tc-${evtId}`,
-                    tc: {
-                      id: `tc-${evtId}`,
-                      toolId,
-                      input: evt.data?.input || {},
-                      result: { success: evt.data?.success ?? true, duration_ms: evt.data?.duration_ms ?? 0 },
-                    },
-                  });
-                }
-                // thinking and status events are shown separately (thinkingBlocks state), not in timeline
-              }
-
-              // Summary as final message
-              if (intakeStatus?.summary && !isIntakeRunning) {
-                timeline.push({ kind: "message", id: "intake-summary", role: "assistant", content: intakeStatus.summary });
-              }
-
-              return timeline.map((item) => {
-                if (item.kind === "message") {
+                  if (!content) return null;
                   return (
-                    <div key={item.id} className={cn("flex", item.role === "user" ? "justify-end" : "justify-start")}>
+                    <div key={key} className="rounded-lg border border-fg/5 bg-fg/[0.02] px-3 py-1.5 text-[10px] text-fg/30 italic">
+                      {content.length > 300 ? content.substring(0, 300) + "..." : content}
+                    </div>
+                  );
+                }
+
+                // Message
+                if (t === "message") {
+                  const content = evt.data?.content;
+                  if (!content || content.includes("[Context limit")) return null;
+                  const role = evt.data?.role ?? "assistant";
+                  return (
+                    <div key={key} className={cn("flex", role === "user" ? "justify-end" : "justify-start")}>
                       <div className={cn(
                         "max-w-[90%] rounded-lg px-3 py-2 text-sm",
-                        item.role === "user"
-                          ? "bg-accent/15 text-fg"
-                          : "bg-panel2/60 text-fg/85"
+                        role === "user" ? "bg-accent/15 text-fg" : "bg-panel2/60 text-fg/85"
                       )}>
-                        <div className="whitespace-pre-wrap text-xs">{item.content}</div>
-                        {item.toolCalls && item.toolCalls.length > 0 && (
-                          <div className="mt-1.5 space-y-1">
-                            {item.toolCalls.map((tc) => (
-                              <ToolCallDetail key={tc.id} tc={tc} />
-                            ))}
-                          </div>
-                        )}
+                        <div className="whitespace-pre-wrap text-xs">{content}</div>
                       </div>
                     </div>
                   );
                 }
 
-                // Tool call item — use specialized widgets based on tool type
-                if (isFileAccessTool(item.tc.toolId)) {
-                  return <FileAccessWidget key={item.id} tc={item.tc} />;
+                // Tool call
+                if (t === "tool_call" || t === "tool") {
+                  const toolId = evt.data?.toolId || "unknown";
+                  const tc: ToolCallEntry = {
+                    id: `tc-${i}`,
+                    toolId,
+                    input: evt.data?.input || {},
+                    result: { success: evt.data?.success ?? true, duration_ms: evt.data?.duration_ms ?? 0 },
+                  };
+                  if (isFileAccessTool(toolId)) {
+                    return <FileAccessWidget key={key} tc={tc} />;
+                  }
+                  if (typeof isVisionTool === "function" && isVisionTool(toolId)) {
+                    return (
+                      <VisionToolWidget key={key} toolId={toolId} input={tc.input} result={tc.result} />
+                    );
+                  }
+                  return <ToolCallDetail key={key} tc={tc} />;
                 }
-                if (isVisionTool(item.tc.toolId)) {
-                  return (
-                    <VisionToolWidget
-                      key={item.id}
-                      toolId={item.tc.toolId}
-                      input={item.tc.input}
-                      result={item.tc.result}
-                    />
-                  );
-                }
-                return (
-                  <ToolCallDetail key={item.id} tc={item.tc} />
-                );
-              });
-            })()}
 
-            {/* Thinking blocks (CLI streaming) */}
-            {thinkingBlocks.length > 0 && isIntakeRunning && (
-              <div className="space-y-1">
-                {thinkingBlocks.slice(-3).map((block) => (
-                  <div key={block.id} className="rounded-lg border border-fg/5 bg-fg/[0.02] px-3 py-1.5 text-[10px] text-fg/30 italic">
-                    {block.content.length > 200 ? block.content.substring(0, 200) + "..." : block.content}
-                  </div>
-                ))}
-              </div>
-            )}
+                // Status events — skip rendering (shown in header)
+                return null;
+              }).filter(Boolean);
+            })()}
 
             {/* Loading indicator */}
             {(isLoading || isIntakeRunning) && (
