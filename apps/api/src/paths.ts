@@ -57,6 +57,32 @@ export function resolveRelativePath(relativePath: string) {
   return resolveApiPath(relativePath);
 }
 
+// ── Project directory paths (for CLI agent runtime) ──────────────────
+
+export function resolveProjectDir(projectId: string) {
+  return resolveApiPath("projects", projectId);
+}
+
+export function resolveProjectDocumentsDir(projectId: string) {
+  return resolveApiPath("projects", projectId, "documents");
+}
+
+export function resolveProjectClaudeMd(projectId: string) {
+  return resolveApiPath("projects", projectId, "CLAUDE.md");
+}
+
+export function resolveProjectClaudeSettings(projectId: string) {
+  return resolveApiPath("projects", projectId, ".claude", "settings.json");
+}
+
+export function resolveProjectSessionJson(projectId: string) {
+  return resolveApiPath("projects", projectId, ".bidwright", "session.json");
+}
+
+export function resolveKnowledgeDir() {
+  return resolveApiPath("knowledge");
+}
+
 export function sanitizeFileName(value: string) {
   const trimmed = value.trim().replace(/[\\/]+/g, "-");
   const ext = path.extname(trimmed);

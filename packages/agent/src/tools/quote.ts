@@ -170,24 +170,146 @@ export const searchItemsTool = createQuoteTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 3b. quote.getItemConfig — discover categories, rate schedules, catalog items
+// ──────────────────────────────────────────────────────────────
+export const getItemConfigTool = createQuoteTool({
+  id: "quote.getItemConfig",
+  name: "Get Item Configuration",
+  description: `Discover how line items work in this organization. Returns:
+1. Entity categories — the types of line items (e.g. Labour, Material) with their calculation types and editable fields. Categories are user-configured and vary per organization.
+2. Rate schedule items — pre-configured rates (labour rates, equipment rates) that should be linked to line items via rateScheduleItemId for categories with auto-calculation.
+3. Catalog items — equipment/material catalog with pricing.
+
+CALL THIS FIRST before creating any line items. The response tells you which categories use rate schedules (calculationType=auto_labour or auto_equipment) and which are freeform (calculationType=manual or direct_price).`,
+  inputSchema: z.object({}),
+  tags: ["item", "read", "rates", "config"],
+}, async (ctx, _input) => {
+  // Fetch workspace which includes rate schedules
+  const wsRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`, {
+    method: "GET", headers: authHeaders(ctx),
+  });
+  let rateSchedules: any[] = [];
+  let entityCategories: any[] = [];
+  if (wsRes.ok) {
+    const wsData = await wsRes.json() as any;
+    // workspace response nests data under .workspace
+    const ws = wsData.workspace || wsData;
+    rateSchedules = ws.rateSchedules || [];
+    entityCategories = ws.entityCategories || [];
+  }
+
+  // Fetch catalogs
+  const catRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalogs`, {
+    method: "GET", headers: authHeaders(ctx),
+  });
+  let catalogs: any[] = [];
+  if (catRes.ok) {
+    const catData = await catRes.json() as any;
+    catalogs = catData.catalogs || catData || [];
+  }
+
+  // Build category config — this tells the agent HOW to create items per category
+  const categoryConfig = entityCategories.map((ec: any) => ({
+    name: ec.name,
+    entityType: ec.entityType,
+    defaultUom: ec.defaultUom,
+    validUoms: ec.validUoms,
+    calculationType: ec.calculationType,
+    editableFields: ec.editableFields,
+    // Derive whether this category needs rate schedule linking
+    usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
+  }));
+
+  // Build rate schedule items — only if there are schedules configured
+  const rateItems: any[] = [];
+  for (const rs of rateSchedules) {
+    const tiers = (rs.tiers || []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier }));
+    for (const item of (rs.items || [])) {
+      rateItems.push({
+        rateScheduleItemId: item.id,
+        name: item.name,
+        code: item.code,
+        unit: item.unit,
+        forCategory: rs.category, // "labour", "equipment", etc.
+        scheduleName: rs.name,
+        rates: item.rates,
+        costRates: item.costRates,
+        burden: item.burden,
+        perDiem: item.perDiem,
+        tiers,
+      });
+    }
+  }
+
+  // Build catalog items summary (first 50)
+  const catalogItems: any[] = [];
+  for (const cat of catalogs) {
+    for (const item of (cat.items || [])) {
+      catalogItems.push({
+        catalogItemId: item.id,
+        name: item.name,
+        code: item.code,
+        unit: item.unit,
+        unitCost: item.unitCost,
+        unitPrice: item.unitPrice,
+        catalogName: cat.name,
+        catalogKind: cat.kind,
+      });
+    }
+  }
+
+  // Build dynamic instructions from the actual configuration
+  const autoCategories = categoryConfig.filter((c: any) => c.usesRateSchedule);
+  const manualCategories = categoryConfig.filter((c: any) => !c.usesRateSchedule);
+
+  let instructions = "";
+  if (autoCategories.length > 0) {
+    const names = autoCategories.map((c: any) => c.name).join(", ");
+    if (rateItems.length > 0) {
+      instructions += `Categories [${names}] use auto-calculation from rate schedules. When creating items in these categories, set rateScheduleItemId to link to the appropriate rate. `;
+    } else {
+      instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. Create items with estimated costs and note "NEEDS RATE SCHEDULE" in description. `;
+    }
+  }
+  if (manualCategories.length > 0) {
+    const names = manualCategories.map((c: any) => c.name).join(", ");
+    instructions += `Categories [${names}] use manual pricing — set cost and quantity directly.`;
+  }
+
+  return {
+    success: true,
+    data: {
+      categories: categoryConfig,
+      rateScheduleItems: rateItems,
+      catalogItems: catalogItems.slice(0, 50),
+      instructions,
+    },
+    duration_ms: 0,
+  };
+});
+
 // 4. quote.createWorksheetItem
 // ──────────────────────────────────────────────────────────────
 export const createWorksheetItemTool = createQuoteTool({
   id: "quote.createWorksheetItem",
   name: "Create Line Item",
-  description: "Create a new line item in a worksheet. Requires worksheetId and entityName. Provide category, quantity, uom, cost. Price is auto-calculated from cost + markup.",
+  description: `Create a new line item in a worksheet. Requires worksheetId and entityName.
+IMPORTANT: For LABOUR items, you MUST first call listRateItems to find the correct rateScheduleItemId, then pass it here.
+Labour items need: rateScheduleItemId, laborHourReg (regular hours), and quantity.
+For other categories (Material, Equipment, Subcontractor), provide cost and quantity directly.`,
   inputSchema: z.object({
     worksheetId: z.string().describe("ID of the worksheet to add the item to"),
     category: z.string().optional().default("Material").describe("Item category: Material, Labour, Equipment, Subcontractor"),
     entityName: z.string().describe("Name of the line item"),
     description: z.string().optional().default("").describe("Detailed description with document reference and assumptions"),
     quantity: z.number().optional().default(1).describe("Quantity of the item"),
-    uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, etc."),
+    uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
     cost: z.number().optional().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
     markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%)"),
-    laborHourReg: z.number().optional().default(0).describe("Regular labor hours per unit"),
+    laborHourReg: z.number().optional().default(0).describe("Regular labor hours per unit (for Labour items)"),
     laborHourOver: z.number().optional().default(0).describe("Overtime labor hours per unit"),
     laborHourDouble: z.number().optional().default(0).describe("Double-time labor hours per unit"),
+    rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for Labour items. Get from listRateItems tool."),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
   }),
   tags: ["item", "create", "write"],
@@ -197,7 +319,7 @@ export const createWorksheetItemTool = createQuoteTool({
   const markup = rest.markup ?? 0;
   const price = cost * (1 + markup / 100);
   const cat = category ?? "Material";
-  const body = {
+  const body: Record<string, unknown> = {
     ...rest,
     category: cat,
     entityType: cat,
@@ -208,6 +330,12 @@ export const createWorksheetItemTool = createQuoteTool({
     uom: rest.uom ?? "EA",
     description: rest.description ?? "",
   };
+
+  // If rateScheduleItemId provided, include it and set up tierUnits
+  if (rest.rateScheduleItemId) {
+    body.rateScheduleItemId = rest.rateScheduleItemId;
+  }
+
   return apiPost(ctx, `/worksheets/${worksheetId}/items`, body, `Created line item: ${rest.entityName}`);
 });
 
@@ -716,6 +844,7 @@ export const quoteTools: Tool[] = [
   getWorkspaceTool,
   listWorksheetsTool,
   searchItemsTool,
+  getItemConfigTool,
   createWorksheetItemTool,
   updateWorksheetItemTool,
   deleteWorksheetItemTool,

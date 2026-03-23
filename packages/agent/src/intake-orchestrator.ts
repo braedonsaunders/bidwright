@@ -1,3 +1,8 @@
+/**
+ * @deprecated Replaced by CLI-native agent runtime. The 3-phase orchestration pattern
+ * is no longer used. Claude Code / Codex manage their own workflow via CLAUDE.md instructions.
+ * See apps/api/src/services/claude-md-generator.ts for the new approach.
+ */
 import type {
   AgentConfig,
   AgentResponse,

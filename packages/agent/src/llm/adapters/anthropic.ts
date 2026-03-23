@@ -1,3 +1,7 @@
+/**
+ * @deprecated LLM adapters replaced by CLI-native runtimes.
+ * Claude Code / Codex handle LLM calls directly. This file is kept for reference only.
+ */
 import type { ChatRequest, ChatResponse, LLMAdapter, StreamChunk } from "../types.js";
 
 export class AnthropicAdapter implements LLMAdapter {

@@ -4,7 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, RefreshCw, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
 import { Badge, Button, EmptyState, Select } from "@/components/ui";
-import { startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult } from "@/lib/api";
+import {
+  startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
+  startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -176,17 +179,34 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [ingestionStatus, setIngestionStatus] = useState<string | null>(null);
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
   const [docsExpanded, setDocsExpanded] = useState(false);
+  const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
+  const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastRefreshToolCount = useRef(0);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  // Load default provider/model from org settings (must complete before auto-intake)
+  // Load default provider/model from org settings + detect CLIs
   useEffect(() => {
-    getSettings().then((s) => {
-      const integ = s?.integrations;
-      if (integ?.llmProvider) setProvider(integ.llmProvider);
-      if (integ?.llmModel) setModel(integ.llmModel);
-    }).catch(() => {}).finally(() => setSettingsReady(true));
+    Promise.all([
+      getSettings().then((s) => {
+        const integ = s?.integrations;
+        if (integ?.llmProvider) setProvider(integ.llmProvider);
+        if (integ?.llmModel) setModel(integ.llmModel);
+        // Use configured runtime if set
+        if (integ?.agentRuntime) setCliRuntime(integ.agentRuntime);
+      }).catch(() => {}),
+      detectCli().then((result) => {
+        setCliAvailable({ claude: result.claude.available, codex: result.codex.available });
+        // Auto-select best available runtime
+        if (!cliRuntime) {
+          if (result.claude.available) setCliRuntime("claude-code");
+          else if (result.codex.available) setCliRuntime("codex");
+        }
+      }).catch(() => {}),
+    ]).finally(() => setSettingsReady(true));
   }, []);
 
   // Poll ingestion status to show document extraction progress
@@ -209,28 +229,42 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     return () => { active = false; clearInterval(interval); };
   }, [projectId, open]);
 
-  // Restore latest intake session from DB on mount
+  // Restore latest session on mount (try CLI first, then legacy intake)
   useEffect(() => {
-    fetch(`${API_BASE}/api/intake/project/${projectId}/latest`, { headers: authHeaders() })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (!data) return;
-        setIntakeSessionId(data.sessionId);
+    // Try CLI status first
+    getCliStatus(projectId)
+      .then((data) => {
+        if (data.status === "none") throw new Error("no cli session");
+        setIntakeSessionId(data.sessionId || null);
         setIntakeStatus({
-          sessionId: data.sessionId,
-          projectId,
-          scope: "",
-          status: data.status === "running" ? "running" : data.status === "stopped" ? ("stopped" as any) : data.status === "failed" ? "failed" : "completed",
-          toolCallCount: data.toolCallCount ?? 0,
-          messageCount: data.messageCount ?? 0,
-          summary: data.summary,
-          createdAt: "",
-          updatedAt: "",
-          recentToolCalls: [],
+          sessionId: data.sessionId || "", projectId, scope: "", status: data.status as any,
+          toolCallCount: (data.events || []).filter((e: any) => e.type === "tool_call").length,
+          messageCount: (data.events || []).filter((e: any) => e.type === "message").length,
+          summary: null, createdAt: data.startedAt || "", updatedAt: "", recentToolCalls: [],
           events: data.events,
         } as any);
+        // If running, reconnect SSE
+        if (data.status === "running") {
+          connectToSseStream(projectId);
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        // Fall back to legacy intake session
+        fetch(`${API_BASE}/api/intake/project/${projectId}/latest`, { headers: authHeaders() })
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return;
+            setIntakeSessionId(data.sessionId);
+            setIntakeStatus({
+              sessionId: data.sessionId, projectId, scope: "",
+              status: data.status === "running" ? "running" : data.status === "stopped" ? ("stopped" as any) : data.status === "failed" ? "failed" : "completed",
+              toolCallCount: data.toolCallCount ?? 0, messageCount: data.messageCount ?? 0,
+              summary: data.summary, createdAt: "", updatedAt: "", recentToolCalls: [],
+              events: data.events,
+            } as any);
+          })
+          .catch(() => {});
+      });
   }, [projectId]);
 
   useEffect(() => {
@@ -280,6 +314,15 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     setIsLoading(true);
 
     try {
+      // If CLI session is running, send message to it
+      if (cliRuntime && isIntakeRunning) {
+        await sendCliMessage(projectId, content.trim());
+        // Response will come via SSE stream
+        setIsLoading(false);
+        return;
+      }
+
+      // Legacy API-based chat
       let sid = sessionId;
       if (!sid) {
         sid = await createSession();
@@ -302,7 +345,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // Refresh workspace if the agent made mutations
       if (data.toolCallsExecuted?.length && hasMutatingToolCalls(data.toolCallsExecuted)) {
         onWorkspaceMutated?.();
       }
@@ -329,30 +371,159 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   async function handleStartIntake() {
     setIntakeLoading(true);
     setLiveToolCalls([]);
+    setThinkingBlocks([]);
     lastRefreshToolCount.current = 0;
     try {
-      const result = await startIntake({ projectId, provider, model });
-      setIntakeSessionId(result.sessionId);
-      // Persist session ID
-      localStorage.setItem(intakeStorageKey(projectId), JSON.stringify({ sessionId: result.sessionId }));
-      setIntakeStatus({
-        sessionId: result.sessionId,
-        projectId: result.projectId,
-        scope: result.scope,
-        status: "running",
-        toolCallCount: 0,
-        messageCount: 0,
-        summary: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        recentToolCalls: [],
-      });
+      if (cliRuntime) {
+        // CLI-based intake (preferred)
+        const result = await startCliSession({ projectId, runtime: cliRuntime, model });
+        setIntakeSessionId(result.sessionId);
+        setIntakeStatus({
+          sessionId: result.sessionId, projectId, scope: "", status: "running",
+          toolCallCount: 0, messageCount: 0, summary: null,
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), recentToolCalls: [],
+        });
+        // Connect SSE stream
+        connectToSseStream(projectId);
+      } else {
+        // Legacy API-based intake (fallback)
+        const result = await startIntake({ projectId, provider, model });
+        setIntakeSessionId(result.sessionId);
+        localStorage.setItem(intakeStorageKey(projectId), JSON.stringify({ sessionId: result.sessionId }));
+        setIntakeStatus({
+          sessionId: result.sessionId, projectId: result.projectId, scope: result.scope, status: "running",
+          toolCallCount: 0, messageCount: 0, summary: null,
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), recentToolCalls: [],
+        });
+      }
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Failed to start intake agent");
     } finally {
       setIntakeLoading(false);
     }
   }
+
+  // SSE stream connection for CLI runtime
+  function connectToSseStream(pid: string) {
+    // Cleanup existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const es = connectCliStream(pid);
+    eventSourceRef.current = es;
+    setSseConnected(true);
+
+    let toolCount = 0;
+    let msgCount = 0;
+
+    es.addEventListener("thinking", (e) => {
+      const data = JSON.parse(e.data);
+      setThinkingBlocks((prev) => [...prev.slice(-5), { id: `think-${Date.now()}`, content: data.content }]);
+    });
+
+    es.addEventListener("tool_call", (e) => {
+      const data = JSON.parse(e.data);
+      toolCount++;
+      setLiveToolCalls((prev) => [...prev, {
+        id: data.toolUseId || `tc-${toolCount}`,
+        toolId: data.toolId,
+        input: data.input,
+        result: { success: true, duration_ms: 0 }, // Updated when tool_result arrives
+      }]);
+      setIntakeStatus((prev) => prev ? { ...prev, toolCallCount: toolCount } : prev);
+    });
+
+    es.addEventListener("tool_result", (e) => {
+      const data = JSON.parse(e.data);
+      // Update the matching tool call with result
+      setLiveToolCalls((prev) => {
+        const updated = [...prev];
+        const match = updated.findLast((tc) => tc.id === data.toolUseId || !tc.result.duration_ms);
+        if (match) {
+          match.result = {
+            success: !data.content?.includes("error"),
+            duration_ms: data.duration_ms || 0,
+            data: data.content,
+          };
+        }
+        return updated;
+      });
+      // Check for mutations → refresh workspace
+      if (data.toolId && MUTATING_TOOL_PATTERNS.test(data.toolId)) {
+        onWorkspaceMutated?.();
+      }
+    });
+
+    es.addEventListener("message", (e) => {
+      const data = JSON.parse(e.data);
+      msgCount++;
+      setMessages((prev) => [...prev, {
+        id: `cli-msg-${msgCount}`,
+        role: data.role || "assistant",
+        content: data.content,
+        timestamp: new Date().toISOString(),
+      }]);
+      setIntakeStatus((prev) => prev ? { ...prev, messageCount: msgCount } : prev);
+    });
+
+    es.addEventListener("progress", (e) => {
+      const data = JSON.parse(e.data);
+      setMessages((prev) => [...prev, {
+        id: `progress-${Date.now()}`,
+        role: "assistant",
+        content: `[${data.phase}] ${data.detail}`,
+        timestamp: new Date().toISOString(),
+      }]);
+    });
+
+    es.addEventListener("file_read", (e) => {
+      const data = JSON.parse(e.data);
+      // Show as a subtle indicator, not a full message
+      setThinkingBlocks((prev) => [...prev.slice(-5), { id: `file-${Date.now()}`, content: `Reading: ${data.fileName}` }]);
+    });
+
+    es.addEventListener("status", (e) => {
+      const data = JSON.parse(e.data);
+      if (data.status === "completed" || data.status === "stopped" || data.status === "failed") {
+        setIntakeStatus((prev) => prev ? { ...prev, status: data.status } : prev);
+        setSseConnected(false);
+        es.close();
+        eventSourceRef.current = null;
+        onWorkspaceMutated?.(); // Final refresh
+      }
+    });
+
+    es.addEventListener("error", (e) => {
+      // Try to parse error data
+      try {
+        const data = JSON.parse((e as any).data);
+        setSessionError(data.message);
+      } catch {
+        // SSE connection error — might reconnect automatically
+      }
+    });
+
+    es.onerror = () => {
+      setSseConnected(false);
+      // EventSource auto-reconnects, but if the session is done, close
+      const status = intakeStatus?.status;
+      if (status && status !== "running") {
+        es.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }
+
+  // Cleanup SSE on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, []);
 
   // Auto-start intake when redirected from upload (wait for settings to load first)
   useEffect(() => {
@@ -440,7 +611,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
               <div>
                 <div className="text-sm font-semibold">Bidwright AI</div>
-                <div className="text-[10px] text-fg/35">{provider} / {model.split("/").pop()}</div>
+                <div className="text-[10px] text-fg/35">
+                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI` : `${provider} / ${model.split("/").pop()}`}
+                  {sseConnected && <span className="ml-1 text-success">connected</span>}
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -567,12 +741,17 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 <span className="ml-auto text-fg/30">
                   {intakeStatus.toolCallCount} tools · {intakeStatus.messageCount} msgs
                 </span>
-                {isIntakeRunning && intakeSessionId && (
+                {isIntakeRunning && (
                   <button
                     onClick={async () => {
                       try {
-                        await stopIntake(intakeSessionId);
+                        if (cliRuntime) {
+                          await stopCliSession(projectId);
+                        } else if (intakeSessionId) {
+                          await stopIntake(intakeSessionId);
+                        }
                         setIntakeStatus((prev) => prev ? { ...prev, status: "stopped" as any } : prev);
+                        if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
                       } catch {}
                     }}
                     className="ml-auto rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger"
@@ -583,7 +762,17 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 )}
                 {(intakeStatus.status === "stopped" || isIntakeFailed) && (
                   <button
-                    onClick={() => handleStartIntake()}
+                    onClick={async () => {
+                      if (cliRuntime) {
+                        try {
+                          await resumeCliSession(projectId);
+                          setIntakeStatus((prev) => prev ? { ...prev, status: "running" } : prev);
+                          connectToSseStream(projectId);
+                        } catch { handleStartIntake(); }
+                      } else {
+                        handleStartIntake();
+                      }
+                    }}
                     className="ml-auto rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent"
                     title="Resume / Restart"
                   >
@@ -663,11 +852,22 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               });
             })()}
 
+            {/* Thinking blocks (CLI streaming) */}
+            {thinkingBlocks.length > 0 && isIntakeRunning && (
+              <div className="space-y-1">
+                {thinkingBlocks.slice(-3).map((block) => (
+                  <div key={block.id} className="rounded-lg border border-fg/5 bg-fg/[0.02] px-3 py-1.5 text-[10px] text-fg/30 italic">
+                    {block.content.length > 200 ? block.content.substring(0, 200) + "..." : block.content}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Loading indicator */}
             {(isLoading || isIntakeRunning) && (
               <div className="flex items-center gap-1.5 text-[10px] text-fg/30 py-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                {isIntakeRunning ? "Agent working..." : "Thinking..."}
+                {isIntakeRunning ? (sseConnected ? "Agent working (live)..." : "Agent working...") : "Thinking..."}
               </div>
             )}
 

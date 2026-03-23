@@ -63,6 +63,7 @@ import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { intakeRoutes } from "./routes/intake-routes.js";
+import { registerCliRoutes } from "./routes/cli-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
@@ -162,7 +163,9 @@ const createWorksheetItemSchema = z.object({
   laborHourReg: z.coerce.number().finite().default(0),
   laborHourOver: z.coerce.number().finite().default(0),
   laborHourDouble: z.coerce.number().finite().default(0),
-  lineOrder: z.coerce.number().int().optional()
+  lineOrder: z.coerce.number().int().optional(),
+  rateScheduleItemId: z.string().nullable().optional(),
+  tierUnits: z.record(z.number()).optional(),
 });
 const createWorksheetSchema = z.object({
   name: z.string().min(1)
@@ -3130,6 +3133,7 @@ export function buildServer() {
   app.register(rateScheduleRoutes);
   app.register(intakeRoutes);
   app.register(catalogRoutes);
+  registerCliRoutes(app);
 
   app.addHook("onReady", async () => {
     await cleanExpiredSessions(prisma);

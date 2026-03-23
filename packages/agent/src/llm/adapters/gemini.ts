@@ -1,3 +1,7 @@
+/**
+ * @deprecated LLM adapters replaced by CLI-native runtimes.
+ * Claude Code / Codex handle LLM calls directly. This file is kept for reference only.
+ */
 import type { ChatRequest, ChatResponse, ChatContentBlock, LLMAdapter } from "../types.js";
 
 export class GeminiAdapter implements LLMAdapter {

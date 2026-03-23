@@ -1,3 +1,7 @@
+/**
+ * @deprecated LLM adapters replaced by CLI-native runtimes.
+ * Claude Code / Codex handle LLM calls directly. This file is kept for reference only.
+ */
 import { OpenAIAdapter } from "./openai.js";
 import type { LLMAdapter } from "../types.js";
 

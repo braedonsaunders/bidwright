@@ -82,6 +82,7 @@ import {
 import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
 import { PluginsPage } from "@/components/plugins-page";
+import { detectCli } from "@/lib/api";
 
 const STORAGE_KEY = "bidwright-settings";
 
@@ -89,7 +90,7 @@ type SettingsGroup = "organization" | "estimating" | "data" | "integrations" | "
 type OrgSubTab = "general" | "brand" | "departments";
 type EstimatingSubTab = "defaults" | "catalogs" | "rates";
 type DataSubTab = "categories" | "clients" | "conditions";
-type IntegrationsSubTab = "email" | "apikeys" | "plugins";
+type IntegrationsSubTab = "email" | "apikeys" | "agent" | "plugins";
 
 const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "general", label: "General" },
@@ -107,8 +108,9 @@ const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "conditions", label: "Inclusions & Exclusions" },
 ];
 const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
-  { id: "email", label: "Email" },
+  { id: "agent", label: "Agent Runtime" },
   { id: "apikeys", label: "API Keys" },
+  { id: "email", label: "Email" },
   { id: "plugins", label: "Plugins" },
 ];
 
@@ -2153,12 +2155,192 @@ export function SettingsPage({
             </Card>
           )}
 
+          {/* ── Agent Runtime ─── */}
+          {activeGroup === "integrations" && integrationsSubTab === "agent" && (
+            <AgentRuntimeSettings settings={settings} onUpdate={(patch) => setSettings((prev) => ({ ...prev, integrations: { ...prev.integrations, ...patch } }))} onSave={handleSave} />
+          )}
+
           {/* ── Plugins ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "plugins" && (
             <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} />
           )}
 
         </FadeIn>
+    </div>
+  );
+}
+
+// ─── Agent Runtime Settings Component ────────────────────────────────────
+
+function AgentRuntimeSettings({
+  settings,
+  onUpdate,
+  onSave,
+}: {
+  settings: { integrations: IntegrationSettings & Record<string, any> };
+  onUpdate: (patch: Record<string, any>) => void;
+  onSave: () => void;
+}) {
+  const [cliStatus, setCliStatus] = useState<{
+    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
+    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
+    configured: { runtime: string | null; model: string | null };
+  } | null>(null);
+  const [detecting, setDetecting] = useState(true);
+
+  useEffect(() => {
+    setDetecting(true);
+    detectCli()
+      .then((result) => setCliStatus(result as any))
+      .catch(() => setCliStatus(null))
+      .finally(() => setDetecting(false));
+  }, []);
+
+  const currentRuntime = settings.integrations.agentRuntime || cliStatus?.configured?.runtime || "";
+  const currentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold mb-1">Agent Runtime</h3>
+        <p className="text-xs text-fg/40 mb-4">
+          Configure which CLI agent runtime to use for AI estimating. The agent reads project documents natively and creates estimates via MCP tools.
+        </p>
+      </div>
+
+      {/* CLI Detection Status */}
+      <div className="rounded-lg border border-line p-4 space-y-3">
+        <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">Detected CLIs</h4>
+        {detecting ? (
+          <div className="text-xs text-fg/40">Detecting installed CLIs...</div>
+        ) : (
+          <div className="space-y-2">
+            {/* Claude Code */}
+            <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full ${cliStatus?.claude?.available ? "bg-success" : "bg-fg/20"}`} />
+                <span className="text-sm font-medium">Claude Code</span>
+                {cliStatus?.claude?.version && (
+                  <span className="text-[10px] text-fg/30">{cliStatus.claude.version}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {cliStatus?.claude?.available ? (
+                  <>
+                    <span className="text-[10px] text-fg/40">{cliStatus.claude.path}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.claude.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                      {cliStatus.claude.auth?.authenticated ? `Auth: ${cliStatus.claude.auth.method}` : "Not authenticated"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[10px] text-fg/30">Not installed — run: npm i -g @anthropic-ai/claude-code</span>
+                )}
+              </div>
+            </div>
+
+            {/* Codex */}
+            <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full ${cliStatus?.codex?.available ? "bg-success" : "bg-fg/20"}`} />
+                <span className="text-sm font-medium">Codex CLI</span>
+                {cliStatus?.codex?.version && (
+                  <span className="text-[10px] text-fg/30">{cliStatus.codex.version}</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {cliStatus?.codex?.available ? (
+                  <>
+                    <span className="text-[10px] text-fg/40">{cliStatus.codex.path}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.codex.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                      {cliStatus.codex.auth?.authenticated ? `Auth: ${cliStatus.codex.auth.method}` : "Not authenticated"}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[10px] text-fg/30">Not installed — see openai.com/codex</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Runtime Selection */}
+      <div className="space-y-3">
+        <label className="text-xs font-medium text-fg/60">Preferred Runtime</label>
+        <select
+          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
+          value={currentRuntime}
+          onChange={(e) => onUpdate({ agentRuntime: e.target.value || null })}
+        >
+          <option value="">Auto-detect (best available)</option>
+          <option value="claude-code" disabled={!cliStatus?.claude?.available}>
+            Claude Code CLI {!cliStatus?.claude?.available ? "(not installed)" : ""}
+          </option>
+          <option value="codex" disabled={!cliStatus?.codex?.available}>
+            Codex CLI {!cliStatus?.codex?.available ? "(not installed)" : ""}
+          </option>
+        </select>
+      </div>
+
+      {/* Model Selection */}
+      <div className="space-y-3">
+        <label className="text-xs font-medium text-fg/60">Model</label>
+        <select
+          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
+          value={currentModel}
+          onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
+        >
+          <option value="">Default</option>
+          {currentRuntime !== "codex" && (
+            <>
+              <option value="sonnet">Claude Sonnet (recommended)</option>
+              <option value="opus">Claude Opus (best quality, slower)</option>
+              <option value="haiku">Claude Haiku (fastest, cheaper)</option>
+            </>
+          )}
+          {currentRuntime !== "claude-code" && (
+            <>
+              <option value="gpt-5.4">GPT-5.4 (recommended)</option>
+              <option value="gpt-5.4-mini">GPT-5.4 Mini (faster)</option>
+              <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
+            </>
+          )}
+        </select>
+      </div>
+
+      {/* CLI Path Override */}
+      <div className="space-y-3">
+        <label className="text-xs font-medium text-fg/60">CLI Path Override (optional)</label>
+        <input
+          type="text"
+          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
+          placeholder={currentRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
+          value={currentRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
+          onChange={(e) => {
+            if (currentRuntime === "codex") {
+              onUpdate({ codexPath: e.target.value || null });
+            } else {
+              onUpdate({ claudeCodePath: e.target.value || null });
+            }
+          }}
+        />
+        <p className="text-[10px] text-fg/30">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
+      </div>
+
+      {/* Auth Note */}
+      <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
+        <p className="font-medium text-fg/50">Authentication</p>
+        <p>Claude Code uses your <code className="text-fg/50">ANTHROPIC_API_KEY</code> environment variable or OAuth login (run <code className="text-fg/50">claude</code> in terminal and type <code className="text-fg/50">/login</code>).</p>
+        <p>Codex uses your <code className="text-fg/50">OPENAI_API_KEY</code> environment variable or OAuth login.</p>
+        <p>API keys configured in the API Keys tab are also passed to the CLI automatically.</p>
+      </div>
+
+      <button
+        onClick={onSave}
+        className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent/90"
+      >
+        Save Settings
+      </button>
     </div>
   );
 }

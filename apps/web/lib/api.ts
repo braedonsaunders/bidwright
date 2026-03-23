@@ -2973,3 +2973,65 @@ export async function stopIntake(sessionId: string) {
     method: "POST",
   });
 }
+
+// ---------------------------------------------------------------------------
+// CLI Agent Runtime
+// ---------------------------------------------------------------------------
+
+export async function detectCli() {
+  return apiRequest<{
+    claude: { available: boolean; path: string; version?: string };
+    codex: { available: boolean; path: string; version?: string };
+  }>("/api/cli/detect");
+}
+
+export async function startCliSession(input: {
+  projectId: string;
+  runtime?: "claude-code" | "codex";
+  model?: string;
+  scope?: string;
+  prompt?: string;
+}) {
+  return apiRequest<{ sessionId: string; projectId: string; runtime: string; status: string }>(
+    "/api/cli/start",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }
+  );
+}
+
+export function connectCliStream(projectId: string): EventSource {
+  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") : null;
+  const url = new URL(`/api/cli/${projectId}/stream`, apiBaseUrl);
+  if (token) url.searchParams.set("token", token);
+  return new EventSource(url.toString());
+}
+
+export async function stopCliSession(projectId: string) {
+  return apiRequest<{ stopped: boolean }>(`/api/cli/${projectId}/stop`, { method: "POST" });
+}
+
+export async function resumeCliSession(projectId: string, prompt?: string) {
+  return apiRequest<{ sessionId: string; status: string }>(`/api/cli/${projectId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+}
+
+export async function sendCliMessage(projectId: string, message: string) {
+  return apiRequest<{ sent: boolean }>(`/api/cli/${projectId}/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+}
+
+export async function getCliStatus(projectId: string) {
+  return apiRequest<{
+    status: string;
+    runtime?: string;
+    sessionId?: string;
+    startedAt?: string;
+    source?: "live" | "db";
+    events?: any[];
+  }>(`/api/cli/${projectId}/status`);
+}
