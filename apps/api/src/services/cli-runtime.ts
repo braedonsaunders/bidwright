@@ -280,12 +280,15 @@ export async function spawnSession(opts: {
       data: { status: session.status, exitCode: code, signal },
     });
     events.emit("done", session.status);
+    // Clean up from Map after 5 minutes (events are persisted to DB)
+    setTimeout(() => { sessions.delete(projectId); }, 5 * 60 * 1000);
   });
 
   child.on("error", (err) => {
     session.status = "failed";
     events.emit("event", { type: "error", data: { message: err.message } });
     events.emit("done", "failed");
+    setTimeout(() => { sessions.delete(projectId); }, 5 * 60 * 1000);
   });
 
   // Save session state to disk for recovery

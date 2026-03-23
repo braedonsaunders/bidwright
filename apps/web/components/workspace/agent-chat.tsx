@@ -9,6 +9,7 @@ import {
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { isVisionTool, VisionToolWidget, ProgressIndicator } from "./vision-chat-widgets";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -403,10 +404,19 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     setIsLoading(true);
 
     try {
-      // If CLI session is running, send message to it
-      if (cliRuntime && isIntakeRunning) {
-        await sendCliMessage(projectId, content.trim());
-        // Response will come via SSE stream
+      // CLI runtime: send message (spawns new session if previous completed)
+      if (cliRuntime) {
+        const result = await sendCliMessage(projectId, content.trim());
+        if (result.sessionId) {
+          // A new session was started
+          setIntakeSessionId(result.sessionId);
+          setIntakeStatus((prev) => prev ? { ...prev, status: "running" } : {
+            sessionId: result.sessionId, projectId, scope: "", status: "running",
+            toolCallCount: 0, messageCount: 0, summary: null,
+            createdAt: new Date().toISOString(), updatedAt: "", recentToolCalls: [],
+          } as any);
+          connectToSseStream(projectId);
+        }
         setIsLoading(false);
         return;
       }
@@ -993,9 +1003,19 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                   );
                 }
 
-                // Tool call item — use file widget for Read/Glob/Grep
+                // Tool call item — use specialized widgets based on tool type
                 if (isFileAccessTool(item.tc.toolId)) {
                   return <FileAccessWidget key={item.id} tc={item.tc} />;
+                }
+                if (isVisionTool(item.tc.toolId)) {
+                  return (
+                    <VisionToolWidget
+                      key={item.id}
+                      toolId={item.tc.toolId}
+                      input={item.tc.input}
+                      result={item.tc.result}
+                    />
+                  );
                 }
                 return (
                   <ToolCallDetail key={item.id} tc={item.tc} />
