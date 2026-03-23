@@ -10,7 +10,6 @@ import numpy as np
 import cv2
 import math
 import time
-import tempfile
 from PIL import Image
 import pytesseract
 import xml.etree.ElementTree as ET
@@ -36,10 +35,20 @@ ENABLE_COMPLEX_PDF_SPECIAL_HANDLING = False
 # -----------------------
 
 def load_pdf(filepath):
-    """Load the PDF file from the given file path with optimized memory usage."""
-    base_path = "/var/www/html/adminapp2/storage/app/public/"
-    full_path = os.path.join(base_path, filepath)
-    
+    """Load the PDF file from the given file path with optimized memory usage.
+    Supports both absolute paths and paths relative to a configurable base directory.
+    """
+    # If the path is already absolute and exists, use it directly
+    if os.path.isabs(filepath) and os.path.exists(filepath):
+        full_path = filepath
+    else:
+        # Try configurable base path from environment, fall back to legacy path
+        base_path = os.environ.get("PDF_BASE_PATH", "")
+        full_path = os.path.join(base_path, filepath)
+
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"PDF file not found: {full_path}")
+
     # Use stream=True to reduce memory usage for large PDFs
     try:
         return fitz.open(full_path, filetype="pdf")
@@ -59,8 +68,14 @@ def compute_pdf_bbox(selection, pdf_page):
     
     pdf_width = pdf_page.rect.width
     pdf_height = pdf_page.rect.height
-    scale_x = pdf_width / image_width
-    scale_y = pdf_height / image_height
+
+    if image_width <= 0 or image_height <= 0:
+        logging.warning(f"Invalid image dimensions: {image_width}x{image_height}, falling back to 1:1 scale")
+        scale_x = 1.0
+        scale_y = 1.0
+    else:
+        scale_x = pdf_width / image_width
+        scale_y = pdf_height / image_height
     
     pdf_x = x * scale_x
     pdf_y = y * scale_y
@@ -148,65 +163,50 @@ def extract_pdf_snippet(pdf_page, clip_rect):
             return pix.tobytes("png")
 
 def extract_vector_data(pdf_page, clip_rect):
-    """Extract vector data from the PDF page with efficient vector counting for large documents."""
-    # Check if clip_rect is valid
+    """Extract vector data from the PDF page with efficient counting and extraction in a single pass."""
     if not clip_rect.is_valid or clip_rect.width <= 0 or clip_rect.height <= 0:
         if DEBUG:
             logging.warning(f"Invalid clip rectangle: {clip_rect}")
         return []
-    
-    # Fast vector count check - without using 'extend' parameter which caused an error
-    vector_count = 0
-    count_start_time = time.time()
-    MAX_COUNT_TIME = 2.0  # Maximum time for counting vectors
-    
-    try:
-        # Count vectors with timeout - fixed to avoid 'extend' parameter
-        for drawing in pdf_page.get_drawings():
-            vector_count += 1
-            
-            # Check if we've already counted too many vectors or spent too much time
-            if vector_count > 50000 or (time.time() - count_start_time) > MAX_COUNT_TIME:
-                if DEBUG:
-                    logging.warning(f"Large number of vectors detected ({vector_count}+), skipping vector extraction")
-                return []  # Skip extraction for huge vector counts
-    except Exception as e:
-        if DEBUG:
-            logging.error(f"Error counting vectors: {e}")
-        return []
-    
-    # For reasonable vector counts, extract with intersection check
-    MAX_VECTORS = 200  # Maximum number of vectors to return
-    
+
+    MAX_VECTORS = 200
+    MAX_TOTAL_VECTORS = 50000
+    MAX_TIME = 5.0  # seconds
+
     try:
         vectors = []
-        processed = 0
-        extract_start_time = time.time()
-        
+        total_seen = 0
+        start_time = time.time()
+
         for drawing in pdf_page.get_drawings():
-            processed += 1
-            
-            # Periodic timeout check during extraction
-            if processed % 1000 == 0 and time.time() - extract_start_time > 5.0:
+            total_seen += 1
+
+            # Bail out if the page has too many vectors (complex PDF)
+            if total_seen > MAX_TOTAL_VECTORS:
                 if DEBUG:
-                    logging.warning(f"Vector extraction timeout after processing {processed}/{vector_count} vectors")
+                    logging.warning(f"Large number of vectors detected ({total_seen}+), skipping vector extraction")
+                return []
+
+            # Periodic timeout check
+            if total_seen % 1000 == 0 and time.time() - start_time > MAX_TIME:
+                if DEBUG:
+                    logging.warning(f"Vector extraction timeout after processing {total_seen} vectors")
                 break
-            
+
             # Check intersection with clip rectangle
             dr_rect = drawing.get("rect")
             if isinstance(dr_rect, fitz.Rect) and dr_rect.intersects(clip_rect):
                 # Filter out tiny elements (garbage removal)
                 if dr_rect.width < 1.0 and dr_rect.height < 1.0:
                     continue
-                
+
                 vectors.append(drawing)
-                
-                # Limit the number of vectors to prevent memory issues
+
                 if len(vectors) >= MAX_VECTORS:
                     if DEBUG:
                         logging.warning(f"Maximum vector count ({MAX_VECTORS}) reached, truncating results")
                     break
-        
+
         return vectors
     except Exception as e:
         if DEBUG:
@@ -272,7 +272,7 @@ def check_pdf_annotations(pdf_doc, pdf_page, page_index):
         return []
 
 # -----------------------
-# OCR Classes (from Bluebeam.OCR.dll)
+# OCR Classes
 # -----------------------
 
 class ExtractedTextItem:
@@ -348,7 +348,7 @@ class OCREngine:
             pil_image = image
             
         # Apply OCR with Tesseract
-        config = f'--psm 6'  # Assume a single uniform block of text
+        config = '--psm 6'  # Assume a single uniform block of text
         text = pytesseract.image_to_string(pil_image, config=config)
         return text
     
@@ -373,65 +373,48 @@ class OCREngine:
     
     def extract_text_from_table_block(self, table_block):
         """Extract text from a table block"""
-        if isinstance(table_block, np.ndarray):
-            config = f'--psm 6 --oem 3 -c preserve_interword_spaces=1 tessedit_do_invert=0'
-            
-            # Convert to PIL image if needed
-            if isinstance(table_block, np.ndarray):
-                if len(table_block.shape) > 2 and table_block.shape[2] == 3:
-                    # Apply preprocessing for better OCR
-                    gray = cv2.cvtColor(table_block, cv2.COLOR_BGR2GRAY)
-                    # Use adaptive threshold for tables
-                    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-                                                 cv2.THRESH_BINARY, 11, 2)
-                    pil_image = Image.fromarray(binary)
-                else:
-                    pil_image = Image.fromarray(table_block)
-            else:
-                pil_image = table_block
-                
-            try:
-                text = pytesseract.image_to_string(pil_image, config=config)
-                return self._clean_string(text)
-            except Exception as e:
-                if DEBUG:
-                    logging.error(f"Table OCR error: {e}")
-                return ""
-        return table_block
+        if not isinstance(table_block, np.ndarray):
+            return table_block
+
+        config = '--psm 6 --oem 3 -c preserve_interword_spaces=1 tessedit_do_invert=0'
+
+        if len(table_block.shape) > 2 and table_block.shape[2] == 3:
+            gray = cv2.cvtColor(table_block, cv2.COLOR_BGR2GRAY)
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                           cv2.THRESH_BINARY, 11, 2)
+            pil_image = Image.fromarray(binary)
+        else:
+            pil_image = Image.fromarray(table_block)
+
+        try:
+            text = pytesseract.image_to_string(pil_image, config=config)
+            return self._clean_string(text)
+        except Exception as e:
+            if DEBUG:
+                logging.error(f"Table OCR error: {e}")
+            return ""
     
     def extract_text_from_barcode_block(self, barcode_block):
-        """Extract text from a barcode block with timeout"""
-        if isinstance(barcode_block, np.ndarray):
-            try:
-                # Use a timeout for barcode processing
-                start_time = time.time()
-                MAX_BARCODE_TIME = 2.0  # seconds
-                
-                # Process with specialized configuration for barcodes
-                config = f'--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ tessedit_do_invert=0'
-                
-                if time.time() - start_time > MAX_BARCODE_TIME:
-                    return ""
-                    
-                # Convert to PIL image if needed
-                if isinstance(barcode_block, np.ndarray):
-                    if len(barcode_block.shape) > 2 and barcode_block.shape[2] == 3:
-                        gray = cv2.cvtColor(barcode_block, cv2.COLOR_BGR2GRAY)
-                        # Use threshold for barcodes
-                        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                        pil_image = Image.fromarray(binary)
-                    else:
-                        pil_image = Image.fromarray(barcode_block)
-                else:
-                    pil_image = barcode_block
-                    
-                text = pytesseract.image_to_string(pil_image, config=config)
-                return self._clean_string(text)
-            except Exception as e:
-                if DEBUG:
-                    logging.error(f"Barcode OCR error: {e}")
-                return ""
-        return barcode_block
+        """Extract text from a barcode block"""
+        if not isinstance(barcode_block, np.ndarray):
+            return barcode_block
+
+        try:
+            config = '--psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ tessedit_do_invert=0'
+
+            if len(barcode_block.shape) > 2 and barcode_block.shape[2] == 3:
+                gray = cv2.cvtColor(barcode_block, cv2.COLOR_BGR2GRAY)
+                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                pil_image = Image.fromarray(binary)
+            else:
+                pil_image = Image.fromarray(barcode_block)
+
+            text = pytesseract.image_to_string(pil_image, config=config, timeout=2)
+            return self._clean_string(text)
+        except Exception as e:
+            if DEBUG:
+                logging.error(f"Barcode OCR error: {e}")
+            return ""
     
     @staticmethod
     def _clean_string(text):
@@ -451,7 +434,7 @@ class OCREngine:
         return text.strip()
 
 # -----------------------
-# PDF Matching Implementation (from pdf_matching.dll)
+# PDF Matching Implementation
 # -----------------------
 
 class PDFMatchingTools:
@@ -468,7 +451,7 @@ class PDFMatchingTools:
     
     def create_matchline_cntxt(self, param1, param2, param3, param4):
         """Creates a matching context as seen in create_matchline_cntxt"""
-        # Allocate memory and initialize as in the original DLL
+        # Initialize matching context
         context = {
             'segments': [],
             'params': {
@@ -490,7 +473,7 @@ class PDFMatchingTools:
         return context
     
     def _create_tree_node(self):
-        """Creates a tree node structure as seen in the original DLL"""
+        """Creates a tree node structure for spatial indexing"""
         return {
             'left': None,
             'right': None,
@@ -553,7 +536,7 @@ class PDFMatchingTools:
             stack.pop()
     
     def insert_seg_into_matchline_cntxt(self, context, param2, param3, param4, param5, param6):
-        """Implements insert_seg_into_matchline_cntxt (FUN_180001e80)"""
+        """Insert a segment into the matching context"""
         # Create segment data
         segment = {
             'x': param2,       # X coordinate
@@ -569,7 +552,7 @@ class PDFMatchingTools:
         # Insert into the tree structure
         self._insert_into_tree(context['tree_root'], param2, len(context['segments'])-1)
         
-        # Additional logic from FUN_180001e80
+        # Compare with existing segments
         # Calculate distances between segment points
         if len(context['segments']) > 1:
             # Comparison with existing segments
@@ -590,15 +573,14 @@ class PDFMatchingTools:
                 if 'point_counters' not in context:
                     context['point_counters'] = [0, 0]
                 
-                # Update internal counters as in FUN_180001e80
+                # Update internal counters
                 if segment.get('type', 0) == 0:
                     context['point_counters'][0] += 1
                 else:
                     context['point_counters'][1] += 1
     
     def _insert_into_tree(self, root, value, data_index):
-        """Implements FUN_1800062d0 to insert a value into the tree"""
-        # Follow the exact algorithm from FUN_1800062d0
+        """Insert a value into the binary search tree for spatial indexing"""
         current = root
         last = None
         direction = None
@@ -697,7 +679,7 @@ class PDFMatchingTools:
                 context['finalized'] = True
     
     def is_valid_context(self, context):
-        """Implements FUN_180002830 to check if a context is valid"""
+        """Check if a matching context is valid (has enough segments)"""
         if context is None:
             return False
         
@@ -705,7 +687,7 @@ class PDFMatchingTools:
         return len(context.get('segments', [])) > 1
     
     def _compute_feature_hash(self, x, y):
-        """Implements the hash function from FUN_180002d70"""
+        """Compute a spatial hash for fast feature lookup"""
         # Exact constants from the original function
         x_val = (int(x) + 0x9e3779b9)
         x_val = (x_val ^ (x_val >> 32)) & 0xffffffffffffffff
@@ -719,7 +701,7 @@ class PDFMatchingTools:
         return x_val
     
     def _find_features_in_range(self, context, center_val, range_val):
-        """Implements FUN_1800011b0 to find features within a value range"""
+        """Find features within a value range using the spatial tree"""
         if not context or not context.get('tree_root'):
             return []
         
@@ -756,7 +738,7 @@ class PDFMatchingTools:
         return results
     
     def extract_features(self, image, context):
-        """Extracts features from an image, implementing FUN_180005720"""
+        """Extract visual features from an image using multiple detectors (SIFT, ORB, BRISK)"""
         # Convert image to grayscale if needed
         if len(image.shape) > 2 and image.shape[2] == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -933,7 +915,7 @@ class PDFMatchingTools:
         return self.ocr_engine.extract_text_from_page(pdf_page, rect)
     
     def transform_feature(self, feature, context, index=-1):
-        """Implements FUN_180005de0 for feature transformation"""
+        """Transform a feature's coordinates based on a context segment"""
         # If index is -1, return original feature
         if index == -1:
             return feature.copy()
@@ -957,11 +939,11 @@ class PDFMatchingTools:
         # Get the scale factor
         size = feature.get('size', 1.0)
         
-        # Transform coordinates as in FUN_180005de0
+        # Transform coordinates using angle and size
         new_x = cos_angle * size + x
         new_y = sin_angle * size + y
         
-        # Calculate opposite angle as in FUN_180005bb0
+        # Calculate opposite angle (rotated by pi)
         opposite_angle = math.atan2(sin_angle, -cos_angle)  # cos(a+π), sin(a+π)
         
         # Create transformed feature
@@ -975,7 +957,7 @@ class PDFMatchingTools:
         return transformed
     
     def transform_points(self, points, transform_matrix):
-        """Implements FUN_180046590 for transforming multiple points"""
+        """Transform multiple points using a 6-element affine transformation matrix"""
         # This function transforms a set of points using the given transformation matrix
         if not points:
             return []
@@ -993,12 +975,12 @@ class PDFMatchingTools:
         return transformed_points
     
     def calculate_feature_distance(self, feature1, feature2, params):
-        """Calculates distance between features, implementing FUN_180001690"""
+        """Calculate weighted distance between two features (spatial + angular + descriptor)"""
         # Extract coordinates
         x1, y1 = feature1.get('x', 0), feature1.get('y', 0)
         x2, y2 = feature2.get('x', 0), feature2.get('y', 0)
         
-        # Calculate spatial distance exactly as in FUN_180001690
+        # Calculate spatial distance
         spatial_dist = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
         
         # Calculate angle difference (uses cosines and sines as in original)
@@ -1008,7 +990,7 @@ class PDFMatchingTools:
         cos1, sin1 = math.cos(angle1), math.sin(angle1)
         cos2, sin2 = math.cos(angle2), math.sin(angle2)
         
-        # Calculate norm of sum of direction vectors (as in FUN_180001410)
+        # Calculate norm of sum of direction vectors
         angle_dist = math.sqrt((cos1 + cos2)**2 + (sin1 + sin2)**2)
         
         # Descriptor distance (if available)
@@ -1092,7 +1074,7 @@ class PDFMatchingTools:
         return similarity
     
     def perform_matching(self, context1, context2):
-        """Implements FUN_1800021b0 to match two contexts"""
+        """Match two feature contexts by finding best feature correspondences"""
         # Extract features
         features1 = context1.get('features', [])
         features2 = context2.get('features', [])
@@ -1106,7 +1088,7 @@ class PDFMatchingTools:
         best_match_i = -1
         best_match_j = -1
         
-        # Find best feature match - nested loops as in FUN_1800021b0
+        # Find best feature match via exhaustive search
         for i in range(len(features1)):
             for j in range(len(features2)):
                 # Calculate distance between features
@@ -1187,7 +1169,7 @@ class PDFMatchingTools:
         return (param1 * 3 - 1) * param2
     
     def visualize_matches(self, context, transform, output_path):
-        """Implements FUN_18004d210 to visualize matches"""
+        """Visualize feature matches by drawing original and transformed points"""
         # Create a blank image with white background
         height, width = 500, 500
         img = np.ones((height, width, 3), dtype=np.uint8) * 255
@@ -1645,13 +1627,11 @@ class PDFMatchingTools:
                 match_pix = pdf_page.get_pixmap(matrix=fitz.Matrix(ZOOM_FACTOR, ZOOM_FACTOR), clip=match_rect)
                 match_image = "data:image/png;base64," + base64.b64encode(match_pix.tobytes("png")).decode("utf-8")
                 
-                # Extract any text from the matching region (with timeout)
+                # Extract any text from the matching region
                 match_text = ""
                 try:
-                    start_time = time.time()
-                    if time.time() - start_time < 0.5:  # Very short timeout (0.5s)
-                        match_text = pdf_page.get_text("text", clip=match_rect).strip()
-                except:
+                    match_text = pdf_page.get_text("text", clip=match_rect).strip()
+                except Exception:
                     pass
                 
                 results.append({
@@ -1895,13 +1875,11 @@ class PDFMatchingTools:
                             match_pix = pdf_page.get_pixmap(matrix=fitz.Matrix(ZOOM_FACTOR, ZOOM_FACTOR), clip=match_rect)
                             match_image = "data:image/png;base64," + base64.b64encode(match_pix.tobytes("png")).decode("utf-8")
                             
-                            # Extract text with very limited timeout
+                            # Extract text from the matching region
                             match_text = ""
                             try:
-                                text_start = time.time()
-                                if time.time() - text_start < 0.5:  # Very short timeout
-                                    match_text = pdf_page.get_text("text", clip=match_rect)
-                            except:
+                                match_text = pdf_page.get_text("text", clip=match_rect).strip()
+                            except Exception:
                                 pass
                             
                             matches.append({
@@ -2087,28 +2065,71 @@ def main():
     """
     Main function with improved complex PDF handling that always searches the entire page.
     Prioritizes template matching, then visual matching, with optional direct text, and no OCR.
+
+    Supports two invocation modes:
+      1. Legacy file mode: auto_count.py payload_file.json
+      2. Stdin JSON mode: auto_count.py --json  (reads JSON payload from stdin)
+
+    Stdin JSON payload format:
+      {
+        "pdfPath": "/absolute/path/to.pdf",
+        "pageIndex": 0,
+        "boundingBox": { "x": 0, "y": 0, "width": 100, "height": 100, "imageWidth": 800, "imageHeight": 600 },
+        "templateImagePath": "/optional/path/to/template.png",
+        "threshold": 0.65,
+        "methods": ["template", "text", "visual"]
+      }
     """
     start_time = time.time()
-    
+
     try:
-        if len(sys.argv) < 2:
-            print(json.dumps({"result": {"error": "Usage: auto_count.py payload_file.json"}}))
-            sys.exit(1)
-        
-        payload_file = sys.argv[1].strip("'\"")
-        if not os.path.exists(payload_file):
-            print(json.dumps({"result": {"error": f"Payload file does not exist: {payload_file}"}}))
-            sys.exit(1)
-        
-        with open(payload_file, "r") as f:
-            payload = json.load(f)
-        
-        doc_id = payload.get("id")
-        page_index = int(payload.get("pageIndex"))
-        bounding_box_payload = payload.get("boundingBox")
-        document_obj = payload.get("document")
-        pdf_filepath = document_obj.get("FilePath")
-        
+        # Determine invocation mode
+        stdin_mode = "--json" in sys.argv
+
+        if stdin_mode:
+            # ── Stdin JSON mode (used by bidwright python-runner.ts) ──
+            raw = sys.stdin.read()
+            payload = json.loads(raw)
+
+            pdf_filepath = payload.get("pdfPath")
+            if not pdf_filepath:
+                print(json.dumps({"result": {"error": "Missing 'pdfPath' in JSON payload"}}))
+                sys.exit(1)
+
+            page_index = int(payload.get("pageIndex", payload.get("pageNumber", 1)) or 0)
+            # pageNumber is 1-based from the frontend; convert to 0-based
+            if "pageNumber" in payload and "pageIndex" not in payload:
+                page_index = max(0, page_index - 1)
+            bounding_box_payload = payload.get("boundingBox")
+            doc_id = payload.get("documentId", payload.get("id", "unknown"))
+
+            # Optional: load template from a separate image file instead of bounding box crop
+            template_image_path = payload.get("templateImagePath")
+            threshold = float(payload.get("threshold", 0.65))
+            requested_methods = payload.get("methods", [])
+        else:
+            # ── Legacy file mode ──
+            if len(sys.argv) < 2:
+                print(json.dumps({"result": {"error": "Usage: auto_count.py payload_file.json  OR  auto_count.py --json"}}))
+                sys.exit(1)
+
+            payload_file = sys.argv[1].strip("'\"")
+            if not os.path.exists(payload_file):
+                print(json.dumps({"result": {"error": f"Payload file does not exist: {payload_file}"}}))
+                sys.exit(1)
+
+            with open(payload_file, "r") as f:
+                payload = json.load(f)
+
+            doc_id = payload.get("id")
+            page_index = int(payload.get("pageIndex"))
+            bounding_box_payload = payload.get("boundingBox")
+            document_obj = payload.get("document")
+            pdf_filepath = document_obj.get("FilePath")
+            template_image_path = None
+            threshold = 0.65
+            requested_methods = []
+
         if not pdf_filepath:
             print(json.dumps({"result": {"error": "Document object missing 'FilePath'"}}))
             sys.exit(1)
@@ -2204,7 +2225,13 @@ def main():
                 logging.error(f"Error extracting vector data: {e}")
         
         # Extract the snippet image into a numpy array for matching
-        snippet_array = cv2.imdecode(np.frombuffer(base64.b64decode(pdf_snippet_data_url.split(',')[1]), np.uint8), cv2.IMREAD_COLOR)
+        # If a separate template image was provided, use it instead of the PDF crop
+        if stdin_mode and template_image_path and os.path.exists(template_image_path):
+            snippet_array = cv2.imread(template_image_path, cv2.IMREAD_COLOR)
+            if snippet_array is None:
+                raise ValueError(f"Failed to load template image: {template_image_path}")
+        else:
+            snippet_array = cv2.imdecode(np.frombuffer(base64.b64decode(pdf_snippet_data_url.split(',')[1]), np.uint8), cv2.IMREAD_COLOR)
         
         # Initialize matching tools
         matching_tools = PDFMatchingTools()

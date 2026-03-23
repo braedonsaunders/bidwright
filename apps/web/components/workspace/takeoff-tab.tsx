@@ -22,8 +22,13 @@ import {
   ArrowDownToLine,
   Hash,
   LayoutGrid,
+  ScanSearch,
+  Loader2,
+  X,
+  Crosshair,
+  RotateCcw,
 } from "lucide-react";
-import type { ProjectWorkspaceData, KnowledgeBookRecord } from "@/lib/api";
+import type { ProjectWorkspaceData, KnowledgeBookRecord, VisionMatch } from "@/lib/api";
 import {
   listTakeoffAnnotations,
   createTakeoffAnnotation,
@@ -32,6 +37,7 @@ import {
   getDocumentDownloadUrl,
   getBookFileUrl,
   listKnowledgeBooks,
+  runVisionCountSymbols,
 } from "@/lib/api";
 import {
   Badge,
@@ -74,7 +80,8 @@ type ToolId =
   | "area-triangle"
   | "area-ellipse"
   | "area-vertical-wall"
-  | "calibrate";
+  | "calibrate"
+  | "auto-count";
 
 interface ToolDef {
   id: ToolId;
@@ -90,6 +97,7 @@ const TOOLS: ToolDef[] = [
   { id: "linear-drop", label: "Linear Drop", icon: ArrowDownToLine, group: "linear" },
   { id: "count", label: "Count", icon: Target, group: "count" },
   { id: "count-by-distance", label: "Count by Distance", icon: Hash, group: "count" },
+  { id: "auto-count", label: "Auto Count (CV)", icon: ScanSearch, group: "count" },
   { id: "area-rectangle", label: "Rectangle", icon: Square, group: "area" },
   { id: "area-polygon", label: "Polygon", icon: Layers, group: "area" },
   { id: "area-triangle", label: "Triangle", icon: Triangle, group: "area" },
@@ -128,6 +136,43 @@ function buildPdfUrl(doc: TakeoffDocument): string {
   return "";
 }
 
+/* ─── CSV Export Helper ─── */
+
+function exportAnnotationsCsv(annotations: TakeoffAnnotation[], calibration: Calibration | null) {
+  const rows: string[][] = [
+    ["Label", "Type", "Group", "Value", "Unit", "Area", "Volume", "Color", "Points"],
+  ];
+
+  for (const ann of annotations) {
+    const m = ann.measurement;
+    rows.push([
+      ann.label || "",
+      ann.type,
+      ann.groupName || "",
+      m?.value?.toString() ?? "",
+      m?.unit ?? "",
+      m?.area?.toString() ?? "",
+      m?.volume?.toString() ?? "",
+      ann.color,
+      ann.points.map((p) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`).join(" "),
+    ]);
+  }
+
+  if (calibration) {
+    rows.push([]);
+    rows.push(["Calibration", `1 ${calibration.unit} = ${calibration.pixelsPerUnit.toFixed(2)} px`]);
+  }
+
+  const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "takeoff-annotations.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ─── Component ─── */
 
 export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
@@ -150,7 +195,6 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
     let cancelled = false;
     (async () => {
       try {
-        // Only fetch project-scoped books (global library books aren't project drawings)
         const books = await listKnowledgeBooks(projectId);
         if (cancelled) return;
         setKnowledgePdfs(
@@ -175,7 +219,6 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(projectPdfs[0]?.id ?? "");
 
-  /* Auto-select first doc when knowledge books load and nothing is selected */
   useEffect(() => {
     if (!selectedDocId && drawings.length > 0) {
       setSelectedDocId(drawings[0].id);
@@ -205,6 +248,12 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
   const [activeOpts, setActiveOpts] = useState<TakeoffAnnotation["opts"]>({});
   const [activeGroupName, setActiveGroupName] = useState<string | undefined>();
   const [activeLabel, setActiveLabel] = useState<string>("");
+
+  /* Auto-count state */
+  const [autoCountRunning, setAutoCountRunning] = useState(false);
+  const [autoCountResults, setAutoCountResults] = useState<VisionMatch[] | null>(null);
+  const [autoCountSnippet, setAutoCountSnippet] = useState<string | null>(null);
+  const [autoCountThreshold, setAutoCountThreshold] = useState(0.65);
 
   /* Canvas dimensions */
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
@@ -260,7 +309,6 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
       }
     });
 
-    /* Also check via MutationObserver for attribute changes (width/height) */
     const mutObs = new MutationObserver(() => {
       if (canvas.width > 0 && canvas.height > 0) {
         setCanvasSize({ width: canvas.width, height: canvas.height });
@@ -299,8 +347,20 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
   }
 
   function handleToolSelect(tool: ToolId) {
+    // Clear auto-count results when switching tools
+    if (tool !== "auto-count") {
+      setAutoCountResults(null);
+      setAutoCountSnippet(null);
+    }
+
     if (tool === "select") {
       setActiveTool("select");
+      return;
+    }
+
+    if (tool === "auto-count") {
+      // Auto-count uses a special region-select mode - no config modal needed
+      setActiveTool("auto-count");
       return;
     }
 
@@ -346,13 +406,103 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
         page,
       });
       if (saved?.id) {
-        /* Update local id with server id */
         setAnnotations((prev) =>
           prev.map((a) => (a.id === newAnnotation.id ? { ...a, id: saved.id } : a))
         );
       }
     } catch {
       /* Keep local annotation even if API fails */
+    }
+  }
+
+  /* ─── Auto-Count: when user finishes drawing a selection rectangle ─── */
+
+  async function handleAutoCountSelection(data: Partial<TakeoffAnnotation>) {
+    if (!selectedDoc || !data.points || data.points.length < 2) return;
+
+    const [p1, p2] = data.points;
+    const bbox = {
+      x: Math.min(p1.x, p2.x),
+      y: Math.min(p1.y, p2.y),
+      width: Math.abs(p2.x - p1.x),
+      height: Math.abs(p2.y - p1.y),
+      imageWidth: canvasSize.width,
+      imageHeight: canvasSize.height,
+    };
+
+    if (bbox.width < 5 || bbox.height < 5) return;
+
+    // Resolve the real document ID (strip kb- prefix for knowledge books)
+    const realDocId = selectedDoc.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDoc.id;
+
+    setAutoCountRunning(true);
+    setAutoCountResults(null);
+    setAutoCountSnippet(null);
+
+    try {
+      const result = await runVisionCountSymbols({
+        projectId,
+        documentId: realDocId,
+        pageNumber: page,
+        boundingBox: bbox,
+        threshold: autoCountThreshold,
+      });
+
+      setAutoCountResults(result.matches);
+      setAutoCountSnippet(result.snippetImage ?? null);
+
+      // Convert matches to count annotations on the canvas
+      if (result.matches.length > 0) {
+        const matchPoints: Point[] = result.matches.map((m) => {
+          // Convert PDF coordinates back to canvas coordinates
+          const scaleX = canvasSize.width / (canvasSize.width); // Already in canvas coords from Python
+          const centerX = m.rect.x + m.rect.width / 2;
+          const centerY = m.rect.y + m.rect.height / 2;
+          // The Python pipeline returns coordinates relative to the full page at ZOOM_FACTOR
+          // We need to convert them to canvas coordinates
+          const zoomFactor = 3.0; // Matches ZOOM_FACTOR in auto_count.py
+          return {
+            x: (centerX / zoomFactor) * zoom,
+            y: (centerY / zoomFactor) * zoom,
+          };
+        });
+
+        const countAnnotation: TakeoffAnnotation = {
+          id: crypto.randomUUID(),
+          type: "count",
+          label: `Auto Count (${result.totalCount} found)`,
+          color: "#22c55e",
+          thickness: 4,
+          points: matchPoints,
+          visible: true,
+          groupName: "Auto Count",
+          measurement: { value: result.totalCount, unit: "count" },
+        };
+
+        setAnnotations((prev) => [...prev, countAnnotation]);
+
+        // Persist
+        try {
+          const saved = await createTakeoffAnnotation(projectId, {
+            ...countAnnotation,
+            documentId: selectedDocId,
+            page,
+          });
+          if (saved?.id) {
+            setAnnotations((prev) =>
+              prev.map((a) => (a.id === countAnnotation.id ? { ...a, id: saved.id } : a))
+            );
+          }
+        } catch {
+          /* local annotation is fine */
+        }
+      }
+    } catch (err) {
+      console.error("Auto-count failed:", err);
+    } finally {
+      setAutoCountRunning(false);
     }
   }
 
@@ -395,14 +545,24 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
   }
 
   function handleEditAnnotation(id: string) {
-    /* Select the annotation for now; full edit modal is a future enhancement */
     setSelectedAnnotationId(id);
+  }
+
+  /* Clear all annotations */
+  function handleClearAll() {
+    for (const ann of annotations) {
+      deleteTakeoffAnnotation(projectId, ann.id).catch(() => {});
+    }
+    setAnnotations([]);
   }
 
   /* Build document URL */
   const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
 
   const zoomPercent = Math.round(zoom * 100);
+
+  /* Determine if auto-count tool is active */
+  const isAutoCountActive = activeTool === "auto-count";
 
   /* ─── Render ─── */
 
@@ -419,6 +579,8 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
               setSelectedDocId(v);
               setPage(1);
               setAnnotations([]);
+              setAutoCountResults(null);
+              setAutoCountSnippet(null);
             }}
           >
             <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 w-56 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors truncate">
@@ -543,12 +705,102 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
           {TOOLS.find((t) => t.id === activeTool)?.label ?? "Select"} tool
         </Badge>
 
+        {/* Clear all */}
+        {annotations.length > 0 && (
+          <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all annotations">
+            <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+        )}
+
         {/* Export */}
-        <Button variant="secondary" size="sm">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => exportAnnotationsCsv(annotations, calibration)}
+          disabled={annotations.length === 0}
+        >
           <Download className="h-3.5 w-3.5" />
           Export
         </Button>
       </div>
+
+      {/* ─── Auto-Count Banner ─── */}
+      {isAutoCountActive && (
+        <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
+          <ScanSearch className="h-4 w-4 text-accent shrink-0" />
+          <div className="flex-1">
+            <p className="text-xs font-medium text-fg/80">
+              {autoCountRunning
+                ? "Analyzing drawing for matches..."
+                : "Draw a rectangle around a symbol to auto-count all occurrences on this page"}
+            </p>
+            {!autoCountRunning && (
+              <p className="text-[11px] text-fg/40 mt-0.5">
+                Select a symbol by clicking and dragging. The CV pipeline will find all matching symbols.
+              </p>
+            )}
+          </div>
+
+          {autoCountRunning && (
+            <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          )}
+
+          {/* Threshold control */}
+          <div className="flex items-center gap-1.5">
+            <label className="text-[11px] text-fg/40">Sensitivity:</label>
+            <input
+              type="range"
+              min={30}
+              max={95}
+              value={Math.round(autoCountThreshold * 100)}
+              onChange={(e) => setAutoCountThreshold(parseInt(e.target.value) / 100)}
+              className="w-16 accent-accent"
+              title={`Threshold: ${Math.round(autoCountThreshold * 100)}%`}
+            />
+            <span className="text-[11px] text-fg/50 w-7">{Math.round(autoCountThreshold * 100)}%</span>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              setActiveTool("select");
+              setAutoCountResults(null);
+              setAutoCountSnippet(null);
+            }}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
+
+      {/* ─── Auto-Count Results Banner ─── */}
+      {autoCountResults && !isAutoCountActive && (
+        <div className="flex items-center gap-3 rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-2">
+          <Crosshair className="h-4 w-4 text-green-500 shrink-0" />
+          <p className="text-xs text-fg/70">
+            Auto-count found <span className="font-semibold text-green-600">{autoCountResults.length}</span> match{autoCountResults.length !== 1 ? "es" : ""}
+          </p>
+          {autoCountSnippet && (
+            <img
+              src={autoCountSnippet}
+              alt="Template"
+              className="h-8 w-8 rounded border border-line object-contain bg-white"
+            />
+          )}
+          <div className="flex-1" />
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              setAutoCountResults(null);
+              setAutoCountSnippet(null);
+            }}
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
 
       {/* ─── Main Area ─── */}
       <div className="flex flex-1 gap-3 overflow-hidden">
@@ -610,13 +862,36 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
                 width={canvasSize.width}
                 height={canvasSize.height}
                 annotations={annotations.filter((a) => a.visible)}
-                activeTool={activeTool === "select" ? null : activeTool}
+                activeTool={
+                  isAutoCountActive
+                    ? "area-rectangle"    /* Re-use rectangle drawing for region selection */
+                    : activeTool === "select"
+                      ? null
+                      : activeTool
+                }
                 calibration={calibration}
-                activeColor={activeColor}
-                activeThickness={activeThickness}
-                onAnnotationComplete={handleAnnotationComplete}
+                activeColor={isAutoCountActive ? "#f59e0b" : activeColor}
+                activeThickness={isAutoCountActive ? 2 : activeThickness}
+                onAnnotationComplete={
+                  isAutoCountActive
+                    ? handleAutoCountSelection
+                    : handleAnnotationComplete
+                }
                 onCalibrationRequest={handleCalibrationRequest}
               />
+
+              {/* Auto-count processing overlay */}
+              {autoCountRunning && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg backdrop-blur-sm z-10">
+                  <div className="flex items-center gap-3 rounded-xl bg-panel px-5 py-3 shadow-xl border border-line">
+                    <Loader2 className="h-5 w-5 animate-spin text-accent" />
+                    <div>
+                      <p className="text-sm font-medium text-fg">Running symbol detection...</p>
+                      <p className="text-xs text-fg/40">OpenCV template matching + feature detection</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

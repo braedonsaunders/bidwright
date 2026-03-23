@@ -2157,7 +2157,7 @@ export function SettingsPage({
 
           {/* ── Agent Runtime ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "agent" && (
-            <AgentRuntimeSettings settings={settings} onUpdate={(patch) => setSettings((prev) => ({ ...prev, integrations: { ...prev.integrations, ...patch } }))} onSave={handleSave} />
+            <AgentRuntimeSettings settings={settings} onUpdate={(patch) => setSettings((prev) => ({ ...prev, integrations: { ...prev.integrations, ...patch } }))} />
           )}
 
           {/* ── Plugins ─── */}
@@ -2175,11 +2175,9 @@ export function SettingsPage({
 function AgentRuntimeSettings({
   settings,
   onUpdate,
-  onSave,
 }: {
   settings: { integrations: IntegrationSettings & Record<string, any> };
   onUpdate: (patch: Record<string, any>) => void;
-  onSave: () => void;
 }) {
   const [cliStatus, setCliStatus] = useState<{
     claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
@@ -2200,13 +2198,11 @@ function AgentRuntimeSettings({
   const currentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-sm font-semibold mb-1">Agent Runtime</h3>
-        <p className="text-xs text-fg/40 mb-4">
-          Configure which CLI agent runtime to use for AI estimating. The agent reads project documents natively and creates estimates via MCP tools.
-        </p>
-      </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Agent Runtime</CardTitle>
+      </CardHeader>
+      <CardBody className="space-y-4">
 
       {/* CLI Detection Status */}
       <div className="rounded-lg border border-line p-4 space-y-3">
@@ -2265,10 +2261,9 @@ function AgentRuntimeSettings({
       </div>
 
       {/* Runtime Selection */}
-      <div className="space-y-3">
-        <label className="text-xs font-medium text-fg/60">Preferred Runtime</label>
-        <select
-          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
+      <div>
+        <Label>Preferred Runtime</Label>
+        <Select
           value={currentRuntime}
           onChange={(e) => onUpdate({ agentRuntime: e.target.value || null })}
         >
@@ -2279,14 +2274,13 @@ function AgentRuntimeSettings({
           <option value="codex" disabled={!cliStatus?.codex?.available}>
             Codex CLI {!cliStatus?.codex?.available ? "(not installed)" : ""}
           </option>
-        </select>
+        </Select>
       </div>
 
       {/* Model Selection */}
-      <div className="space-y-3">
-        <label className="text-xs font-medium text-fg/60">Model</label>
-        <select
-          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
+      <div>
+        <Label>Model</Label>
+        <Select
           value={currentModel}
           onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
         >
@@ -2305,15 +2299,14 @@ function AgentRuntimeSettings({
               <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
             </>
           )}
-        </select>
+        </Select>
       </div>
 
       {/* CLI Path Override */}
-      <div className="space-y-3">
-        <label className="text-xs font-medium text-fg/60">CLI Path Override (optional)</label>
-        <input
+      <div>
+        <Label>CLI Path Override (optional)</Label>
+        <Input
           type="text"
-          className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm"
           placeholder={currentRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
           value={currentRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
           onChange={(e) => {
@@ -2324,7 +2317,7 @@ function AgentRuntimeSettings({
             }
           }}
         />
-        <p className="text-[10px] text-fg/30">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
+        <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
       </div>
 
       {/* Auth Note */}
@@ -2335,12 +2328,7 @@ function AgentRuntimeSettings({
         <p>API keys configured in the API Keys tab are also passed to the CLI automatically.</p>
       </div>
 
-      <button
-        onClick={onSave}
-        className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent/90"
-      >
-        Save Settings
-      </button>
-    </div>
+      </CardBody>
+    </Card>
   );
 }

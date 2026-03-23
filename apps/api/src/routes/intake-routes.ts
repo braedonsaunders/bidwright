@@ -235,7 +235,7 @@ export async function intakeRoutes(app: FastifyInstance) {
 
     for (const id of [
       "project.readFile", "project.searchFiles", "knowledge.queryProjectDocs",
-      "quote.createWorksheetItem", "quote.getWorkspace",
+      "quote.getItemConfig", "quote.createWorksheetItem", "quote.getWorkspace",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) itemTools.register(t); }
 

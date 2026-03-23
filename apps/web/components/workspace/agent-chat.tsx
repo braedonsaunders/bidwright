@@ -618,13 +618,15 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Select className="h-7 w-28 text-[10px]" value={provider} onChange={(e) => { setProvider(e.target.value); setSessionId(null); }}>
-                <option value="anthropic">Claude</option>
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="gemini">Gemini</option>
-                <option value="lmstudio">LM Studio</option>
-              </Select>
+              {!cliRuntime && (
+                <Select className="h-7 w-28 text-[10px]" value={provider} onChange={(e) => { setProvider(e.target.value); setSessionId(null); }}>
+                  <option value="anthropic">Claude</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="lmstudio">LM Studio</option>
+                </Select>
+              )}
               <button onClick={onClose} className="rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg">
                 <X className="h-4 w-4" />
               </button>

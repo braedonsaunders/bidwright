@@ -15,6 +15,7 @@
     "@bidwright/domain": "workspace:*",
     "@bidwright/ingestion": "workspace:*",
     "@bidwright/vector": "workspace:*",
+    "@bidwright/vision": "workspace:*",
     "@fastify/cors": "^10.0.2",
     "@fastify/multipart": "^9.3.0",
     "argon2": "^0.41.1",

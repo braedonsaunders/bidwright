@@ -1716,7 +1716,10 @@ export async function submitPackageIngest(input: PackageIngestInput) {
   const formData = new FormData();
   formData.append("file", input.file);
 
-  if (input.packageName) formData.append("packageName", input.packageName);
+  if (input.packageName) {
+    formData.append("packageName", input.packageName);
+    formData.append("projectName", input.packageName); // Also set project name from package name
+  }
   if (input.clientName) formData.append("clientName", input.clientName);
   if (input.location) formData.append("location", input.location);
   if (input.dueDate) formData.append("dueDate", input.dueDate);
@@ -2918,6 +2921,70 @@ export async function updateTakeoffAnnotation(projectId: string, annotationId: s
 export async function deleteTakeoffAnnotation(projectId: string, annotationId: string) {
   return apiRequest<void>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
     method: "DELETE",
+  });
+}
+
+// ── Vision / Auto-Count ──────────────────────────────────────────────────
+
+export interface VisionBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+export interface VisionMatch {
+  rect: { x: number; y: number; width: number; height: number };
+  confidence: number;
+  image?: string;
+  text?: string;
+  detection_method: string;
+}
+
+export interface VisionCountResult {
+  success: boolean;
+  documentId: string;
+  pageNumber: number;
+  totalCount: number;
+  matches: VisionMatch[];
+  snippetImage?: string;
+  duration_ms: number;
+  errors: string[];
+}
+
+export async function runVisionCountSymbols(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber: number;
+  boundingBox: VisionBoundingBox;
+  threshold?: number;
+  methods?: string[];
+}) {
+  return apiRequest<VisionCountResult>("/api/vision/count-symbols", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface VisionCropResult {
+  success: boolean;
+  image: string | null;
+  duration_ms: number;
+}
+
+export async function runVisionCropRegion(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber: number;
+  boundingBox: VisionBoundingBox;
+}) {
+  return apiRequest<VisionCropResult>("/api/vision/crop-region", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
 }
 

@@ -463,17 +463,24 @@ const symbolCountTool: Tool = {
     id: "vision.countSymbols",
     name: "Count Symbols in Drawing",
     category: "vision",
-    description: "Use machine learning (OpenCV template matching, OCR, visual feature matching) to count occurrences of a symbol or pattern across PDF drawing pages. Uses a pre-trained Python pipeline with 5 matching methods. Provide the document and a template image of the symbol to find.",
+    description: "Use the OpenCV computer vision pipeline (template matching, OCR, visual feature matching) to count occurrences of a symbol on a PDF drawing page. Select a bounding box region around an example of the symbol to use as a template, then the pipeline searches the entire page for matches. Returns match locations, confidence scores, and detection methods used.",
     parameters: [
-      { name: "documentId", type: "string", description: "Source document ID containing the drawings", required: true },
-      { name: "templateDocumentId", type: "string", description: "Document ID of the template/symbol image to search for", required: true },
-      { name: "pageNumbers", type: "array", description: "Specific pages to search (empty = all pages)", required: false },
-      { name: "threshold", type: "number", description: "Matching confidence threshold 0-1 (default 0.65)", required: false },
+      { name: "documentId", type: "string", description: "Source document ID containing the drawing", required: true },
+      { name: "pageNumber", type: "number", description: "Page number to search (1-based)", required: true },
+      { name: "boundingBox", type: "object", description: "Bounding box of the template symbol region: { x, y, width, height, imageWidth, imageHeight } in canvas pixel coordinates", required: true },
+      { name: "threshold", type: "number", description: "Matching confidence threshold 0-1 (default 0.65). Lower = more matches but more false positives", required: false },
     ],
     inputSchema: z.object({
       documentId: z.string(),
-      templateDocumentId: z.string(),
-      pageNumbers: z.array(z.number()).optional(),
+      pageNumber: z.number().min(1),
+      boundingBox: z.object({
+        x: z.number(),
+        y: z.number(),
+        width: z.number(),
+        height: z.number(),
+        imageWidth: z.number(),
+        imageHeight: z.number(),
+      }),
       threshold: z.number().min(0).max(1).optional(),
     }),
     requiresConfirmation: false,
@@ -483,15 +490,14 @@ const symbolCountTool: Tool = {
   async execute(input: Record<string, unknown>, context: ToolExecutionContext) {
     const start = Date.now();
 
-    // Try to call the vision package endpoint if available
     try {
       const res = await apiFetch(context, `${context.apiBaseUrl}/api/vision/count-symbols`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           documentId: input.documentId,
-          templateDocumentId: input.templateDocumentId,
-          pageNumbers: input.pageNumbers ?? [],
+          pageNumber: input.pageNumber,
+          boundingBox: input.boundingBox,
           threshold: input.threshold ?? 0.65,
           projectId: context.projectId,
         }),
@@ -499,26 +505,93 @@ const symbolCountTool: Tool = {
 
       if (res.ok) {
         const result = await res.json();
-        return { success: true, data: result, duration_ms: Date.now() - start };
+        // Strip base64 images from matches to keep response size reasonable for the agent
+        const matches = (result.matches ?? []).map((m: any) => ({
+          rect: m.rect,
+          confidence: m.confidence,
+          text: m.text,
+          detection_method: m.detection_method,
+        }));
+        return {
+          success: true,
+          data: {
+            totalCount: result.totalCount,
+            matches,
+            documentId: result.documentId,
+            pageNumber: result.pageNumber,
+            duration_ms: result.duration_ms,
+            errors: result.errors,
+          },
+          duration_ms: Date.now() - start,
+        };
       }
-    } catch {
-      // Vision endpoint not available, fall through
-    }
 
-    return {
-      success: true,
-      data: {
-        message: "Symbol counting requires the @bidwright/vision backend service with OpenCV support. The vision endpoint is not currently available.",
-        documentId: input.documentId,
-        templateDocumentId: input.templateDocumentId,
-        pageNumbers: input.pageNumbers ?? "all",
-        threshold: input.threshold ?? 0.65,
-      },
-      sideEffects: [],
-      duration_ms: Date.now() - start,
-    };
+      const errorText = await res.text().catch(() => "");
+      return {
+        success: false,
+        error: `Vision API returned ${res.status}: ${errorText}`,
+        duration_ms: Date.now() - start,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: `Vision API call failed: ${err instanceof Error ? err.message : String(err)}`,
+        duration_ms: Date.now() - start,
+      };
+    }
   },
 };
+
+// ──────────────────────────────────────────────────────────────
+// 12. vision.cropRegion
+// ──────────────────────────────────────────────────────────────
+const cropRegionTool = createVisionTool({
+  id: "vision.cropRegion",
+  name: "Crop PDF Region",
+  description: "Extract a cropped image from a specific rectangular region of a PDF page. Returns the image as a base64 data URL. Useful for isolating a symbol, detail, or annotation from a drawing to use as a template for counting or analysis.",
+  inputSchema: z.object({
+    documentId: z.string().describe("ID of the PDF document"),
+    pageNumber: z.number().describe("Page number (1-based)"),
+    boundingBox: z.object({
+      x: z.number().describe("X coordinate of the top-left corner (in canvas pixels)"),
+      y: z.number().describe("Y coordinate of the top-left corner (in canvas pixels)"),
+      width: z.number().describe("Width of the region (in canvas pixels)"),
+      height: z.number().describe("Height of the region (in canvas pixels)"),
+      imageWidth: z.number().describe("Total canvas/image width"),
+      imageHeight: z.number().describe("Total canvas/image height"),
+    }).describe("Bounding box of the region to crop"),
+  }),
+  tags: ["vision", "crop", "region", "pdf"],
+}, async (ctx, input) => {
+  try {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/vision/crop-region`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        projectId: ctx.projectId,
+        documentId: input.documentId,
+        pageNumber: input.pageNumber,
+        boundingBox: input.boundingBox,
+      }),
+    });
+
+    if (res.ok) {
+      const result = await res.json();
+      return {
+        success: true,
+        data: {
+          image: result.image,
+          duration_ms: result.duration_ms,
+        },
+      };
+    }
+
+    const errorText = await res.text().catch(() => "");
+    return { success: false, error: `Vision API returned ${res.status}: ${errorText}` };
+  } catch (err) {
+    return { success: false, error: `Crop failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+});
 
 // ──────────────────────────────────────────────────────────────
 // Export all tools as array
@@ -535,4 +608,5 @@ export const visionTools: Tool[] = [
   identifySymbolsTool,
   getPageInfoTool,
   symbolCountTool,
+  cropRegionTool,
 ];

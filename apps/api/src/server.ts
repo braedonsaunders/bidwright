@@ -3,7 +3,8 @@ import multipart from "@fastify/multipart";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, stat, writeFile, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
@@ -58,6 +59,7 @@ import { agentRoutes } from "./routes/agent-routes.js";
 import { knowledgeRoutes } from "./routes/knowledge-routes.js";
 import { datasetRoutes } from "./routes/dataset-routes.js";
 import { takeoffRoutes } from "./routes/takeoff-routes.js";
+import { visionRoutes } from "./routes/vision-routes.js";
 import { authPlugin } from "./middleware/auth.js";
 import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
@@ -570,6 +572,69 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     totalBytes: multipartUpload.totalBytes,
     sourceKind
   });
+
+  // Create SourceDocument records immediately from ZIP entries so documents appear in file browser right away
+  // Text extraction + Azure DI will update these records later during async ingestion
+  try {
+    const JSZip = (await import("jszip")).default;
+    const zipData = await readFile(multipartUpload.storagePath);
+    const zip = await JSZip.loadAsync(zipData);
+    const now = new Date();
+    const docEntries: Array<{ relativePath: string; size: number }> = [];
+    zip.forEach((relativePath, entry) => {
+      if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
+        const ext = path.extname(relativePath).toLowerCase();
+        if ([".pdf", ".xlsx", ".xls", ".csv", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".dwg", ".dxf", ".txt"].includes(ext)) {
+          docEntries.push({ relativePath, size: (entry as any)._data?.uncompressedSize || 0 });
+        }
+      }
+    });
+
+    // Also save the original files to disk immediately for CLI access
+    const docsDir = resolveApiPath("projects", targetProjectId, "documents");
+    await mkdir(docsDir, { recursive: true });
+
+    for (const entry of docEntries) {
+      const fileName = path.basename(entry.relativePath);
+      const sanitized = sanitizeFileName(fileName);
+      const ext = path.extname(fileName).toLowerCase();
+      const docId = createId("doc");
+      const storagePath = `packages/${multipartUpload.packageId}/originals/${docId}/${sanitized}`;
+
+      // Create SourceDocument immediately (empty extractedText — will be populated by ingestion)
+      await prisma.sourceDocument.create({
+        data: {
+          id: docId,
+          projectId: targetProjectId,
+          fileName: sanitized,
+          fileType: ext.replace(".", ""),
+          documentType: ext === ".pdf" ? "reference" : "data",
+          pageCount: 0, // Updated by ingestion
+          checksum: "",
+          storagePath,
+          extractedText: "", // Updated by ingestion + Azure DI
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      // Extract and save the actual file to disk for immediate CLI access
+      const fileData = await zip.file(entry.relativePath)?.async("nodebuffer");
+      if (fileData) {
+        const diskPath = resolveApiPath(storagePath);
+        await mkdir(path.dirname(diskPath), { recursive: true });
+        await writeFile(diskPath, fileData);
+        // Also symlink into documents/ for CLI
+        const symlinkTarget = path.join(docsDir, sanitized);
+        if (!existsSync(symlinkTarget)) {
+          try { await symlink(diskPath, symlinkTarget); } catch {}
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[upload] Failed to create immediate SourceDocuments:", err);
+    // Non-critical — full ingestion will handle everything
+  }
 
   // Run ingestion asynchronously — return immediately so the UI can redirect
   store.ingestUploadedPackage(multipartUpload.packageId).then(async (outcome) => {
@@ -3130,6 +3195,7 @@ export function buildServer() {
   app.register(knowledgeRoutes);
   app.register(datasetRoutes);
   app.register(takeoffRoutes);
+  app.register(visionRoutes);
   app.register(rateScheduleRoutes);
   app.register(intakeRoutes);
   app.register(catalogRoutes);

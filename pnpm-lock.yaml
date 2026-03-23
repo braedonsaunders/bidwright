@@ -35,6 +35,9 @@ importers:
       '@bidwright/vector':
         specifier: workspace:*
         version: link:../../packages/vector
+      '@bidwright/vision':
+        specifier: workspace:*
+        version: link:../../packages/vision
       '@fastify/cors':
         specifier: ^10.0.2
         version: 10.1.0

@@ -43,12 +43,19 @@ export function checkCliAuth(runtime: AgentRuntime, apiKey?: string): { authenti
     if (apiKey || process.env.ANTHROPIC_API_KEY) {
       return { authenticated: true, method: "api_key" };
     }
-    // Check if OAuth credentials exist on disk
+    // Check if OAuth credentials exist on disk (Linux/Windows)
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
     const configDir = process.env.CLAUDE_CONFIG_DIR || join(homeDir, ".claude");
     const credPath = join(configDir, ".credentials.json");
     if (existsSync(credPath)) {
       return { authenticated: true, method: "oauth" };
+    }
+    // Check macOS Keychain (Claude Code stores OAuth tokens there)
+    if (process.platform === "darwin") {
+      try {
+        execSync('security find-generic-password -s "Claude Code-credentials" 2>/dev/null', { stdio: "pipe" });
+        return { authenticated: true, method: "keychain" };
+      } catch {}
     }
     return { authenticated: false, method: "none" };
   } else {
