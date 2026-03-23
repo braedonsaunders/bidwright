@@ -660,11 +660,16 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     };
   }, []);
 
-  // Poll CLI status as fallback when SSE isn't connected (ensures events show up)
+  // Poll CLI status + refresh workspace periodically while agent is running
   useEffect(() => {
     if (!intakeSessionId || !cliRuntime) return;
     const status = intakeStatus?.status;
     if (status !== "running") return;
+
+    // Refresh workspace every 10s while agent runs (catches sub-agent mutations)
+    const wsRefreshInterval = setInterval(() => {
+      onWorkspaceMutated?.();
+    }, 10_000);
 
     const poll = async () => {
       try {
@@ -712,7 +717,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     };
 
     const interval = setInterval(poll, 5000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); clearInterval(wsRefreshInterval); };
   }, [intakeSessionId, intakeStatus?.status, cliRuntime, projectId]);
 
   // Auto-start intake when redirected from upload (wait for settings to load first)
