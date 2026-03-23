@@ -164,10 +164,23 @@ function ToolCallDetail({ tc }: { tc: ToolCallEntry }) {
               {tc.result.sideEffects.join(", ")}
             </div>
           )}
+          {/* Show input parameters */}
+          {tc.input != null && Object.keys(tc.input as any).length > 0 && (
+            <div>
+              <div className="text-[9px] text-fg/25 uppercase tracking-wider mb-0.5">Input</div>
+              <pre className="max-h-32 overflow-auto rounded bg-bg/50 p-1.5 text-[10px] text-fg/40 whitespace-pre-wrap break-all">
+                {JSON.stringify(tc.input, null, 2)}
+              </pre>
+            </div>
+          )}
+          {/* Show result data if available */}
           {tc.result.data != null && (
-            <pre className="max-h-40 overflow-auto rounded bg-bg/50 p-1.5 text-[10px] text-fg/50 whitespace-pre-wrap break-all">
-              {typeof tc.result.data === "string" ? tc.result.data : JSON.stringify(tc.result.data, null, 2)}
-            </pre>
+            <div>
+              <div className="text-[9px] text-fg/25 uppercase tracking-wider mb-0.5">Result</div>
+              <pre className="max-h-40 overflow-auto rounded bg-bg/50 p-1.5 text-[10px] text-fg/50 whitespace-pre-wrap break-all">
+                {typeof tc.result.data === "string" ? tc.result.data : JSON.stringify(tc.result.data, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       )}
