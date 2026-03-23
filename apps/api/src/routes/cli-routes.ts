@@ -148,7 +148,11 @@ export function registerCliRoutes(app: FastifyInstance) {
             await store.updateAiRun(sessionId, {
               output: { events: [...existing, ...toSave] } as any,
             });
-          } catch {}
+          } catch (err) {
+            console.error(`[cli] Failed to persist events for ${sessionId}:`, err);
+            // Put events back so we don't lose them
+            eventBuffer.unshift(...toSave);
+          }
         }, 5000);
       };
 
@@ -157,16 +161,18 @@ export function registerCliRoutes(app: FastifyInstance) {
         persistEvents();
       });
 
-      session.events.on("done", async (status: string) => {
+      session.events.on("done", async (finalStatus: string) => {
         if (saveTimer) clearTimeout(saveTimer);
         try {
           const run = await store.getAiRun(sessionId);
           const existing = ((run?.output as any)?.events || []);
           await store.updateAiRun(sessionId, {
-            status,
+            status: finalStatus,
             output: { events: [...existing, ...eventBuffer] } as any,
           });
-        } catch {}
+        } catch (err) {
+          console.error(`[cli] Failed to persist final events for ${sessionId}:`, err);
+        }
       });
 
       return { sessionId, projectId, runtime, status: "running" };
