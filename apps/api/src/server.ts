@@ -2969,6 +2969,13 @@ export function buildServer() {
       .send(createReadStream(absPath));
   });
 
+  app.get("/knowledge/books/:bookId/info", async (request) => {
+    const { bookId } = request.params as { bookId: string };
+    const book = await request.store!.getKnowledgeBook(bookId);
+    if (!book) return { error: "Book not found" };
+    return { book };
+  });
+
   app.get("/knowledge/books/:bookId/thumbnail", async (request, reply) => {
     const { bookId } = request.params as { bookId: string };
     const book = await request.store!.getKnowledgeBook(bookId);

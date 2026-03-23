@@ -102,6 +102,35 @@ export function registerKnowledgeTools(server: McpServer) {
     }
   );
 
+  // ── getBookPage ──────────────────────────────────────────
+  server.tool(
+    "getBookPage",
+    "Get the file path and page details for a knowledge book page so you can read it directly. When search results reference a book and page number, use this to get the actual file path, then use the Read tool to view the real PDF page (with vision). This lets you see the original tables, diagrams, and formatting that OCR may have garbled.",
+    {
+      bookId: z.string().describe("Knowledge book ID (from search results)"),
+      pageNumber: z.number().describe("Page number to view"),
+    },
+    async ({ bookId, pageNumber }) => {
+      const data = await apiGet(`/knowledge/books/${bookId}/info`);
+      const book = data.book || data;
+      if (!book || !book.storagePath) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Book not found or no file stored" }) }] };
+      }
+      // Return the file path relative to the project working directory
+      // The CLI agent can use Read tool with pages parameter to view it
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          bookName: book.name,
+          fileName: book.sourceFileName,
+          filePath: `../../${book.storagePath}`, // Relative to project workdir
+          pageNumber,
+          totalPages: book.pageCount,
+          hint: `Use the Read tool on the filePath with pages="${pageNumber}" to view this page visually. The PDF page will be rendered as an image so you can read tables and diagrams directly.`,
+        }, null, 2) }],
+      };
+    }
+  );
+
   // ── searchCatalogs ────────────────────────────────────────
   server.tool(
     "searchCatalogs",
