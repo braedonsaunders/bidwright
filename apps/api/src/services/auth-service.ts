@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from "crypto";
 import argon2 from "argon2";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "@bidwright/db";
 
 // ---------------------------------------------------------------------------
 // Password hashing (argon2 + legacy SHA-256 fallback)

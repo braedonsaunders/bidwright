@@ -1,4 +1,4 @@
-export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted";
+export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted" | "estimating";
 export type QuoteStatus = "draft" | "review" | "submitted" | "awarded" | "lost";
 export type AiRunStatus = "queued" | "running" | "complete" | "failed";
 export type CatalogKind =
@@ -745,7 +745,7 @@ export interface Plugin {
   name: string;
   slug: string;
   icon?: string;
-  category: "labour" | "equipment" | "material" | "travel" | "general";
+  category: "labour" | "equipment" | "material" | "travel" | "general" | "dynamic";
   description: string;
   llmDescription?: string;        // richer description for LLM tool discovery
   version: string;
@@ -820,7 +820,7 @@ export interface BrandProfile {
 export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
-  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
+  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number; maxAgentIterations?: number };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
   brand: BrandProfile;
 }

@@ -207,7 +207,7 @@ export async function seedSampleProjects(prisma: PrismaClient, store: BidwrightS
       data: {
         id: aiRun.id, projectId: aiRun.projectId, revisionId: aiRun.revisionId,
         kind: aiRun.kind, status: aiRun.status, model: aiRun.model,
-        promptVersion: aiRun.promptVersion, input: aiRun.input, output: aiRun.output,
+        promptVersion: aiRun.promptVersion, input: aiRun.input as any, output: aiRun.output as any,
         createdAt: new Date(aiRun.createdAt), updatedAt: new Date(aiRun.updatedAt),
       },
     });
@@ -231,7 +231,7 @@ export async function seedRateSchedules(prisma: PrismaClient, store: BidwrightSt
       data: {
         id: schedule.id, organizationId, name: schedule.name, description: schedule.description,
         category: schedule.category, scope: schedule.scope, defaultMarkup: schedule.defaultMarkup,
-        autoCalculate: schedule.autoCalculate, metadata: schedule.metadata,
+        autoCalculate: schedule.autoCalculate, metadata: schedule.metadata as any,
         tiers: {
           create: (store.rateScheduleTiers ?? [])
             .filter((t) => t.scheduleId === schedule.id)

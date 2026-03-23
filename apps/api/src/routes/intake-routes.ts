@@ -158,7 +158,7 @@ export async function intakeRoutes(app: FastifyInstance) {
         onToolCall: (tc) => {
           const s = intakeSessions.get(sessionId);
           if (s) {
-            s.toolCalls.push(tc);
+            s.toolCalls.push({ ...tc, timestamp: new Date().toISOString() });
             s.updatedAt = new Date().toISOString();
           }
         },

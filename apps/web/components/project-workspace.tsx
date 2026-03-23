@@ -207,7 +207,7 @@ function statusTone(s: string | undefined | null) {
 function StatusDropdown({ value, onChange, options }: {
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options: readonly { value: string; label: string; [k: string]: unknown }[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

@@ -2547,7 +2547,7 @@ export function buildServer() {
       return {
         status: response.status,
         statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
+        headers: Object.fromEntries((response.headers as any).entries()),
         body: responseBody,
       };
     } catch (error) {

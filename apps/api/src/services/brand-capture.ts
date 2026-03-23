@@ -359,8 +359,9 @@ ${allContent.slice(0, 20000)}
   });
 
   const response = await adapter.chat({
+    model: config.model,
+    systemPrompt: BRAND_EXTRACTION_PROMPT,
     messages: [
-      { role: "system", content: BRAND_EXTRACTION_PROMPT },
       { role: "user", content: userPrompt },
     ],
     temperature: 0.3,

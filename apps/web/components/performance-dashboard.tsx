@@ -105,7 +105,7 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
 
   const chartData = useMemo(() => {
     return filtered
-      .filter((p) => p.latestRevision?.subtotal > 0)
+      .filter((p) => (p.latestRevision?.subtotal ?? 0) > 0)
       .slice(0, 20)
       .map((p) => ({
         id: p.id,

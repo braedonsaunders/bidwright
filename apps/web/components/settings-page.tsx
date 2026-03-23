@@ -832,7 +832,7 @@ export function SettingsPage({
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 
     const apiPayload: Partial<AppSettingsRecord> = {
-      general: {},
+      general: {} as AppSettingsRecord["general"],
       email: {
         host: settings.email.smtpHost,
         port: parseInt(settings.email.smtpPort, 10) || 587,

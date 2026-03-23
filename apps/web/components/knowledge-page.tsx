@@ -510,7 +510,7 @@ function BookDetailPanel({
               <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
-              <Separator orientation="vertical" className="h-4 mx-1" />
+              <Separator className="h-4 mx-1" />
               <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
                 <ZoomOut className="h-3 w-3" />
               </Button>

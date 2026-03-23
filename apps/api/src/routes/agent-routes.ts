@@ -178,9 +178,12 @@ export async function agentRoutes(app: FastifyInstance) {
     const plugin = await request.store!.createPlugin({
       name: body.name,
       slug: body.slug ?? body.name.toLowerCase().replace(/\s+/g, "-"),
-      category: "dynamic",
+      category: "dynamic" as const,
       description: body.description ?? "",
-      toolDefinitions: body.toolDefinitions ?? [],
+      toolDefinitions: (body.toolDefinitions ?? []) as any,
+      config: {},
+      version: "1.0.0",
+      enabled: true,
     });
     reply.code(201);
     return plugin;

@@ -448,7 +448,7 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Category *</Label>
-                  <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  <Select value={category} onChange={(e) => setCategory(e.target.value as typeof category)}>
                     <option value="labour">Labour</option>
                     <option value="equipment">Equipment</option>
                     <option value="material">Material</option>
@@ -467,7 +467,7 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Default Output Type</Label>
-                  <Select value={defaultOutputType} onChange={(e) => setDefaultOutputType(e.target.value)}>
+                  <Select value={defaultOutputType} onChange={(e) => setDefaultOutputType(e.target.value as typeof defaultOutputType)}>
                     <option value="line_items">Line Items</option>
                     <option value="worksheet">Worksheet</option>
                     <option value="text_content">Text Content</option>

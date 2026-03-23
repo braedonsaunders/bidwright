@@ -2712,7 +2712,7 @@ export class PrismaApiStore {
       // This bridges the zip→document pipeline to the knowledge/vector pipeline
       // so the intake agent can immediately search document content.
       try {
-        const { knowledgeService } = await import("../services/knowledge-service.js");
+        const { knowledgeService } = await import("./services/knowledge-service.js");
         for (const doc of sourceDocuments) {
           if (!doc.extractedText) continue;
           await knowledgeService.ingestDocument({
@@ -2863,6 +2863,7 @@ export class PrismaApiStore {
 
   async listScheduleTasks(projectId: string) {
     const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
     const tasks = await this.db.scheduleTask.findMany({
       where: { projectId, revisionId: revision.id },
       orderBy: { order: "asc" },
@@ -2975,6 +2976,7 @@ export class PrismaApiStore {
   async saveBaseline(projectId: string) {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return;
     const tasks = await this.db.scheduleTask.findMany({ where: { projectId, revisionId: revision.id } });
     for (const t of tasks) {
       await this.db.scheduleTask.update({
@@ -2987,6 +2989,7 @@ export class PrismaApiStore {
   async clearBaseline(projectId: string) {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return;
     await this.db.scheduleTask.updateMany({
       where: { projectId, revisionId: revision.id },
       data: { baselineStart: null, baselineEnd: null },
