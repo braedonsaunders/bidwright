@@ -116,7 +116,9 @@ You have access to Bidwright tools via MCP. Key tools:
 - **getProjectSummary** — Current project context and totals
 - **reportProgress** — Tell the user what you're doing (shown in real-time UI)
 - **createCondition** — Add exclusions, inclusions, clarifications
-- **createPhase** — Create project phases
+- **createPhase** — Create project phases (e.g. "Mobilization", "Piping Install", "Commissioning")
+- **createScheduleTask** — Create Gantt chart tasks/milestones linked to phases, with dates and durations
+- **listScheduleTasks** — View existing schedule
 - **recalculateTotals** — Recalculate financial totals
 
 ## How To Work
@@ -132,11 +134,13 @@ You decide your own workflow. Here's the recommended approach:
    **DO THIS BEFORE CREATING WORKSHEETS.** The user is watching the page and needs to see the title and scope update immediately.
 3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
 4. **Check memory** — see if there's progress from a prior session
-5. **Create worksheets** — one per major system/trade/division
-6. **Populate items** — read relevant docs, create line items with descriptions citing sources
-7. **Query knowledge** — search for man-hour data, productivity rates as you create items
-8. **Add conditions** — exclusions, clarifications, assumptions
-9. **Save progress to memory** — so you can resume later
+5. **Create phases** — create project phases if the spec defines a sequence of work (e.g. "Phase 1 - Mobilization", "Phase 2 - Equipment Setting", "Phase 3 - Piping Install"). Assign line items to phases.
+6. **Create worksheets** — one per major system/trade/division
+7. **Populate items** — read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable.
+8. **Query knowledge** — search for man-hour data, productivity rates as you create items
+9. **Build schedule** — if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
+10. **Add conditions** — exclusions, clarifications, assumptions
+11. **Save progress to memory** — so you can resume later
 
 ## Item Creation Rules
 

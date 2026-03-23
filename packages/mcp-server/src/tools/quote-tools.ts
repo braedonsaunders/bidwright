@@ -206,7 +206,7 @@ export function registerQuoteTools(server: McpServer) {
       text: z.string().describe("Condition text"),
     },
     async ({ type, text }) => {
-      await apiPost(projectPath("/conditions"), { type, text, sortOrder: 0 });
+      await apiPost(projectPath("/conditions"), { type, value: text, sortOrder: 0 });
       return { content: [{ type: "text" as const, text: `Added ${type}: ${text.substring(0, 60)}...` }] };
     }
   );
@@ -219,6 +219,41 @@ export function registerQuoteTools(server: McpServer) {
     async ({ name, description }) => {
       await apiPost(projectPath("/phases"), { name, description });
       return { content: [{ type: "text" as const, text: `Created phase: ${name}` }] };
+    }
+  );
+
+  // ── createScheduleTask ──────────────────────────────────
+  server.tool(
+    "createScheduleTask",
+    "Create a schedule task or milestone for the project Gantt chart. Link to a phase for grouping. Set startDate/endDate (ISO strings) and duration (days).",
+    {
+      name: z.string().describe("Task name"),
+      description: z.string().optional().describe("Task description"),
+      phaseId: z.string().optional().describe("Phase ID to group under"),
+      taskType: z.enum(["task", "milestone"]).default("task"),
+      startDate: z.string().optional().describe("Start date (ISO string, e.g. '2026-04-01')"),
+      endDate: z.string().optional().describe("End date (ISO string)"),
+      duration: z.number().optional().describe("Duration in days"),
+      order: z.number().optional().describe("Sort order"),
+    },
+    async (input) => {
+      await apiPost(projectPath("/schedule/tasks"), input);
+      return { content: [{ type: "text" as const, text: `Created schedule task: ${input.name}` }] };
+    }
+  );
+
+  // ── listScheduleTasks ─────────────────────────────────────
+  server.tool(
+    "listScheduleTasks",
+    "List all schedule tasks and milestones for the project.",
+    {},
+    async () => {
+      const data = await apiGet(projectPath("/schedule/tasks"));
+      const tasks = (Array.isArray(data) ? data : data.tasks || []).map((t: any) => ({
+        id: t.id, name: t.name, phaseId: t.phaseId, taskType: t.taskType,
+        startDate: t.startDate, endDate: t.endDate, duration: t.duration, order: t.order,
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify(tasks, null, 2) }] };
     }
   );
 
