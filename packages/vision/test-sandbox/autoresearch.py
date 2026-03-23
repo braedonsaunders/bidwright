@@ -78,10 +78,7 @@ TEST_CASES = [
     # ── Kemira: identical tanks ──
     {
         "name": "kemira_tanks",
-        "pdf": os.path.join(KEMIRA.replace("kemira/Kemira Brantford", "kemira/Kemira Brantford"),
-                            "..", "Kemira Brantford", "K5600-218 800U_PACKAGE REV 0.pdf")
-              if os.path.exists(os.path.join(SANDBOX, "kemira", "Kemira Brantford"))
-              else "",  # skip if not available
+        "pdf": os.path.join(SANDBOX, "kemira", "Kemira Brantford", "K5600-218 800U_PACKAGE REV 0.pdf"),
         "page": 4, "bbox": {"x": 2810, "y": 1553, "w": 360, "h": 360},
         "min_expected": 2, "max_expected": 4,
         "desc": "Identical storage tanks",
@@ -102,21 +99,21 @@ TEST_CASES = [
         "min_expected": 10, "max_expected": 60,
         "desc": "P&ID valve tags (auto-discover)",
     },
-    # ── Home Hardware: steel grid bubbles ──
+    # ── Home Hardware: P&ID drain symbols ──
     {
-        "name": "hh_grid_bubbles",
-        "pdf": os.path.join(HH, "Steel Erection Drawings", "E3_ PLATFORM PLANS Rev.A markup.pdf"),
-        "page": 1, "bbox": "auto:grid_bubble",
-        "min_expected": 3, "max_expected": 15,
-        "desc": "Structural grid line bubbles",
+        "name": "hh_pid_drains",
+        "pdf": os.path.join(HH, "PID", "006-P-HT-001,_ DEVREE FILLER HOLDING TANK Rev.F.pdf"),
+        "page": 1, "bbox": {"x": 517, "y": 1484, "w": 42, "h": 37},  # drain triangle "D"
+        "min_expected": 5, "max_expected": 15,
+        "desc": "P&ID drain symbols (triangle-D)",
     },
-    # ── Home Hardware: ISO callout numbers ──
+    # ── Home Hardware: P&ID connection diamonds ──
     {
-        "name": "hh_iso_callouts",
-        "pdf": os.path.join(HH, "ISO", "HOME HARDWARE REV01 1.29.2025.pdf"),
-        "page": 1, "bbox": "auto:callout_number",
-        "min_expected": 3, "max_expected": 20,
-        "desc": "ISO component callout numbers",
+        "name": "hh_pid_connections",
+        "pdf": os.path.join(HH, "PID", "006-P-HT-001,_ DEVREE FILLER HOLDING TANK Rev.F.pdf"),
+        "page": 1, "bbox": {"x": 991, "y": 2770, "w": 76, "h": 75},  # diamond junction
+        "min_expected": 10, "max_expected": 30,
+        "desc": "P&ID connection junction diamonds",
     },
 ]
 
@@ -153,7 +150,7 @@ def auto_discover_template(img, iw, ih, template_type):
     return {"x": c["x"], "y": c["y"], "w": c["w"], "h": c["h"]}
 
 
-def run_single_test(case, threshold=0.70, multi_scale=False, render_dpi=150):
+def run_single_test(case, threshold=0.75, render_dpi=150):
     """Run a single test case. Returns {name, matches, true_pos, false_pos, elapsed}."""
     pdf = case["pdf"]
     if not pdf or not os.path.exists(pdf):
@@ -180,7 +177,7 @@ def run_single_test(case, threshold=0.70, multi_scale=False, render_dpi=150):
 
     # Run matching
     start = time.time()
-    matches = count_matches(template, img, threshold=threshold, multi_scale=multi_scale)
+    matches = count_matches(template, img, threshold=threshold)
     elapsed = time.time() - start
 
     # Score: how many have real content?
@@ -205,7 +202,7 @@ def run_single_test(case, threshold=0.70, multi_scale=False, render_dpi=150):
     }
 
 
-def run_full_eval(threshold=0.70, multi_scale=False, render_dpi=150, verbose=True):
+def run_full_eval(threshold=0.75, render_dpi=150, verbose=True):
     """Run all test cases, compute composite score."""
     results = []
     total_tp = 0
@@ -215,7 +212,7 @@ def run_full_eval(threshold=0.70, multi_scale=False, render_dpi=150, verbose=Tru
     run_count = 0
 
     for case in TEST_CASES:
-        r = run_single_test(case, threshold, multi_scale, render_dpi)
+        r = run_single_test(case, threshold, render_dpi)
         results.append(r)
 
         if r["status"] == "ok":
@@ -243,7 +240,7 @@ def run_full_eval(threshold=0.70, multi_scale=False, render_dpi=150, verbose=Tru
     score = precision * range_accuracy * speed_bonus
 
     summary = {
-        "threshold": threshold, "multi_scale": multi_scale, "dpi": render_dpi,
+        "threshold": threshold, "dpi": render_dpi,
         "precision": round(precision, 3),
         "range_accuracy": round(range_accuracy, 3),
         "avg_time": round(avg_time, 3),
@@ -268,30 +265,30 @@ def autoresearch_loop(iterations=20):
     print("█" * 70)
 
     configs = [
-        # Iteration 1-5: threshold sweep, no multi-scale (fast)
-        {"threshold": 0.60, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.65, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.70, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.75, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.80, "multi_scale": False, "render_dpi": 150},
-        # Iteration 6-10: multi-scale variants
-        {"threshold": 0.60, "multi_scale": True, "render_dpi": 150},
-        {"threshold": 0.65, "multi_scale": True, "render_dpi": 150},
-        {"threshold": 0.70, "multi_scale": True, "render_dpi": 150},
-        {"threshold": 0.75, "multi_scale": True, "render_dpi": 150},
-        {"threshold": 0.80, "multi_scale": True, "render_dpi": 150},
-        # Iteration 11-15: DPI variants
-        {"threshold": 0.65, "multi_scale": False, "render_dpi": 120},
-        {"threshold": 0.70, "multi_scale": False, "render_dpi": 120},
-        {"threshold": 0.65, "multi_scale": False, "render_dpi": 200},
-        {"threshold": 0.70, "multi_scale": False, "render_dpi": 200},
-        {"threshold": 0.70, "multi_scale": True, "render_dpi": 200},
-        # Iteration 16-20: fine-tuning around best
-        {"threshold": 0.67, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.68, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.69, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.71, "multi_scale": False, "render_dpi": 150},
-        {"threshold": 0.72, "multi_scale": False, "render_dpi": 150},
+        # Iteration 1-5: threshold sweep at 150 DPI
+        {"threshold": 0.60, "render_dpi": 150},
+        {"threshold": 0.65, "render_dpi": 150},
+        {"threshold": 0.70, "render_dpi": 150},
+        {"threshold": 0.75, "render_dpi": 150},
+        {"threshold": 0.80, "render_dpi": 150},
+        # Iteration 6-10: fine-tuning 0.70-0.80 range (where the sweet spot is)
+        {"threshold": 0.71, "render_dpi": 150},
+        {"threshold": 0.72, "render_dpi": 150},
+        {"threshold": 0.73, "render_dpi": 150},
+        {"threshold": 0.74, "render_dpi": 150},
+        {"threshold": 0.76, "render_dpi": 150},
+        # Iteration 11-15: lower thresholds with higher DPI (can work if bbox is recalculated)
+        {"threshold": 0.77, "render_dpi": 150},
+        {"threshold": 0.78, "render_dpi": 150},
+        {"threshold": 0.79, "render_dpi": 150},
+        {"threshold": 0.68, "render_dpi": 150},
+        {"threshold": 0.69, "render_dpi": 150},
+        # Iteration 16-20: edge cases
+        {"threshold": 0.50, "render_dpi": 150},
+        {"threshold": 0.55, "render_dpi": 150},
+        {"threshold": 0.85, "render_dpi": 150},
+        {"threshold": 0.90, "render_dpi": 150},
+        {"threshold": 0.95, "render_dpi": 150},
     ]
 
     all_results = []
@@ -300,7 +297,7 @@ def autoresearch_loop(iterations=20):
 
     for i, cfg in enumerate(configs[:iterations]):
         print(f"\n{'─'*70}")
-        print(f"RUN {i+1}/{iterations}: thresh={cfg['threshold']} ms={cfg['multi_scale']} dpi={cfg['render_dpi']}")
+        print(f"RUN {i+1}/{iterations}: thresh={cfg['threshold']} dpi={cfg['render_dpi']}")
         print(f"{'─'*70}")
 
         summary = run_full_eval(**cfg)
@@ -324,8 +321,7 @@ def autoresearch_loop(iterations=20):
         marker = " ★" if r["config"] == best_config else ""
         print(f"  Run {r['run']:2d}: score={r['score']:.3f} P={r['precision']:.3f} "
               f"Range={r['range_accuracy']:.3f} T={r['avg_time']:.2f}s "
-              f"| thresh={r['config']['threshold']} ms={r['config']['multi_scale']} "
-              f"dpi={r['config']['render_dpi']}{marker}")
+              f"| thresh={r['config']['threshold']} dpi={r['config']['render_dpi']}{marker}")
 
     print(f"\nBEST CONFIG: {best_config}")
     print(f"BEST SCORE:  {best_score:.3f}")

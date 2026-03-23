@@ -7,9 +7,8 @@
 import type { FastifyInstance } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, sendMessage, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
-import { SSEStream } from "../services/sse-stream.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
-import type { PrismaApiStore } from "../prisma-store.js";
+import { prisma } from "@bidwright/db";
 
 export function registerCliRoutes(app: FastifyInstance) {
 
@@ -139,46 +138,50 @@ export function registerCliRoutes(app: FastifyInstance) {
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
       });
 
-      // Persist events to DB
+      // Persist events to DB using prisma directly (survives store context issues)
       let eventBuffer: any[] = [];
       let saveTimer: ReturnType<typeof setTimeout> | null = null;
-      const persistEvents = () => {
+
+      const flushEvents = async () => {
+        if (eventBuffer.length === 0) return;
+        const toSave = [...eventBuffer];
+        eventBuffer = [];
+        try {
+          const run = await prisma.aiRun.findFirst({ where: { id: sessionId } });
+          const existing = ((run?.output as any)?.events || []);
+          await prisma.aiRun.update({
+            where: { id: sessionId },
+            data: { output: { events: [...existing, ...toSave] } as any },
+          });
+        } catch (err) {
+          console.error(`[cli] Failed to persist events for ${sessionId}:`, err);
+          eventBuffer.unshift(...toSave); // Put back
+        }
+      };
+
+      const scheduleFlush = () => {
         if (saveTimer) return;
         saveTimer = setTimeout(async () => {
           saveTimer = null;
-          if (eventBuffer.length === 0) return;
-          const toSave = [...eventBuffer];
-          eventBuffer = [];
-          try {
-            const run = await store.getAiRun(sessionId);
-            const existing = ((run?.output as any)?.events || []);
-            await store.updateAiRun(sessionId, {
-              output: { events: [...existing, ...toSave] } as any,
-            });
-          } catch (err) {
-            console.error(`[cli] Failed to persist events for ${sessionId}:`, err);
-            // Put events back so we don't lose them
-            eventBuffer.unshift(...toSave);
-          }
-        }, 5000);
+          await flushEvents();
+        }, 3000); // Flush every 3s
       };
 
       session.events.on("event", (evt: any) => {
         eventBuffer.push({ ...evt, timestamp: new Date().toISOString() });
-        persistEvents();
+        scheduleFlush();
       });
 
       session.events.on("done", async (finalStatus: string) => {
         if (saveTimer) clearTimeout(saveTimer);
         try {
-          const run = await store.getAiRun(sessionId);
-          const existing = ((run?.output as any)?.events || []);
-          await store.updateAiRun(sessionId, {
-            status: finalStatus,
-            output: { events: [...existing, ...eventBuffer] } as any,
+          await flushEvents(); // Flush remaining events
+          await prisma.aiRun.update({
+            where: { id: sessionId },
+            data: { status: finalStatus },
           });
         } catch (err) {
-          console.error(`[cli] Failed to persist final events for ${sessionId}:`, err);
+          console.error(`[cli] Failed to persist final status for ${sessionId}:`, err);
         }
       });
 
@@ -198,24 +201,48 @@ export function registerCliRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: "No active session for this project" });
     }
 
-    const sse = new SSEStream(reply);
+    // Set SSE headers manually and hijack the response so Fastify doesn't close it
+    reply.raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+      "Access-Control-Allow-Origin": "*",
+    });
 
-    // Forward events
+    // Send initial ping so the client knows it's connected
+    reply.raw.write(`: connected\n\n`);
+
+    // Forward events from CLI process to SSE
     const onEvent = (evt: any) => {
-      sse.send(evt);
+      try {
+        const payload = JSON.stringify(evt.data);
+        reply.raw.write(`event: ${evt.type}\ndata: ${payload}\n\n`);
+      } catch {}
     };
 
     session.events.on("event", onEvent);
 
-    // Cleanup on disconnect
+    // Keep-alive ping every 15s
+    const pingTimer = setInterval(() => {
+      try { reply.raw.write(`: ping\n\n`); } catch {}
+    }, 15_000);
+
+    // Cleanup on client disconnect
     reply.raw.on("close", () => {
       session.events.off("event", onEvent);
+      clearInterval(pingTimer);
     });
 
     // When session ends, close SSE
     session.events.once("done", () => {
-      sse.close();
+      session.events.off("event", onEvent);
+      clearInterval(pingTimer);
+      try { reply.raw.end(); } catch {}
     });
+
+    // IMPORTANT: Don't return anything — keep the connection open
+    // Fastify will not auto-close because we already wrote to reply.raw
   });
 
   // ── Stop Session ────────────────────────────────────────────
@@ -257,27 +284,20 @@ export function registerCliRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const session = getSession(projectId);
 
-    // If session is still running, return live status
-    if (session && session.status === "running") {
-      return {
-        status: session.status,
-        runtime: session.runtime,
-        sessionId: session.sessionId,
-        startedAt: session.startedAt,
-        source: "live",
-      };
-    }
-
-    // For completed/failed/stopped sessions (or no session), get events from DB
-    const store = request.store!;
-    const run = await store.getLatestAiRun(projectId, "cli-intake");
+    // Always get events from DB (they're persisted every 3s)
+    const run = await prisma.aiRun.findFirst({
+      where: { projectId, kind: "cli-intake" },
+      orderBy: { createdAt: "desc" },
+    });
     if (run) {
+      // If there's a live session, use its status (more up-to-date than DB)
+      const liveStatus = session?.status;
       return {
-        status: run.status,
-        runtime: (run.input as any)?.runtime,
+        status: liveStatus || run.status,
+        runtime: (run.input as any)?.runtime || session?.runtime,
         sessionId: run.id,
-        startedAt: run.createdAt,
-        source: "db",
+        startedAt: run.createdAt?.toISOString?.() || run.createdAt,
+        source: liveStatus ? "live" : "db",
         events: (run.output as any)?.events || [],
       };
     }

@@ -1,0 +1,369 @@
+{
+  "best_config": {
+    "threshold": 0.75,
+    "render_dpi": 150
+  },
+  "best_score": 1.0,
+  "runs": [
+    {
+      "run": 4,
+      "config": {
+        "threshold": 0.75,
+        "render_dpi": 150
+      },
+      "threshold": 0.75,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.275,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 105,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 5,
+      "config": {
+        "threshold": 0.8,
+        "render_dpi": 150
+      },
+      "threshold": 0.8,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.282,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 103,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 9,
+      "config": {
+        "threshold": 0.74,
+        "render_dpi": 150
+      },
+      "threshold": 0.74,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.281,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 107,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 10,
+      "config": {
+        "threshold": 0.76,
+        "render_dpi": 150
+      },
+      "threshold": 0.76,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.279,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 104,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 11,
+      "config": {
+        "threshold": 0.77,
+        "render_dpi": 150
+      },
+      "threshold": 0.77,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.278,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 104,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 12,
+      "config": {
+        "threshold": 0.78,
+        "render_dpi": 150
+      },
+      "threshold": 0.78,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.295,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 104,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 13,
+      "config": {
+        "threshold": 0.79,
+        "render_dpi": 150
+      },
+      "threshold": 0.79,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 1.0,
+      "avg_time": 0.28,
+      "speed_bonus": 1.0,
+      "score": 1.0,
+      "total_tp": 103,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 8
+    },
+    {
+      "run": 3,
+      "config": {
+        "threshold": 0.7,
+        "render_dpi": 150
+      },
+      "threshold": 0.7,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.875,
+      "avg_time": 0.274,
+      "speed_bonus": 1.0,
+      "score": 0.875,
+      "total_tp": 111,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 7
+    },
+    {
+      "run": 6,
+      "config": {
+        "threshold": 0.71,
+        "render_dpi": 150
+      },
+      "threshold": 0.71,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.875,
+      "avg_time": 0.281,
+      "speed_bonus": 1.0,
+      "score": 0.875,
+      "total_tp": 111,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 7
+    },
+    {
+      "run": 7,
+      "config": {
+        "threshold": 0.72,
+        "render_dpi": 150
+      },
+      "threshold": 0.72,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.875,
+      "avg_time": 0.281,
+      "speed_bonus": 1.0,
+      "score": 0.875,
+      "total_tp": 110,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 7
+    },
+    {
+      "run": 8,
+      "config": {
+        "threshold": 0.73,
+        "render_dpi": 150
+      },
+      "threshold": 0.73,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.875,
+      "avg_time": 0.282,
+      "speed_bonus": 1.0,
+      "score": 0.875,
+      "total_tp": 109,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 7
+    },
+    {
+      "run": 15,
+      "config": {
+        "threshold": 0.69,
+        "render_dpi": 150
+      },
+      "threshold": 0.69,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.875,
+      "avg_time": 0.282,
+      "speed_bonus": 1.0,
+      "score": 0.875,
+      "total_tp": 113,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 7
+    },
+    {
+      "run": 14,
+      "config": {
+        "threshold": 0.68,
+        "render_dpi": 150
+      },
+      "threshold": 0.68,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.75,
+      "avg_time": 0.279,
+      "speed_bonus": 1.0,
+      "score": 0.75,
+      "total_tp": 114,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 6
+    },
+    {
+      "run": 18,
+      "config": {
+        "threshold": 0.85,
+        "render_dpi": 150
+      },
+      "threshold": 0.85,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.75,
+      "avg_time": 0.281,
+      "speed_bonus": 1.0,
+      "score": 0.75,
+      "total_tp": 99,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 6
+    },
+    {
+      "run": 19,
+      "config": {
+        "threshold": 0.9,
+        "render_dpi": 150
+      },
+      "threshold": 0.9,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.75,
+      "avg_time": 0.281,
+      "speed_bonus": 1.0,
+      "score": 0.75,
+      "total_tp": 90,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 6
+    },
+    {
+      "run": 2,
+      "config": {
+        "threshold": 0.65,
+        "render_dpi": 150
+      },
+      "threshold": 0.65,
+      "dpi": 150,
+      "precision": 0.991,
+      "range_accuracy": 0.75,
+      "avg_time": 0.275,
+      "speed_bonus": 1.0,
+      "score": 0.744,
+      "total_tp": 116,
+      "total_fp": 1,
+      "tests_run": 8,
+      "in_range": 6
+    },
+    {
+      "run": 1,
+      "config": {
+        "threshold": 0.6,
+        "render_dpi": 150
+      },
+      "threshold": 0.6,
+      "dpi": 150,
+      "precision": 0.904,
+      "range_accuracy": 0.75,
+      "avg_time": 0.284,
+      "speed_bonus": 1.0,
+      "score": 0.678,
+      "total_tp": 122,
+      "total_fp": 13,
+      "tests_run": 8,
+      "in_range": 6
+    },
+    {
+      "run": 17,
+      "config": {
+        "threshold": 0.55,
+        "render_dpi": 150
+      },
+      "threshold": 0.55,
+      "dpi": 150,
+      "precision": 0.847,
+      "range_accuracy": 0.5,
+      "avg_time": 0.287,
+      "speed_bonus": 1.0,
+      "score": 0.423,
+      "total_tp": 149,
+      "total_fp": 27,
+      "tests_run": 8,
+      "in_range": 4
+    },
+    {
+      "run": 20,
+      "config": {
+        "threshold": 0.95,
+        "render_dpi": 150
+      },
+      "threshold": 0.95,
+      "dpi": 150,
+      "precision": 1.0,
+      "range_accuracy": 0.375,
+      "avg_time": 0.282,
+      "speed_bonus": 1.0,
+      "score": 0.375,
+      "total_tp": 64,
+      "total_fp": 0,
+      "tests_run": 8,
+      "in_range": 3
+    },
+    {
+      "run": 16,
+      "config": {
+        "threshold": 0.5,
+        "render_dpi": 150
+      },
+      "threshold": 0.5,
+      "dpi": 150,
+      "precision": 0.928,
+      "range_accuracy": 0.375,
+      "avg_time": 0.298,
+      "speed_bonus": 1.0,
+      "score": 0.348,
+      "total_tp": 400,
+      "total_fp": 31,
+      "tests_run": 8,
+      "in_range": 3
+    }
+  ]
+}

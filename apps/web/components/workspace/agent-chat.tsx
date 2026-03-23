@@ -297,14 +297,42 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       .then((data) => {
         if (data.status === "none") throw new Error("no cli session");
         setIntakeSessionId(data.sessionId || null);
+        const events = data.events || [];
         setIntakeStatus({
           sessionId: data.sessionId || "", projectId, scope: "", status: data.status as any,
-          toolCallCount: (data.events || []).filter((e: any) => e.type === "tool_call").length,
-          messageCount: (data.events || []).filter((e: any) => e.type === "message").length,
+          toolCallCount: events.filter((e: any) => e.type === "tool_call").length,
+          messageCount: events.filter((e: any) => e.type === "message").length,
           summary: null, createdAt: data.startedAt || "", updatedAt: "", recentToolCalls: [],
-          events: data.events,
+          events,
         } as any);
-        // If running, reconnect SSE
+
+        // Hydrate tool calls and messages from stored events
+        const restoredTools: ToolCallEntry[] = events
+          .filter((e: any) => e.type === "tool_call")
+          .map((e: any, i: number) => ({
+            id: e.data?.toolUseId || `restored-tc-${i}`,
+            toolId: e.data?.toolId || "unknown",
+            input: e.data?.input || {},
+            result: { success: true, duration_ms: 0 },
+          }));
+        setLiveToolCalls(restoredTools);
+
+        const restoredMsgs: ChatMessage[] = events
+          .filter((e: any) => e.type === "message")
+          .map((e: any, i: number) => ({
+            id: `restored-msg-${i}`,
+            role: e.data?.role || "assistant",
+            content: e.data?.content || "",
+            timestamp: e.timestamp || "",
+          }));
+        setMessages(restoredMsgs);
+
+        const restoredThinking = events
+          .filter((e: any) => e.type === "thinking")
+          .map((e: any, i: number) => ({ id: `restored-think-${i}`, content: e.data?.content || "" }));
+        setThinkingBlocks(restoredThinking.slice(-5));
+
+        // If running, reconnect SSE for live updates
         if (data.status === "running") {
           connectToSseStream(projectId);
         }
@@ -587,6 +615,54 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       }
     };
   }, []);
+
+  // Poll CLI status as fallback when SSE isn't connected (ensures events show up)
+  useEffect(() => {
+    if (!intakeSessionId || !cliRuntime) return;
+    const status = intakeStatus?.status;
+    if (status !== "running") return;
+
+    const poll = async () => {
+      try {
+        const data = await getCliStatus(projectId);
+        const events = data.events || [];
+        if (events.length > 0) {
+          // Update tool calls from persisted events
+          const tools = events.filter((e: any) => e.type === "tool_call");
+          setLiveToolCalls(tools.map((e: any, i: number) => ({
+            id: e.data?.toolUseId || `poll-tc-${i}`,
+            toolId: e.data?.toolId || "unknown",
+            input: e.data?.input || {},
+            result: { success: true, duration_ms: 0 },
+          })));
+
+          const msgs = events.filter((e: any) => e.type === "message");
+          setMessages(msgs.map((e: any, i: number) => ({
+            id: `poll-msg-${i}`,
+            role: e.data?.role || "assistant",
+            content: e.data?.content || "",
+            timestamp: e.timestamp || "",
+          })));
+
+          setIntakeStatus((prev) => prev ? {
+            ...prev,
+            status: data.status as any,
+            toolCallCount: tools.length,
+            messageCount: msgs.length,
+            events,
+          } : prev);
+        }
+
+        if (data.status !== "running") {
+          setIntakeStatus((prev) => prev ? { ...prev, status: data.status as any } : prev);
+          onWorkspaceMutated?.();
+        }
+      } catch {}
+    };
+
+    const interval = setInterval(poll, 5000);
+    return () => clearInterval(interval);
+  }, [intakeSessionId, intakeStatus?.status, cliRuntime, projectId]);
 
   // Auto-start intake when redirected from upload (wait for settings to load first)
   useEffect(() => {
