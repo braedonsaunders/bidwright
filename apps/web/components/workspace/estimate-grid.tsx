@@ -181,6 +181,7 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
   "checkbox",
   "lineOrder",
   "entityName",
+  "description",
   "quantity",
   "uom",
   "cost",
@@ -279,11 +280,11 @@ function getLaborColumnLabel(
   category: EntityCategory | undefined
 ): string {
   if (!category) {
-    return column === "laborHourReg" ? "Reg Hrs" : column === "laborHourOver" ? "OT Hrs" : "DT Hrs";
+    return column === "laborHourReg" ? "Unit 1" : column === "laborHourOver" ? "Unit 2" : "Unit 3";
   }
   const map = { laborHourReg: "reg", laborHourOver: "over", laborHourDouble: "double" } as const;
   const label = category.laborHourLabels[map[column]];
-  return label || (column === "laborHourReg" ? "Reg Hrs" : column === "laborHourOver" ? "OT Hrs" : "DT Hrs");
+  return label || (column === "laborHourReg" ? "Unit 1" : column === "laborHourOver" ? "Unit 2" : "Unit 3");
 }
 
 /** Entity option item with optional pricing data from catalog */
@@ -2155,7 +2156,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                       </th>
                     )}
                     {isColVisible("phaseId") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
+                      <th className="border-b border-line px-2 py-2 text-left w-20 max-w-[80px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
                         <span className="flex items-center gap-1">Phase {renderSortIcon("phaseId")}</span>
                       </th>
                     )}
@@ -2803,7 +2804,7 @@ function GroupRows({
               {isColVisible("uom") &&
                 renderEditableCell(row, "uom", row.uom, "text-center")}
 
-              {/* Labour Hours - dynamic labels */}
+              {/* Unit columns - dynamic labels from category */}
               {isColVisible("laborHourReg") &&
                 renderEditableCell(
                   row,
@@ -2873,7 +2874,7 @@ function GroupRows({
                   row,
                   "phaseId",
                   phase ? (
-                    <span className="text-fg/60">{phase.number}</span>
+                    <span className="text-fg/60 truncate block max-w-[72px]" title={`${phase.number} – ${phase.name}`}>{phase.number} – {phase.name}</span>
                   ) : (
                     <span className="text-fg/20">--</span>
                   ),

@@ -2965,7 +2965,7 @@ export async function runVisionCountSymbols(input: {
   pageNumber: number;
   boundingBox: VisionBoundingBox;
   threshold?: number;
-  methods?: string[];
+  crossScale?: boolean;
 }) {
   return apiRequest<VisionCountResult>("/api/vision/count-symbols", {
     method: "POST",
@@ -3033,6 +3033,7 @@ export async function runVisionCountAllPages(input: {
   documentId: string;
   boundingBox: VisionBoundingBox;
   threshold?: number;
+  crossScale?: boolean;
 }) {
   return apiRequest<VisionCountAllPagesResult>("/api/vision/count-symbols-all-pages", {
     method: "POST",

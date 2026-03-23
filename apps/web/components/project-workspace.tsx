@@ -348,6 +348,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       setChatOpen(true);
       setAutoIntake(true);
       intakeInitRef.current = true;
+      // Remove ?intake=true from URL so it doesn't re-trigger on reload
+      const url = new URL(window.location.href);
+      url.searchParams.delete("intake");
+      window.history.replaceState({}, "", url.pathname + url.search);
     }
   }, [searchParams]);
 
@@ -1118,9 +1122,9 @@ function EstimateTab({
                 <div><Label>Line order</Label><Input type="number" step="1" value={String(itemDraft.lineOrder)} onChange={(e) => setItemDraft((c) => c ? { ...c, lineOrder: Math.max(1, Math.round(parseNum(e.target.value))) } : c)} /></div>
               </div>
               <div className="grid gap-3 grid-cols-3">
-                <div><Label>Reg hrs</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourReg)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourReg: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>OT hrs</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourOver)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourOver: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>DT hrs</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourDouble)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourDouble: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 1</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourReg)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourReg: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 2</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourOver)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourOver: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 3</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourDouble)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourDouble: parseNum(e.target.value) } : c)} /></div>
               </div>
               <Separator />
               <div className="flex gap-2">

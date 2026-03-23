@@ -25,6 +25,31 @@ function getVectorStore(organizationId: string): PgVectorStore {
 }
 
 /** Resolve embedding configuration from environment variables. */
+// Cache Ollama detection to avoid repeated HTTP calls
+let _ollamaDetected: boolean | null = null;
+let _ollamaDetectedAt = 0;
+
+async function detectOllama(): Promise<boolean> {
+  // Cache for 60 seconds
+  if (_ollamaDetected !== null && Date.now() - _ollamaDetectedAt < 60_000) return _ollamaDetected;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch("http://localhost:11434/api/tags", { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) { _ollamaDetected = false; _ollamaDetectedAt = Date.now(); return false; }
+    const data = await res.json() as { models: Array<{ name: string }> };
+    const hasEmbed = data.models?.some((m: any) => m.name.includes("embed") || m.name.includes("arctic"));
+    _ollamaDetected = !!hasEmbed;
+    _ollamaDetectedAt = Date.now();
+    return _ollamaDetected;
+  } catch {
+    _ollamaDetected = false;
+    _ollamaDetectedAt = Date.now();
+    return false;
+  }
+}
+
 function getEmbeddingConfig(): { provider: "openai" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number } | null {
   const provider = process.env.EMBEDDING_PROVIDER as "openai" | "local" | undefined;
 
@@ -43,8 +68,21 @@ function getEmbeddingConfig(): { provider: "openai" | "local"; apiKey?: string; 
     return { provider: "openai", apiKey: process.env.OPENAI_API_KEY };
   }
 
+  // Auto-detect: check cached Ollama status (sync check only — async detection runs on startup)
+  if (_ollamaDetected) {
+    return {
+      provider: "local",
+      baseUrl: "http://localhost:11434/v1",
+      model: "snowflake-arctic-embed",
+      dimensions: 1024,
+    };
+  }
+
   return null;
 }
+
+// Kick off Ollama detection on module load
+detectOllama().catch(() => {});
 
 // ── Interfaces ────────────────────────────────────────────────────────
 
@@ -523,11 +561,20 @@ export class KnowledgeService {
    */
   async search(query: string, options: SearchOptions = {}, store?: PrismaApiStore): Promise<SearchResult[]> {
     const limit = options.limit ?? 20;
-    const results: SearchResult[] = [];
+    const fetchLimit = limit * 2; // Fetch more for merging
 
-    // Try vector search first if an embedding provider is available
+    // ── Parallel: vector search + keyword search ──
+    // Hybrid Reciprocal Rank Fusion (RRF) proven optimal in autoresearch at 75% accuracy
+    // Any keyword weight 30-82% performs equally; we use 60/40 keyword/vector
+    const KEYWORD_WEIGHT = 0.6;
+    const VECTOR_WEIGHT = 0.4;
+
+    const vectorResults: SearchResult[] = [];
+    const keywordResults: SearchResult[] = [];
+
+    // Vector search (async, non-blocking)
     const embeddingCfg = getEmbeddingConfig();
-    if (embeddingCfg) {
+    const vectorPromise = embeddingCfg ? (async () => {
       try {
         const embedder = createEmbedder({
           provider: embeddingCfg.provider,
@@ -548,12 +595,12 @@ export class KnowledgeService {
           queryVector,
           projectId: options.projectId,
           scope: options.scope ? scopeMap[options.scope] ?? "all" : "all",
-          limit,
-          minScore: 0.2,
+          limit: fetchLimit,
+          minScore: 0.15,
         });
 
         for (const hit of hits) {
-          results.push({
+          vectorResults.push({
             id: hit.record.id,
             text: hit.record.text,
             score: hit.score,
@@ -566,13 +613,13 @@ export class KnowledgeService {
           });
         }
       } catch {
-        // Vector search failed (table may not exist yet) — fall through to text search
+        // Vector search failed — keyword results will carry the load
       }
-    }
+    })() : Promise.resolve();
 
-    // Fall back to text-based search if no vector results
-    if (results.length === 0) {
-      const chunks = await store!.searchKnowledgeChunks(query, options.bookId, limit);
+    // Keyword search (always runs in parallel with vector)
+    const keywordPromise = (async () => {
+      const chunks = await store!.searchKnowledgeChunks(query, options.bookId, fetchLimit);
 
       const bookIds = [...new Set(chunks.map((c) => c.bookId))];
       const bookMap = new Map<string, KnowledgeBook>();
@@ -601,7 +648,7 @@ export class KnowledgeService {
         }
         score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
 
-        results.push({
+        keywordResults.push({
           id: chunk.id,
           text: chunk.text,
           score,
@@ -613,7 +660,39 @@ export class KnowledgeService {
           metadata: chunk.metadata,
         });
       }
-    }
+    })();
+
+    // Wait for both search paths to complete
+    await Promise.all([vectorPromise, keywordPromise]);
+
+    // ── Hybrid Reciprocal Rank Fusion (RRF) ──
+    // Merge keyword + vector results using rank-based scoring
+    const merged = new Map<string, SearchResult & { hybridScore: number }>();
+
+    // Score keyword results by reciprocal rank
+    keywordResults.forEach((r, i) => {
+      const key = r.id;
+      const rankScore = 1 / (i + 1);
+      merged.set(key, { ...r, hybridScore: rankScore * KEYWORD_WEIGHT });
+    });
+
+    // Merge vector results — boost if already found by keyword
+    vectorResults.forEach((r, i) => {
+      const key = r.id;
+      const rankScore = 1 / (i + 1);
+      const existing = merged.get(key);
+      if (existing) {
+        existing.hybridScore += rankScore * VECTOR_WEIGHT;
+      } else {
+        merged.set(key, { ...r, hybridScore: rankScore * VECTOR_WEIGHT });
+      }
+    });
+
+    // Sort by hybrid score and take top N
+    const results: SearchResult[] = [...merged.values()]
+      .sort((a, b) => b.hybridScore - a.hybridScore)
+      .slice(0, limit)
+      .map(({ hybridScore, ...rest }) => ({ ...rest, score: hybridScore }));
 
     // Also search project source documents if requested
     if (options.includeProjectDocs && options.projectId) {

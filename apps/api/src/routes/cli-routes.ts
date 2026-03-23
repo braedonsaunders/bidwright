@@ -349,25 +349,54 @@ export function registerCliRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const session = getSession(projectId);
 
-    // Always get events from DB (they're persisted every 3s)
-    const run = await prisma.aiRun.findFirst({
+    // Get ALL intake runs for this project, oldest first
+    const runs = await prisma.aiRun.findMany({
       where: { projectId, kind: "cli-intake" },
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: "asc" },
     });
-    if (run) {
-      // If there's a live session, use its status (more up-to-date than DB)
-      const liveStatus = session?.status;
-      return {
-        status: liveStatus || run.status,
-        runtime: (run.input as any)?.runtime || session?.runtime,
-        sessionId: run.id,
-        startedAt: run.createdAt?.toISOString?.() || run.createdAt,
-        source: liveStatus ? "live" : "db",
-        events: (run.output as any)?.events || [],
-      };
+
+    if (runs.length === 0 && !session) {
+      return { status: "none" };
     }
 
-    return { status: "none" };
+    // Merge all runs into a single chronological event stream with run dividers
+    const mergedEvents: any[] = [];
+    for (const run of runs) {
+      const runEvents = (run.output as any)?.events || [];
+      // Skip empty/trivial runs (< 3 events) unless it's the only one
+      if (runEvents.length < 3 && runs.length > 1) continue;
+
+      // Add a run divider
+      mergedEvents.push({
+        type: "run_divider",
+        data: {
+          runId: run.id,
+          status: run.status,
+          model: run.model,
+          startedAt: run.createdAt?.toISOString?.() || "",
+        },
+        timestamp: run.createdAt?.toISOString?.() || "",
+      });
+
+      // Add all events from this run
+      for (const event of runEvents) {
+        mergedEvents.push(event);
+      }
+    }
+
+    // Determine current status: live session takes priority
+    const latestRun = runs[runs.length - 1];
+    const currentStatus = session?.status === "running" ? "running" : (latestRun?.status || "none");
+
+    return {
+      status: currentStatus,
+      runtime: (latestRun?.input as any)?.runtime || session?.runtime,
+      sessionId: latestRun?.id || session?.sessionId,
+      startedAt: runs[0]?.createdAt?.toISOString?.() || "",
+      source: session?.status === "running" ? "live" : "db",
+      events: mergedEvents,
+      runCount: runs.filter(r => ((r.output as any)?.events || []).length >= 3).length,
+    };
   });
 
   // ── List All Sessions ───────────────────────────────────────

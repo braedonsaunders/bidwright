@@ -91,17 +91,23 @@ export function RichTextEditor({
     const text = editorRef.current.textContent ?? "";
     setIsEmpty(!text.trim() && !html.includes("<img"));
     isInternalChange.current = true;
+    lastEmittedHtml.current = html;
     onChange(html);
   }
 
   /* Sync external value into editor (only when it truly differs) */
+  const lastEmittedHtml = useRef(value);
   useEffect(() => {
     if (isInternalChange.current) {
       isInternalChange.current = false;
       return;
     }
-    if (editorRef.current && editorRef.current.innerHTML !== value) {
+    // Only reset if value changed AND it wasn't our own emission
+    if (editorRef.current && value !== lastEmittedHtml.current) {
+      // Don't clobber the editor if it's currently focused — user is typing
+      if (document.activeElement === editorRef.current) return;
       editorRef.current.innerHTML = value;
+      lastEmittedHtml.current = value;
       const text = editorRef.current.textContent ?? "";
       setIsEmpty(!text.trim() && !value.includes("<img"));
     }
@@ -161,8 +167,8 @@ export function RichTextEditor({
           onInput={emitChange}
           onBlur={emitChange}
           onPaste={handlePaste}
-          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none"
-          style={{ minHeight }}
+          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none overflow-visible"
+          style={{ minHeight, height: "auto" }}
         />
       </div>
     </div>

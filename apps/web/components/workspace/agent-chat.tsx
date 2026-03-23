@@ -374,6 +374,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     getCliStatus(projectId)
       .then((data) => {
         if (data.status === "none") throw new Error("no cli session");
+        restoredFromDb.current = true;
         setIntakeSessionId(data.sessionId || null);
         const events = data.events || [];
         setIntakeStatus({
@@ -445,6 +446,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   }, [messages, liveToolCalls]);
 
   const intakeAutoStarted = useRef(false);
+  const restoredFromDb = useRef(false);
 
   const createSession = useCallback(async () => {
     try {
@@ -784,14 +786,21 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     return () => { clearInterval(interval); clearInterval(wsRefreshInterval); };
   }, [intakeSessionId, intakeStatus?.status, cliRuntime, projectId]);
 
-  // Auto-start intake when redirected from upload (wait for settings to load first)
+  // Auto-start intake ONLY when redirected from upload AND no existing session
+  // The restore useEffect (above) runs first and sets intakeSessionId if a session exists
   useEffect(() => {
-    if (autoStartIntake && open && settingsReady && !intakeAutoStarted.current && !intakeSessionId) {
-      intakeAutoStarted.current = true;
-      handleStartIntake();
-      onIntakeStarted?.();
+    if (autoStartIntake && open && settingsReady && !intakeAutoStarted.current && !intakeSessionId && !restoredFromDb.current) {
+      // Small delay to let the restore finish first
+      const timer = setTimeout(() => {
+        if (!intakeAutoStarted.current && !intakeSessionId) {
+          intakeAutoStarted.current = true;
+          handleStartIntake();
+          onIntakeStarted?.();
+        }
+      }, 1500);
+      return () => clearTimeout(timer);
     }
-  }, [autoStartIntake, open, settingsReady]);
+  }, [autoStartIntake, open, settingsReady, intakeSessionId]);
 
   // Poll intake status with live tool call accumulation
   useEffect(() => {
@@ -1101,6 +1110,30 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     );
                   }
                   return <ToolCallDetail key={key} tc={tc} />;
+                }
+
+                // Run divider — separates multiple sessions
+                if (t === "run_divider") {
+                  const startedAt = evt.data?.startedAt;
+                  const dateStr = startedAt ? new Date(startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+                  const model = evt.data?.model || "";
+                  const status = evt.data?.status || "";
+                  return (
+                    <div key={key} className="flex items-center gap-2 py-2">
+                      <div className="h-px flex-1 bg-line" />
+                      <span className="text-[10px] text-fg/30 whitespace-nowrap flex items-center gap-1.5">
+                        {status === "completed" ? (
+                          <span className="h-1.5 w-1.5 rounded-full bg-success" />
+                        ) : status === "failed" ? (
+                          <span className="h-1.5 w-1.5 rounded-full bg-danger" />
+                        ) : (
+                          <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+                        )}
+                        Session · {dateStr}{model ? ` · ${model}` : ""}
+                      </span>
+                      <div className="h-px flex-1 bg-line" />
+                    </div>
+                  );
                 }
 
                 // Status events — skip rendering (shown in header)
