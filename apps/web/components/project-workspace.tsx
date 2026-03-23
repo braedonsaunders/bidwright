@@ -40,7 +40,6 @@ import {
   aiSuggestPhases,
   copyQuote,
   createPhase,
-  createProjectJob,
   createRevision,
   createWorksheet,
   createWorksheetItem,
@@ -49,8 +48,7 @@ import {
   deleteRevisionById,
   deleteWorksheet,
   deleteWorksheetItem,
-  getActivities,
-  getQuotePdfUrl,
+
   importPreview,
   importProcess,
   makeRevisionZero,
@@ -59,6 +57,7 @@ import {
   updateProjectStatus,
   updateRevision,
   updateWorksheet,
+  getProjectWorkspace,
   updateWorksheetItem,
 } from "@/lib/api";
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
@@ -76,18 +75,14 @@ import {
   CreateWorksheetModal,
   RenameWorksheetModal,
   SendQuoteModal,
-  CreateJobModal,
   ImportBOMModal,
   AIModal,
   AIPhasesModal,
   AIEquipmentModal,
-  ActivityModal,
-  PDFModal,
-  type CreateJobData,
   type AIPhaseResult,
   type AIEquipmentResult,
-  type PDFDownloadOptions,
 } from "@/components/workspace/modals";
+import { PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import {
   Badge,
@@ -301,7 +296,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [error, setError] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
   const [modal, setModal] = useState<ModalState>(null);
-  const [activities, setActivities] = useState<Activity[]>([]);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
@@ -351,6 +345,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const currentItem = itemDraft?.itemId ? (workspace.worksheets ?? []).flatMap((w) => w.items).find((i) => i.id === itemDraft.itemId) ?? null : null;
 
   function apply(next: WorkspaceResponse) { setData(next); setError(null); }
+
+  const refreshWorkspace = useCallback(() => {
+    startTransition(async () => {
+      try {
+        const fresh = await getProjectWorkspace(workspace.project.id);
+        apply(fresh);
+      } catch { /* silent - user can still manually refresh */ }
+    });
+  }, [workspace.project.id]);
+
   function closeModal() { setModal(null); setAiResult(null); setAiPhaseResult(null); setAiEquipResult(null); }
 
   // ─── Action handlers ───
@@ -364,27 +368,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       case "copyQuote": setModal("copyQuote"); break;
       case "deleteQuote": setModal("deleteQuote"); break;
       case "sendQuote": setModal("sendQuote"); break;
-      case "createJob": setModal("createJob"); break;
       case "importBOM": setModal("importBOM"); break;
       case "aiDescription": setModal("aiDescription"); setAiResult(null); break;
       case "aiNotes": setModal("aiNotes"); setAiResult(null); break;
       case "aiPhases": setModal("aiPhases"); setAiPhaseResult(null); break;
       case "aiEquipment": setModal("aiEquipment"); setAiEquipResult(null); break;
-      case "activity": loadActivities(); break;
       case "pdf": setModal("pdf"); break;
       case "compare": setModal("compare"); break;
     }
   }
 
-  function loadActivities() {
-    startTransition(async () => {
-      try {
-        const acts = await getActivities(workspace.project.id);
-        setActivities(acts);
-        setModal("activity");
-      } catch { setActivities([]); setModal("activity"); }
-    });
-  }
 
   function exec(fn: () => Promise<WorkspaceResponse>) {
     startTransition(async () => {
@@ -552,27 +545,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   <MenuSection label="PDF">
                     <MenuItem onClick={() => handleAction("pdf")}>Generate PDF</MenuItem>
                   </MenuSection>
-                  <MenuSection label="Plugins">
-                    <MenuItem onClick={() => { setShowActions(false); setPluginToolsOpen(true); }}>Plugin Tools</MenuItem>
-                  </MenuSection>
-                  <MenuSection label="AI">
-                    <MenuItem onClick={() => handleAction("aiDescription")}>Rewrite Description</MenuItem>
-                    <MenuItem onClick={() => handleAction("aiNotes")}>Rewrite Notes</MenuItem>
-                    <MenuItem onClick={() => handleAction("aiPhases")}>Guess Phases</MenuItem>
-                    <MenuItem onClick={() => handleAction("aiEquipment")}>Guess Equipment</MenuItem>
-                  </MenuSection>
                   <MenuSection label="Actions">
                     <MenuItem onClick={() => handleAction("sendQuote")}>Send Quote</MenuItem>
                     <MenuItem onClick={() => handleAction("copyQuote")}>Copy Quote</MenuItem>
                     <MenuItem onClick={() => handleAction("importBOM")}>Import Line Items</MenuItem>
                   </MenuSection>
-                  <MenuSection label="Utilities">
-                    <MenuItem onClick={() => handleAction("createJob")}>Create Job</MenuItem>
-                    <MenuItem onClick={() => handleAction("activity")}>Activity Log</MenuItem>
-                    <MenuItem onClick={() => handleAction("makeRevZero")}>Make Current Rev. 0</MenuItem>
-                  </MenuSection>
                   <MenuSection label="Revisions">
                     <MenuItem onClick={() => handleAction("createRevision")}>New Revision</MenuItem>
+                    <MenuItem onClick={() => handleAction("makeRevZero")}>Make Current Rev. 0</MenuItem>
                     <MenuItem onClick={() => handleAction("deleteRevision")} className="text-danger">Delete Revision</MenuItem>
                   </MenuSection>
                   <MenuSection label="Danger">
@@ -723,23 +703,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           });
         }} />
 
-      <CreateJobModal open={modal === "createJob"} onClose={closeModal} isPending={isPending}
-        onConfirm={(jobData) => {
-          startTransition(async () => {
-            try {
-              await createProjectJob(workspace.project.id, {
-                name: jobData.jobName,
-                foreman: jobData.foreman || undefined,
-                projectManager: jobData.projectManager || undefined,
-                startDate: jobData.startDate || undefined,
-                shipDate: jobData.shipDate || undefined,
-                poNumber: jobData.poNumber || undefined,
-                poIssuer: jobData.poIssuer || undefined,
-              });
-              closeModal();
-            } catch (e) { setError(e instanceof Error ? e.message : "Job creation failed"); }
-          });
-        }} />
 
       <ImportBOMModal open={modal === "importBOM"} onClose={closeModal} isPending={isPending}
         onImport={(file, mapping) => {
@@ -824,15 +787,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           });
         }} />
 
-      <ActivityModal open={modal === "activity"} onClose={closeModal} activities={activities} />
 
-      <PDFModal open={modal === "pdf"} onClose={closeModal} isPending={isPending}
-        previewUrl={getQuotePdfUrl(workspace.project.id, "main")}
-        onDownload={(options) => {
-          const url = getQuotePdfUrl(workspace.project.id, options.template ?? "main");
-          window.open(url, "_blank");
-          closeModal();
-        }} />
+      <PdfStudio projectId={workspace.project.id} open={modal === "pdf"} onClose={closeModal} />
 
       <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 
@@ -842,6 +798,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         onClose={() => setChatOpen(false)}
         autoStartIntake={autoIntake}
         onIntakeStarted={() => setAutoIntake(false)}
+        onWorkspaceMutated={refreshWorkspace}
       />
 
       <AnimatePresence>

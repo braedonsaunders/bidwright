@@ -42,6 +42,16 @@ export class ToolRegistry {
     return [...new Set(Array.from(this.tools.values()).map(t => t.definition.category))];
   }
 
+  /** Get all tools in a category */
+  getByCategory(category: string): Tool[] {
+    return Array.from(this.tools.values()).filter(t => t.definition.category === category);
+  }
+
+  /** Get tools by their IDs */
+  getByIds(ids: ToolId[]): Tool[] {
+    return ids.map(id => this.tools.get(id)).filter((t): t is Tool => t != null);
+  }
+
   /** Convert all (or filtered) tools to the normalized ToolSpec format for LLM consumption */
   toToolSpecs(filter?: { category?: string; ids?: ToolId[] }): ToolSpec[] {
     let tools = Array.from(this.tools.values());
@@ -77,14 +87,19 @@ function zodToJsonSchema(schema: unknown): Record<string, unknown> {
 
 function zodFieldToJsonSchema(field: any): Record<string, unknown> {
   const typeName = field?._def?.typeName;
+  const desc = field?._def?.description;
   switch (typeName) {
-    case "ZodString": return { type: "string", description: field._def.description ?? "" };
-    case "ZodNumber": return { type: "number", description: field._def.description ?? "" };
-    case "ZodBoolean": return { type: "boolean" };
-    case "ZodEnum": return { type: "string", enum: field._def.values };
+    case "ZodString": return { type: "string", ...(desc ? { description: desc } : {}) };
+    case "ZodNumber": return { type: "number", ...(desc ? { description: desc } : {}) };
+    case "ZodBoolean": return { type: "boolean", ...(desc ? { description: desc } : {}) };
+    case "ZodEnum": return { type: "string", enum: field._def.values, ...(desc ? { description: desc } : {}) };
     case "ZodNullable": return { ...zodFieldToJsonSchema(field._def.innerType), nullable: true };
-    case "ZodOptional": return zodFieldToJsonSchema(field._def.innerType);
-    case "ZodArray": return { type: "array", items: zodFieldToJsonSchema(field._def.type) };
-    default: return { type: "string" };
+    case "ZodOptional": return { ...zodFieldToJsonSchema(field._def.innerType), ...(desc ? { description: desc } : {}) };
+    case "ZodDefault": {
+      const inner = zodFieldToJsonSchema(field._def.innerType);
+      return { ...inner, ...(desc ? { description: desc } : {}) };
+    }
+    case "ZodArray": return { type: "array", items: zodFieldToJsonSchema(field._def.type), ...(desc ? { description: desc } : {}) };
+    default: return { type: "string", ...(desc ? { description: desc } : {}) };
   }
 }

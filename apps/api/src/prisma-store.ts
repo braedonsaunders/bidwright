@@ -51,7 +51,7 @@ import type {
   WorksheetItem,
 } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
-import { ingestCustomerPackage } from "@bidwright/ingestion";
+import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma } from "@bidwright/db";
 
@@ -532,7 +532,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
   defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
-  integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514" },
+  integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "" },
   brand: DEFAULT_BRAND,
 };
 
@@ -616,6 +616,7 @@ function mapSourceDocument(d: any): SourceDocument {
     checksum: d.checksum,
     storagePath: d.storagePath,
     extractedText: d.extractedText,
+    structuredData: d.structuredData ?? null,
     createdAt: toISO(d.createdAt),
     updatedAt: toISO(d.updatedAt),
   };
@@ -1269,7 +1270,12 @@ export class PrismaApiStore {
 
   // ── Private: save file artifacts for package ────────────────────────────
 
-  private async saveArtifactsForPackage(packageId: string, report: IngestionReport, packageChecksum: string) {
+  private async saveArtifactsForPackage(
+    packageId: string,
+    report: IngestionReport,
+    packageChecksum: string,
+    zipPath?: string,
+  ): Promise<Map<string, string>> {
     const reportPath = resolveApiPath(relativePackageReportPath(packageId));
     const chunksPath = resolveApiPath(relativePackageChunksPath(packageId));
     const documentsDir = resolveApiPath(relativePackageRoot(packageId), "documents");
@@ -1293,6 +1299,32 @@ export class PrismaApiStore {
       };
       await writeJsonAtomic(absoluteDocumentPath, payload);
     }
+
+    // Save original binary files from the zip so they can be previewed/downloaded
+    const binaryPathMap = new Map<string, string>();
+    if (zipPath) {
+      try {
+        const originalsDir = resolveApiPath(relativePackageRoot(packageId), "originals");
+        await mkdir(originalsDir, { recursive: true });
+        const entries = await extractArchiveEntries(zipPath);
+        const entryMap = new Map(entries.map((e) => [e.path, e]));
+
+        for (const document of report.documents) {
+          const entry = entryMap.get(document.sourcePath);
+          if (!entry || entry.bytes.length === 0) continue;
+          const safeName = sanitizeFileName(path.basename(entry.name));
+          const relPath = path.join("packages", packageId, "originals", document.id, safeName);
+          const absPath = resolveApiPath(relPath);
+          await mkdir(path.dirname(absPath), { recursive: true });
+          await writeFile(absPath, Buffer.from(entry.bytes));
+          binaryPathMap.set(document.id, relPath);
+        }
+      } catch {
+        // Non-fatal: previews won't work but ingestion continues
+      }
+    }
+
+    return binaryPathMap;
   }
 
   // ── Private: ensure project has a quote+revision skeleton ───────────────
@@ -1566,6 +1598,43 @@ export class PrismaApiStore {
     }
     const runs = await this.db.aiRun.findMany({ where });
     return runs.map(mapAiRun);
+  }
+
+  async createAiRun(input: { id: string; projectId: string; revisionId?: string; kind: string; status: string; model: string; input: any; output: any }) {
+    return this.db.aiRun.create({
+      data: {
+        id: input.id,
+        projectId: input.projectId,
+        revisionId: input.revisionId ?? "",
+        kind: input.kind,
+        status: input.status,
+        model: input.model,
+        input: input.input ?? {},
+        output: input.output ?? {},
+      },
+    });
+  }
+
+  async updateAiRun(id: string, patch: { status?: string; output?: any }) {
+    return this.db.aiRun.update({
+      where: { id },
+      data: {
+        ...(patch.status ? { status: patch.status } : {}),
+        ...(patch.output ? { output: patch.output } : {}),
+      },
+    });
+  }
+
+  async getAiRun(id: string) {
+    const run = await this.db.aiRun.findFirst({ where: { id } });
+    return run ? mapAiRun(run) : null;
+  }
+
+  async getLatestAiRun(projectId: string, kind?: string) {
+    const where: any = { projectId };
+    if (kind) where.kind = kind;
+    const run = await this.db.aiRun.findFirst({ where, orderBy: { createdAt: "desc" } });
+    return run ? mapAiRun(run) : null;
   }
 
   // ── Entity Categories ──────────────────────────────────────────────────
@@ -2356,6 +2425,7 @@ export class PrismaApiStore {
           projectId,
           quoteNumber: makeQuoteNumber(),
           title: input.name,
+          customerString: input.clientName ?? "",
           status: "draft",
           currentRevisionId: revisionId,
           customerExistingNew: "New",
@@ -2369,8 +2439,8 @@ export class PrismaApiStore {
           id: revisionId,
           quoteId,
           revisionNumber: 0,
-          title: "Initial Estimate",
-          description: "Seeded estimate shell for the uploaded customer package.",
+          title: input.name,
+          description: `Estimate for ${input.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
           notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
           breakoutStyle: "phase_detail",
           phaseWorksheetEnabled: true,
@@ -2549,14 +2619,21 @@ export class PrismaApiStore {
     const checksum = await sha256File(zipPath);
 
     try {
+      // Resolve Azure DI credentials from org settings for scanned PDF support
+      const orgSettings = await this.getSettings();
+      const integrations = orgSettings.integrations ?? {} as any;
+      const azureConfig = (integrations.azureDiEndpoint || integrations.azureDiKey)
+        ? { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey }
+        : undefined;
+
       const report = await ingestCustomerPackage({
         packageId,
         packageName: pkg.packageName,
         sourceKind: pkg.sourceKind as PackageSourceKind,
         zipInput: zipPath,
-      });
+      }, { azureConfig });
 
-      await this.saveArtifactsForPackage(packageId, report, checksum);
+      const binaryPathMap = await this.saveArtifactsForPackage(packageId, report, checksum, zipPath);
 
       const timestamp = new Date();
       const timestampISO = timestamp.toISOString();
@@ -2569,8 +2646,9 @@ export class PrismaApiStore {
         documentType: documentTypeFromIngestion(document.kind),
         pageCount: inferPageCount(document, report.chunks),
         checksum: checksumForDocument(checksum, document),
-        storagePath: relativePackageDocumentArtifact(packageId, document.id, document.title),
+        storagePath: binaryPathMap.get(document.id) ?? relativePackageDocumentArtifact(packageId, document.id, document.title),
         extractedText: document.text,
+        structuredData: document.structuredData ?? null,
         createdAt: timestampISO,
         updatedAt: timestampISO,
       }));
@@ -2595,6 +2673,8 @@ export class PrismaApiStore {
               checksum: doc.checksum,
               storagePath: doc.storagePath,
               extractedText: doc.extractedText,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              structuredData: doc.structuredData ? (doc.structuredData as any) : undefined,
               createdAt: timestamp,
               updatedAt: timestamp,
             },
@@ -4951,7 +5031,11 @@ export class PrismaApiStore {
   async listKnowledgeBooks(projectId?: string): Promise<KnowledgeBook[]> {
     const where: any = { organizationId: this.organizationId };
     if (projectId) {
+      // Show global books + books scoped to this specific project
       where.OR = [{ projectId }, { scope: "global" }];
+    } else {
+      // No project context — only return global (library) books
+      where.scope = "global";
     }
     const books = await this.db.knowledgeBook.findMany({ where });
     return books.map(mapKnowledgeBook);

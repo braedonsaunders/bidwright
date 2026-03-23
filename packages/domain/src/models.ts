@@ -21,6 +21,17 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface SourceDocumentStructuredData {
+  tables?: Array<{
+    pageNumber: number;
+    headers: string[];
+    rows: string[][];
+    rawMarkdown: string;
+  }>;
+  keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+  selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
+}
+
 export interface SourceDocument {
   id: string;
   projectId: string;
@@ -31,6 +42,7 @@ export interface SourceDocument {
   checksum: string;
   storagePath: string;
   extractedText: string;
+  structuredData?: SourceDocumentStructuredData | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -821,7 +833,7 @@ export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number; maxAgentIterations?: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string };
   brand: BrandProfile;
 }
 

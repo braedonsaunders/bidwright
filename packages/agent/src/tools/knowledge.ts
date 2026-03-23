@@ -61,15 +61,15 @@ export const queryKnowledgeTool = createKnowledgeTool({
   const results: Record<string, unknown> = { query, scope };
 
   if (scope === "project" || scope === "all") {
-    const params = new URLSearchParams({ q: query, projectId, limit });
-    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search?${params.toString()}`);
+    const params = new URLSearchParams({ q: query, projectId, limit, includeProjectDocs: "true" });
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search/enhanced?${params.toString()}`);
     if (!res.ok) return { success: false, error: `Project search failed: ${res.status} ${res.statusText}` };
     results.projectResults = await res.json();
   }
 
   if (scope === "library" || scope === "all") {
     const params = new URLSearchParams({ q: query, limit });
-    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search/enhanced?${params.toString()}`);
     if (!res.ok) return { success: false, error: `Library search failed: ${res.status} ${res.statusText}` };
     results.libraryResults = await res.json();
   }
@@ -94,9 +94,10 @@ export const queryProjectDocsTool = createKnowledgeTool({
   const params = new URLSearchParams({
     q: String(input.query),
     projectId: String(input.projectId),
+    includeProjectDocs: "true",
   });
   if (input.limit) params.set("limit", String(input.limit));
-  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search?${params.toString()}`);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search/enhanced?${params.toString()}`);
   if (!res.ok) return { success: false, error: `Query project docs failed: ${res.status} ${res.statusText}` };
   const data = await res.json();
   return { success: true, data };
@@ -117,7 +118,7 @@ export const queryGlobalLibraryTool = createKnowledgeTool({
 }, async (ctx, input) => {
   const params = new URLSearchParams({ q: String(input.query) });
   if (input.limit) params.set("limit", String(input.limit));
-  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search/enhanced?${params.toString()}`);
   if (!res.ok) return { success: false, error: `Query global library failed: ${res.status} ${res.statusText}` };
   const data = await res.json();
   return { success: true, data };
@@ -480,7 +481,7 @@ export const searchBooksTool = createKnowledgeTool({
   if (input.bookId) params.set("bookId", String(input.bookId));
   if (input.limit) params.set("limit", String(input.limit));
   try {
-    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search/enhanced?${params.toString()}`);
     const data = await res.json();
     return { success: true, data };
   } catch (error) {
@@ -755,6 +756,109 @@ export const viewBookPageTool = createKnowledgeTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 24. knowledge.extractStructured
+// ──────────────────────────────────────────────────────────────
+export const extractStructuredTool = createKnowledgeTool({
+  id: "knowledge.extractStructured",
+  name: "Extract Structured Data from Document",
+  description:
+    "Run Azure Document Intelligence on a document to extract structured tables, " +
+    "key-value pairs, and OCR text. Use this when you need richer data from a PDF " +
+    "than basic text extraction provides — especially for scanned documents, forms, " +
+    "or documents with complex tables.",
+  inputSchema: z.object({
+    documentId: z.string().describe("ID of the document (KnowledgeBook or SourceDocument) to analyze"),
+    projectId: z.string().optional().describe("Project ID for context"),
+    model: z
+      .enum(["prebuilt-layout", "prebuilt-document", "prebuilt-invoice", "prebuilt-read"])
+      .optional()
+      .default("prebuilt-layout")
+      .describe(
+        "Azure DI model: prebuilt-layout (tables + text + sections), " +
+        "prebuilt-document (key-value pairs + entities), " +
+        "prebuilt-invoice (invoice-specific fields), " +
+        "prebuilt-read (OCR text only)"
+      ),
+    updateDocument: z
+      .boolean()
+      .optional()
+      .default(false)
+      .describe("If true, update the stored document metadata with the richer extraction results"),
+  }),
+  mutates: true,
+  tags: ["knowledge", "document", "extraction", "azure", "ocr", "tables"],
+}, async (ctx, input) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/extract-structured`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentId: input.documentId,
+      projectId: input.projectId ?? ctx.projectId,
+      model: input.model ?? "prebuilt-layout",
+      updateDocument: input.updateDocument ?? false,
+    }),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    return { success: false, error: `Structured extraction failed (${res.status}): ${errBody}` };
+  }
+
+  const data = await res.json() as {
+    success: boolean;
+    data?: {
+      content: string;
+      pageCount: number;
+      tables: Array<{ pageNumber: number; headers: string[]; rows: string[][]; rawMarkdown: string }>;
+      keyValuePairs: Array<{ key: string; value: string; confidence: number }>;
+      selectionMarks: Array<{ state: string; pageNumber: number; confidence: number }>;
+      pages: Array<{ pageNumber: number; content: string; sectionCount: number }>;
+      warnings: string[];
+    };
+  };
+
+  if (!data.success || !data.data) {
+    return { success: false, error: "Extraction returned no data" };
+  }
+
+  // Build a concise summary for the agent
+  const result = data.data;
+  const summary: Record<string, unknown> = {
+    pageCount: result.pageCount,
+    tableCount: result.tables.length,
+    keyValuePairCount: result.keyValuePairs.length,
+    selectionMarkCount: result.selectionMarks.length,
+    warnings: result.warnings,
+  };
+
+  // Include tables as markdown for easy consumption
+  if (result.tables.length > 0) {
+    summary.tables = result.tables.map((t) => ({
+      pageNumber: t.pageNumber,
+      headers: t.headers,
+      rowCount: t.rows.length,
+      markdown: t.rawMarkdown,
+    }));
+  }
+
+  // Include key-value pairs (useful for forms)
+  if (result.keyValuePairs.length > 0) {
+    summary.keyValuePairs = result.keyValuePairs;
+  }
+
+  // Include full text content
+  summary.content = result.content;
+
+  return {
+    success: true,
+    data: summary,
+    sideEffects: input.updateDocument
+      ? [`Updated document ${input.documentId} with Azure DI extraction results`]
+      : undefined,
+  };
+});
+
+// ──────────────────────────────────────────────────────────────
 // Export all tools as array
 // ──────────────────────────────────────────────────────────────
 export const knowledgeTools: Tool[] = [
@@ -782,4 +886,5 @@ export const knowledgeTools: Tool[] = [
   addKnowledgeChunkTool,
   viewBookTool,
   viewBookPageTool,
+  extractStructuredTool,
 ];

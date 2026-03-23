@@ -78,11 +78,14 @@ export interface ToolSpec {
   inputSchema: Record<string, unknown>;
 }
 
+export type ToolChoice = "auto" | "required" | "none" | { type: "function"; name: string };
+
 export interface ChatRequest {
   model: string;
   systemPrompt: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
+  toolChoice?: ToolChoice;
   maxTokens?: number;
   temperature?: number;
 }
@@ -117,12 +120,20 @@ export interface ProviderConfig {
   organizationId?: string;
 }
 
+export interface PrepareStepResult {
+  activeTools?: string[];
+  toolChoice?: ToolChoice;
+  injectMessage?: string;
+}
+
 export interface AgentConfig {
   llm: LLMAdapter;
   maxIterations: number;
   maxTokens: number;
   temperature: number;
   systemPrompt: string;
+  abortSignal?: AbortSignal;
+  prepareStep?: (step: number, toolCallHistory: { toolId: string; success: boolean }[]) => PrepareStepResult | undefined;
   onToolCall?: (toolCall: { id: string; toolId: string; input: unknown; result: ToolResult }) => void;
   onMessage?: (message: { role: "user" | "assistant"; content: string }) => void;
 }

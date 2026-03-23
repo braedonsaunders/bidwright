@@ -261,8 +261,9 @@ export function AppShell({
           </div>
         </div>
 
-        <div ref={searchRef} className="relative px-3 pt-3">
-          <Search className="pointer-events-none absolute left-5.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25 mt-1.5" />
+        <div ref={searchRef} className="px-3 pt-3">
+          <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
           <Input
             className="h-8 pl-8 text-xs"
             placeholder="Search..."
@@ -284,7 +285,7 @@ export function AppShell({
             }}
           />
           {searchOpen && searchResults.length > 0 && (
-            <div className="absolute left-3 right-3 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
+            <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
               <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
                 Tools ({searchResults.length})
               </div>
@@ -303,10 +304,11 @@ export function AppShell({
             </div>
           )}
           {searchOpen && searchResults.length === 0 && searchQuery.trim() && (
-            <div className="absolute left-3 right-3 top-full z-50 mt-1 rounded-lg border border-line bg-panel shadow-lg px-3 py-3 text-xs text-fg/40">
+            <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel shadow-lg px-3 py-3 text-xs text-fg/40">
               No tools found for &quot;{searchQuery}&quot;
             </div>
           )}
+          </div>
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3 py-3">

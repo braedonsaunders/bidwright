@@ -10,7 +10,9 @@ import {
   ChevronRight,
   Download,
   Edit3,
+  Expand,
   ExternalLink,
+  Eye,
   File,
   FileText,
   Folder,
@@ -19,9 +21,11 @@ import {
   Image as ImageIcon,
   Loader2,
   Minus,
+  Maximize2,
   MoreHorizontal,
   Plus,
   Search,
+  Table2,
   Trash2,
   Upload,
   X,
@@ -43,6 +47,7 @@ import {
   updateFileNode,
   uploadFile,
 } from "@/lib/api";
+import type { SourceDocumentStructuredData } from "@/lib/api";
 import {
   Badge,
   Button,
@@ -102,6 +107,7 @@ const TYPE_BADGE_TONE: Record<string, "default" | "success" | "warning" | "dange
 
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "svg"]);
 const PDF_EXTENSIONS = new Set(["pdf"]);
+const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv"]);
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv", "log", "cfg", "ini", "html", "css", "js", "ts"]);
 
 /* ─── Helpers ─── */
@@ -122,14 +128,21 @@ function getFileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
 }
 
-function getPreviewType(item: TreeItem): "pdf" | "image" | "text" | "none" {
+type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "none";
+
+function getFilePreviewType(item: TreeItem): FilePreviewType {
   const ext = getFileExtension(item.name);
   if (PDF_EXTENSIONS.has(ext)) return "pdf";
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (SPREADSHEET_EXTENSIONS.has(ext)) return "spreadsheet";
   if (TEXT_EXTENSIONS.has(ext)) return "text";
-  // Source documents with extracted text can show text preview
-  if (item.extractedText) return "text";
   return "none";
+}
+
+function hasExtractedContent(item: TreeItem): boolean {
+  if (item.extractedText) return true;
+  const sd = item.sourceDocument?.structuredData;
+  return !!(sd && ((sd.tables && sd.tables.length > 0) || (sd.keyValuePairs && sd.keyValuePairs.length > 0)));
 }
 
 function getDownloadUrl(item: TreeItem, projectId: string, inline = false): string | null {
@@ -260,13 +273,16 @@ function filterTree(items: TreeItem[], query: string): TreeItem[] {
 
 function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const pdfDocRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
+  const fitScaleRef = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageCount, setPageCount] = useState(0);
-  const [zoom, setZoom] = useState(1.2);
+  const [zoom, setZoom] = useState<number | null>(null); // null = fit-to-width
+  const [isFitMode, setIsFitMode] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -300,6 +316,8 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
         pdfDocRef.current = doc;
         setPageCount(doc.numPages);
         setPageNumber(1);
+        setZoom(null);
+        setIsFitMode(true);
         setLoading(false);
       } catch (err) {
         if (!cancelled) {
@@ -318,7 +336,8 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
   const renderPage = useCallback(async () => {
     const doc = pdfDocRef.current;
     const canvas = canvasRef.current;
-    if (!doc || !canvas) return;
+    const container = containerRef.current;
+    if (!doc || !canvas || !container) return;
 
     const clampedPage = Math.max(1, Math.min(pageNumber, doc.numPages));
 
@@ -329,25 +348,54 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
       }
 
       const page = await doc.getPage(clampedPage);
-      const viewport = page.getViewport({ scale: zoom });
 
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+      // Calculate fit-to-width scale based on container
+      const containerWidth = container.clientWidth - 32; // subtract padding
+      const unscaledViewport = page.getViewport({ scale: 1 });
+      const fitScale = containerWidth / unscaledViewport.width;
+      fitScaleRef.current = fitScale;
+
+      const effectiveScale = isFitMode ? fitScale : (zoom ?? fitScale);
+      const viewport = page.getViewport({ scale: effectiveScale });
+
+      // Use 2x device pixel ratio for sharp rendering
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = viewport.width * dpr;
+      canvas.height = viewport.height * dpr;
       canvas.style.width = `${viewport.width}px`;
       canvas.style.height = `${viewport.height}px`;
 
-      const renderTask = page.render({ canvas, viewport });
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.scale(dpr, dpr);
+
+      const renderTask = page.render({
+        canvasContext: ctx!,
+        viewport,
+      });
       renderTaskRef.current = renderTask;
       await renderTask.promise;
       renderTaskRef.current = null;
     } catch (err: unknown) {
       if (err instanceof Error && err.message?.includes("Rendering cancelled")) return;
     }
-  }, [pageNumber, zoom]);
+  }, [pageNumber, zoom, isFitMode]);
 
   useEffect(() => {
     if (!loading && !error) renderPage();
   }, [loading, error, renderPage]);
+
+  // Re-render on container resize for fit-to-width
+  useEffect(() => {
+    if (!isFitMode || loading || error) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(() => {
+      renderPage();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isFitMode, loading, error, renderPage]);
 
   useEffect(() => {
     return () => {
@@ -358,6 +406,27 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
       }
     };
   }, []);
+
+  const displayZoom = isFitMode
+    ? fitScaleRef.current ? Math.round(fitScaleRef.current * 100) : 100
+    : Math.round((zoom ?? 1) * 100);
+
+  const handleZoomOut = () => {
+    const current = isFitMode ? (fitScaleRef.current ?? 1) : (zoom ?? 1);
+    setIsFitMode(false);
+    setZoom(Math.max(0.25, current - 0.2));
+  };
+
+  const handleZoomIn = () => {
+    const current = isFitMode ? (fitScaleRef.current ?? 1) : (zoom ?? 1);
+    setIsFitMode(false);
+    setZoom(Math.min(4, current + 0.2));
+  };
+
+  const handleFitToWidth = () => {
+    setIsFitMode(true);
+    setZoom(null);
+  };
 
   if (error) {
     return (
@@ -378,9 +447,9 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
   }
 
   return (
-    <div className="flex flex-col pb-1">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* PDF Controls */}
-      <div className="flex items-center justify-between border-b border-line px-3 py-2 bg-panel2/30">
+      <div className="flex items-center justify-between border-b border-line px-3 py-2 bg-panel2/30 shrink-0">
         <div className="flex items-center gap-1">
           <button
             onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
@@ -402,25 +471,37 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setZoom((z) => Math.max(0.5, z - 0.2))}
+            onClick={handleZoomOut}
             className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
+            title="Zoom out"
           >
             <ZoomOut className="h-3.5 w-3.5" />
           </button>
           <span className="text-xs text-fg/50 min-w-[40px] text-center">
-            {Math.round(zoom * 100)}%
+            {displayZoom}%
           </span>
           <button
-            onClick={() => setZoom((z) => Math.min(3, z + 0.2))}
+            onClick={handleZoomIn}
             className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
+            title="Zoom in"
           >
             <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={handleFitToWidth}
+            className={cn(
+              "rounded p-1 hover:bg-panel2 ml-1",
+              isFitMode ? "text-accent" : "text-fg/50 hover:text-fg"
+            )}
+            title="Fit to width"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
       {/* PDF Canvas */}
-      <div className="overflow-auto bg-bg/30 flex-1 flex justify-center p-4">
+      <div ref={containerRef} className="overflow-auto bg-bg/30 flex-1 flex justify-center p-4 min-h-0">
         <canvas ref={canvasRef} className="block shadow-lg" />
       </div>
     </div>
@@ -520,6 +601,298 @@ function TextPreview({ url, extractedText }: { url: string | null; extractedText
     <div className="overflow-auto bg-bg/30 p-4 flex-1">
       <pre className="text-xs text-fg/70 leading-relaxed whitespace-pre-wrap font-mono">
         {truncateText(content ?? "", 50000)}
+      </pre>
+    </div>
+  );
+}
+
+/* ─── Spreadsheet Preview (CSV/TSV) ─── */
+
+function SpreadsheetPreview({ url, extractedText, fileName }: { url: string | null; extractedText?: string; fileName: string }) {
+  const [content, setContent] = useState<string | null>(extractedText ?? null);
+  const [loading, setLoading] = useState(!extractedText);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (extractedText || !url) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        const text = await res.text();
+        if (!cancelled) { setContent(text); setLoading(false); }
+      })
+      .catch((err) => {
+        if (!cancelled) { setError(err instanceof Error ? err.message : "Failed to load"); setLoading(false); }
+      });
+    return () => { cancelled = true; };
+  }, [url, extractedText]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        <span className="ml-2 text-sm text-fg/50">Loading spreadsheet...</span>
+      </div>
+    );
+  }
+
+  if (error || !content) {
+    return (
+      <div className="flex flex-col items-center gap-2 p-8 text-sm text-danger">
+        <AlertTriangle className="h-5 w-5" />
+        <p>{error ?? "No content available"}</p>
+      </div>
+    );
+  }
+
+  const ext = getFileExtension(fileName);
+  const separator = ext === "tsv" ? "\t" : ",";
+  const rows = parseCSV(content, separator);
+  const headerRow = rows[0] ?? [];
+  const dataRows = rows.slice(1);
+
+  return (
+    <div className="overflow-auto bg-bg/30 flex-1 p-2">
+      <table className="w-full text-xs border-collapse">
+        {headerRow.length > 0 && (
+          <thead>
+            <tr>
+              {headerRow.map((cell, i) => (
+                <th
+                  key={i}
+                  className="sticky top-0 bg-panel2 border border-line px-2 py-1.5 text-left font-medium text-fg/70 whitespace-nowrap"
+                >
+                  {cell}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        )}
+        <tbody>
+          {dataRows.slice(0, 500).map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? "bg-panel/30" : ""}>
+              {row.map((cell, ci) => (
+                <td
+                  key={ci}
+                  className="border border-line/50 px-2 py-1 text-fg/60 whitespace-nowrap max-w-[300px] truncate"
+                >
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {dataRows.length > 500 && (
+        <p className="text-[11px] text-fg/30 text-center py-2">
+          Showing first 500 of {dataRows.length} rows
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Simple CSV parser that handles quoted fields */
+function parseCSV(text: string, separator: string): string[][] {
+  const rows: string[][] = [];
+  const lines = text.split("\n");
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const cells: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          current += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === separator) {
+          cells.push(current.trim());
+          current = "";
+        } else {
+          current += ch;
+        }
+      }
+    }
+    cells.push(current.trim());
+    rows.push(cells);
+  }
+  return rows;
+}
+
+/* ─── Full Screen PDF Overlay ─── */
+
+function FullScreenPdfOverlay({
+  url,
+  fileName,
+  onClose,
+}: {
+  url: string;
+  fileName: string;
+  onClose: () => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2.5 bg-panel/90 border-b border-line">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-accent" />
+          <span className="text-sm font-medium text-fg truncate max-w-[500px]">{fileName}</span>
+        </div>
+        <button
+          onClick={onClose}
+          className="rounded-md p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      {/* PDF content */}
+      <div className="flex-1 overflow-hidden">
+        <PdfPreview url={url} fileName={fileName} />
+      </div>
+    </motion.div>
+  );
+}
+
+/* ─── Structured Content View ─── */
+
+function StructuredContentView({
+  structuredData,
+  extractedText,
+}: {
+  structuredData: SourceDocumentStructuredData | null | undefined;
+  extractedText: string | undefined;
+}) {
+  const tables = structuredData?.tables ?? [];
+  const keyValuePairs = structuredData?.keyValuePairs ?? [];
+  const hasStructured = tables.length > 0 || keyValuePairs.length > 0;
+
+  if (hasStructured) {
+    return (
+      <div className="overflow-auto bg-bg/30 p-4 flex-1 space-y-6">
+        {/* Key-Value Pairs */}
+        {keyValuePairs.length > 0 && (
+          <div>
+            <h4 className="text-[11px] font-medium uppercase text-fg/40 tracking-wider mb-2 flex items-center gap-1.5">
+              <FileText className="h-3 w-3" />
+              Key-Value Pairs ({keyValuePairs.length})
+            </h4>
+            <div className="rounded-lg border border-line overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-panel2/50">
+                    <th className="text-left px-3 py-1.5 font-medium text-fg/60 border-b border-line w-[40%]">Key</th>
+                    <th className="text-left px-3 py-1.5 font-medium text-fg/60 border-b border-line">Value</th>
+                    <th className="text-right px-3 py-1.5 font-medium text-fg/60 border-b border-line w-[80px]">Conf.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {keyValuePairs.map((kv, i) => (
+                    <tr key={i} className={i % 2 === 0 ? "bg-panel/20" : ""}>
+                      <td className="px-3 py-1.5 text-fg/70 font-medium">{kv.key}</td>
+                      <td className="px-3 py-1.5 text-fg/60">{kv.value || "—"}</td>
+                      <td className="px-3 py-1.5 text-right text-fg/40">
+                        {Math.round(kv.confidence * 100)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Tables */}
+        {tables.map((table, ti) => (
+          <div key={ti}>
+            <h4 className="text-[11px] font-medium uppercase text-fg/40 tracking-wider mb-2 flex items-center gap-1.5">
+              <Table2 className="h-3 w-3" />
+              Table {ti + 1}
+              <span className="text-fg/25">· Page {table.pageNumber}</span>
+            </h4>
+            <div className="rounded-lg border border-line overflow-auto">
+              <table className="w-full text-xs border-collapse">
+                {table.headers.length > 0 && (
+                  <thead>
+                    <tr>
+                      {table.headers.map((h, hi) => (
+                        <th
+                          key={hi}
+                          className="sticky top-0 bg-panel2 border-b border-line px-2.5 py-1.5 text-left font-medium text-fg/70 whitespace-nowrap"
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                )}
+                <tbody>
+                  {table.rows.map((row, ri) => (
+                    <tr key={ri} className={ri % 2 === 0 ? "bg-panel/20" : ""}>
+                      {row.map((cell, ci) => (
+                        <td
+                          key={ci}
+                          className="border-b border-line/30 px-2.5 py-1.5 text-fg/60 whitespace-nowrap max-w-[300px] truncate"
+                        >
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+
+        {/* Full text below structured data */}
+        {extractedText && (
+          <div>
+            <h4 className="text-[11px] font-medium uppercase text-fg/40 tracking-wider mb-2">
+              Full Text
+            </h4>
+            <pre className="text-xs text-fg/50 leading-relaxed whitespace-pre-wrap font-mono rounded-lg border border-line p-3 bg-panel/20">
+              {truncateText(extractedText, 50000)}
+            </pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Fallback: plain text only
+  if (!extractedText) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 p-8 text-sm text-fg/40">
+        <FileText className="h-8 w-8 text-fg/15" />
+        <p>No extracted content available</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-auto bg-bg/30 p-4 flex-1">
+      <pre className="text-xs text-fg/70 leading-relaxed whitespace-pre-wrap font-mono">
+        {truncateText(extractedText, 50000)}
       </pre>
     </div>
   );
@@ -913,7 +1286,18 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
     return getDownloadUrl(selectedItem, projectId, false);
   }, [selectedItem, projectId]);
 
-  const previewType = selectedItem ? getPreviewType(selectedItem) : "none";
+  const filePreviewType = selectedItem ? getFilePreviewType(selectedItem) : "none";
+  const hasExtracted = selectedItem ? hasExtractedContent(selectedItem) : false;
+  // Show tabs when there is extracted content (so user can toggle between file view and text)
+  const showPreviewTabs = selectedItem?.type === "file" && (hasExtracted && filePreviewType !== "none" || hasExtracted);
+  const [previewTab, setPreviewTab] = useState<"file" | "extracted">("file");
+  const [fullScreenPdf, setFullScreenPdf] = useState(false);
+
+  // Reset to file tab when selection changes
+  useEffect(() => {
+    setPreviewTab("file");
+    setFullScreenPdf(false);
+  }, [selectedId]);
 
   return (
     <div className="flex h-full gap-4">
@@ -1204,6 +1588,12 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {filePreviewType === "pdf" && previewUrl && (
+                    <Button variant="secondary" size="xs" onClick={() => setFullScreenPdf(true)}>
+                      <Expand className="h-3.5 w-3.5" />
+                      Full Screen
+                    </Button>
+                  )}
                   {downloadUrl && (
                     <a href={downloadUrl} download>
                       <Button variant="secondary" size="xs">
@@ -1260,58 +1650,117 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
                 )}
               </div>
 
+              {/* Preview tabs */}
+              {showPreviewTabs && (
+                <div className="flex items-center gap-1 px-4 border-b border-line">
+                  <button
+                    onClick={() => setPreviewTab("file")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
+                      previewTab === "file"
+                        ? "border-accent text-accent"
+                        : "border-transparent text-fg/50 hover:text-fg/70"
+                    )}
+                  >
+                    <Eye className="h-3 w-3" />
+                    File
+                  </button>
+                  <button
+                    onClick={() => setPreviewTab("extracted")}
+                    className={cn(
+                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
+                      previewTab === "extracted"
+                        ? "border-accent text-accent"
+                        : "border-transparent text-fg/50 hover:text-fg/70"
+                    )}
+                  >
+                    <FileText className="h-3 w-3" />
+                    Extracted
+                  </button>
+                </div>
+              )}
+
               {/* Preview area */}
               <div className="flex-1 overflow-hidden flex flex-col">
-                {previewType === "pdf" && previewUrl && (
-                  <PdfPreview
-                    key={previewUrl}
-                    url={previewUrl}
-                    fileName={selectedItem.name}
-                  />
-                )}
-                {previewType === "image" && previewUrl && (
-                  <ImagePreview
-                    key={previewUrl}
-                    url={previewUrl}
-                    fileName={selectedItem.name}
-                  />
-                )}
-                {previewType === "text" && (
-                  <TextPreview
+                {previewTab === "file" || !hasExtracted ? (
+                  <>
+                    {filePreviewType === "pdf" && previewUrl && (
+                      <PdfPreview
+                        key={previewUrl}
+                        url={previewUrl}
+                        fileName={selectedItem.name}
+                      />
+                    )}
+                    {filePreviewType === "image" && previewUrl && (
+                      <ImagePreview
+                        key={previewUrl}
+                        url={previewUrl}
+                        fileName={selectedItem.name}
+                      />
+                    )}
+                    {filePreviewType === "spreadsheet" && (
+                      <SpreadsheetPreview
+                        key={selectedItem.id}
+                        url={previewUrl}
+                        extractedText={selectedItem.extractedText}
+                        fileName={selectedItem.name}
+                      />
+                    )}
+                    {filePreviewType === "text" && !SPREADSHEET_EXTENSIONS.has(getFileExtension(selectedItem.name)) && (
+                      <TextPreview
+                        key={selectedItem.id}
+                        url={previewUrl}
+                        extractedText={!hasExtracted ? selectedItem.extractedText : undefined}
+                      />
+                    )}
+                    {filePreviewType === "none" && (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+                        <File className="h-12 w-12 text-fg/15" />
+                        <p className="text-sm text-fg/40">
+                          Preview not available for this file type
+                        </p>
+                        {downloadUrl && (
+                          <a href={downloadUrl} download>
+                            <Button variant="secondary" size="sm">
+                              <Download className="h-4 w-4" />
+                              Download File
+                            </Button>
+                          </a>
+                        )}
+                        {/* If no file preview but has extracted content and no tabs, show inline */}
+                        {hasExtracted && !showPreviewTabs && (
+                          <div className="w-full mt-4">
+                            <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">
+                              Extracted Text
+                            </p>
+                            <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">
+                              {truncateText(selectedItem.extractedText!, 2000)}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  /* Extracted content tab — structured view */
+                  <StructuredContentView
                     key={selectedItem.id}
-                    url={previewUrl}
+                    structuredData={selectedItem.sourceDocument?.structuredData}
                     extractedText={selectedItem.extractedText}
                   />
                 )}
-                {previewType === "none" && (
-                  <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
-                    <File className="h-12 w-12 text-fg/15" />
-                    <p className="text-sm text-fg/40">
-                      Preview not available for this file type
-                    </p>
-                    {downloadUrl && (
-                      <a href={downloadUrl} download>
-                        <Button variant="secondary" size="sm">
-                          <Download className="h-4 w-4" />
-                          Download File
-                        </Button>
-                      </a>
-                    )}
-
-                    {/* Show extracted text if available */}
-                    {selectedItem.extractedText && (
-                      <div className="w-full mt-4">
-                        <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">
-                          Extracted Text
-                        </p>
-                        <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">
-                          {truncateText(selectedItem.extractedText, 2000)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
+
+              {/* Full screen PDF overlay */}
+              <AnimatePresence>
+                {fullScreenPdf && previewUrl && (
+                  <FullScreenPdfOverlay
+                    url={previewUrl}
+                    fileName={selectedItem.name}
+                    onClose={() => setFullScreenPdf(false)}
+                  />
+                )}
+              </AnimatePresence>
             </>
           )}
         </Card>

@@ -451,7 +451,7 @@ function GeneralSubTab({
             </div>
           </div>
 
-          {/* Department */}
+          {/* Department / Type */}
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label>Department</Label>
@@ -468,10 +468,6 @@ function GeneralSubTab({
                 ))}
               </Select>
             </div>
-          </div>
-
-          {/* Type / Dates */}
-          <div className="grid gap-4 md:grid-cols-3">
             <div>
               <Label>Type</Label>
               <Select
@@ -486,6 +482,10 @@ function GeneralSubTab({
                 <option value="BudgetDNE">Budget DNE</option>
               </Select>
             </div>
+          </div>
+
+          {/* Dates */}
+          <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label>Quote Date</Label>
               <Input

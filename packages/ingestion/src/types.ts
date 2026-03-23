@@ -32,6 +32,17 @@ export interface DocumentCitation {
   excerpt?: string;
 }
 
+export interface SourceDocumentStructuredData {
+  tables?: Array<{
+    pageNumber: number;
+    headers: string[];
+    rows: string[][];
+    rawMarkdown: string;
+  }>;
+  keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+  selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
+}
+
 export interface SourceDocument {
   id: string;
   sourcePath: string;
@@ -41,6 +52,7 @@ export interface SourceDocument {
   text: string;
   metadata: Record<string, string | number | boolean>;
   citations: DocumentCitation[];
+  structuredData?: SourceDocumentStructuredData;
 }
 
 export interface DocumentChunk {

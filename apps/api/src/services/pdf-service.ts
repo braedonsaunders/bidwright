@@ -54,6 +54,125 @@ export interface PdfDataPackage {
   }>;
 }
 
+export interface PdfLayoutOptions {
+  // Which sections to show (all default true)
+  sections: {
+    coverPage: boolean;
+    scopeOfWork: boolean;
+    leadLetter: boolean;
+    lineItems: boolean;
+    phases: boolean;
+    modifiers: boolean;
+    conditions: boolean;
+    hoursSummary: boolean;
+    labourSummary: boolean;
+    notes: boolean;
+    reportSections: boolean;
+  };
+  // Section display order (array of section keys)
+  sectionOrder: string[];
+  // Line items options
+  lineItemOptions: {
+    showCostColumn: boolean;
+    showMarkupColumn: boolean;
+    groupBy: "none" | "phase" | "worksheet";
+  };
+  // Branding
+  branding: {
+    accentColor: string;     // hex e.g. "#3b82f6"
+    headerBgColor: string;   // hex
+    fontFamily: "sans" | "serif" | "mono";
+  };
+  // Page setup
+  pageSetup: {
+    orientation: "portrait" | "landscape";
+    pageSize: "letter" | "a4" | "legal";
+  };
+  // Cover page options
+  coverPageOptions: {
+    companyName: string;
+    tagline: string;
+    logoUrl: string;
+  };
+  // Header/footer
+  headerFooter: {
+    showHeader: boolean;
+    showFooter: boolean;
+    headerText: string;
+    footerText: string;
+    showPageNumbers: boolean;
+  };
+  // Custom sections
+  customSections: Array<{
+    id: string;
+    title: string;
+    content: string;
+    order: number;
+  }>;
+}
+
+export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
+  return {
+    sections: {
+      coverPage: true,
+      scopeOfWork: true,
+      leadLetter: true,
+      lineItems: true,
+      phases: true,
+      modifiers: true,
+      conditions: true,
+      hoursSummary: true,
+      labourSummary: false,
+      notes: true,
+      reportSections: true,
+    },
+    sectionOrder: [
+      "coverPage", "scopeOfWork", "leadLetter", "lineItems", "phases",
+      "modifiers", "conditions", "hoursSummary", "labourSummary", "notes", "reportSections",
+    ],
+    lineItemOptions: {
+      showCostColumn: true,
+      showMarkupColumn: true,
+      groupBy: "none",
+    },
+    branding: {
+      accentColor: "#3b82f6",
+      headerBgColor: "#1a1a1a",
+      fontFamily: "sans",
+    },
+    pageSetup: {
+      orientation: "portrait",
+      pageSize: "letter",
+    },
+    coverPageOptions: {
+      companyName: "",
+      tagline: "",
+      logoUrl: "",
+    },
+    headerFooter: {
+      showHeader: true,
+      showFooter: true,
+      headerText: "",
+      footerText: "",
+      showPageNumbers: true,
+    },
+    customSections: [],
+  };
+}
+
+function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>): T {
+  const result = { ...base };
+  for (const key of Object.keys(overrides) as (keyof T)[]) {
+    const val = overrides[key];
+    if (val !== undefined && typeof val === "object" && !Array.isArray(val) && val !== null) {
+      result[key] = deepMerge(base[key] as any, val as any);
+    } else if (val !== undefined) {
+      result[key] = val as T[keyof T];
+    }
+  }
+  return result;
+}
+
 export function buildPdfDataPackage(workspace: any, reportSections: any[] = []): PdfDataPackage {
   const rev = workspace.currentRevision;
   const lineItems = (workspace.worksheets ?? []).flatMap((ws: any) =>
@@ -107,10 +226,24 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = []):
   };
 }
 
+const FONT_STACKS: Record<PdfLayoutOptions["branding"]["fontFamily"], string> = {
+  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  serif: '"Georgia", "Times New Roman", serif',
+  mono: '"SF Mono", "Fira Code", monospace',
+};
+
 export function generatePdfHtml(
   data: PdfDataPackage,
-  templateType: string
+  templateType: string,
+  options?: Partial<PdfLayoutOptions>
 ): string {
+  const defaults = getDefaultPdfLayoutOptions();
+  const opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
+
+  const fontStack = FONT_STACKS[opts.branding.fontFamily];
+  const accent = opts.branding.accentColor;
+  const headerBg = opts.branding.headerBgColor;
+
   const inclusions = data.conditions.filter((c) =>
     c.type.toLowerCase().includes("inclusion")
   );
@@ -125,85 +258,113 @@ export function generatePdfHtml(
     })}`;
   const formatPct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
-  let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1a1a1a; margin: 40px; font-size: 12px; line-height: 1.5; }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 24px 0 8px; border-bottom: 2px solid #e5e5e5; padding-bottom: 4px; }
-  h3 { font-size: 13px; margin: 16px 0 4px; }
-  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-  th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid #e5e5e5; font-size: 11px; }
-  th { background: #f5f5f5; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; }
-  .meta { color: #666; font-size: 11px; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
-  .badge-firm { background: #e8f5e9; color: #2e7d32; }
-  .badge-budget { background: #fff3e0; color: #e65100; }
-  .totals { background: #f5f5f5; font-weight: 600; }
-  .footer { margin-top: 32px; padding-top: 16px; border-top: 2px solid #e5e5e5; font-size: 11px; color: #666; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
-  .summary-card { background: #f9f9f9; border: 1px solid #e5e5e5; border-radius: 6px; padding: 12px; }
-  .summary-card .label { font-size: 10px; text-transform: uppercase; color: #888; }
-  .summary-card .value { font-size: 18px; font-weight: 600; margin-top: 4px; }
-  .conditions { columns: 2; column-gap: 24px; }
-  .conditions li { margin-bottom: 4px; }
-  @media print { body { margin: 20px; } }
-</style></head><body>`;
+  // --- Section renderers ---
 
-  // Header
-  html += `<div class="header">
-    <div>
-      <h1>${escapeHtml(data.title || data.quoteNumber)}</h1>
-      <div class="meta">${escapeHtml(data.clientName)} &middot; ${escapeHtml(data.location)}</div>
-      <div class="meta">Quote ${escapeHtml(data.quoteNumber)} &middot; Revision ${data.revisionNumber}</div>
-    </div>
-    <div style="text-align:right">
-      <span class="badge badge-${data.type.toLowerCase()}">${escapeHtml(data.type)}</span>
-      ${data.dateQuote ? `<div class="meta" style="margin-top:4px">Date: ${escapeHtml(data.dateQuote)}</div>` : ""}
-      ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
-    </div>
-  </div>`;
+  const renderCoverPage = (): string => {
+    const companyName = opts.coverPageOptions.companyName || "Proposal";
+    const tagline = opts.coverPageOptions.tagline;
+    const logoUrl = opts.coverPageOptions.logoUrl;
+    const dateStr = data.dateQuote
+      ? new Date(data.dateQuote).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
+      : new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
-  // Summary cards
-  html += `<div class="summary-grid">
-    <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
-    <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
-    <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
-    <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
-  </div>`;
+    let coverHtml = `<div class="cover-page">`;
+    if (logoUrl) {
+      coverHtml += `<img src="${escapeHtml(logoUrl)}" alt="Logo" style="max-width:180px;max-height:80px;margin-bottom:24px" />`;
+    }
+    coverHtml += `<div class="cover-company">${escapeHtml(companyName)}</div>`;
+    if (tagline) {
+      coverHtml += `<div class="cover-tagline">${escapeHtml(tagline)}</div>`;
+    }
+    coverHtml += `<div class="cover-divider"></div>`;
+    coverHtml += `<div class="cover-title">${escapeHtml(data.title || data.quoteNumber)}</div>`;
+    coverHtml += `<div class="cover-meta">Prepared for <strong>${escapeHtml(data.clientName)}</strong></div>`;
+    coverHtml += `<div class="cover-meta">${escapeHtml(data.location)}</div>`;
+    coverHtml += `<div class="cover-details">`;
+    coverHtml += `<span>Quote ${escapeHtml(data.quoteNumber)}</span>`;
+    coverHtml += `<span>&middot;</span>`;
+    coverHtml += `<span>Revision ${data.revisionNumber}</span>`;
+    coverHtml += `<span>&middot;</span>`;
+    coverHtml += `<span>${dateStr}</span>`;
+    coverHtml += `</div>`;
+    coverHtml += `</div>`;
+    return coverHtml;
+  };
 
-  // Description
-  if (data.description) {
-    html += `<h2>Scope of Work</h2><div>${escapeHtml(data.description)}</div>`;
-  }
+  const renderScopeOfWork = (): string => {
+    if (!data.description) return "";
+    return `<h2>Scope of Work</h2><div class="section-body">${escapeHtml(data.description)}</div>`;
+  };
 
-  // Lead letter (only for main template)
-  if (templateType === "main" && data.leadLetter) {
-    html += `<h2>Lead Letter</h2><div>${escapeHtml(data.leadLetter)}</div>`;
-  }
+  const renderLeadLetter = (): string => {
+    if (templateType !== "main" || !data.leadLetter) return "";
+    return `<h2>Lead Letter</h2><div class="section-body">${escapeHtml(data.leadLetter)}</div>`;
+  };
 
-  // Line items table
-  if (templateType !== "closeout") {
+  const renderLineItems = (): string => {
+    if (templateType === "closeout") return "";
+
     const backupCol = templateType === "backup";
-    html += `<h2>Line Items</h2><table>
-      <thead><tr><th>#</th><th>Item</th><th>Category</th>${backupCol ? "<th>Worksheet</th>" : ""}<th class="num">Qty</th><th>UOM</th><th class="num">Cost</th><th class="num">Markup</th><th class="num">Price</th><th class="num">Hours</th></tr></thead><tbody>`;
-    for (const item of data.lineItems) {
-      const hours =
-        item.laborHourReg + item.laborHourOver + item.laborHourDouble;
-      html += `<tr>
+    const showCost = opts.lineItemOptions.showCostColumn;
+    const showMarkup = opts.lineItemOptions.showMarkupColumn;
+    const groupBy = opts.lineItemOptions.groupBy;
+
+    const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
+      const hours = item.laborHourReg + item.laborHourOver + item.laborHourDouble;
+      let row = `<tr>
         <td>${item.lineOrder}</td>
         <td><strong>${escapeHtml(item.entityName)}</strong>${item.description ? `<br><span style="color:#888">${escapeHtml(item.description)}</span>` : ""}</td>
         <td>${escapeHtml(item.category)}</td>
         ${backupCol ? `<td>${escapeHtml(item.worksheetName)}</td>` : ""}
         <td class="num">${item.quantity}</td>
         <td>${escapeHtml(item.uom)}</td>
-        <td class="num">${formatMoney(item.cost)}</td>
-        <td class="num">${formatPct(item.markup)}</td>
+        ${showCost ? `<td class="num">${formatMoney(item.cost)}</td>` : ""}
+        ${showMarkup ? `<td class="num">${formatPct(item.markup)}</td>` : ""}
         <td class="num"><strong>${formatMoney(item.price)}</strong></td>
         <td class="num">${hours > 0 ? hours.toLocaleString() : ""}</td>
       </tr>`;
+      return row;
+    };
+
+    const renderGroupHeader = (label: string, count: number) =>
+      `<tr style="background:#f0f4ff"><td colspan="100%" style="font-weight:600;font-size:11px;color:${accent};padding:8px">${escapeHtml(label)} <span style="font-weight:400;color:#888">(${count} items)</span></td></tr>`;
+
+    let result = `<h2>Line Items</h2><table>
+      <thead><tr>
+        <th>#</th><th>Item</th><th>Category</th>
+        ${backupCol ? "<th>Worksheet</th>" : ""}
+        <th class="num">Qty</th><th>UOM</th>
+        ${showCost ? '<th class="num">Cost</th>' : ""}
+        ${showMarkup ? '<th class="num">Markup</th>' : ""}
+        <th class="num">Price</th><th class="num">Hours</th>
+      </tr></thead><tbody>`;
+
+    if (groupBy === "phase") {
+      const groups = new Map<string, PdfDataPackage["lineItems"]>();
+      for (const item of data.lineItems) {
+        const key = item.phaseName || "Unphased";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(item);
+      }
+      for (const [phaseName, items] of groups) {
+        result += renderGroupHeader(phaseName, items.length);
+        for (const item of items) result += renderItemRow(item);
+      }
+    } else if (groupBy === "worksheet") {
+      const groups = new Map<string, PdfDataPackage["lineItems"]>();
+      for (const item of data.lineItems) {
+        const key = item.worksheetName || "Default";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(item);
+      }
+      for (const [wsName, items] of groups) {
+        result += renderGroupHeader(wsName, items.length);
+        for (const item of items) result += renderItemRow(item);
+      }
+    } else {
+      for (const item of data.lineItems) result += renderItemRow(item);
     }
+
     // Totals row
     const totalCost = data.lineItems.reduce((s, i) => s + i.cost, 0);
     const totalPrice = data.lineItems.reduce((s, i) => s + i.price, 0);
@@ -211,39 +372,53 @@ export function generatePdfHtml(
       (s, i) => s + i.laborHourReg + i.laborHourOver + i.laborHourDouble,
       0
     );
-    html += `<tr class="totals"><td colspan="${backupCol ? 6 : 5}">Total (${data.lineItems.length} items)</td><td class="num">${formatMoney(totalCost)}</td><td></td><td class="num">${formatMoney(totalPrice)}</td><td class="num">${totalHrs.toLocaleString()}</td></tr>`;
-    html += `</tbody></table>`;
-  }
+    const baseCols = backupCol ? 6 : 5;
+    const skipCols = baseCols + (showCost ? 0 : -1) + (showMarkup ? 0 : -1);
+    result += `<tr class="totals"><td colspan="${skipCols}">Total (${data.lineItems.length} items)</td>`;
+    if (showCost) result += `<td class="num">${formatMoney(totalCost)}</td>`;
+    if (showMarkup) result += `<td></td>`;
+    result += `<td class="num">${formatMoney(totalPrice)}</td><td class="num">${totalHrs.toLocaleString()}</td></tr>`;
+    result += `</tbody></table>`;
+    return result;
+  };
 
-  // Modifiers
-  if (data.modifiers.length > 0) {
-    html += `<h2>Modifiers</h2><table><thead><tr><th>Name</th><th>Type</th><th>Applies To</th><th class="num">%</th><th class="num">Amount</th></tr></thead><tbody>`;
-    for (const m of data.modifiers) {
-      html += `<tr><td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.type)}</td><td>${escapeHtml(m.appliesTo)}</td><td class="num">${m.percentage != null ? formatPct(m.percentage) : ""}</td><td class="num">${m.amount != null ? formatMoney(m.amount) : ""}</td></tr>`;
+  const renderPhases = (): string => {
+    if (data.phases.length === 0) return "";
+    let result = `<h2>Phases</h2><table>
+      <thead><tr><th>#</th><th>Phase</th><th>Description</th></tr></thead><tbody>`;
+    for (const p of data.phases) {
+      result += `<tr><td>${escapeHtml(p.number)}</td><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.description)}</td></tr>`;
     }
-    html += `</tbody></table>`;
-  }
+    result += `</tbody></table>`;
+    return result;
+  };
 
-  // Conditions
-  if (inclusions.length > 0 || exclusions.length > 0) {
-    html += `<h2>Terms & Conditions</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
+  const renderModifiers = (): string => {
+    if (data.modifiers.length === 0) return "";
+    let result = `<h2>Modifiers</h2><table><thead><tr><th>Name</th><th>Type</th><th>Applies To</th><th class="num">%</th><th class="num">Amount</th></tr></thead><tbody>`;
+    for (const m of data.modifiers) {
+      result += `<tr><td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.type)}</td><td>${escapeHtml(m.appliesTo)}</td><td class="num">${m.percentage != null ? formatPct(m.percentage) : ""}</td><td class="num">${m.amount != null ? formatMoney(m.amount) : ""}</td></tr>`;
+    }
+    result += `</tbody></table>`;
+    return result;
+  };
+
+  const renderConditions = (): string => {
+    if (inclusions.length === 0 && exclusions.length === 0) return "";
+    let result = `<h2>Terms & Conditions</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
     if (inclusions.length > 0) {
-      html += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+      result += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
     }
     if (exclusions.length > 0) {
-      html += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+      result += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
     }
-    html += `</div>`;
-  }
+    result += `</div>`;
+    return result;
+  };
 
-  // Notes
-  if (data.notes) {
-    html += `<h2>Notes</h2><div>${escapeHtml(data.notes)}</div>`;
-  }
-
-  // Hours summary (for main and site copy)
-  if (templateType !== "closeout") {
-    html += `<h2>Hours Summary</h2>
+  const renderHoursSummary = (): string => {
+    if (templateType === "closeout") return "";
+    return `<h2>Hours Summary</h2>
       <table><thead><tr><th>Regular</th><th>Overtime (1.5x)</th><th>Double Time (2x)</th><th>Total</th></tr></thead>
       <tbody><tr>
         <td class="num">${data.lineItems.reduce((s, i) => s + i.laborHourReg * i.quantity, 0).toLocaleString()}</td>
@@ -251,11 +426,71 @@ export function generatePdfHtml(
         <td class="num">${data.lineItems.reduce((s, i) => s + i.laborHourDouble * i.quantity, 0).toLocaleString()}</td>
         <td class="num"><strong>${data.totalHours.toLocaleString()}</strong></td>
       </tr></tbody></table>`;
-  }
+  };
 
-  // Report sections
-  if (data.reportSections.length > 0) {
-    html += `<h2>Report</h2>`;
+  const renderLabourSummary = (): string => {
+    // Group labour by phase and compute totals
+    const phaseLabour = new Map<string, { reg: number; ot: number; dt: number; total: number; cost: number }>();
+    for (const item of data.lineItems) {
+      const key = item.phaseName || "Unphased";
+      const existing = phaseLabour.get(key) ?? { reg: 0, ot: 0, dt: 0, total: 0, cost: 0 };
+      const reg = item.laborHourReg * item.quantity;
+      const ot = item.laborHourOver * item.quantity;
+      const dt = item.laborHourDouble * item.quantity;
+      existing.reg += reg;
+      existing.ot += ot;
+      existing.dt += dt;
+      existing.total += reg + ot + dt;
+      existing.cost += item.cost;
+      phaseLabour.set(key, existing);
+    }
+
+    if (phaseLabour.size === 0) return "";
+
+    let result = `<h2>Labour Summary</h2><table>
+      <thead><tr><th>Phase</th><th class="num">Reg Hours</th><th class="num">OT Hours</th><th class="num">DT Hours</th><th class="num">Total Hours</th><th class="num">Rate</th><th class="num">Cost</th></tr></thead><tbody>`;
+
+    let grandReg = 0, grandOt = 0, grandDt = 0, grandTotal = 0, grandCost = 0;
+    for (const [phase, v] of phaseLabour) {
+      const rate = v.total > 0 ? v.cost / v.total : 0;
+      grandReg += v.reg;
+      grandOt += v.ot;
+      grandDt += v.dt;
+      grandTotal += v.total;
+      grandCost += v.cost;
+      result += `<tr>
+        <td>${escapeHtml(phase)}</td>
+        <td class="num">${v.reg.toLocaleString()}</td>
+        <td class="num">${v.ot.toLocaleString()}</td>
+        <td class="num">${v.dt.toLocaleString()}</td>
+        <td class="num"><strong>${v.total.toLocaleString()}</strong></td>
+        <td class="num">${formatMoney(rate)}</td>
+        <td class="num">${formatMoney(v.cost)}</td>
+      </tr>`;
+    }
+
+    const grandRate = grandTotal > 0 ? grandCost / grandTotal : 0;
+    result += `<tr class="totals">
+      <td>Total</td>
+      <td class="num">${grandReg.toLocaleString()}</td>
+      <td class="num">${grandOt.toLocaleString()}</td>
+      <td class="num">${grandDt.toLocaleString()}</td>
+      <td class="num"><strong>${grandTotal.toLocaleString()}</strong></td>
+      <td class="num">${formatMoney(grandRate)}</td>
+      <td class="num">${formatMoney(grandCost)}</td>
+    </tr>`;
+    result += `</tbody></table>`;
+    return result;
+  };
+
+  const renderNotes = (): string => {
+    if (!data.notes) return "";
+    return `<h2>Notes</h2><div class="section-body">${escapeHtml(data.notes)}</div>`;
+  };
+
+  const renderReportSections = (): string => {
+    if (data.reportSections.length === 0) return "";
+    let result = `<h2>Report</h2>`;
     const topLevel = data.reportSections
       .filter((s) => !s.parentSectionId)
       .sort((a, b) => a.order - b.order);
@@ -265,16 +500,173 @@ export function generatePdfHtml(
         .sort((a, b) => a.order - b.order);
 
     for (const section of topLevel) {
-      html += renderReportSection(section);
+      result += renderReportSection(section);
       for (const child of children(section.id)) {
-        html += `<div style="margin-left:24px;padding-left:16px;border-left:3px solid #e5e5e5">`;
-        html += renderReportSection(child);
-        html += `</div>`;
+        result += `<div style="margin-left:24px;padding-left:16px;border-left:3px solid #e5e5e5">`;
+        result += renderReportSection(child);
+        result += `</div>`;
       }
+    }
+    return result;
+  };
+
+  // Section key to renderer map
+  const sectionRenderers: Record<string, () => string> = {
+    coverPage: renderCoverPage,
+    scopeOfWork: renderScopeOfWork,
+    leadLetter: renderLeadLetter,
+    lineItems: renderLineItems,
+    phases: renderPhases,
+    modifiers: renderModifiers,
+    conditions: renderConditions,
+    hoursSummary: renderHoursSummary,
+    labourSummary: renderLabourSummary,
+    notes: renderNotes,
+    reportSections: renderReportSections,
+  };
+
+  // --- Build HTML ---
+
+  const pageSizeMap: Record<string, string> = { letter: "letter", a4: "A4", legal: "legal" };
+  const pageSize = pageSizeMap[opts.pageSetup.pageSize] || "letter";
+  const orientation = opts.pageSetup.orientation;
+
+  let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  @page {
+    size: ${pageSize} ${orientation};
+    margin: 20mm 15mm;
+    ${opts.headerFooter.showPageNumbers ? `@bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 9px; color: #999; }` : ""}
+    ${opts.headerFooter.headerText ? `@top-center { content: "${opts.headerFooter.headerText}"; font-size: 9px; color: #666; }` : ""}
+    ${opts.headerFooter.footerText ? `@bottom-center { content: "${opts.headerFooter.footerText}"; font-size: 9px; color: #666; }` : ""}
+  }
+  * { box-sizing: border-box; }
+  body { font-family: ${fontStack}; color: #1a1a1a; margin: 0; padding: 40px; font-size: 12px; line-height: 1.6; }
+  h1 { font-size: 24px; margin: 0 0 4px; color: #111; letter-spacing: -0.02em; }
+  h2 { font-size: 15px; margin: 28px 0 10px; border-bottom: 2px solid ${accent}; padding-bottom: 6px; color: #111; text-transform: uppercase; letter-spacing: 0.04em; }
+  h3 { font-size: 13px; margin: 16px 0 4px; color: #333; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid #e5e5e5; font-size: 11px; }
+  th { background: ${headerBg}; color: #fff; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 2px solid #e5e5e5; }
+  .meta { color: #666; font-size: 11px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; background: ${accent}18; color: ${accent}; }
+  .totals { background: #f5f5f5; font-weight: 600; }
+  .section-body { color: #444; line-height: 1.7; margin-bottom: 8px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+  .summary-card { background: #fff; border: 1px solid #e5e5e5; border-left: 3px solid ${accent}; border-radius: 6px; padding: 14px 16px; }
+  .summary-card .label { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: 0.05em; }
+  .summary-card .value { font-size: 20px; font-weight: 700; margin-top: 4px; color: #111; }
+  .conditions li { margin-bottom: 4px; }
+
+  /* Cover page */
+  .cover-page { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 85vh; text-align: center; page-break-after: always; }
+  .cover-company { font-size: 14px; text-transform: uppercase; letter-spacing: 0.15em; color: ${accent}; font-weight: 600; margin-bottom: 4px; }
+  .cover-tagline { font-size: 12px; color: #888; margin-bottom: 24px; }
+  .cover-divider { width: 60px; height: 3px; background: ${accent}; margin: 16px auto 24px; border-radius: 2px; }
+  .cover-title { font-size: 32px; font-weight: 700; color: #111; margin-bottom: 16px; letter-spacing: -0.02em; line-height: 1.2; }
+  .cover-meta { font-size: 14px; color: #555; margin-bottom: 4px; }
+  .cover-details { display: flex; gap: 12px; align-items: center; font-size: 12px; color: #888; margin-top: 24px; }
+
+  /* Header/footer bars */
+  .html-header { background: ${headerBg}; color: #fff; padding: 8px 20px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; margin: -40px -40px 24px; }
+  .html-footer { margin: 32px -40px -40px; padding: 12px 20px; background: #f5f5f5; border-top: 2px solid #e5e5e5; font-size: 10px; color: #666; display: flex; justify-content: space-between; align-items: center; }
+
+  @media print { body { margin: 0; padding: 20px; } .html-header, .html-footer { margin: 0; } }
+</style></head><body>`;
+
+  // HTML header bar
+  if (opts.headerFooter.showHeader && opts.headerFooter.headerText) {
+    html += `<div class="html-header"><span>${escapeHtml(opts.headerFooter.headerText)}</span><span>${escapeHtml(data.quoteNumber)}</span></div>`;
+  }
+
+  // Render ordered sections
+  for (const sectionKey of opts.sectionOrder) {
+    const sectionFlag = (opts.sections as Record<string, boolean>)[sectionKey];
+    if (sectionFlag === false) continue;
+
+    const renderer = sectionRenderers[sectionKey];
+    if (!renderer) continue;
+
+    const sectionHtml = renderer();
+    if (!sectionHtml) continue;
+
+    html += sectionHtml;
+
+    // After cover page, add the header info block
+    if (sectionKey === "coverPage") {
+      // Header and summary cards follow the cover page
+      html += `<div class="header">
+        <div>
+          <h1>${escapeHtml(data.title || data.quoteNumber)}</h1>
+          <div class="meta">${escapeHtml(data.clientName)} &middot; ${escapeHtml(data.location)}</div>
+          <div class="meta">Quote ${escapeHtml(data.quoteNumber)} &middot; Revision ${data.revisionNumber}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="badge">${escapeHtml(data.type)}</span>
+          ${data.dateQuote ? `<div class="meta" style="margin-top:4px">Date: ${escapeHtml(data.dateQuote)}</div>` : ""}
+          ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
+        </div>
+      </div>`;
+      html += `<div class="summary-grid">
+        <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
+        <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
+        <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
+        <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
+      </div>`;
     }
   }
 
-  html += `<div class="footer">Generated by Bidwright &middot; ${new Date().toLocaleDateString()}</div>`;
+  // If cover page was not rendered, still show header and summary at the top
+  if (!opts.sections.coverPage || !opts.sectionOrder.includes("coverPage")) {
+    // Prepend header after <body> opening. We need to insert it.
+    // Since cover page was skipped, render header block at current position
+    // Actually, let's build it properly — we already have the html accumulating,
+    // so we insert after the <body> tag by rebuilding.
+    const bodyTag = "</head><body>";
+    const bodyIdx = html.indexOf(bodyTag);
+    if (bodyIdx !== -1) {
+      const afterBody = bodyIdx + bodyTag.length;
+      const headerBlock = (opts.headerFooter.showHeader && opts.headerFooter.headerText
+        ? `<div class="html-header"><span>${escapeHtml(opts.headerFooter.headerText)}</span><span>${escapeHtml(data.quoteNumber)}</span></div>`
+        : "") +
+        `<div class="header">
+          <div>
+            <h1>${escapeHtml(data.title || data.quoteNumber)}</h1>
+            <div class="meta">${escapeHtml(data.clientName)} &middot; ${escapeHtml(data.location)}</div>
+            <div class="meta">Quote ${escapeHtml(data.quoteNumber)} &middot; Revision ${data.revisionNumber}</div>
+          </div>
+          <div style="text-align:right">
+            <span class="badge">${escapeHtml(data.type)}</span>
+            ${data.dateQuote ? `<div class="meta" style="margin-top:4px">Date: ${escapeHtml(data.dateQuote)}</div>` : ""}
+            ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
+          </div>
+        </div>
+        <div class="summary-grid">
+          <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
+          <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
+          <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
+          <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
+        </div>`;
+      html = html.slice(0, afterBody) + headerBlock + html.slice(afterBody);
+    }
+  }
+
+  // Custom sections
+  if (opts.customSections.length > 0) {
+    const sorted = [...opts.customSections].sort((a, b) => a.order - b.order);
+    for (const cs of sorted) {
+      html += `<h2>${escapeHtml(cs.title)}</h2><div class="section-body">${cs.content}</div>`;
+    }
+  }
+
+  // HTML footer bar
+  if (opts.headerFooter.showFooter) {
+    const footerText = opts.headerFooter.footerText || "Generated by Bidwright";
+    html += `<div class="html-footer"><span>${escapeHtml(footerText)}</span><span>${new Date().toLocaleDateString()}</span></div>`;
+  }
+
   html += `</body></html>`;
 
   return html;
@@ -553,13 +945,24 @@ async function getBrowser(): Promise<import("playwright").Browser> {
  * Generate a PDF buffer from HTML content using Playwright.
  * Falls back to returning HTML if Playwright/Chromium is unavailable.
  */
-export async function generatePdfBuffer(html: string): Promise<{ buffer: Buffer; contentType: string }> {
+export async function generatePdfBuffer(
+  html: string,
+  layoutOptions?: Partial<PdfLayoutOptions>
+): Promise<{ buffer: Buffer; contentType: string }> {
+  const defaults = getDefaultPdfLayoutOptions();
+  const opts = layoutOptions ? deepMerge(defaults, layoutOptions) : defaults;
+
+  const formatMap: Record<string, string> = { letter: "Letter", a4: "A4", legal: "Legal" };
+  const format = formatMap[opts.pageSetup.pageSize] || "Letter";
+  const landscape = opts.pageSetup.orientation === "landscape";
+
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle" });
     const pdfBuffer = await page.pdf({
-      format: "A4",
+      format: format as any,
+      landscape,
       printBackground: true,
       margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
     });

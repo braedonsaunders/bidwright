@@ -135,18 +135,19 @@ model Project {
 }
 
 model SourceDocument {
-  id            String   @id @default(cuid())
-  projectId     String
-  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  fileName      String
-  fileType      String   @default("")
-  documentType  String   @default("reference")
-  pageCount     Int      @default(0)
-  checksum      String   @default("")
-  storagePath   String   @default("")
-  extractedText String   @default("")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fileName       String
+  fileType       String   @default("")
+  documentType   String   @default("reference")
+  pageCount      Int      @default(0)
+  checksum       String   @default("")
+  storagePath    String   @default("")
+  extractedText  String   @default("")
+  structuredData Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   citations Citation[]
 

@@ -12,7 +12,7 @@
 
 /** Configuration for the multi-provider PDF parser factory. */
 export interface PdfParserConfig {
-  provider: 'llamaparse' | 'docling' | 'local' | 'vision';
+  provider: 'llamaparse' | 'docling' | 'local' | 'vision' | 'azure' | 'hybrid';
   apiKey?: string;
   /** Base URL for self-hosted parser endpoints. */
   baseUrl?: string;
@@ -28,6 +28,12 @@ export interface PdfParserConfig {
    * Caller supplies a function that sends an image to a vision-capable LLM.
    */
   visionLlm?: (imageBase64: string, prompt: string) => Promise<string>;
+  /** Azure Document Intelligence endpoint URL. Required for "azure" and "hybrid" providers. */
+  azureEndpoint?: string;
+  /** Azure Document Intelligence API key. Required for "azure" and "hybrid" providers. */
+  azureKey?: string;
+  /** Azure model to use. @default 'prebuilt-layout' */
+  azureModel?: 'prebuilt-layout' | 'prebuilt-document' | 'prebuilt-invoice' | 'prebuilt-read';
 }
 
 /** The result of parsing a complete document. */
@@ -46,6 +52,10 @@ export interface ParsedDocument {
     mimeType: string;
     hasImages: boolean;
     hasOcr: boolean;
+    /** Key-value pairs extracted by Azure Document Intelligence. */
+    keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+    /** Selection marks (checkboxes, radio buttons) extracted by Azure Document Intelligence. */
+    selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
   };
   /** Non-fatal warnings encountered during parsing. */
   warnings: string[];

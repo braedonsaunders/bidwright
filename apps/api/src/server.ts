@@ -3,7 +3,7 @@ import multipart from "@fastify/multipart";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
@@ -64,7 +64,7 @@ import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { intakeRoutes } from "./routes/intake-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
-import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml } from "./services/pdf-service.js";
+import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
 import {
@@ -154,15 +154,15 @@ const createWorksheetItemSchema = z.object({
   entityName: z.string().min(1),
   vendor: z.string().nullable().optional(),
   description: z.string().default(""),
-  quantity: z.number().finite(),
+  quantity: z.coerce.number().finite(),
   uom: z.string().min(1),
-  cost: z.number().finite(),
-  markup: z.number().finite(),
-  price: z.number().finite(),
-  laborHourReg: z.number().finite().default(0),
-  laborHourOver: z.number().finite().default(0),
-  laborHourDouble: z.number().finite().default(0),
-  lineOrder: z.number().int().optional()
+  cost: z.coerce.number().finite(),
+  markup: z.coerce.number().finite(),
+  price: z.coerce.number().finite(),
+  laborHourReg: z.coerce.number().finite().default(0),
+  laborHourOver: z.coerce.number().finite().default(0),
+  laborHourDouble: z.coerce.number().finite().default(0),
+  lineOrder: z.coerce.number().int().optional()
 });
 const createWorksheetSchema = z.object({
   name: z.string().min(1)
@@ -568,9 +568,42 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     sourceKind
   });
 
-  const outcome = await store.ingestUploadedPackage(multipartUpload.packageId);
+  // Run ingestion asynchronously — return immediately so the UI can redirect
+  store.ingestUploadedPackage(multipartUpload.packageId).then(async (outcome) => {
+    // Write ingestion results to agent memory so the AI drawer can display them
+    try {
+      const docs = outcome.documents ?? [];
+      const summary = docs.map((d: any) => {
+        const type = d.documentType ?? d.fileType ?? "unknown";
+        const pages = d.pageCount ?? 0;
+        const hasText = d.extractedText && d.extractedText.length > 50;
+        return `- ${d.fileName} | ${type} | ${pages} pages | ${hasText ? "text extracted" : "no text"}`;
+      }).join("\n");
+
+      const memPath = resolveApiPath("projects", targetProjectId!, "agent-memory.json");
+      let memory: any = { sections: {}, updatedAt: null };
+      try { memory = JSON.parse(await readFile(memPath, "utf8")); } catch {}
+      memory.sections["ingestion_results"] = `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`;
+      memory.updatedAt = new Date().toISOString();
+      await mkdir(path.dirname(memPath), { recursive: true });
+      await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+    } catch {}
+  }).catch((err) => {
+    console.error(`[ingestion] Package ${multipartUpload.packageId} failed:`, err);
+  });
+
+  // Return project info immediately so the UI can navigate to the workspace
+  const project = await store.getProject(targetProjectId);
+  const workspace = await store.getWorkspace(targetProjectId);
   reply.code(201);
-  return buildPackageResponse(outcome);
+  return {
+    project,
+    quote: workspace?.quote ?? null,
+    revision: workspace?.currentRevision ?? null,
+    documents: [],
+    status: "processing",
+    message: "Package uploaded. Document extraction is running in the background.",
+  };
 }
 
 export function buildServer() {
@@ -649,6 +682,62 @@ export function buildServer() {
     }
 
     return payload;
+  });
+
+  // ── Ingestion Status (for polling from AI drawer) ────────────────
+  app.get("/projects/:projectId/ingestion-status", async (request) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) return { status: "unknown", documents: [] };
+
+    const documents = await request.store!.listDocuments(projectId);
+    return {
+      status: (project as any).ingestionStatus ?? "unknown",
+      documentCount: documents.length,
+      documents: documents.map((d: any) => ({
+        id: d.id,
+        fileName: d.fileName,
+        fileType: d.fileType,
+        documentType: d.documentType,
+        pageCount: d.pageCount,
+        hasText: !!(d.extractedText && d.extractedText.length > 50),
+      })),
+    };
+  });
+
+  // ── Agent Memory (per-project persistent scratchpad) ─────────────
+  app.get("/projects/:projectId/agent-memory", async (request) => {
+    const { projectId } = request.params as { projectId: string };
+    const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
+    try {
+      const raw = await readFile(memPath, "utf8");
+      return JSON.parse(raw);
+    } catch {
+      return { sections: {}, updatedAt: null };
+    }
+  });
+
+  app.put("/projects/:projectId/agent-memory", async (request) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = request.body as { section: string; content: string; append?: boolean };
+    const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
+
+    let memory: { sections: Record<string, string>; updatedAt: string | null } = { sections: {}, updatedAt: null };
+    try {
+      const raw = await readFile(memPath, "utf8");
+      memory = JSON.parse(raw);
+    } catch {}
+
+    if (body.append && memory.sections[body.section]) {
+      memory.sections[body.section] += "\n" + body.content;
+    } else {
+      memory.sections[body.section] = body.content;
+    }
+    memory.updatedAt = new Date().toISOString();
+
+    await mkdir(path.dirname(memPath), { recursive: true });
+    await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+    return memory;
   });
 
   app.get("/projects/:projectId/estimate", async (request, reply) => {
@@ -2098,8 +2187,16 @@ export function buildServer() {
 
     const reportSections = await request.store!.listReportSections(projectId);
     const pdfData = buildPdfDataPackage(workspace, reportSections);
-    const html = generatePdfHtml(pdfData, templateType);
-    const { buffer, contentType } = await generatePdfBuffer(html);
+
+    // Parse layout options from query param if present
+    let layoutOptions: Partial<PdfLayoutOptions> | undefined;
+    const layoutParam = (request.query as Record<string, string>)?.layout;
+    if (layoutParam) {
+      try { layoutOptions = JSON.parse(decodeURIComponent(layoutParam)); } catch { /* ignore */ }
+    }
+
+    const html = generatePdfHtml(pdfData, templateType, layoutOptions);
+    const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
     return reply.type(contentType).send(buffer);
   });
 

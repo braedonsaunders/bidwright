@@ -255,6 +255,46 @@ export const askUserTool = createSystemTool({
 // ──────────────────────────────────────────────────────────────
 // Export all system tools
 // ──────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────
+// system.readMemory
+// ──────────────────────────────────────────────────────────────
+export const readMemoryTool = createSystemTool({
+  id: "system.readMemory",
+  name: "Read Agent Memory",
+  description: "Read the project-level agent memory. This is your persistent scratchpad — use it to track what documents you've processed, decisions you've made, progress notes, and anything you need to remember across tool calls. The memory persists across sessions.",
+  inputSchema: z.object({}),
+  tags: ["memory", "read"],
+}, async (ctx) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/agent-memory`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status}` };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data };
+});
+
+// ──────────────────────────────────────────────────────────────
+// system.writeMemory
+// ──────────────────────────────────────────────────────────────
+export const writeMemoryTool = createSystemTool({
+  id: "system.writeMemory",
+  name: "Write Agent Memory",
+  description: "Write to a section of the project-level agent memory. Use sections like 'progress', 'documents_processed', 'decisions', 'open_questions', 'scope_summary'. Use append=true to add to existing content.",
+  inputSchema: z.object({
+    section: z.string().describe("Memory section name (e.g. 'progress', 'documents_processed', 'scope_summary')"),
+    content: z.string().describe("Content to write to this section"),
+    append: z.boolean().optional().describe("If true, append to existing section content instead of replacing"),
+  }),
+  tags: ["memory", "write"],
+}, async (ctx, input) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/agent-memory`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section: input.section, content: input.content, append: input.append }),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status}` };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data, sideEffects: [`Updated memory section: ${input.section}`] };
+});
+
 export const systemTools: Tool[] = [
   listToolsTool,
   getProjectSummaryTool,
@@ -262,4 +302,6 @@ export const systemTools: Tool[] = [
   getCitationsTool,
   logActivityTool,
   askUserTool,
+  readMemoryTool,
+  writeMemoryTool,
 ];

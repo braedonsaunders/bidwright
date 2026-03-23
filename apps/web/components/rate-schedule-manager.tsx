@@ -81,14 +81,15 @@ export function RateScheduleManager({
   const [schedules, setSchedulesLocal] = useState<RateSchedule[]>(initialSchedules);
   const setSchedules = useCallback(
     (fn: (prev: RateSchedule[]) => RateSchedule[]) => {
-      setSchedulesLocal((prev) => {
-        const next = fn(prev);
-        setParentSchedules(next);
-        return next;
-      });
+      setSchedulesLocal((prev) => fn(prev));
     },
-    [setParentSchedules]
+    []
   );
+
+  // Sync local state up to parent after render
+  useEffect(() => {
+    setParentSchedules(schedules);
+  }, [schedules, setParentSchedules]);
 
   // Sync from parent on load
   useState(() => {
@@ -460,13 +461,13 @@ export function RateScheduleManager({
             <div className="relative flex-1">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
               <Input
-                className="pl-8"
-                placeholder="Search..."
+                className="pl-8 text-xs"
+                placeholder="Search schedules..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-28">
+            <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-20 text-[11px]">
               <option value="">All</option>
               {CATEGORIES.map((c) => (
                 <option key={c.value} value={c.value}>{c.label}</option>
@@ -481,11 +482,14 @@ export function RateScheduleManager({
           ) : (
             <div className="space-y-1">
               {filtered.map((schedule) => (
-                <button
+                <div
                   key={schedule.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => loadDetail(schedule.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadDetail(schedule.id); } }}
                   className={cn(
-                    "w-full text-left px-3 py-2.5 rounded-lg border transition-all group",
+                    "w-full text-left px-3 py-2.5 rounded-lg border transition-all group cursor-pointer",
                     selectedId === schedule.id
                       ? "border-accent/40 bg-accent/5"
                       : "border-transparent hover:bg-panel2/40"
@@ -514,7 +518,7 @@ export function RateScheduleManager({
                       <span className="text-[10px] text-fg/40">{schedule.tiers.length} tiers</span>
                     )}
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}

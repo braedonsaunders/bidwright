@@ -175,27 +175,40 @@ export const searchItemsTool = createQuoteTool({
 export const createWorksheetItemTool = createQuoteTool({
   id: "quote.createWorksheetItem",
   name: "Create Line Item",
-  description: "Create a new line item in a worksheet. Requires worksheetId and at minimum an entityName. Costs and quantities default to 0.",
+  description: "Create a new line item in a worksheet. Requires worksheetId and entityName. Provide category, quantity, uom, cost. Price is auto-calculated from cost + markup.",
   inputSchema: z.object({
     worksheetId: z.string().describe("ID of the worksheet to add the item to"),
-    category: z.string().optional().describe("Item category (e.g. 'Material', 'Labour', 'Equipment', 'Subcontractor')"),
+    category: z.string().optional().default("Material").describe("Item category: Material, Labour, Equipment, Subcontractor"),
     entityName: z.string().describe("Name of the line item"),
-    description: z.string().optional().describe("Detailed description of the line item"),
+    description: z.string().optional().default("").describe("Detailed description with document reference and assumptions"),
     quantity: z.number().optional().default(1).describe("Quantity of the item"),
-    uom: z.string().optional().default("EA").describe("Unit of measure (e.g. 'EA', 'LF', 'SF', 'HR', 'LS')"),
-    cost: z.number().optional().default(0).describe("Unit cost"),
+    uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, etc."),
+    cost: z.number().optional().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
     markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%)"),
-    price: z.number().optional().describe("Override unit price (if not calculated from cost+markup)"),
     laborHourReg: z.number().optional().default(0).describe("Regular labor hours per unit"),
     laborHourOver: z.number().optional().default(0).describe("Overtime labor hours per unit"),
     laborHourDouble: z.number().optional().default(0).describe("Double-time labor hours per unit"),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
-    sortOrder: z.number().optional().describe("Sort order within the worksheet"),
   }),
   tags: ["item", "create", "write"],
 }, async (ctx, input) => {
-  const { worksheetId, ...body } = input;
-  return apiPost(ctx, `/worksheets/${worksheetId}/items`, body, "Created line item");
+  const { worksheetId, category, ...rest } = input;
+  const cost = rest.cost ?? 0;
+  const markup = rest.markup ?? 0;
+  const price = cost * (1 + markup / 100);
+  const cat = category ?? "Material";
+  const body = {
+    ...rest,
+    category: cat,
+    entityType: cat,
+    cost,
+    markup,
+    price,
+    quantity: rest.quantity ?? 1,
+    uom: rest.uom ?? "EA",
+    description: rest.description ?? "",
+  };
+  return apiPost(ctx, `/worksheets/${worksheetId}/items`, body, `Created line item: ${rest.entityName}`);
 });
 
 // ──────────────────────────────────────────────────────────────

@@ -75,6 +75,17 @@ export interface ProjectListItem {
   } | null;
 }
 
+export interface SourceDocumentStructuredData {
+  tables?: Array<{
+    pageNumber: number;
+    headers: string[];
+    rows: string[][];
+    rawMarkdown: string;
+  }>;
+  keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+  selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
+}
+
 export interface SourceDocument {
   id: string;
   projectId: string;
@@ -85,6 +96,7 @@ export interface SourceDocument {
   checksum: string;
   storagePath: string;
   extractedText: string;
+  structuredData?: SourceDocumentStructuredData | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1576,8 +1588,18 @@ export function getQuotePdfUrl(projectId: string, templateType: string): string 
   return resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
 }
 
-export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "main"): Promise<string> {
-  const url = resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
+export function getQuotePdfPreviewUrl(projectId: string, templateType: string, layoutOptions?: Record<string, unknown>): string {
+  const base = resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
+  if (!layoutOptions) return base;
+  const encoded = encodeURIComponent(JSON.stringify(layoutOptions));
+  return `${base}?layout=${encoded}`;
+}
+
+export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "main", layoutOptions?: Record<string, unknown>): Promise<string> {
+  let url = resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
+  if (layoutOptions) {
+    url += `?layout=${encodeURIComponent(JSON.stringify(layoutOptions))}`;
+  }
   const token = getAuthToken();
   const res = await fetch(url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -2018,6 +2040,37 @@ export function getDocumentDownloadUrl(projectId: string, docId: string, inline 
 }
 
 // ---------------------------------------------------------------------------
+// Structured Extraction (Azure Document Intelligence)
+// ---------------------------------------------------------------------------
+
+export interface StructuredExtractionResult {
+  content: string;
+  pageCount: number;
+  tables: Array<{
+    pageNumber: number;
+    headers: string[];
+    rows: string[][];
+    rawMarkdown: string;
+  }>;
+  keyValuePairs: Array<{ key: string; value: string; confidence: number }>;
+  selectionMarks: Array<{ state: string; pageNumber: number; confidence: number }>;
+  pages: Array<{ pageNumber: number; content: string; sectionCount: number }>;
+  warnings: string[];
+}
+
+export async function extractStructuredContent(documentId: string): Promise<StructuredExtractionResult> {
+  const res = await apiRequest<{ success: boolean; data: StructuredExtractionResult }>(
+    "/api/knowledge/extract-structured",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ documentId }),
+    }
+  );
+  return res.data;
+}
+
+// ---------------------------------------------------------------------------
 // Plugins
 // ---------------------------------------------------------------------------
 
@@ -2143,7 +2196,7 @@ export interface AppSettingsRecord {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string };
   brand: BrandProfile;
 }
 
@@ -2913,4 +2966,10 @@ export async function startIntake(input: IntakeStartInput) {
 
 export async function getIntakeStatus(sessionId: string) {
   return apiRequest<IntakeStatusResult>(`/api/intake/${sessionId}/status`);
+}
+
+export async function stopIntake(sessionId: string) {
+  return apiRequest<{ message: string; status: string }>(`/api/intake/${sessionId}/stop`, {
+    method: "POST",
+  });
 }

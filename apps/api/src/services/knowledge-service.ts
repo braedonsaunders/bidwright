@@ -247,11 +247,16 @@ function smartChunk(
 async function extractText(
   buffer: Buffer,
   mimeType: string,
-  filename: string
+  filename: string,
+  azureConfig?: { endpoint?: string; key?: string },
 ): Promise<{ text: string; pageCount: number }> {
   // PDF: use the real pdf-parse based parser from @bidwright/ingestion
   if (mimeType === "application/pdf") {
-    const parser = createPdfParser({ provider: "local" });
+    const parser = createPdfParser({
+      provider: "hybrid",
+      azureEndpoint: azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT,
+      azureKey: azureConfig?.key || process.env.AZURE_DI_KEY,
+    });
     const doc = await parser.parse(buffer, filename);
     const text = doc.pages.map((p) => p.content).join("\n\n--- Page Break ---\n\n");
     return { text: text || doc.content, pageCount: doc.metadata.pageCount || 1 };
@@ -333,11 +338,23 @@ export class KnowledgeService {
     let sourceFileSize = 0;
 
     // Step 1: Extract text content
+    // Resolve Azure DI credentials from org settings, falling back to env vars
+    let azureConfig: { endpoint?: string; key?: string } | undefined;
+    if (store) {
+      try {
+        const settings = await store.getSettings();
+        const integrations = settings.integrations ?? {} as any;
+        if (integrations.azureDiEndpoint || integrations.azureDiKey) {
+          azureConfig = { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey };
+        }
+      } catch { /* ignore — env vars will be used as fallback */ }
+    }
+
     if (request.file) {
       sourceFileName = request.file.filename;
       sourceFileSize = request.file.buffer.length;
       try {
-        const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename);
+        const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename, azureConfig);
         text = extracted.text;
         pageCount = extracted.pageCount;
       } catch (err) {

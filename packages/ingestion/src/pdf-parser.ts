@@ -505,6 +505,373 @@ async function visionParsePdf(
 }
 
 // ---------------------------------------------------------------------------
+// Azure Document Intelligence Provider
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a PDF using Azure Document Intelligence (formerly Form Recognizer).
+ *
+ * Uses the REST API directly to avoid heavy SDK dependencies.
+ * Supports prebuilt-layout (default), prebuilt-document, prebuilt-invoice, and prebuilt-read.
+ */
+async function azureParsePdf(
+  input: Buffer,
+  filename: string,
+  config: PdfParserConfig,
+): Promise<ParsedDocument> {
+  const endpoint = config.azureEndpoint;
+  const apiKey = config.azureKey;
+  if (!endpoint || !apiKey) {
+    throw new Error(
+      'The "azure" provider requires azureEndpoint and azureKey in config.',
+    );
+  }
+
+  const model = config.azureModel ?? 'prebuilt-layout';
+  const warnings: string[] = [];
+
+  // 1. Submit document for analysis
+  const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/${model}:analyze?api-version=2024-11-30`;
+
+  const submitRes = await fetch(analyzeUrl, {
+    method: 'POST',
+    headers: {
+      'Ocp-Apim-Subscription-Key': apiKey,
+      'Content-Type': 'application/pdf',
+    },
+    body: new Uint8Array(input),
+  });
+
+  if (!submitRes.ok) {
+    const body = await submitRes.text().catch(() => '');
+    throw new Error(`Azure DI submit failed (${submitRes.status}): ${body}`);
+  }
+
+  const operationLocation = submitRes.headers.get('operation-location');
+  if (!operationLocation) {
+    throw new Error('Azure DI response missing operation-location header.');
+  }
+
+  // 2. Poll for completion
+  const maxWait = 5 * 60 * 1000;
+  const pollInterval = 2000;
+  const start = Date.now();
+  let status = 'running';
+  let analyzeResult: AzureAnalyzeResult | undefined;
+
+  while (status === 'running' || status === 'notStarted') {
+    if (Date.now() - start > maxWait) {
+      throw new Error('Azure DI analysis timed out after 5 minutes.');
+    }
+    await sleep(pollInterval);
+
+    const pollRes = await fetch(operationLocation, {
+      headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+    });
+
+    if (!pollRes.ok) {
+      warnings.push(`Azure DI poll returned ${pollRes.status}`);
+      continue;
+    }
+
+    const pollBody = (await pollRes.json()) as {
+      status: string;
+      analyzeResult?: AzureAnalyzeResult;
+      error?: { message: string };
+    };
+    status = pollBody.status;
+
+    if (status === 'succeeded' && pollBody.analyzeResult) {
+      analyzeResult = pollBody.analyzeResult;
+    } else if (status === 'failed') {
+      throw new Error(`Azure DI analysis failed: ${pollBody.error?.message ?? 'unknown error'}`);
+    }
+  }
+
+  if (!analyzeResult) {
+    throw new Error('Azure DI analysis completed but no result returned.');
+  }
+
+  // 3. Map Azure result to ParsedDocument
+  return mapAzureResult(analyzeResult, filename, input.byteLength, warnings);
+}
+
+// ---------------------------------------------------------------------------
+// Azure response types (subset of what the API returns)
+// ---------------------------------------------------------------------------
+
+interface AzureAnalyzeResult {
+  content: string;
+  pages?: AzurePage[];
+  tables?: AzureTable[];
+  keyValuePairs?: AzureKeyValuePair[];
+  paragraphs?: AzureParagraph[];
+}
+
+interface AzurePage {
+  pageNumber: number;
+  width: number;
+  height: number;
+  lines?: Array<{ content: string }>;
+  selectionMarks?: Array<{ state: string; confidence: number }>;
+}
+
+interface AzureTable {
+  rowCount: number;
+  columnCount: number;
+  cells: Array<{
+    rowIndex: number;
+    columnIndex: number;
+    content: string;
+    kind?: 'columnHeader' | 'rowHeader' | 'content' | 'stub';
+  }>;
+  boundingRegions?: Array<{ pageNumber: number }>;
+}
+
+interface AzureKeyValuePair {
+  key: { content: string };
+  value?: { content: string };
+  confidence: number;
+}
+
+interface AzureParagraph {
+  content: string;
+  role?: 'title' | 'sectionHeading' | 'footnote' | 'pageHeader' | 'pageFooter' | 'pageNumber';
+  boundingRegions?: Array<{ pageNumber: number }>;
+}
+
+/**
+ * Map Azure Document Intelligence result to our ParsedDocument format.
+ */
+function mapAzureResult(
+  result: AzureAnalyzeResult,
+  filename: string,
+  fileSize: number,
+  warnings: string[],
+): ParsedDocument {
+  const azurePages = result.pages ?? [];
+  const pages: ParsedPage[] = [];
+  const tables: ExtractedTable[] = [];
+
+  // Build page content from Azure lines
+  for (const azurePage of azurePages) {
+    const pageNumber = azurePage.pageNumber;
+    const lines = azurePage.lines ?? [];
+    const pageContent = lines.map((l) => l.content).join('\n');
+
+    // Get paragraphs for this page to extract sections
+    const pageParagraphs = (result.paragraphs ?? []).filter(
+      (p) => p.boundingRegions?.some((r) => r.pageNumber === pageNumber),
+    );
+    const sections = extractSectionsFromParagraphs(pageParagraphs, pageNumber);
+
+    pages.push({ pageNumber, content: pageContent, sections });
+  }
+
+  // Map Azure tables to ExtractedTable format
+  for (const azureTable of result.tables ?? []) {
+    const pageNumber = azureTable.boundingRegions?.[0]?.pageNumber ?? 1;
+
+    // Build header and data rows from cell grid
+    const headers: string[] = [];
+    const rowMap = new Map<number, string[]>();
+
+    for (const cell of azureTable.cells) {
+      if (cell.kind === 'columnHeader' || cell.rowIndex === 0) {
+        headers[cell.columnIndex] = cell.content;
+      } else {
+        if (!rowMap.has(cell.rowIndex)) {
+          rowMap.set(cell.rowIndex, new Array(azureTable.columnCount).fill(''));
+        }
+        rowMap.get(cell.rowIndex)![cell.columnIndex] = cell.content;
+      }
+    }
+
+    // Fill any empty header slots
+    for (let i = 0; i < azureTable.columnCount; i++) {
+      if (!headers[i]) headers[i] = `Column ${i + 1}`;
+    }
+
+    const rows = Array.from(rowMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([, cells]) => cells);
+
+    // Build markdown representation
+    const rawMarkdown =
+      `| ${headers.join(' | ')} |\n` +
+      `| ${headers.map(() => '---').join(' | ')} |\n` +
+      rows.map((r) => `| ${r.join(' | ')} |`).join('\n');
+
+    tables.push({ pageNumber, headers, rows, rawMarkdown });
+  }
+
+  // Extract key-value pairs
+  const keyValuePairs = (result.keyValuePairs ?? []).map((kv) => ({
+    key: kv.key.content,
+    value: kv.value?.content ?? '',
+    confidence: kv.confidence,
+  }));
+
+  // Extract selection marks across all pages
+  const selectionMarks: Array<{ state: string; pageNumber: number; confidence: number }> = [];
+  for (const azurePage of azurePages) {
+    for (const mark of azurePage.selectionMarks ?? []) {
+      selectionMarks.push({
+        state: mark.state,
+        pageNumber: azurePage.pageNumber,
+        confidence: mark.confidence,
+      });
+    }
+  }
+
+  // Build full content — use Azure's content field which preserves reading order
+  const content = result.content || pages.map((p) => p.content).join('\n\n');
+
+  // If no pages were produced from lines, fall back to splitting content
+  if (pages.length === 0 && content) {
+    const { pages: fallbackPages, tables: fallbackTables } = parseMarkdownIntoParts(content);
+    pages.push(...fallbackPages);
+    tables.push(...fallbackTables);
+  }
+
+  return {
+    title: filename.replace(/\.[^.]+$/, ''),
+    content,
+    pages,
+    tables,
+    metadata: {
+      pageCount: azurePages.length || pages.length,
+      fileSize,
+      mimeType: 'application/pdf',
+      hasImages: false,
+      hasOcr: true,
+      keyValuePairs: keyValuePairs.length > 0 ? keyValuePairs : undefined,
+      selectionMarks: selectionMarks.length > 0 ? selectionMarks : undefined,
+    },
+    warnings,
+  };
+}
+
+/**
+ * Convert Azure paragraphs (with heading roles) into PageSection objects.
+ */
+function extractSectionsFromParagraphs(
+  paragraphs: AzureParagraph[],
+  pageNumber: number,
+): PageSection[] {
+  const sections: PageSection[] = [];
+  let currentTitle: string | undefined;
+  let currentLevel = 1;
+  let currentContent: string[] = [];
+
+  for (const para of paragraphs) {
+    if (para.role === 'title' || para.role === 'sectionHeading') {
+      // Flush previous section
+      if (currentContent.length > 0 || currentTitle) {
+        sections.push({
+          title: currentTitle,
+          content: currentContent.join('\n'),
+          level: currentLevel,
+          pageNumber,
+        });
+        currentContent = [];
+      }
+      currentTitle = para.content;
+      currentLevel = para.role === 'title' ? 1 : 2;
+    } else if (para.role !== 'pageHeader' && para.role !== 'pageFooter' && para.role !== 'pageNumber') {
+      currentContent.push(para.content);
+    }
+  }
+
+  // Flush remaining
+  if (currentContent.length > 0 || currentTitle) {
+    sections.push({
+      title: currentTitle,
+      content: currentContent.join('\n'),
+      level: currentLevel,
+      pageNumber,
+    });
+  }
+
+  if (sections.length === 0 && paragraphs.length > 0) {
+    const bodyContent = paragraphs
+      .filter((p) => p.role !== 'pageHeader' && p.role !== 'pageFooter' && p.role !== 'pageNumber')
+      .map((p) => p.content)
+      .join('\n');
+    if (bodyContent) {
+      sections.push({ content: bodyContent, level: 1, pageNumber });
+    }
+  }
+
+  return sections;
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid Provider
+// ---------------------------------------------------------------------------
+
+/**
+ * Hybrid PDF parser: uses local pdf-parse first, falls back to Azure for
+ * scanned PDFs or when richer structure is needed.
+ */
+async function hybridParsePdf(
+  input: Buffer,
+  filename: string,
+  config: PdfParserConfig,
+): Promise<ParsedDocument> {
+  const hasAzureConfig = !!(config.azureEndpoint && config.azureKey);
+
+  // Always start with local extraction — it's fast and free
+  const localResult = await localParsePdf(input, filename, config);
+
+  // If the PDF has good embedded text, return the local result
+  if (!localResult.metadata.hasOcr) {
+    // Optionally enrich with Azure tables/KV if enabled
+    if (hasAzureConfig && config.options?.tableExtractionEnabled) {
+      try {
+        const azureResult = await azureParsePdf(input, filename, config);
+        // Merge Azure's structured data into the local result
+        if (azureResult.tables.length > 0) {
+          localResult.tables = azureResult.tables;
+        }
+        if (azureResult.metadata.keyValuePairs) {
+          localResult.metadata.keyValuePairs = azureResult.metadata.keyValuePairs;
+        }
+        if (azureResult.metadata.selectionMarks) {
+          localResult.metadata.selectionMarks = azureResult.metadata.selectionMarks;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        localResult.warnings.push(`Azure enrichment failed (non-fatal): ${msg}`);
+      }
+    }
+    return localResult;
+  }
+
+  // Scanned PDF detected — try Azure if available
+  if (hasAzureConfig) {
+    try {
+      const azureResult = await azureParsePdf(input, filename, config);
+      azureResult.warnings.unshift(
+        'Scanned PDF detected — used Azure Document Intelligence for OCR extraction.',
+      );
+      return azureResult;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      localResult.warnings.push(`Azure fallback failed: ${msg}. Returning local (partial) result.`);
+      return localResult;
+    }
+  }
+
+  // No Azure config — return local result with helpful warning
+  localResult.warnings.push(
+    'Scanned PDF detected but no Azure Document Intelligence credentials configured. ' +
+      'Set AZURE_DI_ENDPOINT and AZURE_DI_KEY environment variables for OCR support.',
+  );
+  return localResult;
+}
+
+// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -528,6 +895,10 @@ export function createPdfParser(config: PdfParserConfig): PdfParser {
         return localParsePdf(buffer, filename, config);
       case 'vision':
         return visionParsePdf(buffer, filename, config);
+      case 'azure':
+        return azureParsePdf(buffer, filename, config);
+      case 'hybrid':
+        return hybridParsePdf(buffer, filename, config);
       case 'docling':
         throw new Error('The "docling" provider is not yet implemented.');
       default:

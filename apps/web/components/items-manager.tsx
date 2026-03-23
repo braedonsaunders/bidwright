@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Edit3,
   Library,
   Loader2,
@@ -325,6 +328,8 @@ export function ItemsManager({
   const [loadingItems, setLoadingItems] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [page, setPage] = useState(0);
+  const pageSize = 50;
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null);
 
@@ -386,6 +391,12 @@ export function ItemsManager({
     }
     return filtered;
   }, [items, search, categoryFilter]);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(0); }, [search, categoryFilter, selectedCatalogId]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const paginatedItems = filteredItems.slice(page * pageSize, (page + 1) * pageSize);
 
   // Catalog CRUD
   const handleCreateCatalog = useCallback(async () => {
@@ -503,6 +514,7 @@ export function ItemsManager({
   }, []);
 
   const previewTemplate = useCallback(async (templateId: string) => {
+    // Don't clear existing preview — keeps content visible while loading
     setLibraryPreviewLoading(true);
     try {
       const preview = await getCatalogLibraryItem(templateId, { limit: 50 });
@@ -740,23 +752,23 @@ export function ItemsManager({
         <FadeIn delay={0.1} className="min-w-0 flex-1">
           <Card>
             {/* Toolbar */}
-            <div className="flex items-center gap-3 border-b border-line px-5 py-3">
-              <div className="relative flex-1 max-w-xs">
+            <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+              <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
                 <Input
                   className="h-8 pl-8 text-xs"
-                  placeholder="Search items..."
+                  placeholder="Search items by name, code, or category..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
 
               <Select
-                className="h-8 w-36 text-xs"
+                className="h-8 w-28 text-[11px]"
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
               >
-                <option value="">All Categories</option>
+                <option value="">All</option>
                 {ITEM_CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>
                     {cat}
@@ -793,6 +805,7 @@ export function ItemsManager({
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               </div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -822,7 +835,7 @@ export function ItemsManager({
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredItems.length === 0 && (
+                    {paginatedItems.length === 0 && (
                       <tr>
                         <td
                           colSpan={columns.length + 1}
@@ -833,7 +846,7 @@ export function ItemsManager({
                         </td>
                       </tr>
                     )}
-                    {filteredItems.map((item, i) => {
+                    {paginatedItems.map((item, i) => {
                       const category =
                         (item.metadata?.category as string) ?? "";
                       const margin = computeMargin(
@@ -926,6 +939,35 @@ export function ItemsManager({
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination */}
+              {filteredItems.length > pageSize && (
+                <div className="flex items-center justify-between border-t border-line px-5 py-2.5">
+                  <span className="text-[11px] text-fg/40">
+                    {page * pageSize + 1}–{Math.min((page + 1) * pageSize, filteredItems.length)} of {filteredItems.length} items
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setPage((p) => Math.max(0, p - 1))}
+                      disabled={page === 0}
+                      className="p-1 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="text-[11px] text-fg/50 min-w-[4rem] text-center">
+                      Page {page + 1} of {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                      disabled={page >= totalPages - 1}
+                      className="p-1 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </Card>
         </FadeIn>
@@ -946,6 +988,7 @@ export function ItemsManager({
       </AnimatePresence>
 
       {/* ─── Library Browser Modal ─── */}
+      {typeof document !== "undefined" && createPortal(
       <AnimatePresence>
         {showLibrary && (
           <motion.div
@@ -1023,17 +1066,19 @@ export function ItemsManager({
                 </div>
 
                 {/* Preview panel */}
-                <div className="flex-1 min-w-0 flex flex-col">
-                  {!libraryPreview && !libraryPreviewLoading ? (
+                <div className="flex-1 min-w-0 flex flex-col relative">
+                  {/* Loading overlay — shown on top of existing content */}
+                  {libraryPreviewLoading && (
+                    <div className="absolute inset-0 z-10 flex items-center justify-center bg-panel/60 backdrop-blur-[1px]">
+                      <Loader2 className="h-5 w-5 animate-spin text-fg/40" />
+                    </div>
+                  )}
+                  {!libraryPreview ? (
                     <div className="flex items-center justify-center flex-1 text-sm text-fg/40">
                       <div className="text-center space-y-2">
                         <Library className="h-8 w-8 mx-auto text-fg/20" />
                         <p>Select a template to preview</p>
                       </div>
-                    </div>
-                  ) : libraryPreviewLoading ? (
-                    <div className="flex items-center justify-center flex-1 text-fg/40">
-                      <Loader2 className="h-5 w-5 animate-spin" />
                     </div>
                   ) : libraryPreview ? (
                     <>
@@ -1107,7 +1152,9 @@ export function ItemsManager({
             </motion.div>
           </motion.div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
     </div>
   );
 }

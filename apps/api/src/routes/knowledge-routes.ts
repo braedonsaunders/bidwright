@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
+import { createPdfParser } from "@bidwright/ingestion";
+import { prisma } from "@bidwright/db";
+import { resolveApiPath } from "../paths.js";
+import { readFile } from "node:fs/promises";
 
 /**
  * Knowledge API routes — Fastify plugin.
@@ -229,6 +233,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           documentType: doc.documentType,
           pageCount: doc.pageCount,
           hasExtractedText: !!doc.extractedText,
+          hasStructuredData: !!(doc.structuredData && (
+            (doc.structuredData as any).tables?.length > 0 ||
+            (doc.structuredData as any).keyValuePairs?.length > 0
+          )),
           createdAt: doc.createdAt,
           knowledgeBookId: matchingBook?.id ?? null,
           indexingStatus: matchingBook?.status ?? "unprocessed",
@@ -277,6 +285,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           documentType: doc.documentType,
           pageCount: doc.pageCount,
           content,
+          structuredData: doc.structuredData ?? null,
         };
       }
 
@@ -318,6 +327,109 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       request.log.error(err, "Read document failed");
       return reply.code(500).send({
         message: "Failed to read document",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/knowledge/extract-structured ───────────────────────────
+  // Run Azure Document Intelligence on a document for structured extraction.
+  app.post("/api/knowledge/extract-structured", async (request, reply) => {
+    try {
+      const body = request.body as {
+        documentId: string;
+        projectId?: string;
+        model?: "prebuilt-layout" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-read";
+        updateDocument?: boolean;
+      };
+
+      if (!body.documentId) {
+        return reply.code(400).send({ message: "documentId is required" });
+      }
+
+      // Resolve Azure DI credentials: org settings first, then env vars
+      const settings = await request.store!.getSettings();
+      const integrations = settings.integrations ?? {} as any;
+      const azureEndpoint = integrations.azureDiEndpoint || process.env.AZURE_DI_ENDPOINT;
+      const azureKey = integrations.azureDiKey || process.env.AZURE_DI_KEY;
+      if (!azureEndpoint || !azureKey) {
+        return reply.code(503).send({
+          message: "Azure Document Intelligence not configured. Add credentials in Settings > Integrations > API Keys.",
+        });
+      }
+
+      // Try to find the document as a KnowledgeBook first, then as a SourceDocument
+      let fileBuffer: Buffer | undefined;
+      let fileName = "document.pdf";
+
+      const book = await prisma.knowledgeBook.findUnique({ where: { id: body.documentId } });
+      if (book?.storagePath) {
+        const absPath = resolveApiPath(book.storagePath);
+        fileBuffer = await readFile(absPath);
+        fileName = book.sourceFileName ?? fileName;
+      }
+
+      if (!fileBuffer) {
+        const sourceDoc = await prisma.sourceDocument.findUnique({ where: { id: body.documentId } });
+        if (sourceDoc?.storagePath) {
+          const absPath = resolveApiPath(sourceDoc.storagePath);
+          fileBuffer = await readFile(absPath);
+          fileName = sourceDoc.fileName ?? fileName;
+        }
+      }
+
+      if (!fileBuffer) {
+        return reply.code(404).send({ message: "Document file not found on disk" });
+      }
+
+      // Run Azure Document Intelligence
+      const parser = createPdfParser({
+        provider: "azure",
+        azureEndpoint,
+        azureKey,
+        azureModel: body.model ?? "prebuilt-layout",
+      });
+
+      const doc = await parser.parse(fileBuffer, fileName);
+
+      // Optionally update the stored document with richer extraction
+      if (body.updateDocument && book) {
+        const enrichedText = doc.pages.map((p) => p.content).join("\n\n--- Page Break ---\n\n");
+        await prisma.knowledgeBook.update({
+          where: { id: book.id },
+          data: {
+            metadata: {
+              ...(typeof book.metadata === "object" && book.metadata !== null ? book.metadata : {}),
+              azureExtracted: true,
+              keyValuePairs: doc.metadata.keyValuePairs ?? [],
+              selectionMarks: doc.metadata.selectionMarks ?? [],
+              tableCount: doc.tables.length,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            } as any,
+          },
+        });
+      }
+
+      return {
+        success: true,
+        data: {
+          content: doc.content,
+          pageCount: doc.metadata.pageCount,
+          tables: doc.tables,
+          keyValuePairs: doc.metadata.keyValuePairs ?? [],
+          selectionMarks: doc.metadata.selectionMarks ?? [],
+          pages: doc.pages.map((p) => ({
+            pageNumber: p.pageNumber,
+            content: p.content,
+            sectionCount: p.sections.length,
+          })),
+          warnings: doc.warnings,
+        },
+      };
+    } catch (err) {
+      request.log.error(err, "Structured extraction failed");
+      return reply.code(500).send({
+        message: "Structured extraction failed",
         error: err instanceof Error ? err.message : String(err),
       });
     }

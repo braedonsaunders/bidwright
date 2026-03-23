@@ -35,15 +35,35 @@ export class OpenAIAdapter implements LLMAdapter {
       }
     }
 
-    const tools = request.tools?.map(t => ({
-      type: "function" as const,
-      function: { name: t.name, description: t.description, parameters: t.inputSchema },
-    }));
+    // Sanitize tool names: Claude requires ^[a-zA-Z0-9_-]+ (no dots)
+    const sanitizeName = (n: string) => n.replace(/\./g, "_");
+    const unsanitizeName = (n: string) => n.replace(/_/, ".");
+    const nameMap = new Map<string, string>(); // sanitized -> original
+    const tools = request.tools?.map(t => {
+      const safe = sanitizeName(t.name);
+      nameMap.set(safe, t.name);
+      return {
+        type: "function" as const,
+        function: { name: safe, description: t.description, parameters: t.inputSchema },
+      };
+    });
+
+    // Map toolChoice to OpenAI format
+    let tool_choice: any = undefined;
+    if (request.toolChoice && tools?.length) {
+      if (request.toolChoice === "auto") tool_choice = "auto";
+      else if (request.toolChoice === "required") tool_choice = "required";
+      else if (request.toolChoice === "none") tool_choice = "none";
+      else if (typeof request.toolChoice === "object") {
+        tool_choice = { type: "function", function: { name: sanitizeName(request.toolChoice.name) } };
+      }
+    }
 
     const response = await client.chat.completions.create({
       model: request.model || this.defaultModel,
       messages,
       tools: tools?.length ? tools : undefined,
+      tool_choice,
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
     });
@@ -61,7 +81,7 @@ export class OpenAIAdapter implements LLMAdapter {
           content.push({
             type: "tool_use",
             toolUseId: tc.id,
-            toolName: tc.function.name,
+            toolName: nameMap.get(tc.function.name) ?? tc.function.name,
             toolInput: JSON.parse(tc.function.arguments),
           });
         }

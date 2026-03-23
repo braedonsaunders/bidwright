@@ -45,7 +45,6 @@ interface SeedFile {
   source: string;
   sourceDescription: string;
   items: SeedItem[];
-  categories?: string[];
 }
 
 export async function seedCatalogTemplates(prisma: PrismaClient) {
@@ -111,6 +110,8 @@ export async function seedCatalogTemplates(prisma: PrismaClient) {
           // Extract known fields, put the rest in metadata
           const {
             name, code, category, unit, unitCost, unitPrice, description,
+            dailyRate, weeklyRate, monthlyRate,
+            poundsPerFoot, pricePerPound,
             ...extra
           } = item;
 
@@ -118,14 +119,36 @@ export async function seedCatalogTemplates(prisma: PrismaClient) {
           if (category) metadata.category = category;
           if (description) metadata.description = description;
 
+          // Compute cost/price from domain-specific fields when not explicitly set
+          let resolvedCost = unitCost || 0;
+          let resolvedPrice = unitPrice || 0;
+
+          // Equipment rates: use dailyRate as unitCost/unitPrice
+          if (dailyRate && !resolvedCost) {
+            resolvedCost = dailyRate;
+            resolvedPrice = resolvedPrice || dailyRate;
+            metadata.dailyRate = dailyRate;
+            if (weeklyRate) metadata.weeklyRate = weeklyRate;
+            if (monthlyRate) metadata.monthlyRate = monthlyRate;
+          }
+
+          // Stock items: compute from poundsPerFoot * pricePerPound
+          if (poundsPerFoot && pricePerPound && !resolvedCost) {
+            const computed = Math.round(poundsPerFoot * pricePerPound * 100) / 100;
+            resolvedCost = computed;
+            resolvedPrice = resolvedPrice || computed;
+            metadata.poundsPerFoot = poundsPerFoot;
+            metadata.pricePerPound = pricePerPound;
+          }
+
           return {
             id: createId("ci"),
             catalogId,
             code: code || "",
             name: name || "",
             unit: unit || "EA",
-            unitCost: unitCost || 0,
-            unitPrice: unitPrice || 0,
+            unitCost: resolvedCost,
+            unitPrice: resolvedPrice,
             metadata: metadata as any,
             order: i + idx,
             createdAt: now,

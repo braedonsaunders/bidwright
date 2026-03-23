@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -40,6 +42,7 @@ import {
   Select,
   Separator,
 } from "@/components/ui";
+import * as RadixSelect from "@radix-ui/react-select";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import type { Calibration, Point } from "@/lib/takeoff-math";
@@ -147,18 +150,15 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
     let cancelled = false;
     (async () => {
       try {
+        // Only fetch project-scoped books (global library books aren't project drawings)
         const books = await listKnowledgeBooks(projectId);
-        // Also fetch global books (no projectId filter)
-        const globalBooks = await listKnowledgeBooks();
-        const allBooks = new Map<string, KnowledgeBookRecord>();
-        for (const b of [...books, ...globalBooks]) allBooks.set(b.id, b);
         if (cancelled) return;
         setKnowledgePdfs(
-          Array.from(allBooks.values())
-            .filter((b) => b.status === "indexed" && b.sourceFileName?.toLowerCase().endsWith(".pdf"))
+          books
+            .filter((b) => b.scope === "project" && b.status === "indexed" && b.sourceFileName?.toLowerCase().endsWith(".pdf"))
             .map((b) => ({
               id: `kb-${b.id}`,
-              label: `📚 ${b.name || b.sourceFileName}`,
+              label: b.name || b.sourceFileName,
               source: "knowledge" as const,
               bookId: b.id,
             }))
@@ -413,24 +413,72 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
         {/* Document selector */}
         <div className="flex items-center gap-2">
           <label className="text-xs font-medium text-fg/50">Drawing:</label>
-          <Select
-            className="h-8 w-56 text-xs"
+          <RadixSelect.Root
             value={selectedDocId}
-            onChange={(e) => {
-              setSelectedDocId(e.target.value);
+            onValueChange={(v) => {
+              setSelectedDocId(v);
               setPage(1);
               setAnnotations([]);
             }}
           >
-            {drawings.length === 0 && (
-              <option value="">No drawings available</option>
-            )}
-            {drawings.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label}
-              </option>
-            ))}
-          </Select>
+            <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 w-56 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors truncate">
+              <RadixSelect.Value placeholder="No drawings available" />
+              <RadixSelect.Icon className="ml-auto shrink-0">
+                <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
+              </RadixSelect.Icon>
+            </RadixSelect.Trigger>
+            <RadixSelect.Portal>
+              <RadixSelect.Content
+                className="z-[100] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
+                position="popper"
+                sideOffset={4}
+              >
+                <RadixSelect.Viewport className="p-1 max-h-64">
+                  {drawings.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-fg/40">No drawings available</div>
+                  )}
+                  {projectPdfs.length > 0 && (
+                    <RadixSelect.Group>
+                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
+                        Project Documents
+                      </RadixSelect.Label>
+                      {projectPdfs.map((d) => (
+                        <RadixSelect.Item
+                          key={d.id}
+                          value={d.id}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
+                        >
+                          <RadixSelect.ItemIndicator className="shrink-0">
+                            <Check className="h-3 w-3 text-accent" />
+                          </RadixSelect.ItemIndicator>
+                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
+                        </RadixSelect.Item>
+                      ))}
+                    </RadixSelect.Group>
+                  )}
+                  {knowledgePdfs.length > 0 && (
+                    <RadixSelect.Group>
+                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
+                        Knowledge Books
+                      </RadixSelect.Label>
+                      {knowledgePdfs.map((d) => (
+                        <RadixSelect.Item
+                          key={d.id}
+                          value={d.id}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
+                        >
+                          <RadixSelect.ItemIndicator className="shrink-0">
+                            <Check className="h-3 w-3 text-accent" />
+                          </RadixSelect.ItemIndicator>
+                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
+                        </RadixSelect.Item>
+                      ))}
+                    </RadixSelect.Group>
+                  )}
+                </RadixSelect.Viewport>
+              </RadixSelect.Content>
+            </RadixSelect.Portal>
+          </RadixSelect.Root>
         </div>
 
         <Separator className="!h-6 !w-px" />

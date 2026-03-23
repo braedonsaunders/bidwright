@@ -24,3 +24,4 @@ export { pricingTools } from "./tools/pricing.js";
 
 // Intake
 export { buildIntakeSystemPrompt, type IntakePromptParams } from "./intake-prompt.js";
+export { runIntakeOrchestration, type IntakeOrchestrationConfig, type DocumentInfo } from "./intake-orchestrator.js";

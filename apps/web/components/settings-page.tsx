@@ -86,6 +86,31 @@ import { PluginsPage } from "@/components/plugins-page";
 const STORAGE_KEY = "bidwright-settings";
 
 type SettingsGroup = "organization" | "estimating" | "data" | "integrations" | "users";
+type OrgSubTab = "general" | "brand" | "departments";
+type EstimatingSubTab = "defaults" | "catalogs" | "rates";
+type DataSubTab = "categories" | "clients" | "conditions";
+type IntegrationsSubTab = "email" | "apikeys" | "plugins";
+
+const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "brand", label: "Brand" },
+  { id: "departments", label: "Departments" },
+];
+const ESTIMATING_SUBTABS: { id: EstimatingSubTab; label: string }[] = [
+  { id: "defaults", label: "Defaults" },
+  { id: "catalogs", label: "Items & Catalogs" },
+  { id: "rates", label: "Rate Schedules" },
+];
+const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
+  { id: "categories", label: "Categories" },
+  { id: "clients", label: "Clients" },
+  { id: "conditions", label: "Inclusions & Exclusions" },
+];
+const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
+  { id: "email", label: "Email" },
+  { id: "apikeys", label: "API Keys" },
+  { id: "plugins", label: "Plugins" },
+];
 
 interface GeneralSettings {
   timezone: string;
@@ -125,6 +150,8 @@ interface IntegrationSettings {
   lmstudioBaseUrl: string;
   llmProvider: string;
   llmModel: string;
+  azureDiEndpoint: string;
+  azureDiKey: string;
 }
 
 interface AllSettings {
@@ -187,6 +214,8 @@ const DEFAULT_SETTINGS: AllSettings = {
     lmstudioBaseUrl: "http://localhost:1234/v1",
     llmProvider: "anthropic",
     llmModel: "claude-sonnet-4-20250514",
+    azureDiEndpoint: "",
+    azureDiKey: "",
   },
 };
 
@@ -455,6 +484,10 @@ export function SettingsPage({
   const validGroups: SettingsGroup[] = ["organization", "estimating", "data", "integrations", "users"];
   const initialGroup = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : "organization";
   const [activeGroup, setActiveGroup] = useState<SettingsGroup>(initialGroup);
+  const [orgSubTab, setOrgSubTab] = useState<OrgSubTab>("general");
+  const [estimatingSubTab, setEstimatingSubTab] = useState<EstimatingSubTab>("defaults");
+  const [dataSubTab, setDataSubTab] = useState<DataSubTab>("categories");
+  const [integrationsSubTab, setIntegrationsSubTab] = useState<IntegrationsSubTab>("email");
   const [settings, setSettings] = useState<AllSettings>(DEFAULT_SETTINGS);
   const [brand, setBrand] = useState<BrandProfile>(DEFAULT_BRAND);
   const settingsLoaded = useRef(false);
@@ -542,6 +575,8 @@ export function SettingsPage({
             lmstudioBaseUrl: (apiSettings.integrations as Record<string, string>).lmstudioBaseUrl || prev.integrations.lmstudioBaseUrl,
             llmProvider: apiSettings.integrations.llmProvider || prev.integrations.llmProvider,
             llmModel: apiSettings.integrations.llmModel || prev.integrations.llmModel,
+            azureDiEndpoint: (apiSettings.integrations as any).azureDiEndpoint || prev.integrations.azureDiEndpoint,
+            azureDiKey: (apiSettings.integrations as any).azureDiKey || prev.integrations.azureDiKey,
           },
         }));
 
@@ -858,6 +893,8 @@ export function SettingsPage({
         lmstudioBaseUrl: settings.integrations.lmstudioBaseUrl,
         llmProvider: settings.integrations.llmProvider,
         llmModel: settings.integrations.llmModel,
+        azureDiEndpoint: settings.integrations.azureDiEndpoint,
+        azureDiKey: settings.integrations.azureDiKey,
       },
     };
 
@@ -1035,6 +1072,16 @@ export function SettingsPage({
       {/* Tab content */}
       <FadeIn delay={0.1} className="space-y-5">
           {activeGroup === "organization" && (
+            <div className="flex items-center gap-1 shrink-0">
+              {ORG_SUBTABS.map((t) => {
+                const active = orgSubTab === t.id;
+                return (
+                  <button key={t.id} onClick={() => setOrgSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
+                );
+              })}
+            </div>
+          )}
+          {activeGroup === "organization" && orgSubTab === "general" && (
             <Card>
               <CardHeader>
                 <CardTitle>General Settings</CardTitle>
@@ -1075,7 +1122,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeGroup === "organization" && (
+          {activeGroup === "organization" && orgSubTab === "brand" && (
             <div className="space-y-5">
               <Card>
                 <CardHeader>
@@ -1198,6 +1245,16 @@ export function SettingsPage({
           )}
 
           {activeGroup === "integrations" && (
+            <div className="flex items-center gap-1 shrink-0">
+              {INTEGRATIONS_SUBTABS.map((t) => {
+                const active = integrationsSubTab === t.id;
+                return (
+                  <button key={t.id} onClick={() => setIntegrationsSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
+                );
+              })}
+            </div>
+          )}
+          {activeGroup === "integrations" && integrationsSubTab === "email" && (
             <Card>
               <CardHeader>
                 <CardTitle>Email (SMTP) Settings</CardTitle>
@@ -1251,6 +1308,16 @@ export function SettingsPage({
           )}
 
           {activeGroup === "estimating" && (
+            <div className="flex items-center gap-1 shrink-0">
+              {ESTIMATING_SUBTABS.map((t) => {
+                const active = estimatingSubTab === t.id;
+                return (
+                  <button key={t.id} onClick={() => setEstimatingSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
+                );
+              })}
+            </div>
+          )}
+          {activeGroup === "estimating" && estimatingSubTab === "defaults" && (
             <Card>
               <CardHeader>
                 <CardTitle>Default Values</CardTitle>
@@ -1350,7 +1417,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeGroup === "integrations" && (() => {
+          {activeGroup === "integrations" && integrationsSubTab === "apikeys" && (() => {
             const provider = settings.integrations.llmProvider;
             const cfg = PROVIDER_CONFIG[provider];
             const currentKey = cfg ? (settings.integrations[cfg.keyField] as string) : "";
@@ -1443,12 +1510,53 @@ export function SettingsPage({
                       placeholder={!currentKey && !isLmStudio ? "Enter API key first..." : "Select a model..."}
                     />
                   </div>
+
+                  <Separator />
+
+                  {/* Azure Document Intelligence */}
+                  <div>
+                    <p className="text-xs font-medium text-fg/60 mb-2">Azure Document Intelligence</p>
+                    <p className="text-[10px] text-fg/40 mb-3">Used for OCR extraction from scanned PDFs, structured table extraction, and form key-value pair detection.</p>
+                    <div className="space-y-3">
+                      <div>
+                        <Label>Endpoint</Label>
+                        <Input
+                          type="text"
+                          value={settings.integrations.azureDiEndpoint}
+                          onChange={(e) => updateIntegrations({ azureDiEndpoint: e.target.value })}
+                          placeholder="https://your-resource.cognitiveservices.azure.com/"
+                        />
+                      </div>
+                      <div>
+                        <Label>API Key</Label>
+                        <Input
+                          type="password"
+                          value={settings.integrations.azureDiKey}
+                          onChange={(e) => updateIntegrations({ azureDiKey: e.target.value })}
+                          placeholder="Enter Azure DI key..."
+                        />
+                        {settings.integrations.azureDiKey && (
+                          <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </CardBody>
               </Card>
             );
           })()}
 
           {activeGroup === "data" && (
+            <div className="flex items-center gap-1 shrink-0">
+              {DATA_SUBTABS.map((t) => {
+                const active = dataSubTab === t.id;
+                return (
+                  <button key={t.id} onClick={() => setDataSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
+                );
+              })}
+            </div>
+          )}
+          {activeGroup === "data" && dataSubTab === "categories" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Entity Categories</CardTitle>
@@ -1469,9 +1577,12 @@ export function SettingsPage({
                   return (
                     <div key={cat.id}>
                       {/* Summary row */}
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors"
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCatId(isExpanded ? null : cat.id); } }}
+                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
                       >
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
                         <span
@@ -1486,7 +1597,7 @@ export function SettingsPage({
                         <span onClick={(e) => e.stopPropagation()}>
                           <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
                         </span>
-                      </button>
+                      </div>
 
                       {/* Expanded editor */}
                       {isExpanded && (
@@ -1673,7 +1784,7 @@ export function SettingsPage({
           )}
 
           {/* ── Clients Tab ────────────────────────────────────────── */}
-          {activeGroup === "data" && (
+          {activeGroup === "data" && dataSubTab === "clients" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Clients</CardTitle>
@@ -1694,9 +1805,12 @@ export function SettingsPage({
                   const contacts = custContacts[cust.id] || [];
                   return (
                     <div key={cust.id}>
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setExpandedCustId(isExpanded ? null : cust.id)}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors"
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCustId(isExpanded ? null : cust.id); } }}
+                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
                       >
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
                         <span className="font-medium text-fg truncate">{cust.name || "Untitled"}</span>
@@ -1706,7 +1820,7 @@ export function SettingsPage({
                         <span onClick={(e) => e.stopPropagation()}>
                           <Toggle checked={cust.active} onChange={(val) => toggleCustActive(cust, val)} />
                         </span>
-                      </button>
+                      </div>
                       {isExpanded && (
                         <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveCustomer(cust); }}>
                           <div className="grid grid-cols-2 gap-4">
@@ -1863,7 +1977,7 @@ export function SettingsPage({
           )}
 
           {/* ── Departments Tab ──────────────────────────────────────── */}
-          {activeGroup === "organization" && (
+          {activeGroup === "organization" && orgSubTab === "departments" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Departments</CardTitle>
@@ -1942,18 +2056,18 @@ export function SettingsPage({
             </Card>
           )}
 
-          {/* ── Items & Catalogs ─── */}
-          {activeGroup === "estimating" && (
+          {/* ── Items & Catalogs ─── (kept mounted to preserve state across tab switches) */}
+          <div className={activeGroup === "estimating" && estimatingSubTab === "catalogs" ? "" : "hidden"}>
             <ItemsManager catalogs={initialCatalogs} />
-          )}
+          </div>
 
-          {/* ── Rate Schedules ─── */}
-          {activeGroup === "estimating" && (
+          {/* ── Rate Schedules ─── (kept mounted to preserve state across tab switches) */}
+          <div className={activeGroup === "estimating" && estimatingSubTab === "rates" ? "" : "hidden"}>
             <RateScheduleManager schedules={rateSchedules} setSchedules={setRateSchedules} loading={ratesLoading} catalogs={initialCatalogs} />
-          )}
+          </div>
 
           {/* ── Inclusions / Exclusions ─── */}
-          {activeGroup === "data" && (
+          {activeGroup === "data" && dataSubTab === "conditions" && (
             <Card>
               <CardHeader>
                 <CardTitle>Inclusions &amp; Exclusions Library</CardTitle>
@@ -2040,7 +2154,7 @@ export function SettingsPage({
           )}
 
           {/* ── Plugins ─── */}
-          {activeGroup === "integrations" && (
+          {activeGroup === "integrations" && integrationsSubTab === "plugins" && (
             <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} />
           )}
 
