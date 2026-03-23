@@ -2905,8 +2905,33 @@ export function buildServer() {
   });
 
   app.get("/knowledge/search", async (request) => {
-    const { q, bookId, limit } = (request.query ?? {}) as { q?: string; bookId?: string; limit?: string };
-    return request.store!.searchKnowledgeChunks(q ?? "", bookId, limit ? parseInt(limit, 10) : undefined);
+    const { q, bookId, limit, scope } = (request.query ?? {}) as { q?: string; bookId?: string; limit?: string; scope?: string };
+    const chunks = await request.store!.searchKnowledgeChunks(q ?? "", bookId, limit ? parseInt(limit, 10) * 3 : 60);
+
+    // Enrich with book metadata and apply scope filtering
+    const bookCache = new Map<string, any>();
+    const enriched = [];
+    for (const chunk of chunks) {
+      let book = bookCache.get(chunk.bookId);
+      if (!book) {
+        book = await request.store!.getKnowledgeBook(chunk.bookId);
+        if (book) bookCache.set(chunk.bookId, book);
+      }
+      if (!book) continue;
+
+      // Scope filtering
+      if (scope === "global" && book.scope !== "global") continue;
+      if (scope === "project" && book.scope !== "project") continue;
+
+      enriched.push({
+        ...chunk,
+        bookName: book.name,
+        source: book.sourceFileName || book.name,
+      });
+    }
+
+    const finalLimit = limit ? parseInt(limit, 10) : 20;
+    return enriched.slice(0, finalLimit);
   });
 
   // ── Knowledge Book File Serving ────────────────────────────────────

@@ -128,10 +128,21 @@ You decide your own workflow. Here's the recommended approach:
 1. **Read the main spec/RFQ** — find and read the primary specification document
 2. **IMMEDIATELY update the quote** — as soon as you understand the project, call \`updateQuote\` with:
    - \`projectName\`: The real project name from the spec (e.g. "Soprema Tillsonburg – Bulk Storage System")
-   - \`description\`: A detailed scope summary (what's being built, key systems, contractor responsibilities)
+   - \`description\`: A PROFESSIONAL estimator-quality scope of work (see below)
    - \`notes\`: Key exclusions and assumptions
 
    **DO THIS BEFORE CREATING WORKSHEETS.** The user is watching the page and needs to see the title and scope update immediately.
+
+   ### How to Write the Description / Scope of Work
+   The description should read like a professional construction estimate scope letter. Use bullet points, subheadings per major scope area, and include:
+   - **Specific equipment counts and references** — cite P&ID numbers (e.g. "Transfer pump x 2 (PID-PENTANE-N-0003)")
+   - **Installation methods and standards** — "Secure using 1\\" epoxy anchors and HIT-HY200 A V3 Adhesive"
+   - **Material specifications** — pipe specs, insulation types, grout requirements
+   - **Explicit scope inclusions** — what YOUR company does
+   - **Explicit scope exclusions** — what OTHERS do or what is NOT included
+   - **Assumptions** — distances, access, site conditions
+   - **Vendor/supplier responsibilities** — "All valves and instrumentation will be supplied by others"
+   Do NOT write a paragraph summary. Write a detailed, section-by-section breakdown that an estimator would present to a client.
 3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
 4. **Check memory** — see if there's progress from a prior session
 5. **Create phases** — create project phases if the spec defines a sequence of work (e.g. "Phase 1 - Mobilization", "Phase 2 - Equipment Setting", "Phase 3 - Piping Install"). Assign line items to phases.

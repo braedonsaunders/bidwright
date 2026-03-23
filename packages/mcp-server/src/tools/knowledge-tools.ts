@@ -7,31 +7,27 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── queryKnowledge ────────────────────────────────────────
   server.tool(
     "queryKnowledge",
-    `Search the knowledge base for information. Searches both project documents and the global library (estimating manuals, rate books, standards). Use this to find man-hour estimates, material specs, labour productivity data, pricing references, and any domain knowledge.`,
+    `Search the knowledge base for information. Searches both project documents and the global library (estimating manuals, rate books, standards). Use this to find man-hour estimates, material specs, labour productivity data, pricing references, and any domain knowledge. Returns text snippets with source, page number, and section title.`,
     {
       query: z.string().describe("Search query — be specific about what you need"),
       scope: z.enum(["project", "library", "all"]).default("all").describe("Search scope: project docs only, global library only, or all"),
       limit: z.number().default(10).describe("Max results to return"),
     },
     async ({ query, scope, limit }) => {
-      const params = new URLSearchParams({ q: query, limit: String(limit) });
-      if (scope === "project") params.set("projectId", getProjectId());
-      else if (scope === "all") {
-        params.set("projectId", getProjectId());
-        params.set("includeProjectDocs", "true");
-      }
-      params.set("scope", scope);
-      const data = await apiGet(`/knowledge/search/enhanced?${params}`);
-      const hits = (data.hits || []).map((h: any) => ({
-        text: h.text?.substring(0, 500), // Truncate to avoid context bloat
-        source: h.source,
+      // Use the text-based search which outperforms vector search for this use case
+      const params = new URLSearchParams({ q: query, limit: String(limit), scope });
+      const data = await apiGet(`/knowledge/search?${params}`);
+      const results = Array.isArray(data) ? data : (data.results || []);
+      const hits = results.map((h: any) => ({
+        text: h.text?.substring(0, 600),
+        source: h.source || h.bookName,
         bookName: h.bookName,
         sectionTitle: h.sectionTitle,
         pageNumber: h.pageNumber,
         score: h.score,
       }));
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ query, resultCount: hits.length, hits }, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({ query, scope, resultCount: hits.length, hits }, null, 2) }],
       };
     }
   );
@@ -39,17 +35,18 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── queryGlobalLibrary ────────────────────────────────────
   server.tool(
     "queryGlobalLibrary",
-    "Search the global knowledge library only — estimating manuals, labour productivity data, rate books, material specs, industry standards. Use this for domain knowledge like pipe installation hours per foot, equipment rental rates, etc.",
+    "Search the global knowledge library only — estimating manuals, labour productivity data, rate books, material specs, industry standards. Use this for domain knowledge like pipe installation hours per foot, equipment rental rates, etc. Returns text snippets with source, page, and section.",
     {
-      query: z.string().describe("What to search for — e.g. 'pipe install man hours per linear foot 2 inch'"),
+      query: z.string().describe("What to search for — e.g. 'carbon steel butt weld pipe fittings labor hours'"),
       limit: z.number().default(10),
     },
     async ({ query, limit }) => {
-      const params = new URLSearchParams({ q: query, scope: "library", limit: String(limit) });
-      const data = await apiGet(`/knowledge/search/enhanced?${params}`);
-      const hits = (data.hits || []).map((h: any) => ({
-        text: h.text?.substring(0, 500),
-        source: h.source,
+      const params = new URLSearchParams({ q: query, scope: "global", limit: String(limit) });
+      const data = await apiGet(`/knowledge/search?${params}`);
+      const results = Array.isArray(data) ? data : (data.results || []);
+      const hits = results.map((h: any) => ({
+        text: h.text?.substring(0, 600),
+        source: h.source || h.bookName,
         bookName: h.bookName,
         sectionTitle: h.sectionTitle,
         pageNumber: h.pageNumber,
