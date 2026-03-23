@@ -473,6 +473,27 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     setThinkingBlocks([]);
     lastRefreshToolCount.current = 0;
     try {
+      // Check if there's already a running session (e.g. page refresh)
+      if (cliRuntime) {
+        try {
+          const existing = await getCliStatus(projectId);
+          if (existing.status === "running") {
+            // Session already running — just reconnect to it
+            setIntakeSessionId(existing.sessionId || null);
+            setIntakeStatus({
+              sessionId: existing.sessionId || "", projectId, scope: "", status: "running",
+              toolCallCount: (existing.events || []).filter((e: any) => e.type === "tool_call").length,
+              messageCount: (existing.events || []).filter((e: any) => e.type === "message").length,
+              summary: null, createdAt: existing.startedAt || "", updatedAt: "", recentToolCalls: [],
+              events: existing.events,
+            } as any);
+            connectToSseStream(projectId);
+            setIntakeLoading(false);
+            return;
+          }
+        } catch {}
+      }
+
       if (cliRuntime) {
         // CLI-based intake (preferred)
         // Use the agent-specific model, not the legacy LLM model setting
