@@ -1,10 +1,11 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { access, mkdir, readFile, stat, writeFile, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import JSZip from "jszip";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { z } from "zod";
@@ -582,7 +583,6 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
   // UPDATE these records with extracted text, page counts, and Azure DI data.
   const placeholderDocIds: string[] = [];
   try {
-    const JSZip = (await import("jszip")).default;
     const zipData = await readFile(multipartUpload.storagePath);
     const zip = await JSZip.loadAsync(zipData);
     const now = new Date();
@@ -605,17 +605,22 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
       const fileName = path.basename(relativePath);
       const sanitized = sanitizeFileName(fileName);
       const ext = path.extname(fileName).toLowerCase();
-      const docId = createId("doc");
+      const docId = `doc-${randomUUID()}`;
       const relStoragePath = path.join("projects", targetProjectId!, "documents", sanitized);
 
       // Extract file to disk FIRST so storagePath is valid
       try {
-        const fileData = await zip.file(relativePath)?.async("nodebuffer");
-        if (fileData) {
+        const zipEntry = zip.file(relativePath);
+        if (zipEntry) {
+          const fileData = await zipEntry.async("nodebuffer");
           const diskPath = path.join(docsDir, sanitized);
           await writeFile(diskPath, fileData);
+        } else {
+          console.error("[upload] zip.file() returned null for:", relativePath);
         }
-      } catch {}
+      } catch (extractErr) {
+        console.error("[upload] Failed to extract:", relativePath, extractErr instanceof Error ? extractErr.message : extractErr);
+      }
 
       // Classify document type from filename
       const lowerName = fileName.toLowerCase();
@@ -642,7 +647,10 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
       placeholderDocIds.push(docId);
     }
   } catch (err) {
-    console.error("[upload] Failed to create placeholder docs:", err);
+    const errMsg = err instanceof Error ? `${err.message}\n${err.stack}` : String(err);
+    console.error("[upload] PLACEHOLDER DOCS FAILED:", errMsg);
+    // Store error for debugging
+    (multipartUpload as any)._placeholderError = errMsg;
   }
 
   // Store placeholder doc IDs so ingestion can clean them up when it creates real docs

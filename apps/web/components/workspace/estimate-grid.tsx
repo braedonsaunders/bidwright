@@ -66,6 +66,7 @@ export interface EstimateGridProps {
   workspace: ProjectWorkspaceData;
   onApply: (next: WorkspaceResponse) => void;
   onError: (msg: string) => void;
+  highlightItemId?: string;
 }
 
 type EditingCell = {
@@ -294,6 +295,7 @@ interface EntityOptionItem {
   unit?: string;
   description?: string;
   rateScheduleItemId?: string;
+  itemId?: string;
 }
 
 /** Build entity dropdown options grouped by category */
@@ -317,64 +319,64 @@ function buildEntityOptions(
 
   for (const cat of categories) {
     const items: EntityOptionItem[] = [];
+    const itemSource = cat.itemSource || "freeform";
 
-    if (cat.name === "Labour") {
-      // Rate schedule items first (preferred)
-      for (const sched of workspace.rateSchedules ?? []) {
-        if (sched.category === "labour" || sched.category === "general") {
-          for (const rsItem of sched.items ?? []) {
-            const firstTier = sched.tiers?.[0];
-            const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
-            if (!items.some((i) => i.rateScheduleItemId === rsItem.id)) {
-              items.push({
-                label: `${rsItem.name}${rsItem.code ? ` (${rsItem.code})` : ""}`,
-                value: rsItem.name,
-                unitCost: rate,
-                unit: rsItem.unit,
-                rateScheduleItemId: rsItem.id,
-              });
+    switch (itemSource) {
+      case "rate_schedule": {
+        // Pull items from revision-scoped rate schedules
+        const catKey = cat.entityType.toLowerCase();
+        for (const sched of workspace.rateSchedules ?? []) {
+          if (sched.category === catKey || sched.category === "general") {
+            for (const rsItem of sched.items ?? []) {
+              const firstTier = sched.tiers?.[0];
+              const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
+              if (!items.some((i) => i.rateScheduleItemId === rsItem.id)) {
+                items.push({
+                  label: `${rsItem.name}${rsItem.code ? ` (${rsItem.code})` : ""}`,
+                  value: rsItem.name,
+                  unitCost: rate,
+                  unit: rsItem.unit,
+                  rateScheduleItemId: rsItem.id,
+                });
+              }
             }
           }
         }
-      }
-      // Also include labor catalog items
-      for (const catalog of workspace.catalogs ?? []) {
-        if (catalog.kind === "labor") {
-          for (const ci of catalog.items ?? []) {
-            if (!items.some((i) => i.value === ci.name)) {
-              items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
+        // Also include matching catalog items as fallback
+        for (const catalog of workspace.catalogs ?? []) {
+          if (catalog.kind === catKey || catalog.kind === "labor") {
+            for (const ci of catalog.items ?? []) {
+              if (!items.some((i) => i.value === ci.name)) {
+                items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit, itemId: ci.id });
+              }
             }
           }
         }
+        if (items.length === 0) {
+          items.push({ label: cat.name, value: cat.name });
+        }
+        break;
       }
-      if (items.length === 0) {
-        items.push({ label: "Labour", value: "Labour" });
-      }
-    } else if (cat.name === "Equipment") {
-      for (const catalog of workspace.catalogs ?? []) {
-        if (catalog.kind === "equipment") {
-          for (const ci of catalog.items ?? []) {
-            items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
+      case "catalog": {
+        // Pull items from catalogs — filter by catalogId if set, otherwise by kind matching entityType
+        const catKey = cat.entityType.toLowerCase();
+        for (const catalog of workspace.catalogs ?? []) {
+          if (cat.catalogId ? catalog.id === cat.catalogId : (catalog.kind === catKey || catalog.kind === "equipment" || catalog.kind === "materials")) {
+            for (const ci of catalog.items ?? []) {
+              items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit, itemId: ci.id });
+            }
           }
         }
-      }
-      if (items.length === 0) {
-        items.push({ label: "Equipment", value: "Equipment" });
-      }
-    } else if (cat.name === "Stock Items" || cat.name === "Consumables") {
-      for (const catalog of workspace.catalogs ?? []) {
-        if (catalog.kind === "materials") {
-          for (const ci of catalog.items ?? []) {
-            items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
-          }
+        if (items.length === 0) {
+          items.push({ label: cat.name, value: cat.name });
         }
+        break;
       }
-      if (items.length === 0) {
+      case "freeform":
+      default: {
         items.push({ label: cat.name, value: cat.name });
+        break;
       }
-    } else {
-      // Material, Other Charges, Travel, Subcontractors, Rental
-      items.push({ label: cat.name, value: cat.name });
     }
 
     groups.push({
@@ -464,7 +466,7 @@ function catalogKindToCategory(kind: string): string {
 
 /* ─── Component ─── */
 
-export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps) {
+export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
 
   // Entity categories loaded from API
@@ -486,6 +488,19 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
   const [entityDropdownPos, setEntityDropdownPos] = useState<{ top: number; left: number } | null>(null);
   const entityCellRef = useRef<HTMLTableCellElement | null>(null);
+
+  // Scroll to highlighted item from global search
+  useEffect(() => {
+    if (!highlightItemId) return;
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-item-id="${highlightItemId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-accent/50", "bg-accent/10");
+        setTimeout(() => el.classList.remove("ring-2", "ring-accent/50", "bg-accent/10"), 2500);
+      }
+    });
+  }, [highlightItemId]);
 
   // Filter state
   const [searchTerm, setSearchTerm] = useState("");
@@ -935,6 +950,8 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     catalogData?: { cost?: number; uom?: string; description?: string },
     /** Optional rate schedule item ID to link */
     rateScheduleItemId?: string,
+    /** Optional catalog item ID to link */
+    itemId?: string,
   ) {
     setEntityDropdownRowId(null);
     setEntitySearchTerm("");
@@ -958,6 +975,13 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     }
     if (catalogData?.description) {
       patch.description = catalogData.description;
+    }
+
+    // Link to catalog item if provided
+    if (itemId) {
+      patch.itemId = itemId;
+    } else if (categoryChanged) {
+      patch.itemId = null;
     }
 
     // Link to rate schedule item if provided
@@ -1685,6 +1709,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                         ? { cost: item.unitCost, uom: item.unit, description: item.label }
                         : undefined,
                       item.rateScheduleItemId,
+                      item.itemId,
                     )
                   }
                 >
@@ -2648,6 +2673,7 @@ function GroupRows({
           return (
             <tr
               key={row.id}
+              data-item-id={row.id}
               className={cn(
                 "transition-colors border-l-2",
                 isDetailOpen

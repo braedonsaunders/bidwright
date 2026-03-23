@@ -137,8 +137,10 @@ You decide your own workflow. Here's what a senior estimator would do:
 
 - Call \`getItemConfig\` before creating ANY items
 - Match category names EXACTLY as returned by getItemConfig
-- For auto-calculated categories (auto_labour, auto_equipment): link items via rateScheduleItemId
-- For manual categories: set cost and quantity directly
+- Each category has an \`itemSource\` field that tells you where items come from:
+  - **rate_schedule**: Items come from rate schedules. Set \`rateScheduleItemId\` to link to a rate schedule item. If no schedules are imported, call \`importRateSchedule\` first.
+  - **catalog**: Items come from the item catalog. Set \`itemId\` to link to a catalog item for auto-populated cost/pricing.
+  - **freeform**: No backing data source — set cost and quantity directly.
 - For items with unknown cost: set cost=0 and note "NEEDS PRICING" in description
 - Always include a description citing the source document and section
 - Use the knowledge base for man-hour estimates — don't guess when data exists

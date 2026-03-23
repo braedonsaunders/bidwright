@@ -1055,6 +1055,7 @@ function TreeNode({
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
       onClick={() => onSelect(item)}
+      {...(item.sourceDocument ? { "data-document-id": item.sourceDocument.id } : {})}
     >
       {isPdf ? (
         <FileText className="h-3.5 w-3.5 shrink-0 text-danger/70" />

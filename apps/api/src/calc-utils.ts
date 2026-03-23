@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { WorksheetItem, QuoteRevision } from "@bidwright/domain";
+import type { WorksheetItem, QuoteRevision, CalculationType } from "@bidwright/domain";
 
 export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
@@ -8,14 +8,13 @@ export function roundMoney(value: number): number {
 export function calculateLineItem(
   item: WorksheetItem,
   _revision: QuoteRevision,
+  calculationType: CalculationType,
   rateSchedules?: Array<{
     items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
   }>,
 ): Partial<WorksheetItem> {
-  const category = item.category;
-
-  switch (category) {
-    case "Labour": {
+  switch (calculationType) {
+    case "auto_labour": {
       // Use rate schedule if item has rateScheduleItemId and tierUnits
       if (item.rateScheduleItemId && item.tierUnits && Object.keys(item.tierUnits).length > 0 && rateSchedules?.length) {
         for (const sched of rateSchedules) {
@@ -41,19 +40,21 @@ export function calculateLineItem(
 
       return {};
     }
-    case "Equipment": {
+    case "auto_equipment": {
       const days = item.laborHourReg;
       const price = item.cost * days * item.quantity;
       return { price: roundMoney(price) };
     }
-    case "Other Charges": {
+    case "direct_price": {
       return { cost: 0, markup: 0 };
     }
-    case "Consumables": {
+    case "auto_consumable": {
       const cost = item.quantity * item.cost;
       const price = cost * (1 + item.markup);
       return { price: roundMoney(price) };
     }
+    case "formula":
+    case "manual":
     default: {
       const price = item.quantity * item.cost * (1 + item.markup);
       return { price: roundMoney(price) };

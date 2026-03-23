@@ -51,6 +51,7 @@ interface DocumentationTabProps {
   workspace: ProjectWorkspaceData;
   apply: (next: WorkspaceResponse) => void;
   packages?: FileBrowserProps["packages"];
+  highlightDocumentId?: string;
 }
 
 /* ─── Sub-tab config ─── */
@@ -64,9 +65,23 @@ const subTabs: { id: SubTab; label: string }[] = [
 
 /* ─── Main Component ─── */
 
-export function DocumentationTab({ workspace, apply, packages }: DocumentationTabProps) {
+export function DocumentationTab({ workspace, apply, packages, highlightDocumentId }: DocumentationTabProps) {
   const [activeTab, setActiveTab] = useState<SubTab>("knowledge");
   const [error, setError] = useState<string | null>(null);
+
+  // Scroll to highlighted document from global search
+  useEffect(() => {
+    if (!highlightDocumentId) return;
+    setActiveTab("knowledge");
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-document-id="${highlightDocumentId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-accent/50");
+        setTimeout(() => el.classList.remove("ring-2", "ring-accent/50"), 2500);
+      }
+    });
+  }, [highlightDocumentId]);
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-3 pb-1">

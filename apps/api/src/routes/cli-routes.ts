@@ -257,7 +257,8 @@ export function registerCliRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const session = getSession(projectId);
 
-    if (session) {
+    // If session is still running, return live status
+    if (session && session.status === "running") {
       return {
         status: session.status,
         runtime: session.runtime,
@@ -267,7 +268,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       };
     }
 
-    // Fall back to DB
+    // For completed/failed/stopped sessions (or no session), get events from DB
     const store = request.store!;
     const run = await store.getLatestAiRun(projectId, "cli-intake");
     if (run) {

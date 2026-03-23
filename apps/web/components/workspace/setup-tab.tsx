@@ -86,6 +86,7 @@ export interface SetupTabProps {
   isPending: boolean;
   onApply: (next: WorkspaceResponse) => void;
   onError: (msg: string) => void;
+  highlightField?: string;
 }
 
 /* ─── Constants ─── */
@@ -150,10 +151,29 @@ export function SetupTab({
   isPending: parentPending,
   onApply,
   onError,
+  highlightField,
 }: SetupTabProps) {
   const [subTab, setSubTab] = useState<SetupSubTab>("general");
   const [isPending, startTransition] = useTransition();
   const busy = parentPending || isPending;
+
+  // Scroll to highlighted field from global search
+  useEffect(() => {
+    if (!highlightField) return;
+    // Switch to the correct sub-tab based on field
+    const notesFields = ["notes", "scratchpad", "leadLetter", "followUpNote"];
+    if (notesFields.includes(highlightField)) setSubTab("notes");
+    else setSubTab("general");
+
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-field="${highlightField}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-accent/50");
+        setTimeout(() => el.classList.remove("ring-2", "ring-accent/50"), 2500);
+      }
+    });
+  }, [highlightField]);
 
   function saveRevision(patch?: Partial<RevisionPatchInput>) {
     const payload: RevisionPatchInput = {
@@ -375,7 +395,7 @@ function GeneralSubTab({
         </CardHeader>
         <CardBody className="space-y-4">
           {/* Title with quote number */}
-          <div>
+          <div data-field="title">
             <Label>Quote Title</Label>
             <div className="flex items-center gap-2">
               <span className="flex h-9 shrink-0 items-center rounded-lg border border-line bg-panel2 px-3 text-sm text-fg/60">
@@ -511,7 +531,7 @@ function GeneralSubTab({
           </div>
 
           {/* Description */}
-          <div>
+          <div data-field="description">
             <Label>Description / Scope of Work</Label>
             <div onBlur={() => saveRevision()}>
               <RichTextEditor
@@ -598,7 +618,7 @@ function NotesSubTab({
       </div>
 
       {/* Notes */}
-      <Card>
+      <Card data-field="notes">
         <CardHeader>
           <CardTitle>Notes</CardTitle>
         </CardHeader>
