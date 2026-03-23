@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, sendMessage, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
+import { join } from "node:path";
 import { prisma } from "@bidwright/db";
 
 export function registerCliRoutes(app: FastifyInstance) {
@@ -402,6 +403,166 @@ export function registerCliRoutes(app: FastifyInstance) {
   // ── List All Sessions ───────────────────────────────────────
   app.get("/api/cli/sessions", async () => {
     return { sessions: listSessions() };
+  });
+
+  // ── Dataset Extraction from Knowledge Book ──────────────────
+  app.post("/api/cli/extract-datasets", async (request) => {
+    const { bookId, runtime = "claude-code", model } = request.body as {
+      bookId: string;
+      runtime?: AgentRuntime;
+      model?: string;
+    };
+
+    const store = request.store!;
+    const book = await store.getKnowledgeBook(bookId);
+    if (!book) return { error: "Book not found" };
+
+    // Get Azure DI credentials
+    const settings = await store.getSettings();
+    const integrations = (settings as any)?.integrations || {};
+
+    // Create working directory for the extraction session
+    const workDir = join(apiDataRoot, "dataset-extraction", bookId);
+    const { mkdir, writeFile, copyFile, symlink } = await import("node:fs/promises");
+    const { existsSync } = await import("node:fs");
+    await mkdir(workDir, { recursive: true });
+    await mkdir(join(workDir, "book"), { recursive: true });
+
+    // Copy or symlink the book PDF
+    const bookPath = join(apiDataRoot, book.storagePath!);
+    const destBookPath = join(workDir, "book", book.sourceFileName || "book.pdf");
+    if (existsSync(bookPath) && !existsSync(destBookPath)) {
+      try { await symlink(bookPath, destBookPath); } catch { await copyFile(bookPath, destBookPath).catch(() => {}); }
+    }
+
+    // Get existing chunks from the book (already parsed by Azure DI during ingestion)
+    const allChunks = await prisma.knowledgeChunk.findMany({
+      where: { bookId },
+      orderBy: { order: "asc" },
+      select: { sectionTitle: true, pageNumber: true, text: true },
+    });
+    const chunks = allChunks;
+
+    // Build a section manifest from chunks instead of re-parsing
+    // The CLI agent will read the actual PDF pages directly for table data
+    const sectionMap = new Map<string, { pages: Set<number>; chunkCount: number; preview: string }>();
+    for (const chunk of chunks) {
+      const section = chunk.sectionTitle || "Unknown";
+      const existing = sectionMap.get(section) || { pages: new Set(), chunkCount: 0, preview: "" };
+      if (chunk.pageNumber) existing.pages.add(chunk.pageNumber);
+      existing.chunkCount++;
+      if (!existing.preview) existing.preview = chunk.text.substring(0, 200);
+      sectionMap.set(section, existing);
+    }
+
+    // Create a doc-like structure for the manifest
+    const doc = { tables: [] as any[], metadata: { pageCount: book.pageCount } };
+
+    // No pre-extracted table files — the CLI agent reads the PDF directly
+
+    // Save section manifest (the CLI agent reads the PDF directly for table data)
+    await writeFile(join(workDir, "book-manifest.json"), JSON.stringify({
+      bookId,
+      bookName: book.name,
+      totalPages: book.pageCount,
+      totalChunks: chunks.length,
+      sections: [...sectionMap.entries()].map(([name, info]) => ({
+        name,
+        pages: [...info.pages].sort((a, b) => a - b),
+        chunkCount: info.chunkCount,
+        preview: info.preview.substring(0, 150),
+      })),
+    }, null, 2));
+
+    // Write CLAUDE.md for dataset extraction
+    // Build sections info for CLAUDE.md
+    const sectionsInfo = [...sectionMap.entries()]
+      .map(([name, info]) => `  - "${name}" (${info.chunkCount} chunks, pages: ${[...info.pages].sort((a,b) => a-b).join(", ") || "?"})`)
+      .slice(0, 50)
+      .join("\n");
+
+    const claudeMd = `# Dataset Extraction Agent
+
+You are extracting structured datasets from the knowledge book "${book.name}".
+The book PDF is at \`book/${book.sourceFileName || "book.pdf"}\`.
+
+## Your Task
+
+Read the PDF directly to find and extract structured tables into Bidwright datasets.
+Use the \`createDataset\` MCP tool to create each dataset with proper columns, rows, and rich tags.
+
+## How to Work
+
+1. **Read the PDF** — use the Read tool with \`pages\` parameter to view specific pages as images
+2. **Identify tables** — look for man-hour tables, material tables, weight tables, etc.
+3. **Extract data** — read the table values from the PDF page images
+4. **Create datasets** — call \`createDataset\` for each table with:
+   - Descriptive name (e.g. "Attaching Flanges - Screwed Type - Net Man Hours Each")
+   - Rich tags for search (e.g. ["pipe", "flange", "screwed", "man-hours", "carbon-steel", "field-fabrication"])
+   - Clean column definitions with types
+   - All rows of data
+   - Source page numbers and book ID
+5. **Group related tables** — merge tables that span multiple pages into one dataset
+6. **Skip non-data pages** — title pages, text-only pages, diagrams without tables
+
+## Section Index (from text extraction)
+${sectionsInfo}
+
+## Guidelines
+
+- **Rich tags are critical**: Include material type, operation type, pipe sizes, unit type (hours/lbs/feet), section of manual
+- **Clean column names**: Use snake_case like "pipe_size_inches", "man_hours_each", "pressure_rating_lb"
+- **Numeric columns**: Set type to "number" for all man-hour and measurement values
+- **Merge multi-page tables**: Same table spanning pages should be one dataset
+- **Preserve notes**: Include footnotes and conditions in the dataset description
+- **Source tracking**: Always set sourceBookId="${bookId}" and sourcePages
+
+## Book Info
+- Name: ${book.name}
+- Book ID: ${bookId}
+- Pages: ${book.pageCount}
+- Sections found: ${sectionMap.size}
+`;
+
+    await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
+
+    // Generate MCP config for dataset tools
+    const token = request.headers.authorization?.replace("Bearer ", "") || (request.query as any)?.token || "";
+    const mcpConfig = {
+      mcpServers: {
+        bidwright: {
+          command: "npx",
+          args: ["tsx", join(process.cwd(), "..", "mcp-server", "src", "index.ts")],
+          env: {
+            BIDWRIGHT_API_URL: `http://localhost:4001`,
+            BIDWRIGHT_PROJECT_ID: bookId, // Use bookId as project context
+            BIDWRIGHT_AUTH_TOKEN: token,
+          },
+        },
+      },
+    };
+
+    // Spawn CLI session
+    const sessionResult = await spawnSession({
+      projectId: bookId,
+      projectDir: workDir,
+      prompt: "Read the table-manifest.json and analyze the extracted tables. Group related tables, propose datasets with rich tags, and create them. Start by reading the manifest.",
+      runtime,
+      model,
+      mcpConfig,
+      anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY,
+      openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY,
+    });
+
+    return {
+      sessionId: sessionResult.sessionId,
+      bookId,
+      bookName: book.name,
+      sections: sectionMap.size,
+      chunks: chunks.length,
+      workDir,
+      status: "running",
+    };
   });
 
   // ── Progress Webhook (called by MCP server) ─────────────────

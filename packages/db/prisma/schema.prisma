@@ -44,6 +44,7 @@ model OrganizationSettings {
   maxProjects    Int          @default(0) // 0 = unlimited
   maxStorage     Int          @default(0) // MB, 0 = unlimited
   maxKnowledgeBooks Int       @default(0) // 0 = unlimited
+  termsAndConditions String   @default("")
   updatedAt      DateTime     @updatedAt
 }
 
@@ -228,6 +229,7 @@ model QuoteRevision {
   totalHours            Float    @default(0)
   breakoutPackage       Json     @default("[]")
   calculatedCategoryTotals Json  @default("[]")
+  pdfPreferences        Json     @default("{}")
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -749,6 +751,9 @@ model Dataset {
   rowCount          Int           @default(0)
   source            String        @default("manual")
   sourceDescription String        @default("")
+  sourceBookId      String?       // Link back to KnowledgeBook this was extracted from
+  sourcePages       String        @default("") // Page range(s) e.g. "85-87, 100"
+  tags              String[]      @default([]) // Rich tags for search: ["pipe", "flange", "man-hours", "carbon-steel"]
   isTemplate        Boolean       @default(false)
   sourceTemplateId  String?
   createdAt         DateTime      @default(now())
