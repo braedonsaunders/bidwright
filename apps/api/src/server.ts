@@ -766,45 +766,70 @@ export function buildServer() {
     return project;
   });
 
-  // PATCH /projects/:projectId — update project metadata (name, client, location, description, notes)
+  // PATCH /projects/:projectId — update project + quote + revision metadata
+  // Accepts all fields and routes them to the correct table:
+  //   Project: name (alias: projectName), clientName, location, scope, summary
+  //   Quote: title (synced from name), customerString (synced from clientName)
+  //   QuoteRevision: description, notes
   app.patch("/projects/:projectId", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const body = request.body as Record<string, unknown>;
-    const allowedFields = ["name", "clientName", "clientEmail", "clientPhone", "clientAddress", "projectAddress", "location", "scope", "summary", "notes", "description"];
-    const patch: Record<string, unknown> = {};
-    for (const key of allowedFields) {
-      if (body[key] !== undefined) {
-        // Map some aliases
-        if (key === "projectName") patch.name = body[key];
-        else patch[key] = body[key];
-      }
-    }
-    // Also handle projectName -> name alias
-    if (body.projectName !== undefined) patch.name = body.projectName;
 
-    if (Object.keys(patch).length === 0) {
+    // Map input fields to the correct tables
+    const projectPatch: Record<string, unknown> = {};
+    const revisionPatch: Record<string, unknown> = {};
+
+    // Project fields
+    const name = (body.projectName ?? body.name) as string | undefined;
+    if (name) projectPatch.name = name;
+    if (body.clientName) projectPatch.clientName = body.clientName;
+    if (body.location) projectPatch.location = body.location;
+    if (body.scope) projectPatch.scope = body.scope;
+    if (body.summary) projectPatch.summary = body.summary;
+
+    // Revision fields (description and notes live on QuoteRevision, not Project)
+    if (body.description) revisionPatch.description = body.description;
+    if (body.notes) revisionPatch.notes = body.notes;
+
+    if (Object.keys(projectPatch).length === 0 && Object.keys(revisionPatch).length === 0) {
       return reply.code(400).send({ message: "No valid fields to update" });
     }
 
     try {
-      const updated = await prisma.project.update({
-        where: { id: projectId },
-        data: { ...patch, updatedAt: new Date() },
-      });
-      // Also update quote title/customer if those fields changed
-      if (patch.name || patch.clientName) {
-        const quote = await prisma.quote.findFirst({ where: { projectId } });
-        if (quote) {
-          await prisma.quote.update({
-            where: { id: quote.id },
-            data: {
-              ...(patch.name ? { title: patch.name as string } : {}),
-              ...(patch.clientName ? { customerString: patch.clientName as string } : {}),
-            },
+      // Update project
+      if (Object.keys(projectPatch).length > 0) {
+        await prisma.project.update({
+          where: { id: projectId },
+          data: { ...projectPatch, updatedAt: new Date() },
+        });
+      }
+
+      // Sync name/client to Quote
+      const quote = await prisma.quote.findFirst({ where: { projectId } });
+      if (quote) {
+        const quoteUpdate: Record<string, unknown> = {};
+        if (name) quoteUpdate.title = name;
+        if (body.clientName) quoteUpdate.customerString = body.clientName;
+        if (Object.keys(quoteUpdate).length > 0) {
+          await prisma.quote.update({ where: { id: quote.id }, data: quoteUpdate });
+        }
+
+        // Update revision description/notes
+        if (Object.keys(revisionPatch).length > 0) {
+          const revision = await prisma.quoteRevision.findFirst({
+            where: { quoteId: quote.id },
+            orderBy: { createdAt: "desc" },
           });
+          if (revision) {
+            await prisma.quoteRevision.update({
+              where: { id: revision.id },
+              data: revisionPatch,
+            });
+          }
         }
       }
-      return updated;
+
+      return { ok: true, updated: { ...projectPatch, ...revisionPatch } };
     } catch (err) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Update failed" });
     }
