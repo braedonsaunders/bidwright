@@ -1491,7 +1491,14 @@ export class PrismaApiStore {
       this.db.knowledgeBook.findMany({ where: { projectId }, select: { id: true } }),
     ]);
 
-    // Prisma cascade deletes handle child entities
+    // Explicitly delete project-scoped knowledge books + chunks (no FK cascade to Project)
+    if (knowledgeBooks.length > 0) {
+      const bookIds = knowledgeBooks.map((b) => b.id);
+      await this.db.knowledgeChunk.deleteMany({ where: { bookId: { in: bookIds } } });
+      await this.db.knowledgeBook.deleteMany({ where: { id: { in: bookIds } } });
+    }
+
+    // Prisma cascade deletes handle other child entities
     await this.db.project.delete({ where: { id: projectId } });
 
     // Clean up files on disk (best-effort, don't fail the delete if cleanup fails)
