@@ -288,15 +288,42 @@ async function extractText(
   filename: string,
   azureConfig?: { endpoint?: string; key?: string },
 ): Promise<{ text: string; pageCount: number }> {
-  // PDF: use the real pdf-parse based parser from @bidwright/ingestion
+  // PDF: use Azure DI layout model for table extraction when available,
+  // otherwise fall back to local parser
   if (mimeType === "application/pdf") {
+    const hasAzure = !!(azureConfig?.endpoint && azureConfig?.key) ||
+                     !!(process.env.AZURE_DI_ENDPOINT && process.env.AZURE_DI_KEY);
+
+    // For knowledge books: ALWAYS prefer Azure layout model because it
+    // extracts tables as structured data. Even PDFs with embedded text
+    // benefit from Azure's table detection (embedded text loses structure).
+    const provider = hasAzure ? "azure" as const : "local" as const;
+
     const parser = createPdfParser({
-      provider: "hybrid",
+      provider,
       azureEndpoint: azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT,
       azureKey: azureConfig?.key || process.env.AZURE_DI_KEY,
+      azureModel: "prebuilt-layout",
+      options: { tableExtractionEnabled: true },
     });
     const doc = await parser.parse(buffer, filename);
-    const text = doc.pages.map((p) => p.content).join("\n\n--- Page Break ---\n\n");
+
+    // Build text with table data included as markdown tables
+    const parts: string[] = [];
+    for (const page of doc.pages) {
+      parts.push(page.content);
+    }
+    // Append structured table data as markdown for better searchability
+    if (doc.tables && doc.tables.length > 0) {
+      parts.push("\n\n--- EXTRACTED TABLES ---\n");
+      for (const table of doc.tables) {
+        if (table.markdown) {
+          parts.push(table.markdown);
+        }
+      }
+    }
+
+    const text = parts.join("\n\n--- Page Break ---\n\n");
     return { text: text || doc.content, pageCount: doc.metadata.pageCount || 1 };
   }
 
