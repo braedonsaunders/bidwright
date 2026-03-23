@@ -189,6 +189,7 @@ export interface WorksheetItem {
   laborHourDouble: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 
@@ -939,6 +940,8 @@ export interface EntityCategory {
   };
   calculationType: CalculationType;
   calcFormula: string;
+  itemSource: "rate_schedule" | "catalog" | "freeform";
+  catalogId?: string | null;
   color: string;
   order: number;
   isBuiltIn: boolean;

@@ -166,6 +166,7 @@ export interface WorkspaceWorksheetItem {
   laborHourDouble: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 
@@ -516,6 +517,8 @@ export interface EntityCategory {
   };
   calculationType: CalculationType;
   calcFormula: string;
+  itemSource: "rate_schedule" | "catalog" | "freeform";
+  catalogId?: string | null;
   color: string;
   order: number;
   isBuiltIn: boolean;
@@ -865,6 +868,7 @@ export interface WorksheetItemPatchInput {
   laborHourDouble?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 
@@ -885,6 +889,7 @@ export interface CreateWorksheetItemInput {
   laborHourDouble: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 

@@ -84,6 +84,7 @@ import {
 } from "@/components/workspace/modals";
 import { PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
+import { WorkspaceSearch, type SearchNavigationTarget } from "@/components/workspace/workspace-search";
 import {
   Badge,
   Button,
@@ -305,6 +306,21 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const searchParams = useSearchParams();
   const intakeInitRef = useRef(false);
   const [isPending, startTransition] = useTransition();
+
+  const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
+
+  const handleSearchNavigate = useCallback((target: SearchNavigationTarget) => {
+    setTab(target.tab);
+    if (target.tab === "estimate" && "subTab" in target) {
+      setEstimateSubTab(target.subTab as EstimateSubTab);
+      if (target.subTab === "worksheets" && "worksheetId" in target && target.worksheetId) {
+        setSelectedWsId(target.worksheetId);
+      }
+    }
+    setSearchHighlight(target);
+    // Clear highlight after 3 seconds
+    setTimeout(() => setSearchHighlight(null), 3000);
+  }, []);
 
   const workspace = data.workspace;
   const selectedWs = selectedWsId === "all" ? null : findWs(workspace, selectedWsId);
@@ -583,6 +599,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </button>
           );
         })}
+        <div className="ml-auto shrink-0">
+          <WorkspaceSearch workspace={workspace} onNavigate={handleSearchNavigate} />
+        </div>
       </div>
 
       {error && <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
@@ -592,7 +611,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         <AnimatePresence mode="wait">
           {tab === "setup" && (
             <motion.div key="setup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} />
+              <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} highlightField={searchHighlight && "field" in searchHighlight ? searchHighlight.field : undefined} />
             </motion.div>
           )}
 
@@ -613,7 +632,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
               <AnimatePresence mode="wait">
                 {estimateSubTab === "worksheets" && (
                   <motion.div key="worksheets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <EstimateGrid workspace={workspace} onApply={apply} onError={setError} />
+                    <EstimateGrid workspace={workspace} onApply={apply} onError={setError} highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined} />
                   </motion.div>
                 )}
 
@@ -645,7 +664,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           )}
           {tab === "documents" && (
             <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <DocumentationTab workspace={workspace} apply={apply} packages={data.packages} />
+              <DocumentationTab workspace={workspace} apply={apply} packages={data.packages} highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined} />
             </motion.div>
           )}
           {tab === "activity" && (

@@ -2,11 +2,53 @@ import type { FastifyInstance } from "fastify";
 import { resolveApiPath } from "../paths.js";
 import { access } from "node:fs/promises";
 
+/** Helper: resolve a document's absolute PDF path from its storagePath. */
+async function resolveDocPdf(store: any, projectId: string, documentId: string): Promise<{ absPath: string; doc: any } | { error: string; status: number }> {
+  const doc = await store.getDocument(projectId, documentId);
+  if (!doc) return { error: "Document not found", status: 404 };
+  if (!doc.storagePath) return { error: "Document has no file on disk", status: 400 };
+  const absPath = resolveApiPath(doc.storagePath);
+  try { await access(absPath); } catch { return { error: `PDF not on disk: ${doc.storagePath}`, status: 404 }; }
+  return { absPath, doc };
+}
+
 /**
- * Vision API routes – exposes the Python CV pipeline (auto_count.py)
- * to the frontend takeoff UI and the AI agent.
+ * Vision API routes – PDF rendering, region cropping, and the OpenCV
+ * symbol-matching pipeline. Used by the takeoff UI and the AI agent.
  */
 export async function visionRoutes(app: FastifyInstance) {
+
+  // ── POST /api/vision/render-page ───────────────────────────────────────
+  // Renders a full PDF page (or a region of it) to a PNG image.
+  // Returns base64 data URL. This is how the agent "sees" the drawing.
+  // Body: { projectId, documentId, pageNumber, dpi?, region? }
+  app.post("/api/vision/render-page", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    if (!projectId || !documentId) return reply.code(400).send({ message: "projectId and documentId required" });
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let renderPdfPage: typeof import("@bidwright/vision")["renderPdfPage"];
+    try {
+      const vision = await import("@bidwright/vision");
+      renderPdfPage = vision.renderPdfPage;
+    } catch (err) {
+      return reply.code(500).send({ message: "Vision package not available", error: String(err) });
+    }
+
+    const result = await renderPdfPage({
+      pdfPath: resolved.absPath,
+      pageNumber: (body.pageNumber as number) ?? 1,
+      dpi: (body.dpi as number) ?? 150,
+      region: body.region as any ?? undefined,
+    });
+
+    if (!result.success) return reply.code(500).send({ message: result.error });
+    return result;
+  });
 
   // ── POST /api/vision/count-symbols ─────────────────────────────────────
   // Runs the OpenCV symbol matching pipeline on a PDF page.

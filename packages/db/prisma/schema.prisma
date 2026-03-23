@@ -277,6 +277,7 @@ model WorksheetItem {
   laborHourDouble     Float    @default(0)
   lineOrder           Int      @default(0)
   rateScheduleItemId  String?
+  itemId              String?  // FK to CatalogItem (for catalog-backed categories)
   tierUnits           Json     @default("{}")
 
   @@index([worksheetId])
@@ -787,6 +788,8 @@ model EntityCategory {
   laborHourLabels Json         @default("{}")
   calculationType String       @default("manual")
   calcFormula     String       @default("") // custom formula expression for "formula" calc type
+  itemSource      String       @default("freeform") // "rate_schedule" | "catalog" | "freeform"
+  catalogId       String?      // When itemSource="catalog", which catalog backs this category
   color           String       @default("#6b7280")
   order           Int          @default(0)
   isBuiltIn       Boolean      @default(false)

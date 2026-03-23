@@ -20,6 +20,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 import {
   Badge,
@@ -379,6 +380,12 @@ function SearchableModelSelect({
   );
 }
 
+const ITEM_SOURCE_OPTIONS: { value: EntityCategory["itemSource"]; label: string; description: string }[] = [
+  { value: "freeform", label: "Freeform", description: "User types item name directly" },
+  { value: "rate_schedule", label: "Rate Schedule", description: "Items come from rate schedules" },
+  { value: "catalog", label: "Catalog", description: "Items come from a catalog" },
+];
+
 const EDITABLE_FIELD_KEYS: { key: keyof EntityCategory["editableFields"]; label: string }[] = [
   { key: "quantity", label: "Quantity" },
   { key: "cost", label: "Cost" },
@@ -399,6 +406,8 @@ const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
   laborHourLabels: { reg: "Regular", over: "Overtime", double: "Double Time" },
   calculationType: "manual",
   calcFormula: "",
+  itemSource: "freeform",
+  catalogId: null,
   color: "#6366f1",
   order: 999,
   isBuiltIn: false,
@@ -1573,214 +1582,237 @@ export function SettingsPage({
                     No categories configured. Click &quot;Add Category&quot; to get started.
                   </div>
                 )}
-                {categories.map((cat) => {
-                  const edited = getCatEdit(cat);
-                  const isExpanded = expandedCatId === cat.id;
-                  return (
-                    <div key={cat.id}>
-                      {/* Summary row */}
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setExpandedCatId(isExpanded ? null : cat.id)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCatId(isExpanded ? null : cat.id); } }}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
+                {categories.map((cat) => (
+                  <div
+                    key={cat.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setExpandedCatId(expandedCatId === cat.id ? null : cat.id)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCatId(expandedCatId === cat.id ? null : cat.id); } }}
+                    className={cn("flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer", expandedCatId === cat.id && "bg-accent/5")}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: cat.color || "#888" }}
+                    />
+                    <span className="font-medium text-fg truncate">{cat.name || "Untitled"}</span>
+                    <Badge className="text-[10px] shrink-0">{cat.shortform || "—"}</Badge>
+                    <Badge tone="default" className="text-[10px] shrink-0">{(cat.itemSource || "freeform").replace(/_/g, " ")}</Badge>
+                    {cat.isBuiltIn && <Lock className="h-3 w-3 text-fg/30 shrink-0" />}
+                    <span className="flex-1" />
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
+                    </span>
+                  </div>
+                ))}
+
+                {/* Category Drawer */}
+                <AnimatePresence>
+                  {expandedCatId && (() => {
+                    const cat = categories.find((c) => c.id === expandedCatId);
+                    if (!cat) return null;
+                    const edited = getCatEdit(cat);
+                    return (
+                      <motion.div
+                        key="category-drawer"
+                        initial={{ x: "100%" }}
+                        animate={{ x: 0 }}
+                        exit={{ x: "100%" }}
+                        transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                        className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
                       >
-                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
-                        <span
-                          className="h-2 w-2 rounded-full shrink-0"
-                          style={{ backgroundColor: cat.color || "#888" }}
-                        />
-                        <span className="font-medium text-fg truncate">{cat.name || "Untitled"}</span>
-                        <Badge className="text-[10px] shrink-0">{cat.shortform || "—"}</Badge>
-                        <Badge className="text-[10px] shrink-0">{cat.calculationType.replace(/_/g, " ")}</Badge>
-                        {cat.isBuiltIn && <Lock className="h-3 w-3 text-fg/30 shrink-0" />}
-                        <span className="flex-1" />
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
-                        </span>
-                      </div>
-
-                      {/* Expanded editor */}
-                      {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveCat(cat); }}>
-                          <div className="grid grid-cols-3 gap-4">
-                            <div>
-                              <Label>Name</Label>
-                              <Input
-                                value={edited.name}
-                                onChange={(e) => updateCatEdit(cat.id, { name: e.target.value })}
-                                placeholder="Category name"
-                              />
-                            </div>
-                            <div>
-                              <Label>Shortform</Label>
-                              <Input
-                                value={edited.shortform}
-                                onChange={(e) => updateCatEdit(cat.id, { shortform: e.target.value.slice(0, 2) })}
-                                placeholder="LB"
-                                maxLength={2}
-                              />
-                            </div>
-                            <div>
-                              <Label>Entity Type</Label>
-                              <Input
-                                value={edited.entityType}
-                                onChange={(e) => updateCatEdit(cat.id, { entityType: e.target.value })}
-                                placeholder="labour, equipment, etc."
-                              />
-                            </div>
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: edited.color || "#888" }} />
+                            <span className="text-sm font-semibold truncate">{edited.name || "New Category"}</span>
+                            {cat.isBuiltIn && <Lock className="h-3 w-3 text-fg/30 shrink-0" />}
                           </div>
-
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label>Default UOM</Label>
-                              <Select
-                                value={edited.defaultUom}
-                                onChange={(e) => updateCatEdit(cat.id, { defaultUom: e.target.value })}
+                          <div className="flex items-center gap-1">
+                            {!cat.isBuiltIn && (
+                              <button
+                                className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
+                                onClick={() => {
+                                  if (catDeleteConfirm === cat.id) { deleteCat(cat.id); }
+                                  else { setCatDeleteConfirm(cat.id); }
+                                }}
+                                title={catDeleteConfirm === cat.id ? "Confirm delete" : "Delete category"}
                               >
-                                {VALID_UOMS.map((u) => <option key={u} value={u}>{u}</option>)}
-                              </Select>
-                            </div>
-                            <div>
-                              <Label>Valid UOMs</Label>
-                              <Input
-                                value={(edited.validUoms || []).join(", ")}
-                                onChange={(e) => updateCatEdit(cat.id, { validUoms: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
-                                placeholder="EA, LF, SF"
-                              />
-                              <p className="mt-1 text-[11px] text-fg/40">Comma-separated list</p>
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
+                              onClick={() => { saveCat(cat); setExpandedCatId(null); }}
+                              title="Close"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Body */}
+                        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                          {/* Basic Info */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Basic Info</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label>Name</Label>
+                                <Input value={edited.name} onChange={(e) => updateCatEdit(cat.id, { name: e.target.value })} placeholder="Category name" />
+                              </div>
+                              <div>
+                                <Label>Shortform</Label>
+                                <Input value={edited.shortform} onChange={(e) => updateCatEdit(cat.id, { shortform: e.target.value.slice(0, 2) })} placeholder="LB" maxLength={2} />
+                              </div>
+                              <div>
+                                <Label>Entity Type</Label>
+                                <Input value={edited.entityType} onChange={(e) => updateCatEdit(cat.id, { entityType: e.target.value })} placeholder="Labour, Equipment..." />
+                              </div>
+                              <div>
+                                <Label>Color</Label>
+                                <div className="flex items-center gap-2">
+                                  <input type="color" value={edited.color || "#000000"} onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })} className="h-8 w-8 cursor-pointer rounded border border-line" />
+                                  <Input value={edited.color} onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })} placeholder="#000000" className="flex-1" />
+                                </div>
+                              </div>
                             </div>
                           </div>
 
                           <Separator />
-                          <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Editable Fields</p>
-                          <div className="flex flex-wrap gap-4">
-                            {EDITABLE_FIELD_KEYS.map((f) => (
-                              <label key={f.key} className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={edited.editableFields[f.key]}
-                                  onChange={(e) =>
-                                    updateCatEdit(cat.id, {
-                                      editableFields: { ...edited.editableFields, [f.key]: e.target.checked },
-                                    })
-                                  }
-                                  className="rounded border-line accent-accent"
-                                />
-                                {f.label}
-                              </label>
-                            ))}
+
+                          {/* Item Source */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Item Source</p>
+                            <Select
+                              value={edited.itemSource || "freeform"}
+                              onChange={(e) => updateCatEdit(cat.id, { itemSource: e.target.value as EntityCategory["itemSource"] })}
+                            >
+                              {ITEM_SOURCE_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                              ))}
+                            </Select>
+                            <p className="mt-1 text-[11px] text-fg/40">
+                              {ITEM_SOURCE_OPTIONS.find((o) => o.value === (edited.itemSource || "freeform"))?.description}
+                            </p>
+                            {edited.itemSource === "catalog" && (
+                              <div className="mt-3">
+                                <Label>Linked Catalog</Label>
+                                <Select
+                                  value={edited.catalogId || ""}
+                                  onChange={(e) => updateCatEdit(cat.id, { catalogId: e.target.value || null })}
+                                >
+                                  <option value="">Any catalog</option>
+                                  {initialCatalogs.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.name} ({c.kind})</option>
+                                  ))}
+                                </Select>
+                              </div>
+                            )}
+                            {edited.itemSource === "rate_schedule" && (
+                              <p className="mt-2 text-[11px] text-fg/40">Rate schedules are imported per-quote from Settings &gt; Estimating &gt; Rate Schedules.</p>
+                            )}
                           </div>
 
                           <Separator />
-                          <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Labor Hour Labels</p>
-                          <div className="grid grid-cols-3 gap-4">
-                            <div>
-                              <Label>Regular</Label>
-                              <Input
-                                value={edited.laborHourLabels.reg}
-                                onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, reg: e.target.value } })}
-                                placeholder="Regular"
-                              />
-                            </div>
-                            <div>
-                              <Label>Overtime</Label>
-                              <Input
-                                value={edited.laborHourLabels.over}
-                                onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, over: e.target.value } })}
-                                placeholder="Overtime"
-                              />
-                            </div>
-                            <div>
-                              <Label>Double Time</Label>
-                              <Input
-                                value={edited.laborHourLabels.double}
-                                onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, double: e.target.value } })}
-                                placeholder="Double Time"
-                              />
-                            </div>
-                          </div>
 
-                          <Separator />
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label>Calculation Type</Label>
-                              <Select
-                                value={edited.calculationType}
-                                onChange={(e) => updateCatEdit(cat.id, { calculationType: e.target.value as CalculationType })}
-                              >
-                                {CALCULATION_TYPES.map((ct) => (
-                                  <option key={ct.value} value={ct.value}>{ct.label}</option>
-                                ))}
-                              </Select>
-                            </div>
-                            <div>
-                              <Label>Color</Label>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  type="color"
-                                  value={edited.color || "#000000"}
-                                  onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })}
-                                  className="h-8 w-8 cursor-pointer rounded border border-line"
-                                />
+                          {/* Units */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Units</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label>Default UOM</Label>
+                                <Select value={edited.defaultUom} onChange={(e) => updateCatEdit(cat.id, { defaultUom: e.target.value })}>
+                                  {VALID_UOMS.map((u) => <option key={u} value={u}>{u}</option>)}
+                                </Select>
+                              </div>
+                              <div>
+                                <Label>Valid UOMs</Label>
                                 <Input
-                                  value={edited.color}
-                                  onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })}
-                                  placeholder="#000000"
-                                  className="flex-1"
+                                  value={(edited.validUoms || []).join(", ")}
+                                  onChange={(e) => updateCatEdit(cat.id, { validUoms: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                                  placeholder="EA, LF, SF"
                                 />
                               </div>
                             </div>
                           </div>
 
-                          {edited.calculationType === "formula" && (
-                            <div>
-                              <Label>Custom Formula</Label>
-                              <Input
-                                value={edited.calcFormula}
-                                onChange={(e) => updateCatEdit(cat.id, { calcFormula: e.target.value })}
-                                placeholder="qty * cost * (1 + markup)"
-                              />
-                            </div>
-                          )}
+                          <Separator />
 
-                          {/* Actions */}
-                          <div className="flex items-center gap-2 pt-2">
-                            {!cat.isBuiltIn && (
-                              <>
-                                {catDeleteConfirm === cat.id ? (
-                                  <div className="flex items-center gap-2 ml-2">
-                                    <span className="text-xs text-danger">Delete this category?</span>
-                                    <Button
-                                      variant="danger"
-                                      size="xs"
-                                      onClick={() => deleteCat(cat.id)}
-                                      disabled={catDeleting === cat.id}
-                                    >
-                                      {catDeleting === cat.id ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm"}
-                                    </Button>
-                                    <Button variant="secondary" size="xs" onClick={() => setCatDeleteConfirm(null)}>
-                                      Cancel
-                                    </Button>
-                                  </div>
-                                ) : (
-                                  <button
-                                    onClick={() => setCatDeleteConfirm(cat.id)}
-                                    className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors ml-2"
-                                    title="Delete category"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
-                              </>
+                          {/* Editable Fields */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Editable Fields</p>
+                            <div className="flex flex-wrap gap-4">
+                              {EDITABLE_FIELD_KEYS.map((f) => (
+                                <label key={f.key} className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={edited.editableFields[f.key]}
+                                    onChange={(e) => updateCatEdit(cat.id, { editableFields: { ...edited.editableFields, [f.key]: e.target.checked } })}
+                                    className="rounded border-line accent-accent"
+                                  />
+                                  {f.label}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+
+                          <Separator />
+
+                          {/* Labor Hour Labels */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Labor Hour Labels</p>
+                            <div className="grid grid-cols-3 gap-3">
+                              <div>
+                                <Label>Regular</Label>
+                                <Input value={edited.laborHourLabels.reg} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, reg: e.target.value } })} placeholder="Regular" />
+                              </div>
+                              <div>
+                                <Label>Overtime</Label>
+                                <Input value={edited.laborHourLabels.over} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, over: e.target.value } })} placeholder="Overtime" />
+                              </div>
+                              <div>
+                                <Label>Double Time</Label>
+                                <Input value={edited.laborHourLabels.double} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, double: e.target.value } })} placeholder="Double Time" />
+                              </div>
+                            </div>
+                          </div>
+
+                          <Separator />
+
+                          {/* Calculation */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Calculation</p>
+                            <div>
+                              <Label>Calculation Type</Label>
+                              <Select value={edited.calculationType} onChange={(e) => updateCatEdit(cat.id, { calculationType: e.target.value as CalculationType })}>
+                                {CALCULATION_TYPES.map((ct) => (
+                                  <option key={ct.value} value={ct.value}>{ct.label}</option>
+                                ))}
+                              </Select>
+                            </div>
+                            {edited.calculationType === "formula" && (
+                              <div className="mt-3">
+                                <Label>Custom Formula</Label>
+                                <Input value={edited.calcFormula} onChange={(e) => updateCatEdit(cat.id, { calcFormula: e.target.value })} placeholder="qty * cost * (1 + markup)" />
+                              </div>
                             )}
                           </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+
+                        {/* Footer */}
+                        <div className="border-t border-line px-5 py-3 flex items-center justify-end gap-2 bg-panel2/20">
+                          <Button variant="secondary" size="sm" onClick={() => setExpandedCatId(null)}>
+                            Cancel
+                          </Button>
+                          <Button variant="accent" size="sm" onClick={() => { saveCat(cat); setExpandedCatId(null); }}>
+                            Save
+                          </Button>
+                        </div>
+                      </motion.div>
+                    );
+                  })()}
+                </AnimatePresence>
               </div>
             </Card>
           )}

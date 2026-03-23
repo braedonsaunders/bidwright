@@ -252,6 +252,7 @@ export interface WorksheetItemPatchInput {
   laborHourDouble?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 
@@ -272,6 +273,7 @@ export interface CreateWorksheetItemInput {
   laborHourDouble: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
+  itemId?: string | null;
   tierUnits?: Record<string, number>;
 }
 
@@ -715,6 +717,7 @@ function mapWorksheetItem(i: any): WorksheetItem {
     laborHourDouble: i.laborHourDouble,
     lineOrder: i.lineOrder,
     rateScheduleItemId: i.rateScheduleItemId ?? null,
+    itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
   };
 }
@@ -986,6 +989,8 @@ function mapEntityCategory(e: any): EntityCategory {
     laborHourLabels: (e.laborHourLabels as any) ?? {},
     calculationType: e.calculationType as EntityCategory["calculationType"],
     calcFormula: e.calcFormula ?? "",
+    itemSource: (e.itemSource as EntityCategory["itemSource"]) ?? "freeform",
+    catalogId: e.catalogId ?? null,
     color: e.color ?? "#6b7280",
     order: e.order ?? 0,
     isBuiltIn: e.isBuiltIn ?? false,
@@ -1715,6 +1720,8 @@ export class PrismaApiStore {
     if (patch.laborHourLabels !== undefined) data.laborHourLabels = patch.laborHourLabels as any;
     if (patch.calculationType !== undefined) data.calculationType = patch.calculationType;
     if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
+    if (patch.itemSource !== undefined) data.itemSource = patch.itemSource;
+    if (patch.catalogId !== undefined) data.catalogId = patch.catalogId;
     if (patch.color !== undefined) data.color = patch.color;
     if (patch.order !== undefined) data.order = patch.order;
     if (patch.enabled !== undefined) data.enabled = patch.enabled;
@@ -2102,6 +2109,7 @@ export class PrismaApiStore {
       laborHourDouble: input.laborHourDouble,
       lineOrder,
       rateScheduleItemId: input.rateScheduleItemId ?? null,
+      itemId: input.itemId ?? null,
       tierUnits: input.tierUnits ?? {},
     };
 
@@ -2112,7 +2120,10 @@ export class PrismaApiStore {
     const rateScheduleCtx = revisionSchedules.map((s) => ({
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
-    const calculated = calculateLineItem(item, mapRevision(revision), rateScheduleCtx);
+    const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
+    const catDef = entityCats.find((c) => c.name === item.category);
+    const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(item, calculated);
 
     const created = await this.db.worksheetItem.create({
@@ -2135,6 +2146,7 @@ export class PrismaApiStore {
         laborHourDouble: item.laborHourDouble,
         lineOrder: item.lineOrder,
         rateScheduleItemId: item.rateScheduleItemId ?? null,
+        itemId: item.itemId ?? null,
         tierUnits: item.tierUnits ?? {},
       },
     });
@@ -2236,7 +2248,10 @@ export class PrismaApiStore {
     const rateScheduleCtx = revisionSchedules.map((s) => ({
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
-    const calculated = calculateLineItem(domainItem, mapRevision(revision), rateScheduleCtx);
+    const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
+    const updateCatDef = updateEntityCats.find((c) => c.name === domainItem.category);
+    const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
 
     const updated = await this.db.worksheetItem.update({
@@ -2258,6 +2273,7 @@ export class PrismaApiStore {
         laborHourDouble: domainItem.laborHourDouble,
         lineOrder: domainItem.lineOrder,
         rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
+        itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},
       },
     });
@@ -2313,6 +2329,7 @@ export class PrismaApiStore {
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
     const mappedRev = mapRevision(revision);
+    const importEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
     const created: WorksheetItem[] = [];
 
@@ -2338,7 +2355,9 @@ export class PrismaApiStore {
         lineOrder: baseOrder + idx + 1,
       };
 
-      const calculated = calculateLineItem(item, mappedRev, rateScheduleCtx);
+      const importCatDef = importEntityCats.find((c) => c.name === item.category);
+      const importCalcType = (importCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+      const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx);
       Object.assign(item, calculated);
 
       await this.db.worksheetItem.create({

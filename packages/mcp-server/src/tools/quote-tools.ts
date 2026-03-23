@@ -43,6 +43,8 @@ export function registerQuoteTools(server: McpServer) {
         validUoms: ec.validUoms,
         calculationType: ec.calculationType,
         editableFields: ec.editableFields,
+        itemSource: ec.itemSource ?? "freeform",
+        catalogId: ec.catalogId ?? null,
         usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
       }));
 
@@ -70,17 +72,22 @@ export function registerQuoteTools(server: McpServer) {
         }
       }
 
-      const autoCategories = entityCategories.filter((c: any) => c.usesRateSchedule);
-      const manualCategories = entityCategories.filter((c: any) => !c.usesRateSchedule);
+      const rateScheduleCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
+      const catalogCats = entityCategories.filter((c: any) => c.itemSource === "catalog");
+      const freeformCats = entityCategories.filter((c: any) => c.itemSource === "freeform");
       let instructions = "";
-      if (autoCategories.length > 0) {
-        const names = autoCategories.map((c: any) => c.name).join(", ");
+      if (rateScheduleCats.length > 0) {
+        const names = rateScheduleCats.map((c: any) => c.name).join(", ");
         instructions += rateItems.length > 0
-          ? `Categories [${names}] use auto-calculation. Link items via rateScheduleItemId. `
-          : `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up. Use estimated costs and note "NEEDS RATE SCHEDULE". `;
+          ? `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. `
+          : `Categories [${names}] use rate schedules but NONE are imported. Use estimated costs and note "NEEDS RATE SCHEDULE". `;
       }
-      if (manualCategories.length > 0) {
-        instructions += `Categories [${manualCategories.map((c: any) => c.name).join(", ")}] use manual pricing — set cost and quantity directly.`;
+      if (catalogCats.length > 0) {
+        const names = catalogCats.map((c: any) => c.name).join(", ");
+        instructions += `Categories [${names}] use catalog items. Set itemId to link to a catalog item. `;
+      }
+      if (freeformCats.length > 0) {
+        instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
       return {
@@ -121,7 +128,8 @@ export function registerQuoteTools(server: McpServer) {
       laborHourReg: z.number().default(0).describe("Regular labor hours (for Labour items)"),
       laborHourOver: z.number().default(0).describe("Overtime hours"),
       laborHourDouble: z.number().default(0).describe("Double-time hours"),
-      rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for auto-calculated categories"),
+      rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
+      itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       phaseId: z.string().optional().describe("Phase ID"),
     },
     async (input) => {
@@ -151,8 +159,10 @@ export function registerQuoteTools(server: McpServer) {
       laborHourOver: z.number().optional(),
       laborHourDouble: z.number().optional(),
       rateScheduleItemId: z.string().optional(),
+      catalogItemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
     },
-    async ({ itemId, ...patch }) => {
+    async ({ itemId, catalogItemId, ...patch }) => {
+      if (catalogItemId) (patch as any).itemId = catalogItemId;
       const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
       return { content: [{ type: "text" as const, text: `Updated item ${itemId}` }] };
     }
@@ -220,6 +230,46 @@ export function registerQuoteTools(server: McpServer) {
     async () => {
       await apiPost(projectPath("/recalculate"), {});
       return { content: [{ type: "text" as const, text: "Totals recalculated" }] };
+    }
+  );
+
+  // ── importRateSchedule ───────────────────────────────────
+  server.tool(
+    "importRateSchedule",
+    "Import a global (org-level) rate schedule into the current quote revision. This creates a revision-scoped copy with all tiers and items. Required before Labour/rate_schedule items can be created.",
+    {
+      globalScheduleId: z.string().describe("ID of the global rate schedule to import"),
+    },
+    async ({ globalScheduleId }) => {
+      const data = await apiPost(projectPath("/rate-schedules/import"), { sourceScheduleId: globalScheduleId });
+      return { content: [{ type: "text" as const, text: `Imported rate schedule into current revision` }] };
+    }
+  );
+
+  // ── listRateScheduleItems ──────────────────────────────
+  server.tool(
+    "listRateScheduleItems",
+    "List all rate schedule items available in the current revision. Optionally filter by category (e.g. 'labour', 'equipment').",
+    {
+      category: z.string().optional().describe("Filter by schedule category (e.g. 'labour', 'equipment')"),
+    },
+    async ({ category }) => {
+      const data = await apiGet(projectPath("/workspace"));
+      const ws = data.workspace || data;
+      const items: any[] = [];
+      for (const rs of (ws.rateSchedules || [])) {
+        if (category && rs.category !== category) continue;
+        const tiers = (rs.tiers || []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier }));
+        for (const item of (rs.items || [])) {
+          items.push({
+            rateScheduleItemId: item.id, name: item.name, code: item.code,
+            unit: item.unit, forCategory: rs.category, scheduleName: rs.name,
+            rates: item.rates, costRates: item.costRates,
+            burden: item.burden, perDiem: item.perDiem, tiers,
+          });
+        }
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
     }
   );
 
