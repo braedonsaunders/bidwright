@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
 import { Badge, Button, EmptyState, Select } from "@/components/ui";
 import {
   startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
@@ -128,6 +128,70 @@ function FileAccessWidget({ tc }: { tc: ToolCallEntry }) {
       )}
     </div>
   );
+}
+
+// ─── Agent Sub-Task Widget ────────────────────────────────────────────
+
+function AgentWidget({ tc, isRunning }: { tc: ToolCallEntry; isRunning: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const input = tc.input as any;
+  // Extract a short description from the agent prompt
+  const prompt = input?.prompt || input?.description || "";
+  const shortPrompt = prompt.length > 120 ? prompt.substring(0, 120) + "..." : prompt;
+  const hasResult = tc.result.duration_ms > 0 || tc.result.data;
+
+  return (
+    <div className="rounded-lg border border-accent/20 bg-accent/[0.03] overflow-hidden">
+      <button
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent/10 shrink-0">
+          {!hasResult && isRunning ? (
+            <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />
+          ) : (
+            <Bot className="h-3.5 w-3.5 text-accent" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[11px] font-medium text-accent/80">Sub-Agent</div>
+          <div className="text-[10px] text-fg/40 truncate">{shortPrompt || "Working..."}</div>
+        </div>
+        {hasResult ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+        ) : isRunning ? (
+          <span className="text-[9px] text-accent/60 shrink-0 animate-pulse">running</span>
+        ) : null}
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 text-fg/20 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3 w-3 text-fg/20 shrink-0" />
+        )}
+      </button>
+      {expanded && (
+        <div className="border-t border-accent/10 px-3 py-2 space-y-1.5">
+          {prompt && (
+            <div>
+              <div className="text-[9px] text-fg/25 uppercase tracking-wider mb-0.5">Task</div>
+              <div className="text-[10px] text-fg/50 whitespace-pre-wrap">{prompt}</div>
+            </div>
+          )}
+          {tc.result.data && (
+            <div>
+              <div className="text-[9px] text-fg/25 uppercase tracking-wider mb-0.5">Result</div>
+              <pre className="max-h-40 overflow-auto rounded bg-bg/50 p-1.5 text-[10px] text-fg/40 whitespace-pre-wrap break-all">
+                {typeof tc.result.data === "string" ? tc.result.data : JSON.stringify(tc.result.data, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isAgentTool(toolId: string): boolean {
+  return toolId === "Agent" || toolId === "agent";
 }
 
 // ─── Tool Call Detail ─────────────────────────────────────────────────
@@ -1025,6 +1089,9 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     input: evt.data?.input || {},
                     result: { success: evt.data?.success ?? true, duration_ms: evt.data?.duration_ms ?? 0 },
                   };
+                  if (isAgentTool(toolId)) {
+                    return <AgentWidget key={key} tc={tc} isRunning={isIntakeRunning} />;
+                  }
                   if (isFileAccessTool(toolId)) {
                     return <FileAccessWidget key={key} tc={tc} />;
                   }

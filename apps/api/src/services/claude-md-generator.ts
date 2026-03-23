@@ -163,6 +163,14 @@ You decide your own workflow. Here's the recommended approach:
 - Cite source documents in descriptions (e.g. "Per spec Section 12b")
 - Use Sub-agents (Agent tool) if you need to process multiple worksheets in parallel
 - Save progress to memory frequently so you can resume if stopped
+
+## Progress Reporting
+
+The user watches your work in real-time. Keep them informed:
+- Call \`reportProgress\` before major phases (reading docs, creating worksheets, populating items)
+- When you launch sub-agents, **output a text message** describing what each one is doing (e.g. "Launching 3 sub-agents to populate worksheets 01-03 in parallel")
+- After sub-agents complete, **output a summary** of what was created (e.g. "Sub-agents completed: 45 items created across 3 worksheets")
+- If a long operation is running, periodically output status text so the user knows you're still working
 `;
 }
 
