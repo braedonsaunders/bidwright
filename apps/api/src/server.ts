@@ -606,25 +606,9 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
       const sanitized = sanitizeFileName(fileName);
       const ext = path.extname(fileName).toLowerCase();
       const docId = createId("doc");
+      const relStoragePath = path.join("projects", targetProjectId!, "documents", sanitized);
 
-      await prisma.sourceDocument.create({
-        data: {
-          id: docId,
-          projectId: targetProjectId!,
-          fileName: sanitized,
-          fileType: ext.replace(".", ""),
-          documentType: "reference",
-          pageCount: 0,
-          checksum: "",
-          storagePath: "",
-          extractedText: "",
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-      placeholderDocIds.push(docId);
-
-      // Extract file to disk for CLI
+      // Extract file to disk FIRST so storagePath is valid
       try {
         const fileData = await zip.file(relativePath)?.async("nodebuffer");
         if (fileData) {
@@ -632,6 +616,30 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
           await writeFile(diskPath, fileData);
         }
       } catch {}
+
+      // Classify document type from filename
+      const lowerName = fileName.toLowerCase();
+      const docType = lowerName.includes("spec") ? "specification"
+        : (lowerName.includes("pid") || lowerName.includes("p&id")) ? "drawing"
+        : (lowerName.includes("rfq") || lowerName.includes("quotation")) ? "rfp"
+        : "reference";
+
+      await prisma.sourceDocument.create({
+        data: {
+          id: docId,
+          projectId: targetProjectId!,
+          fileName: sanitized,
+          fileType: ext.replace(".", ""),
+          documentType: docType,
+          pageCount: 0,
+          checksum: "",
+          storagePath: relStoragePath,
+          extractedText: "",
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      placeholderDocIds.push(docId);
     }
   } catch (err) {
     console.error("[upload] Failed to create placeholder docs:", err);
@@ -671,7 +679,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     console.error(`[ingestion] Package ${multipartUpload.packageId} failed:`, err);
   });
 
-  // Return project info immediately so the UI can navigate to the workspace
+  // Return project info — all files are already on disk and SourceDocument records exist
   const project = await store.getProject(targetProjectId);
   const workspace = await store.getWorkspace(targetProjectId);
   reply.code(201);
@@ -679,9 +687,9 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     project,
     quote: workspace?.quote ?? null,
     revision: workspace?.currentRevision ?? null,
-    documents: [],
+    documentCount: placeholderDocIds.length,
     status: "processing",
-    message: "Package uploaded. Document extraction is running in the background.",
+    message: `Package uploaded. ${placeholderDocIds.length} documents ready. Text extraction running in background.`,
   };
 }
 

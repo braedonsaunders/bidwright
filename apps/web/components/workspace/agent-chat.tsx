@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Loader2, RefreshCw, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
 import { Badge, Button, EmptyState, Select } from "@/components/ui";
 import {
   startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
@@ -67,6 +67,67 @@ const QUICK_PROMPTS = [
   "What equipment do we need?",
   "Identify gaps in the bid package",
 ];
+
+// ─── File Access Detection ────────────────────────────────────────────
+
+const FILE_TOOL_IDS = new Set(["Read", "Glob", "Grep"]);
+
+function isFileAccessTool(toolId: string): boolean {
+  return FILE_TOOL_IDS.has(toolId);
+}
+
+function getFileIcon(fileName: string) {
+  const ext = fileName.split(".").pop()?.toLowerCase();
+  switch (ext) {
+    case "pdf": return <FileText className="h-3.5 w-3.5 text-red-400 shrink-0" />;
+    case "xlsx": case "xls": case "csv": return <FileSpreadsheet className="h-3.5 w-3.5 text-green-400 shrink-0" />;
+    case "png": case "jpg": case "jpeg": case "dwg": return <FileImage className="h-3.5 w-3.5 text-blue-400 shrink-0" />;
+    default: return <FileText className="h-3.5 w-3.5 text-fg/30 shrink-0" />;
+  }
+}
+
+function extractFileName(input: any): string | null {
+  if (!input) return null;
+  const filePath = input.file_path || input.path || input.pattern || "";
+  if (!filePath) return null;
+  // Get just the filename from full path
+  const parts = filePath.split("/");
+  return parts[parts.length - 1] || filePath;
+}
+
+// ─── File Access Widget ───────────────────────────────────────────────
+
+function FileAccessWidget({ tc }: { tc: ToolCallEntry }) {
+  const fileName = extractFileName(tc.input);
+  const isGlob = tc.toolId === "Glob";
+  const isGrep = tc.toolId === "Grep";
+  const pages = (tc.input as any)?.pages;
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-line/50 bg-bg/40 px-2.5 py-1.5">
+      {isGlob ? (
+        <FolderSearch className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+      ) : isGrep ? (
+        <Search className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+      ) : (
+        fileName ? getFileIcon(fileName) : <FileText className="h-3.5 w-3.5 text-fg/30 shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <span className="text-[11px] font-medium text-fg/60 truncate block">
+          {isGlob ? `Searching: ${(tc.input as any)?.pattern || "..."}` :
+           isGrep ? `Grep: ${(tc.input as any)?.pattern || "..."}` :
+           fileName || "Reading file..."}
+        </span>
+        {pages && <span className="text-[9px] text-fg/25">pages {pages}</span>}
+      </div>
+      {tc.result.success ? (
+        <CheckCircle2 className="h-3 w-3 shrink-0 text-success/60" />
+      ) : (
+        <XCircle className="h-3 w-3 shrink-0 text-danger/60" />
+      )}
+    </div>
+  );
+}
 
 // ─── Tool Call Detail ─────────────────────────────────────────────────
 
@@ -847,7 +908,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                   );
                 }
 
-                // Tool call item
+                // Tool call item — use file widget for Read/Glob/Grep
+                if (isFileAccessTool(item.tc.toolId)) {
+                  return <FileAccessWidget key={item.id} tc={item.tc} />;
+                }
                 return (
                   <ToolCallDetail key={item.id} tc={item.tc} />
                 );
