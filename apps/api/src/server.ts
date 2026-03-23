@@ -148,7 +148,10 @@ const worksheetItemPatchSchema = z.object({
   laborHourReg: z.number().finite().optional(),
   laborHourOver: z.number().finite().optional(),
   laborHourDouble: z.number().finite().optional(),
-  lineOrder: z.number().int().optional()
+  lineOrder: z.number().int().optional(),
+  rateScheduleItemId: z.string().nullable().optional(),
+  itemId: z.string().nullable().optional(),
+  tierUnits: z.record(z.number()).optional(),
 });
 const createWorksheetItemSchema = z.object({
   phaseId: z.string().nullable().optional(),
@@ -167,6 +170,7 @@ const createWorksheetItemSchema = z.object({
   laborHourDouble: z.coerce.number().finite().default(0),
   lineOrder: z.coerce.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
+  itemId: z.string().nullable().optional(),
   tierUnits: z.record(z.number()).optional(),
 });
 const createWorksheetSchema = z.object({
@@ -573,67 +577,74 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     sourceKind
   });
 
-  // Create SourceDocument records immediately from ZIP entries so documents appear in file browser right away
-  // Text extraction + Azure DI will update these records later during async ingestion
+  // List ZIP entries immediately and create placeholder SourceDocument records
+  // so the file browser shows documents right away. The async ingestion will
+  // UPDATE these records with extracted text, page counts, and Azure DI data.
+  const placeholderDocIds: string[] = [];
   try {
     const JSZip = (await import("jszip")).default;
     const zipData = await readFile(multipartUpload.storagePath);
     const zip = await JSZip.loadAsync(zipData);
     const now = new Date();
-    const docEntries: Array<{ relativePath: string; size: number }> = [];
+
+    // Also extract files to disk for CLI access
+    const docsDir = resolveApiPath("projects", targetProjectId!, "documents");
+    await mkdir(docsDir, { recursive: true });
+
+    const entries: string[] = [];
     zip.forEach((relativePath, entry) => {
       if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
         const ext = path.extname(relativePath).toLowerCase();
         if ([".pdf", ".xlsx", ".xls", ".csv", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".dwg", ".dxf", ".txt"].includes(ext)) {
-          docEntries.push({ relativePath, size: (entry as any)._data?.uncompressedSize || 0 });
+          entries.push(relativePath);
         }
       }
     });
 
-    // Also save the original files to disk immediately for CLI access
-    const docsDir = resolveApiPath("projects", targetProjectId, "documents");
-    await mkdir(docsDir, { recursive: true });
-
-    for (const entry of docEntries) {
-      const fileName = path.basename(entry.relativePath);
+    for (const relativePath of entries) {
+      const fileName = path.basename(relativePath);
       const sanitized = sanitizeFileName(fileName);
       const ext = path.extname(fileName).toLowerCase();
       const docId = createId("doc");
-      const storagePath = `packages/${multipartUpload.packageId}/originals/${docId}/${sanitized}`;
 
-      // Create SourceDocument immediately (empty extractedText — will be populated by ingestion)
       await prisma.sourceDocument.create({
         data: {
           id: docId,
-          projectId: targetProjectId,
+          projectId: targetProjectId!,
           fileName: sanitized,
           fileType: ext.replace(".", ""),
-          documentType: ext === ".pdf" ? "reference" : "data",
-          pageCount: 0, // Updated by ingestion
+          documentType: "reference",
+          pageCount: 0,
           checksum: "",
-          storagePath,
-          extractedText: "", // Updated by ingestion + Azure DI
+          storagePath: "",
+          extractedText: "",
           createdAt: now,
           updatedAt: now,
         },
       });
+      placeholderDocIds.push(docId);
 
-      // Extract and save the actual file to disk for immediate CLI access
-      const fileData = await zip.file(entry.relativePath)?.async("nodebuffer");
-      if (fileData) {
-        const diskPath = resolveApiPath(storagePath);
-        await mkdir(path.dirname(diskPath), { recursive: true });
-        await writeFile(diskPath, fileData);
-        // Also symlink into documents/ for CLI
-        const symlinkTarget = path.join(docsDir, sanitized);
-        if (!existsSync(symlinkTarget)) {
-          try { await symlink(diskPath, symlinkTarget); } catch {}
+      // Extract file to disk for CLI
+      try {
+        const fileData = await zip.file(relativePath)?.async("nodebuffer");
+        if (fileData) {
+          const diskPath = path.join(docsDir, sanitized);
+          await writeFile(diskPath, fileData);
         }
-      }
+      } catch {}
     }
   } catch (err) {
-    console.error("[upload] Failed to create immediate SourceDocuments:", err);
-    // Non-critical — full ingestion will handle everything
+    console.error("[upload] Failed to create placeholder docs:", err);
+  }
+
+  // Store placeholder doc IDs so ingestion can clean them up when it creates real docs
+  if (placeholderDocIds.length > 0) {
+    try {
+      await prisma.storedPackage.update({
+        where: { id: multipartUpload.packageId },
+        data: { documentIds: placeholderDocIds },
+      });
+    } catch {}
   }
 
   // Run ingestion asynchronously — return immediately so the UI can redirect
