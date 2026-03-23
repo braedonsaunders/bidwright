@@ -269,14 +269,79 @@ export function registerCliRoutes(app: FastifyInstance) {
   });
 
   // ── Send Message to Session ─────────────────────────────────
+  // Spawns a new CLI session with --resume if the previous session completed,
+  // or returns error if a session is already running.
   app.post("/api/cli/:projectId/message", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const { message } = (request.body || {}) as { message: string };
 
     if (!message) return reply.code(400).send({ error: "Message required" });
 
-    const sent = sendMessage(projectId, message);
-    return { sent };
+    const existing = getSession(projectId);
+    if (existing && existing.status === "running") {
+      return reply.code(409).send({ error: "Session is already running. Stop it first or wait for it to complete." });
+    }
+
+    // Spawn a new session with the user's message as the prompt
+    // Claude Code will read CLAUDE.md + agent-memory.json for context
+    const projectDir = resolveProjectDir(projectId);
+    const store = request.store!;
+    const settings = await store.getSettings();
+    const integrations = (settings as any)?.integrations || {};
+
+    const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    await prisma.aiRun.create({
+      data: {
+        id: sessionId,
+        projectId,
+        kind: "cli-intake",
+        status: "running",
+        model: "sonnet",
+        input: { runtime: "claude-code", prompt: message } as any,
+        output: { events: [] } as any,
+      },
+    });
+
+    try {
+      const session = await spawnSession({
+        projectId,
+        projectDir,
+        prompt: message,
+        runtime: "claude-code",
+        model: "sonnet",
+        authToken: request.headers.authorization?.replace("Bearer ", "") || "",
+        apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
+        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
+      });
+
+      // Set up event persistence (same as start)
+      let eventBuffer: any[] = [];
+      let saveTimer: ReturnType<typeof setTimeout> | null = null;
+      const flushEvents = async () => {
+        if (eventBuffer.length === 0) return;
+        const toSave = [...eventBuffer];
+        eventBuffer = [];
+        try {
+          const run = await prisma.aiRun.findFirst({ where: { id: sessionId } });
+          const existing = ((run?.output as any)?.events || []);
+          await prisma.aiRun.update({ where: { id: sessionId }, data: { output: { events: [...existing, ...toSave] } as any } });
+        } catch { eventBuffer.unshift(...toSave); }
+      };
+      session.events.on("event", (evt: any) => {
+        eventBuffer.push({ ...evt, timestamp: new Date().toISOString() });
+        if (!saveTimer) saveTimer = setTimeout(async () => { saveTimer = null; await flushEvents(); }, 3000);
+      });
+      session.events.on("done", async (finalStatus: string) => {
+        if (saveTimer) clearTimeout(saveTimer);
+        await flushEvents();
+        await prisma.aiRun.update({ where: { id: sessionId }, data: { status: finalStatus } }).catch(() => {});
+      });
+
+      return { sessionId, status: "running", message: "New session started with your message" };
+    } catch (err) {
+      await prisma.aiRun.update({ where: { id: sessionId }, data: { status: "failed" } }).catch(() => {});
+      return reply.code(500).send({ error: err instanceof Error ? err.message : "Failed to start session" });
+    }
   });
 
   // ── Session Status ──────────────────────────────────────────

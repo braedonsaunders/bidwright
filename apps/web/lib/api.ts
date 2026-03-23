@@ -2993,6 +2993,54 @@ export async function runVisionCropRegion(input: {
   });
 }
 
+// ── Vision / Find Symbols ────────────────────────────────────────────────
+
+export interface VisionFindSymbolsResult {
+  success: boolean;
+  candidates: { x: number; y: number; w: number; h: number; area: number; cx: number; cy: number; aspect: number }[];
+  total: number;
+  imageWidth: number;
+  imageHeight: number;
+  duration_ms: number;
+}
+
+export async function runVisionFindSymbols(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber?: number;
+  minSize?: number;
+  maxSize?: number;
+}) {
+  return apiRequest<VisionFindSymbolsResult>("/api/vision/find-symbols", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+// ── Vision / Count Symbols All Pages ─────────────────────────────────────
+
+export interface VisionCountAllPagesResult {
+  success: boolean;
+  documentId: string;
+  pages: { pageNumber: number; matches: VisionMatch[]; totalCount: number; errors: string[] }[];
+  grandTotal: number;
+  pageCount: number;
+}
+
+export async function runVisionCountAllPages(input: {
+  projectId: string;
+  documentId: string;
+  boundingBox: VisionBoundingBox;
+  threshold?: number;
+}) {
+  return apiRequest<VisionCountAllPagesResult>("/api/vision/count-symbols-all-pages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Intake Orchestration
 // ---------------------------------------------------------------------------
@@ -3090,7 +3138,7 @@ export async function resumeCliSession(projectId: string, prompt?: string) {
 }
 
 export async function sendCliMessage(projectId: string, message: string) {
-  return apiRequest<{ sent: boolean }>(`/api/cli/${projectId}/message`, {
+  return apiRequest<{ sent?: boolean; sessionId?: string; status?: string; message?: string }>(`/api/cli/${projectId}/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
