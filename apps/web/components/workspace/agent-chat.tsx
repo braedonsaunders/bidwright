@@ -51,7 +51,7 @@ function intakeStorageKey(projectId: string) {
   return `bw_intake_${projectId}`;
 }
 
-const MUTATING_TOOL_PATTERNS = /^(quote\.(create|update|delete)|knowledge\.(add|update|remove|ingest|index)|system\.logActivity)/;
+const MUTATING_TOOL_PATTERNS = /^(quote\.(create|update|delete)|knowledge\.(add|update|remove|ingest|index)|system\.logActivity|mcp__bidwright__(create|update|delete|import|recalculate))/;
 
 function hasMutatingToolCalls(toolCalls: Array<{ toolId: string; result?: { sideEffects?: string[] } }>): boolean {
   return toolCalls.some(
@@ -432,6 +432,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         result: { success: true, duration_ms: 0 }, // Updated when tool_result arrives
       }]);
       setIntakeStatus((prev) => prev ? { ...prev, toolCallCount: toolCount } : prev);
+      // Refresh workspace when mutating tools are called
+      if (data.toolId && MUTATING_TOOL_PATTERNS.test(data.toolId)) {
+        onWorkspaceMutated?.();
+      }
     });
 
     es.addEventListener("tool_result", (e) => {
@@ -449,10 +453,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         }
         return updated;
       });
-      // Check for mutations → refresh workspace
-      if (data.toolId && MUTATING_TOOL_PATTERNS.test(data.toolId)) {
-        onWorkspaceMutated?.();
-      }
     });
 
     es.addEventListener("message", (e) => {

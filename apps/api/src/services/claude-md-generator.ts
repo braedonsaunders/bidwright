@@ -127,7 +127,7 @@ You decide your own workflow. Here's what a senior estimator would do:
 2. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
 3. **Check memory** — see if there's progress from a prior session
 4. **Query knowledge** — search for relevant man-hour data, productivity rates
-5. **Update the quote description** — write a detailed scope summary
+5. **Update the quote immediately** — call updateQuote with a proper projectName (from the spec/RFQ title) and a detailed description summarizing the scope. Do this EARLY so the user sees it on the page right away.
 6. **Create worksheets** — one per major system/trade/division
 7. **Populate items** — read relevant docs, create line items with descriptions citing sources
 8. **Add conditions** — exclusions, clarifications, assumptions
