@@ -55,8 +55,24 @@ async function symlinkProjectDocuments(
   documents: Array<{ fileName: string; storagePath?: string }>,
 ): Promise<void> {
   const docsDir = join(projectDir, "documents");
-  await mkdir(docsDir, { recursive: true });
 
+  // Strategy: symlink the actual project documents directory if it exists.
+  // This way, files added/deleted after agent starts are automatically visible.
+  // The real documents live at {dataRoot}/projects/{projectId}/documents/
+  const projectId = projectDir.split("/").pop() ?? "";
+  const realDocsDir = join(dataRoot, "projects", projectId, "documents");
+
+  if (existsSync(realDocsDir) && !existsSync(docsDir)) {
+    try {
+      await symlink(realDocsDir, docsDir);
+      return; // Directory symlink covers everything
+    } catch {
+      // Fall through to individual file symlinks
+    }
+  }
+
+  // Fallback: individual file symlinks (for cases where dir symlink fails)
+  await mkdir(docsDir, { recursive: true });
   for (const doc of documents) {
     if (!doc.storagePath) continue;
     const sourcePath = join(dataRoot, doc.storagePath);
@@ -65,7 +81,7 @@ async function symlinkProjectDocuments(
       try {
         await symlink(sourcePath, targetPath);
       } catch {
-        // Symlink might fail if file already exists or permissions issue — skip
+        // Skip
       }
     }
   }
