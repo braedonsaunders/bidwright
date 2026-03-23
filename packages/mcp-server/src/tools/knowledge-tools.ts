@@ -74,6 +74,81 @@ export function registerKnowledgeTools(server: McpServer) {
     }
   );
 
+  // ── createDataset ────────────────────────────────────────
+  server.tool(
+    "createDataset",
+    "Create a new structured dataset with columns and rows. Use this to store extracted table data from knowledge books. Include rich tags for searchability.",
+    {
+      name: z.string().describe("Descriptive dataset name"),
+      description: z.string().describe("What this dataset contains, source section, any conditions/notes"),
+      category: z.enum(["estimating", "labour", "equipment", "materials", "safety", "standards", "custom"]).default("estimating"),
+      tags: z.array(z.string()).describe("Rich search tags: material type, operation, units, etc."),
+      sourceBookId: z.string().optional().describe("Knowledge book ID this was extracted from"),
+      sourcePages: z.string().optional().describe("Page range(s) e.g. '85-87, 100'"),
+      columns: z.array(z.object({
+        key: z.string().describe("Column key (snake_case)"),
+        label: z.string().describe("Human-readable column name"),
+        type: z.enum(["string", "number", "date", "boolean"]).default("string"),
+      })).describe("Column definitions"),
+      rows: z.array(z.record(z.string(), z.any())).describe("Array of row objects with column keys as keys"),
+    },
+    async ({ name, description, category, tags, sourceBookId, sourcePages, columns, rows }) => {
+      // Create the dataset
+      const dataset = await apiPost(`/datasets`, {
+        name,
+        description,
+        category,
+        scope: "global",
+        columns,
+        source: "book-extraction",
+        sourceDescription: sourceBookId ? `Extracted from knowledge book ${sourceBookId}` : "AI extraction",
+        sourceBookId,
+        sourcePages: sourcePages || "",
+        tags,
+      });
+
+      // Insert rows in batch
+      if (rows.length > 0) {
+        await apiPost(`/datasets/${dataset.id}/rows/batch`, { rows });
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            success: true,
+            datasetId: dataset.id,
+            name,
+            rowCount: rows.length,
+            columnCount: columns.length,
+            tags,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── listDatasets ────────────────────────────────────────
+  server.tool(
+    "listDatasets",
+    "List all existing datasets in the organization. Returns name, description, tags, row count, and column info.",
+    {},
+    async () => {
+      const data = await apiGet(`/datasets`);
+      const datasets = (Array.isArray(data) ? data : data.datasets || []).map((d: any) => ({
+        id: d.id,
+        name: d.name,
+        description: d.description?.substring(0, 100),
+        category: d.category,
+        tags: d.tags,
+        rowCount: d.rowCount,
+        columns: d.columns?.map((c: any) => c.label || c.key),
+        source: d.source,
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify(datasets, null, 2) }] };
+    }
+  );
+
   // ── getDocumentStructured ─────────────────────────────────
   server.tool(
     "getDocumentStructured",
@@ -82,7 +157,7 @@ export function registerKnowledgeTools(server: McpServer) {
       documentId: z.string().describe("SourceDocument ID"),
     },
     async ({ documentId }) => {
-      const data = await apiGet(`/knowledge/documents/${getProjectId()}/${documentId}`);
+      const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}`);
       // Return structured data if available
       const doc = data.document || data;
       const result: any = {
@@ -151,7 +226,7 @@ export function registerKnowledgeTools(server: McpServer) {
     "List all project documents with their metadata — fileName, fileType, documentType, pageCount, whether structured data is available. Use this to understand what documents you have before reading them.",
     {},
     async () => {
-      const data = await apiGet(`/knowledge/documents/${getProjectId()}/enhanced`);
+      const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/enhanced`);
       const docs = (data.documents || data || []).map((d: any) => ({
         id: d.id,
         fileName: d.fileName,

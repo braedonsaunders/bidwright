@@ -222,6 +222,7 @@ export interface RevisionPatchInput {
   doubleHours?: number;
   breakoutPackage?: unknown[];
   calculatedCategoryTotals?: unknown[];
+  pdfPreferences?: Record<string, unknown>;
 }
 
 export interface QuotePatchInput {
@@ -536,6 +537,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
   integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "" },
   brand: DEFAULT_BRAND,
+  termsAndConditions: "",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -682,6 +684,7 @@ function mapRevision(r: any): QuoteRevision {
     doubleHours: r.doubleHours,
     breakoutPackage: (r.breakoutPackage as unknown[]) ?? [],
     calculatedCategoryTotals: (r.calculatedCategoryTotals as unknown[]) ?? [],
+    pdfPreferences: (r.pdfPreferences as Record<string, unknown>) ?? {},
     subtotal: r.subtotal,
     cost: r.cost,
     estimatedProfit: r.estimatedProfit,
@@ -2061,6 +2064,7 @@ export class PrismaApiStore {
     const data: any = { ...patch };
     if (patch.breakoutPackage !== undefined) data.breakoutPackage = patch.breakoutPackage as any;
     if (patch.calculatedCategoryTotals !== undefined) data.calculatedCategoryTotals = patch.calculatedCategoryTotals as any;
+    if (patch.pdfPreferences !== undefined) data.pdfPreferences = patch.pdfPreferences as any;
 
     const updated = await this.db.quoteRevision.update({
       where: { id: revisionId },
@@ -2659,7 +2663,7 @@ export class PrismaApiStore {
         pageCount: inferPageCount(document, report.chunks),
         checksum: checksumForDocument(checksum, document),
         storagePath: binaryPathMap.get(document.id) ?? relativePackageDocumentArtifact(packageId, document.id, document.title),
-        extractedText: document.text,
+        extractedText: document.text?.replace(/\0/g, "") ?? null,
         structuredData: document.structuredData ?? null,
         createdAt: timestampISO,
         updatedAt: timestampISO,
@@ -2674,19 +2678,21 @@ export class PrismaApiStore {
 
         // Create new documents
         for (const doc of sourceDocuments) {
+          // Strip null bytes (0x00) — PostgreSQL rejects them in text columns
+          const sanitize = (s: string | null | undefined) => s?.replace(/\0/g, "") ?? null;
           await tx.sourceDocument.create({
             data: {
               id: doc.id,
               projectId: doc.projectId,
-              fileName: doc.fileName,
+              fileName: sanitize(doc.fileName) ?? doc.fileName,
               fileType: doc.fileType,
               documentType: doc.documentType,
               pageCount: doc.pageCount,
               checksum: doc.checksum,
               storagePath: doc.storagePath,
-              extractedText: doc.extractedText,
+              extractedText: sanitize(doc.extractedText),
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              structuredData: doc.structuredData ? (doc.structuredData as any) : undefined,
+              structuredData: doc.structuredData ? JSON.parse(JSON.stringify(doc.structuredData).replace(/\0/g, "")) : undefined,
               createdAt: timestamp,
               updatedAt: timestamp,
             },
@@ -4946,6 +4952,7 @@ export class PrismaApiStore {
       defaults: (settings.defaults as any) ?? DEFAULT_SETTINGS.defaults,
       integrations: (settings.integrations as any) ?? DEFAULT_SETTINGS.integrations,
       brand: (settings.brand as any) ?? DEFAULT_BRAND,
+      termsAndConditions: settings.termsAndConditions ?? "",
     } as AppSettings;
   }
 
@@ -4958,6 +4965,7 @@ export class PrismaApiStore {
       defaults: patch.defaults ? { ...existing.defaults, ...patch.defaults } : existing.defaults,
       integrations: patch.integrations ? { ...existing.integrations, ...patch.integrations } : existing.integrations,
       brand: patch.brand ? { ...existing.brand, ...patch.brand } : existing.brand,
+      termsAndConditions: patch.termsAndConditions ?? existing.termsAndConditions ?? "",
     };
 
     await this.db.organizationSettings.upsert({
@@ -4969,6 +4977,7 @@ export class PrismaApiStore {
         defaults: merged.defaults as any,
         integrations: merged.integrations as any,
         brand: merged.brand as any,
+        termsAndConditions: merged.termsAndConditions,
         updatedAt: new Date(),
       },
       update: {
@@ -4977,6 +4986,7 @@ export class PrismaApiStore {
         defaults: merged.defaults as any,
         integrations: merged.integrations as any,
         brand: merged.brand as any,
+        termsAndConditions: merged.termsAndConditions,
         updatedAt: new Date(),
       },
     });
@@ -5209,6 +5219,9 @@ export class PrismaApiStore {
     columns: Dataset["columns"];
     source?: Dataset["source"];
     sourceDescription?: string;
+    sourceBookId?: string | null;
+    sourcePages?: string;
+    tags?: string[];
   }): Promise<Dataset> {
     const dataset = await this.db.dataset.create({
       data: {
@@ -5222,6 +5235,9 @@ export class PrismaApiStore {
         columns: input.columns as any,
         source: input.source ?? "manual",
         sourceDescription: input.sourceDescription ?? "",
+        sourceBookId: input.sourceBookId ?? null,
+        sourcePages: input.sourcePages ?? "",
+        tags: input.tags ?? [],
         createdAt: new Date(),
         updatedAt: new Date(),
       },
