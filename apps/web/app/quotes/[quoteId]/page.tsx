@@ -1,23 +1,24 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import { useEffect } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { getProjects } from "@/lib/api";
 
-export default async function QuoteDetailPage({
-  params,
-}: {
-  params: Promise<{ quoteId: string }>;
-}) {
-  const { quoteId } = await params;
+export default function QuoteDetailPage() {
+  const { quoteId } = useParams<{ quoteId: string }>();
+  const router = useRouter();
 
-  try {
-    const projects = await getProjects();
-    const project = projects.find((p) => p.quote.id === quoteId);
-
-    if (project) {
-      redirect(`/projects/${project.id}`);
-    }
-  } catch {
-    // fall through to message below
-  }
+  useEffect(() => {
+    if (!quoteId) return;
+    getProjects()
+      .then((projects) => {
+        const project = projects.find((p) => p.quote?.id === quoteId);
+        if (project) {
+          router.replace(`/projects/${project.id}`);
+        }
+      })
+      .catch(() => {});
+  }, [quoteId, router]);
 
   return (
     <div className="flex min-h-screen items-center justify-center">

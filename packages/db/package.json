@@ -11,7 +11,8 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:seed": "tsx src/seed.ts"
+    "db:seed": "tsx src/seed.ts",
+    "db:reset": "tsx src/reset.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.6.0"

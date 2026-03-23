@@ -44,7 +44,7 @@ export class AgentLoop {
 
     for (let iteration = 0; iteration < this.config.maxIterations; iteration++) {
       const response = await this.config.llm.chat({
-        model: this.config.llm.id,
+        model: "",
         systemPrompt: this.config.systemPrompt,
         messages,
         tools: tools.length > 0 ? tools : undefined,
@@ -61,6 +61,8 @@ export class AgentLoop {
           .map((b) => b.text ?? "")
           .join("");
 
+        this.config.onMessage?.({ role: "assistant", content: textContent });
+
         return {
           message: textContent,
           toolCallsExecuted: allToolCalls,
@@ -70,6 +72,15 @@ export class AgentLoop {
       }
 
       if (response.stopReason === "tool_use") {
+        // Extract any text content from the assistant's response (thinking/reasoning)
+        const assistantText = response.content
+          .filter((b): b is ChatContentBlock & { type: "text" } => b.type === "text")
+          .map((b) => b.text ?? "")
+          .join("");
+        if (assistantText) {
+          this.config.onMessage?.({ role: "assistant", content: assistantText });
+        }
+
         // Add assistant message with tool calls
         messages.push({ role: "assistant", content: response.content });
 
@@ -105,7 +116,9 @@ export class AgentLoop {
             result = await this.executor.execute(tool, toolInput, context);
           }
 
-          allToolCalls.push({ id: toolUseId, toolId: toolName, input: toolInput, result });
+          const toolCall = { id: toolUseId, toolId: toolName, input: toolInput, result };
+          allToolCalls.push(toolCall);
+          this.config.onToolCall?.(toolCall);
 
           messages.push({
             role: "tool",

@@ -1,21 +1,12 @@
-import { AppShell } from "@/components/app-shell";
-import { PluginsPage } from "@/components/plugins-page";
-import { getProjects, listPlugins } from "@/lib/api";
+"use client";
 
-export default async function PluginsRoute() {
-  const [projectsResult, pluginsResult] = await Promise.allSettled([
-    getProjects(),
-    listPlugins(),
-  ]);
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-  const projects =
-    projectsResult.status === "fulfilled" ? projectsResult.value : [];
-  const plugins =
-    pluginsResult.status === "fulfilled" ? pluginsResult.value : [];
-
-  return (
-    <AppShell projects={projects}>
-      <PluginsPage initialPlugins={plugins} />
-    </AppShell>
-  );
+export default function PluginsRoute() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/settings?tab=plugins");
+  }, [router]);
+  return null;
 }

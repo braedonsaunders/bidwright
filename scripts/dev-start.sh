@@ -53,8 +53,8 @@ lsof -ti :3000 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # ── 2. Start infrastructure ───────────────────────────────────────────
 
-echo "▸ Starting Postgres + Redis..."
-docker compose up -d postgres redis 2>&1 | grep -v "level=warning"
+echo "▸ Starting Postgres + Redis + Ollama..."
+docker compose up -d postgres redis ollama 2>&1 | grep -v "level=warning"
 
 # Wait for Postgres to be ready
 echo -n "▸ Waiting for Postgres"
@@ -72,19 +72,72 @@ until docker compose exec -T redis redis-cli ping >/dev/null 2>&1; do
 done
 echo " ready!"
 
+# ── Ollama embeddings model ──────────────────────────────────────────
+# Available models (set EMBEDDING_MODEL to switch):
+#   snowflake-arctic-embed   — 1024 dims, 335MB  (default, best quality)
+#   nomic-embed-text         — 768 dims,  274MB  (good balance)
+#   mxbai-embed-large        — 1024 dims, 670MB  (largest, highest quality)
+export EMBEDDING_PROVIDER="${EMBEDDING_PROVIDER:-local}"
+export EMBEDDING_BASE_URL="${EMBEDDING_BASE_URL:-http://localhost:11434/v1}"
+export EMBEDDING_MODEL="${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+
+# Map model name to dimensions
+case "$EMBEDDING_MODEL" in
+  nomic-embed-text)       export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-768}" ;;
+  mxbai-embed-large)      export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}" ;;
+  snowflake-arctic-embed) export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}" ;;
+  *)                      export EMBEDDING_DIMENSIONS="${EMBEDDING_DIMENSIONS:-1024}" ;;
+esac
+
+# Wait for Ollama to be ready
+echo -n "▸ Waiting for Ollama"
+for i in $(seq 1 30); do
+  if curl -sf http://localhost:11434/ >/dev/null 2>&1; then
+    echo " ready!"
+    break
+  fi
+  echo -n "."
+  sleep 1
+  if [ "$i" -eq 30 ]; then
+    echo " timeout (will continue without embeddings)"
+  fi
+done
+
+# Pull embedding model if not already downloaded
+if curl -sf http://localhost:11434/ >/dev/null 2>&1; then
+  if ! docker compose exec -T ollama ollama list 2>/dev/null | grep -q "$EMBEDDING_MODEL"; then
+    echo "▸ Pulling embedding model: $EMBEDDING_MODEL (first run only)..."
+    docker compose exec -T ollama ollama pull "$EMBEDDING_MODEL" 2>&1 | tail -1
+  else
+    echo "▸ Embedding model: $EMBEDDING_MODEL (cached)"
+  fi
+fi
+
 # ── 3. Generate Prisma client + push schema ───────────────────────────
 
 echo "▸ Generating Prisma client..."
-pnpm db:generate 2>&1 | tail -1
+pnpm db:generate >/dev/null 2>&1
 
 echo "▸ Pushing schema to database..."
-pnpm db:push 2>&1 | grep -E "(sync|Generated|Error)" || true
+yes | pnpm db:push -- --accept-data-loss --skip-generate >/dev/null 2>&1 || true
 
 # ── 4. Create pgvector extension + vector_records table ───────────────
 
-echo "▸ Setting up pgvector..."
+EMBED_DIM="${EMBEDDING_DIMENSIONS:-768}"
+echo "▸ Setting up pgvector (${EMBED_DIM} dimensions)..."
 docker compose exec -T postgres psql -U bidwright -d bidwright -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true
-docker compose exec -T postgres psql -U bidwright -d bidwright <<'SQL' 2>/dev/null || true
+
+# If the table exists with wrong dimensions, recreate it
+CURRENT_DIM=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "
+  SELECT atttypmod FROM pg_attribute
+  WHERE attrelid = 'vector_records'::regclass AND attname = 'embedding';
+" 2>/dev/null | tr -d ' ' || echo "0")
+if [ "$CURRENT_DIM" != "0" ] && [ "$CURRENT_DIM" != "$EMBED_DIM" ]; then
+  echo "  Dimension mismatch ($CURRENT_DIM → $EMBED_DIM), recreating vector_records..."
+  docker compose exec -T postgres psql -U bidwright -d bidwright -c "DROP TABLE IF EXISTS vector_records;" 2>/dev/null || true
+fi
+
+docker compose exec -T postgres psql -U bidwright -d bidwright <<SQL 2>/dev/null || true
 CREATE TABLE IF NOT EXISTS vector_records (
   id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
@@ -92,7 +145,7 @@ CREATE TABLE IF NOT EXISTS vector_records (
   document_id TEXT NOT NULL,
   project_id TEXT,
   scope TEXT NOT NULL DEFAULT 'project',
-  embedding vector(1536) NOT NULL,
+  embedding vector($EMBED_DIM) NOT NULL,
   text TEXT NOT NULL,
   metadata JSONB DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT now()
@@ -102,10 +155,13 @@ CREATE INDEX IF NOT EXISTS idx_vector_records_org ON vector_records (organizatio
 CREATE INDEX IF NOT EXISTS idx_vector_records_project ON vector_records (project_id);
 SQL
 
-# ── 5. Seed database if empty ──────────────────────────────────────────
+# ── 5. Seed database if empty (only if system was already set up) ─────
 
+ADMIN_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"SuperAdmin\";" 2>/dev/null | tr -d ' ' || echo "0")
 ORG_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"Organization\";" 2>/dev/null | tr -d ' ' || echo "0")
-if [ "$ORG_COUNT" = "0" ]; then
+if [ "$ADMIN_COUNT" = "0" ]; then
+  echo "▸ No admin account — setup wizard will run on first visit."
+elif [ "$ORG_COUNT" = "0" ]; then
   echo "▸ Empty database — seeding with demo data..."
   pnpm seed 2>&1 | grep -E "^\[seed\]" || echo "  (seed failed — continuing)"
 else

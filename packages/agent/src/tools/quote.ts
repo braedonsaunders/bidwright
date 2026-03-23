@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Tool, ToolExecutionContext, ToolResult } from "../types.js";
+import { apiFetch } from "./api-fetch.js";
 
 type StoreOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<ToolResult>;
 
@@ -35,6 +36,53 @@ function createQuoteTool(def: {
   };
 }
 
+// Helper for making API requests
+// Note: duration_ms is set to 0 here; the createQuoteTool wrapper overwrites it with the actual elapsed time.
+function authHeaders(ctx: ToolExecutionContext): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (ctx.authToken) h["Authorization"] = `Bearer ${ctx.authToken}`;
+  return h;
+}
+
+async function apiGet(ctx: ToolExecutionContext, path: string): Promise<ToolResult> {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}${path}`, { headers: authHeaders(ctx) });
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data, duration_ms: 0 };
+}
+
+async function apiPost(ctx: ToolExecutionContext, path: string, body: Record<string, unknown>, sideEffect: string): Promise<ToolResult> {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}${path}`, {
+    method: "POST",
+    headers: authHeaders(ctx),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
+}
+
+async function apiPatch(ctx: ToolExecutionContext, path: string, body: Record<string, unknown>, sideEffect: string): Promise<ToolResult> {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}${path}`, {
+    method: "PATCH",
+    headers: authHeaders(ctx),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
+}
+
+async function apiDelete(ctx: ToolExecutionContext, path: string, sideEffect: string): Promise<ToolResult> {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}${path}`, {
+    method: "DELETE",
+    headers: authHeaders(ctx),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json() as Record<string, unknown>;
+  return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
+}
+
 // ──────────────────────────────────────────────────────────────
 // 1. quote.getWorkspace
 // ──────────────────────────────────────────────────────────────
@@ -45,7 +93,7 @@ export const getWorkspaceTool = createQuoteTool({
   inputSchema: z.object({}),
   tags: ["workspace", "read"],
 }, async (ctx) => {
-  return { success: true, data: { message: "Workspace data would be returned here" }, duration_ms: 0 };
+  return apiGet(ctx, "/workspace");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -58,7 +106,10 @@ export const listWorksheetsTool = createQuoteTool({
   inputSchema: z.object({}),
   tags: ["worksheet", "read"],
 }, async (ctx) => {
-  return { success: true, data: { message: "Worksheet list would be returned here" }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json() as { worksheets?: unknown[] };
+  return { success: true, data: data.worksheets ?? [], duration_ms: 0 };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -78,7 +129,44 @@ export const searchItemsTool = createQuoteTool({
   }),
   tags: ["item", "search", "read"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Search results would be returned here", query: input }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const workspace = await res.json() as { worksheets?: any[] };
+
+  const worksheets: any[] = workspace.worksheets ?? [];
+  let items: any[] = [];
+
+  for (const ws of worksheets) {
+    if (input.worksheetId && ws.id !== input.worksheetId) continue;
+    for (const item of (ws.items ?? [])) {
+      items.push({ ...item, worksheetId: ws.id, worksheetName: ws.name });
+    }
+  }
+
+  // Apply filters
+  if (input.query) {
+    const q = (input.query as string).toLowerCase();
+    items = items.filter((item: any) =>
+      (item.entityName?.toLowerCase()?.includes(q)) ||
+      (item.description?.toLowerCase()?.includes(q)) ||
+      (item.category?.toLowerCase()?.includes(q))
+    );
+  }
+  if (input.category) {
+    const cat = (input.category as string).toLowerCase();
+    items = items.filter((item: any) => item.category?.toLowerCase() === cat);
+  }
+  if (input.minCost != null) {
+    items = items.filter((item: any) => (item.cost ?? 0) >= (input.minCost as number));
+  }
+  if (input.maxCost != null) {
+    items = items.filter((item: any) => (item.cost ?? 0) <= (input.maxCost as number));
+  }
+
+  const limit = (input.limit as number) ?? 50;
+  items = items.slice(0, limit);
+
+  return { success: true, data: { items, totalMatches: items.length }, duration_ms: 0 };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -106,7 +194,8 @@ export const createWorksheetItemTool = createQuoteTool({
   }),
   tags: ["item", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Line item created", input }, duration_ms: 0 };
+  const { worksheetId, ...body } = input;
+  return apiPost(ctx, `/worksheets/${worksheetId}/items`, body, "Created line item");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -134,7 +223,8 @@ export const updateWorksheetItemTool = createQuoteTool({
   }),
   tags: ["item", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Line item updated", input }, duration_ms: 0 };
+  const { itemId, ...body } = input;
+  return apiPatch(ctx, `/items/${itemId}`, body, "Updated line item");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -150,7 +240,7 @@ export const deleteWorksheetItemTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["item", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Line item deleted", itemId: input.itemId }, duration_ms: 0 };
+  return apiDelete(ctx, `/items/${input.itemId}`, "Deleted line item");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -167,7 +257,7 @@ export const createWorksheetTool = createQuoteTool({
   }),
   tags: ["worksheet", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Worksheet created", input }, duration_ms: 0 };
+  return apiPost(ctx, "/worksheets", input, "Created worksheet");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -185,7 +275,8 @@ export const updateWorksheetTool = createQuoteTool({
   }),
   tags: ["worksheet", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Worksheet updated", input }, duration_ms: 0 };
+  const { worksheetId, ...body } = input;
+  return apiPatch(ctx, `/worksheets/${worksheetId}`, body, "Updated worksheet");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -201,7 +292,7 @@ export const deleteWorksheetTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["worksheet", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Worksheet deleted", worksheetId: input.worksheetId }, duration_ms: 0 };
+  return apiDelete(ctx, `/worksheets/${input.worksheetId}`, "Deleted worksheet");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -219,7 +310,7 @@ export const createPhaseTool = createQuoteTool({
   }),
   tags: ["phase", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Phase created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/revisions/${ctx.revisionId}/phases`, input, "Created phase");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -238,7 +329,8 @@ export const updatePhaseTool = createQuoteTool({
   }),
   tags: ["phase", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Phase updated", input }, duration_ms: 0 };
+  const { phaseId, ...body } = input;
+  return apiPatch(ctx, `/phases/${phaseId}`, body, "Updated phase");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -254,7 +346,7 @@ export const deletePhaseTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["phase", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Phase deleted", phaseId: input.phaseId }, duration_ms: 0 };
+  return apiDelete(ctx, `/phases/${input.phaseId}`, "Deleted phase");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -275,7 +367,7 @@ export const createModifierTool = createQuoteTool({
   }),
   tags: ["modifier", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Modifier created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/revisions/${ctx.revisionId}/modifiers`, input, "Created modifier");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -297,7 +389,8 @@ export const updateModifierTool = createQuoteTool({
   }),
   tags: ["modifier", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Modifier updated", input }, duration_ms: 0 };
+  const { modifierId, ...body } = input;
+  return apiPatch(ctx, `/modifiers/${modifierId}`, body, "Updated modifier");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -313,7 +406,7 @@ export const deleteModifierTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["modifier", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Modifier deleted", modifierId: input.modifierId }, duration_ms: 0 };
+  return apiDelete(ctx, `/modifiers/${input.modifierId}`, "Deleted modifier");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -330,7 +423,7 @@ export const createConditionTool = createQuoteTool({
   }),
   tags: ["condition", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Condition created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/revisions/${ctx.revisionId}/conditions`, input, "Created condition");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -348,7 +441,8 @@ export const updateConditionTool = createQuoteTool({
   }),
   tags: ["condition", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Condition updated", input }, duration_ms: 0 };
+  const { conditionId, ...body } = input;
+  return apiPatch(ctx, `/conditions/${conditionId}`, body, "Updated condition");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -364,7 +458,7 @@ export const deleteConditionTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["condition", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Condition deleted", conditionId: input.conditionId }, duration_ms: 0 };
+  return apiDelete(ctx, `/conditions/${input.conditionId}`, "Deleted condition");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -385,7 +479,7 @@ export const createALITool = createQuoteTool({
   }),
   tags: ["ali", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "ALI created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/revisions/${ctx.revisionId}/ali`, input, "Created ALI");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -407,7 +501,8 @@ export const updateALITool = createQuoteTool({
   }),
   tags: ["ali", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "ALI updated", input }, duration_ms: 0 };
+  const { aliId, ...body } = input;
+  return apiPatch(ctx, `/ali/${aliId}`, body, "Updated ALI");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -423,68 +518,11 @@ export const deleteALITool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["ali", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "ALI deleted", aliId: input.aliId }, duration_ms: 0 };
+  return apiDelete(ctx, `/ali/${input.aliId}`, "Deleted ALI");
 });
 
 // ──────────────────────────────────────────────────────────────
-// 22. quote.createLabourRate
-// ──────────────────────────────────────────────────────────────
-export const createLabourRateTool = createQuoteTool({
-  id: "quote.createLabourRate",
-  name: "Create Labour Rate",
-  description: "Create a labour rate definition used for calculating labour costs on line items.",
-  inputSchema: z.object({
-    name: z.string().describe("Rate name (e.g. 'Journeyman Electrician', 'Helper')"),
-    regularRate: z.number().describe("Regular hourly rate"),
-    overtimeRate: z.number().optional().describe("Overtime hourly rate (defaults to 1.5x regular)"),
-    doubleTimeRate: z.number().optional().describe("Double-time hourly rate (defaults to 2x regular)"),
-    burdenPercentage: z.number().optional().default(0).describe("Burden/benefits percentage on top of base rate"),
-    code: z.string().optional().describe("Rate code identifier"),
-  }),
-  tags: ["labour", "rate", "create", "write"],
-}, async (ctx, input) => {
-  return { success: true, data: { message: "Labour rate created", input }, duration_ms: 0 };
-});
-
-// ──────────────────────────────────────────────────────────────
-// 23. quote.updateLabourRate
-// ──────────────────────────────────────────────────────────────
-export const updateLabourRateTool = createQuoteTool({
-  id: "quote.updateLabourRate",
-  name: "Update Labour Rate",
-  description: "Update an existing labour rate definition.",
-  inputSchema: z.object({
-    labourRateId: z.string().describe("ID of the labour rate to update"),
-    name: z.string().optional().describe("New name"),
-    regularRate: z.number().optional().describe("New regular hourly rate"),
-    overtimeRate: z.number().optional().describe("New overtime hourly rate"),
-    doubleTimeRate: z.number().optional().describe("New double-time hourly rate"),
-    burdenPercentage: z.number().optional().describe("New burden/benefits percentage"),
-    code: z.string().optional().describe("New rate code"),
-  }),
-  tags: ["labour", "rate", "update", "write"],
-}, async (ctx, input) => {
-  return { success: true, data: { message: "Labour rate updated", input }, duration_ms: 0 };
-});
-
-// ──────────────────────────────────────────────────────────────
-// 24. quote.deleteLabourRate
-// ──────────────────────────────────────────────────────────────
-export const deleteLabourRateTool = createQuoteTool({
-  id: "quote.deleteLabourRate",
-  name: "Delete Labour Rate",
-  description: "Delete a labour rate definition. Items using this rate will need reassignment. Requires confirmation.",
-  inputSchema: z.object({
-    labourRateId: z.string().describe("ID of the labour rate to delete"),
-  }),
-  requiresConfirmation: true,
-  tags: ["labour", "rate", "delete", "write"],
-}, async (ctx, input) => {
-  return { success: true, data: { message: "Labour rate deleted", labourRateId: input.labourRateId }, duration_ms: 0 };
-});
-
-// ──────────────────────────────────────────────────────────────
-// 25. quote.updateRevision
+// 22. quote.updateRevision
 // ──────────────────────────────────────────────────────────────
 export const updateRevisionTool = createQuoteTool({
   id: "quote.updateRevision",
@@ -498,7 +536,7 @@ export const updateRevisionTool = createQuoteTool({
   }),
   tags: ["revision", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Revision updated", input }, duration_ms: 0 };
+  return apiPatch(ctx, `/revisions/${ctx.revisionId}`, input, "Updated revision");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -515,7 +553,7 @@ export const createRevisionTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["revision", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "New revision created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/quotes/${ctx.quoteId}/revisions`, input, "Created new revision");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -531,7 +569,7 @@ export const deleteRevisionTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["revision", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Revision deleted", revisionId: input.revisionId }, duration_ms: 0 };
+  return apiDelete(ctx, `/revisions/${input.revisionId}`, "Deleted revision");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -548,7 +586,25 @@ export const copyQuoteTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["quote", "copy", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Quote copied", input }, duration_ms: 0 };
+  // First get the workspace data to copy
+  const wsRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`);
+  if (!wsRes.ok) return { success: false, error: `Failed to fetch workspace: ${wsRes.status} ${wsRes.statusText}`, duration_ms: 0 };
+  const workspace = await wsRes.json();
+
+  // Create a new project with the workspace data
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: input.newProjectName,
+      sourceProjectId: ctx.projectId,
+      includeDocuments: input.includeDocuments ?? false,
+      workspace,
+    }),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  const data = await res.json();
+  return { success: true, data, sideEffects: ["Copied quote to new project"], duration_ms: 0 };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -570,7 +626,7 @@ export const updateQuoteTool = createQuoteTool({
   }),
   tags: ["quote", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Quote updated", input }, duration_ms: 0 };
+  return apiPatch(ctx, "/quote", input, "Updated quote");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -583,7 +639,7 @@ export const recalculateTotalsTool = createQuoteTool({
   inputSchema: z.object({}),
   tags: ["totals", "calculate", "write"],
 }, async (ctx) => {
-  return { success: true, data: { message: "Totals recalculated" }, duration_ms: 0 };
+  return apiPost(ctx, "/recalculate", {}, "Recalculated totals");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -601,7 +657,7 @@ export const createReportSectionTool = createQuoteTool({
   }),
   tags: ["report", "section", "create", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Report section created", input }, duration_ms: 0 };
+  return apiPost(ctx, `/revisions/${ctx.revisionId}/report-sections`, input, "Created report section");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -620,7 +676,8 @@ export const updateReportSectionTool = createQuoteTool({
   }),
   tags: ["report", "section", "update", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Report section updated", input }, duration_ms: 0 };
+  const { sectionId, ...body } = input;
+  return apiPatch(ctx, `/report-sections/${sectionId}`, body, "Updated report section");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -636,7 +693,7 @@ export const deleteReportSectionTool = createQuoteTool({
   requiresConfirmation: true,
   tags: ["report", "section", "delete", "write"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Report section deleted", sectionId: input.sectionId }, duration_ms: 0 };
+  return apiDelete(ctx, `/report-sections/${input.sectionId}`, "Deleted report section");
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -664,9 +721,6 @@ export const quoteTools: Tool[] = [
   createALITool,
   updateALITool,
   deleteALITool,
-  createLabourRateTool,
-  updateLabourRateTool,
-  deleteLabourRateTool,
   updateRevisionTool,
   createRevisionTool,
   deleteRevisionTool,

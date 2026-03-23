@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,71 +12,269 @@ import {
   Ruler,
   Square,
   Target,
-  Trash2,
+  Circle,
+  Triangle,
+  Spline,
+  Scaling,
+  Layers,
+  ArrowDownToLine,
+  Hash,
+  LayoutGrid,
 } from "lucide-react";
-import type { ProjectWorkspaceData } from "@/lib/api";
+import type { ProjectWorkspaceData, KnowledgeBookRecord } from "@/lib/api";
+import {
+  listTakeoffAnnotations,
+  createTakeoffAnnotation,
+  updateTakeoffAnnotation,
+  deleteTakeoffAnnotation,
+  getDocumentDownloadUrl,
+  getBookFileUrl,
+  listKnowledgeBooks,
+} from "@/lib/api";
 import {
   Badge,
   Button,
   Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   Select,
   Separator,
 } from "@/components/ui";
+import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
+import type { Calibration, Point } from "@/lib/takeoff-math";
+const PdfCanvasViewer = dynamic(
+  () => import("./takeoff/pdf-canvas-viewer").then((m) => m.PdfCanvasViewer),
+  { ssr: false }
+);
+import {
+  AnnotationCanvas,
+  type TakeoffAnnotation,
+} from "./takeoff/annotation-canvas";
+import { AnnotationSidebar } from "./takeoff/annotation-sidebar";
+import {
+  CreateAnnotationModal,
+  type AnnotationConfig,
+} from "./takeoff/create-annotation-modal";
 
-/* ─── Types ─── */
+/* ─── Tool definitions ─── */
 
-type MeasurementTool = "select" | "line" | "area" | "count" | "calibrate";
+type ToolId =
+  | "select"
+  | "linear"
+  | "linear-polyline"
+  | "linear-drop"
+  | "count"
+  | "count-by-distance"
+  | "area-rectangle"
+  | "area-polygon"
+  | "area-triangle"
+  | "area-ellipse"
+  | "area-vertical-wall"
+  | "calibrate";
 
-interface TakeoffItem {
-  id: string;
+interface ToolDef {
+  id: ToolId;
   label: string;
-  tool: MeasurementTool;
-  quantity: number;
-  unit: string;
-  color: string;
+  icon: typeof Ruler;
+  group: "nav" | "linear" | "count" | "area" | "util";
 }
 
-const TOOL_COLORS = [
-  "#3b82f6",
-  "#ef4444",
-  "#22c55e",
-  "#f59e0b",
-  "#8b5cf6",
-  "#ec4899",
-  "#06b6d4",
-  "#f97316",
+const TOOLS: ToolDef[] = [
+  { id: "select", label: "Select", icon: MousePointer2, group: "nav" },
+  { id: "linear", label: "Linear", icon: Ruler, group: "linear" },
+  { id: "linear-polyline", label: "Polyline", icon: Spline, group: "linear" },
+  { id: "linear-drop", label: "Linear Drop", icon: ArrowDownToLine, group: "linear" },
+  { id: "count", label: "Count", icon: Target, group: "count" },
+  { id: "count-by-distance", label: "Count by Distance", icon: Hash, group: "count" },
+  { id: "area-rectangle", label: "Rectangle", icon: Square, group: "area" },
+  { id: "area-polygon", label: "Polygon", icon: Layers, group: "area" },
+  { id: "area-triangle", label: "Triangle", icon: Triangle, group: "area" },
+  { id: "area-ellipse", label: "Ellipse", icon: Circle, group: "area" },
+  { id: "area-vertical-wall", label: "Vertical Wall", icon: LayoutGrid, group: "area" },
+  { id: "calibrate", label: "Calibrate", icon: Scaling, group: "util" },
 ];
 
-const MEASUREMENT_TOOLS: { tool: MeasurementTool; label: string; icon: typeof Ruler }[] = [
-  { tool: "select", label: "Select", icon: MousePointer2 },
-  { tool: "line", label: "Line", icon: Ruler },
-  { tool: "area", label: "Area", icon: Square },
-  { tool: "count", label: "Count", icon: Target },
-  { tool: "calibrate", label: "Calibrate", icon: Maximize2 },
-];
+const TOOL_GROUPS = [
+  { key: "nav", label: "Navigate" },
+  { key: "linear", label: "Linear" },
+  { key: "count", label: "Count" },
+  { key: "area", label: "Area" },
+  { key: "util", label: "Utility" },
+] as const;
+
+/* ─── Unified document entry for the takeoff selector ─── */
+
+interface TakeoffDocument {
+  id: string;
+  label: string;
+  source: "project" | "knowledge";
+  /** For project docs – use getDocumentDownloadUrl */
+  projectId?: string;
+  /** For knowledge books – use getBookFileUrl */
+  bookId?: string;
+}
+
+function buildPdfUrl(doc: TakeoffDocument): string {
+  if (doc.source === "knowledge" && doc.bookId) {
+    return getBookFileUrl(doc.bookId);
+  }
+  if (doc.source === "project" && doc.projectId) {
+    return getDocumentDownloadUrl(doc.projectId, doc.id, true);
+  }
+  return "";
+}
 
 /* ─── Component ─── */
 
 export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
-  const drawings = (workspace.sourceDocuments ?? []).filter(
-    (d) => d.documentType === "drawing"
-  );
+  const projectId = workspace.project.id;
 
-  const [selectedDocId, setSelectedDocId] = useState(drawings[0]?.id ?? "");
+  /* Project source documents that are PDFs */
+  const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
+    .filter((d) => d.documentType === "drawing" || d.fileType === "application/pdf")
+    .map((d) => ({
+      id: d.id,
+      label: d.fileName,
+      source: "project" as const,
+      projectId,
+    }));
+
+  /* Knowledge books (loaded async) */
+  const [knowledgePdfs, setKnowledgePdfs] = useState<TakeoffDocument[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const books = await listKnowledgeBooks(projectId);
+        // Also fetch global books (no projectId filter)
+        const globalBooks = await listKnowledgeBooks();
+        const allBooks = new Map<string, KnowledgeBookRecord>();
+        for (const b of [...books, ...globalBooks]) allBooks.set(b.id, b);
+        if (cancelled) return;
+        setKnowledgePdfs(
+          Array.from(allBooks.values())
+            .filter((b) => b.status === "indexed" && b.sourceFileName?.toLowerCase().endsWith(".pdf"))
+            .map((b) => ({
+              id: `kb-${b.id}`,
+              label: `📚 ${b.name || b.sourceFileName}`,
+              source: "knowledge" as const,
+              bookId: b.id,
+            }))
+        );
+      } catch {
+        /* Knowledge API may not be available */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const drawings = [...projectPdfs, ...knowledgePdfs];
+
+  /* Core state */
+  const [selectedDocId, setSelectedDocId] = useState(projectPdfs[0]?.id ?? "");
+
+  /* Auto-select first doc when knowledge books load and nothing is selected */
+  useEffect(() => {
+    if (!selectedDocId && drawings.length > 0) {
+      setSelectedDocId(drawings[0].id);
+    }
+  }, [drawings.length, selectedDocId]);
   const [page, setPage] = useState(1);
-  const [zoom, setZoom] = useState(100);
-  const [activeTool, setActiveTool] = useState<MeasurementTool>("select");
-  const [takeoffItems, setTakeoffItems] = useState<TakeoffItem[]>([]);
-  const [nextItemLabel, setNextItemLabel] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [activeTool, setActiveTool] = useState<ToolId>("select");
+
+  /* Annotation state */
+  const [annotations, setAnnotations] = useState<TakeoffAnnotation[]>([]);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
+
+  /* Calibration state */
+  const [calibration, setCalibration] = useState<Calibration | null>(null);
+  const [calibrationPromptOpen, setCalibrationPromptOpen] = useState(false);
+  const [calibrationPoints, setCalibrationPoints] = useState<[Point, Point] | null>(null);
+  const [calibrationInput, setCalibrationInput] = useState("");
+  const [calibrationUnit, setCalibrationUnit] = useState("ft");
+
+  /* Drawing config (from modal or defaults) */
+  const [activeColor, setActiveColor] = useState("#3b82f6");
+  const [activeThickness, setActiveThickness] = useState(3);
+  const [activeOpts, setActiveOpts] = useState<TakeoffAnnotation["opts"]>({});
+  const [activeGroupName, setActiveGroupName] = useState<string | undefined>();
+  const [activeLabel, setActiveLabel] = useState<string>("");
+
+  /* Canvas dimensions */
+  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
+  const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const selectedDoc = drawings.find((d) => d.id === selectedDocId);
-  const totalPages = selectedDoc?.pageCount ?? 1;
+
+  /* ─── Load annotations from API ─── */
+
+  const loadAnnotations = useCallback(async () => {
+    if (!projectId || !selectedDocId) return;
+    try {
+      const data = await listTakeoffAnnotations(projectId, selectedDocId, page);
+      if (Array.isArray(data)) {
+        setAnnotations(
+          data.map((a: Record<string, unknown>) => ({
+            id: a.id as string,
+            type: a.type as string,
+            label: (a.label as string) ?? "",
+            color: (a.color as string) ?? "#3b82f6",
+            thickness: (a.thickness as number) ?? 3,
+            points: (a.points as Point[]) ?? [],
+            visible: a.visible !== false,
+            groupName: a.groupName as string | undefined,
+            opts: a.opts as TakeoffAnnotation["opts"],
+            measurement: a.measurement as TakeoffAnnotation["measurement"],
+          }))
+        );
+      }
+    } catch {
+      /* API may not be available yet; use local state */
+    }
+  }, [projectId, selectedDocId, page]);
+
+  useEffect(() => {
+    loadAnnotations();
+  }, [loadAnnotations]);
+
+  /* ─── PDF page count callback ─── */
+
+  const handlePageCount = useCallback((count: number) => {
+    setTotalPages(count);
+  }, []);
+
+  /* Watch PDF canvas size changes */
+  useEffect(() => {
+    const canvas = pdfCanvasRef.current;
+    if (!canvas) return;
+
+    const observer = new ResizeObserver(() => {
+      if (canvas.width > 0 && canvas.height > 0) {
+        setCanvasSize({ width: canvas.width, height: canvas.height });
+      }
+    });
+
+    /* Also check via MutationObserver for attribute changes (width/height) */
+    const mutObs = new MutationObserver(() => {
+      if (canvas.width > 0 && canvas.height > 0) {
+        setCanvasSize({ width: canvas.width, height: canvas.height });
+      }
+    });
+
+    observer.observe(canvas);
+    mutObs.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+
+    return () => {
+      observer.disconnect();
+      mutObs.disconnect();
+    };
+  }, [selectedDocId]);
 
   /* ─── Handlers ─── */
 
@@ -89,45 +287,127 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
   }
 
   function handleZoomIn() {
-    setZoom((z) => Math.min(400, z + 25));
+    setZoom((z) => Math.min(4, z + 0.25));
   }
 
   function handleZoomOut() {
-    setZoom((z) => Math.max(25, z - 25));
+    setZoom((z) => Math.max(0.25, z - 0.25));
   }
 
   function handleFitToWidth() {
-    setZoom(100);
+    setZoom(1);
   }
 
-  function handleAddItem() {
-    if (!nextItemLabel.trim()) return;
-    const newItem: TakeoffItem = {
+  function handleToolSelect(tool: ToolId) {
+    if (tool === "select") {
+      setActiveTool("select");
+      return;
+    }
+
+    /* For any drawing tool, open the config modal first */
+    setShowCreateModal(true);
+    setPendingConfig(null);
+    setActiveTool(tool);
+  }
+
+  /* When user confirms annotation config in modal */
+  function handleAnnotationConfigConfirm(config: AnnotationConfig) {
+    setActiveTool(config.type as ToolId);
+    setActiveColor(config.color);
+    setActiveThickness(config.thickness);
+    setActiveOpts(config.opts);
+    setActiveGroupName(config.groupName);
+    setActiveLabel(config.label);
+    setShowCreateModal(false);
+  }
+
+  /* When annotation drawing is complete */
+  async function handleAnnotationComplete(data: Partial<TakeoffAnnotation>) {
+    const newAnnotation: TakeoffAnnotation = {
       id: crypto.randomUUID(),
-      label: nextItemLabel.trim(),
-      tool: activeTool === "select" ? "count" : activeTool,
-      quantity: 0,
-      unit: activeTool === "line" ? "ft" : activeTool === "area" ? "sq ft" : "ea",
-      color: TOOL_COLORS[takeoffItems.length % TOOL_COLORS.length],
+      type: data.type ?? activeTool,
+      label: activeLabel || data.type || activeTool,
+      color: data.color ?? activeColor,
+      thickness: data.thickness ?? activeThickness,
+      points: data.points ?? [],
+      visible: true,
+      groupName: activeGroupName,
+      opts: activeOpts,
+      measurement: data.measurement,
     };
-    setTakeoffItems((items) => [...items, newItem]);
-    setNextItemLabel("");
+
+    setAnnotations((prev) => [...prev, newAnnotation]);
+
+    /* Persist to API */
+    try {
+      const saved = await createTakeoffAnnotation(projectId, {
+        ...newAnnotation,
+        documentId: selectedDocId,
+        page,
+      });
+      if (saved?.id) {
+        /* Update local id with server id */
+        setAnnotations((prev) =>
+          prev.map((a) => (a.id === newAnnotation.id ? { ...a, id: saved.id } : a))
+        );
+      }
+    } catch {
+      /* Keep local annotation even if API fails */
+    }
   }
 
-  function handleRemoveItem(id: string) {
-    setTakeoffItems((items) => items.filter((i) => i.id !== id));
+  /* Calibration flow */
+  function handleCalibrationRequest(points: [Point, Point]) {
+    setCalibrationPoints(points);
+    setCalibrationPromptOpen(true);
   }
 
-  function handleUpdateQuantity(id: string, quantity: number) {
-    setTakeoffItems((items) =>
-      items.map((i) => (i.id === id ? { ...i, quantity } : i))
+  function handleCalibrationConfirm() {
+    if (!calibrationPoints || !calibrationInput) return;
+    const knownDist = parseFloat(calibrationInput);
+    if (knownDist <= 0 || isNaN(knownDist)) return;
+
+    const [a, b] = calibrationPoints;
+    const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+    const pixelsPerUnit = pixelDist / knownDist;
+
+    setCalibration({ pixelsPerUnit, unit: calibrationUnit });
+    setCalibrationPromptOpen(false);
+    setCalibrationInput("");
+    setCalibrationPoints(null);
+    setActiveTool("select");
+  }
+
+  /* Annotation CRUD */
+  function handleToggleVisibility(id: string) {
+    setAnnotations((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a))
     );
   }
+
+  async function handleDeleteAnnotation(id: string) {
+    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    try {
+      await deleteTakeoffAnnotation(projectId, id);
+    } catch {
+      /* Ignore */
+    }
+  }
+
+  function handleEditAnnotation(id: string) {
+    /* Select the annotation for now; full edit modal is a future enhancement */
+    setSelectedAnnotationId(id);
+  }
+
+  /* Build document URL */
+  const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
+
+  const zoomPercent = Math.round(zoom * 100);
 
   /* ─── Render ─── */
 
   return (
-    <div className="flex h-[calc(100vh-320px)] min-h-[500px] flex-col gap-3">
+    <div className="flex h-full flex-1 min-h-0 flex-col gap-3">
       {/* ─── Top Toolbar ─── */}
       <div className="flex items-center gap-3 rounded-lg border border-line bg-panel px-3 py-2">
         {/* Document selector */}
@@ -139,6 +419,7 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
             onChange={(e) => {
               setSelectedDocId(e.target.value);
               setPage(1);
+              setAnnotations([]);
             }}
           >
             {drawings.length === 0 && (
@@ -146,7 +427,7 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
             )}
             {drawings.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.fileName}
+                {d.label}
               </option>
             ))}
           </Select>
@@ -185,7 +466,7 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
           <Button variant="ghost" size="xs" onClick={handleZoomOut}>
             <Minus className="h-3.5 w-3.5" />
           </Button>
-          <span className="w-12 text-center text-xs text-fg/60">{zoom}%</span>
+          <span className="w-12 text-center text-xs text-fg/60">{zoomPercent}%</span>
           <Button variant="ghost" size="xs" onClick={handleZoomIn}>
             <Plus className="h-3.5 w-3.5" />
           </Button>
@@ -194,164 +475,189 @@ export function TakeoffTab({ workspace }: { workspace: ProjectWorkspaceData }) {
           </Button>
         </div>
 
+        <Separator className="!h-6 !w-px" />
+
+        {/* Calibration indicator */}
+        {calibration ? (
+          <Badge tone="success" className="text-[11px]">
+            Calibrated: 1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
+          </Badge>
+        ) : (
+          <Badge tone="warning" className="text-[11px]">
+            Not calibrated
+          </Badge>
+        )}
+
         <div className="flex-1" />
+
+        {/* Active tool indicator */}
+        <Badge tone="info" className="text-[11px]">
+          {TOOLS.find((t) => t.id === activeTool)?.label ?? "Select"} tool
+        </Badge>
 
         {/* Export */}
         <Button variant="secondary" size="sm">
           <Download className="h-3.5 w-3.5" />
-          Export Takeoff
+          Export
         </Button>
       </div>
 
       {/* ─── Main Area ─── */}
       <div className="flex flex-1 gap-3 overflow-hidden">
-        {/* Left: Measurement tools panel */}
-        <div className="flex w-12 flex-col gap-1 rounded-lg border border-line bg-panel p-1.5">
-          {MEASUREMENT_TOOLS.map(({ tool, label, icon: Icon }) => (
-            <button
-              key={tool}
-              onClick={() => setActiveTool(tool)}
-              title={label}
-              className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-md transition-colors",
-                activeTool === tool
-                  ? "bg-accent/15 text-accent"
-                  : "text-fg/40 hover:bg-panel2 hover:text-fg/70"
-              )}
-            >
-              <Icon className="h-4 w-4" />
-            </button>
-          ))}
+        {/* Left: Tool palette */}
+        <div className="flex w-12 flex-col gap-0.5 rounded-lg border border-line bg-panel p-1.5 overflow-y-auto">
+          {TOOL_GROUPS.map((group) => {
+            const groupTools = TOOLS.filter((t) => t.group === group.key);
+            return (
+              <div key={group.key}>
+                {group.key !== "nav" && (
+                  <div className="my-1 h-px w-full bg-line/50" />
+                )}
+                {groupTools.map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => handleToolSelect(id)}
+                    title={label}
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                      activeTool === id
+                        ? "bg-accent/15 text-accent"
+                        : "text-fg/40 hover:bg-panel2 hover:text-fg/70"
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                ))}
+              </div>
+            );
+          })}
         </div>
 
         {/* Center: Document viewer area */}
-        <div className="flex flex-1 items-center justify-center overflow-auto rounded-lg border border-line bg-bg/50">
+        <div className="flex flex-1 items-start justify-center overflow-auto rounded-lg border border-line bg-bg/50">
           {!selectedDoc ? (
-            <EmptyState className="border-none">
-              <Ruler className="mx-auto mb-3 h-10 w-10 text-fg/20" />
-              <p className="text-sm font-medium text-fg/50">Select a drawing to begin takeoff</p>
-              <p className="mt-1 text-xs text-fg/30">
-                Upload drawings via the Documents tab, then select one here to start measuring.
-              </p>
-            </EmptyState>
+            <div className="flex flex-1 items-center justify-center h-full">
+              <EmptyState className="border-none">
+                <Ruler className="mx-auto mb-3 h-10 w-10 text-fg/20" />
+                <p className="text-sm font-medium text-fg/50">
+                  Select a drawing to begin takeoff
+                </p>
+                <p className="mt-1 text-xs text-fg/30">
+                  Upload drawings via the Documents tab, then select one here to start measuring.
+                </p>
+              </EmptyState>
+            </div>
           ) : (
-            <div className="flex flex-col items-center gap-3 p-8">
-              <div
-                className="flex items-center justify-center rounded-lg border-2 border-dashed border-line bg-panel"
-                style={{
-                  width: `${Math.round(800 * (zoom / 100))}px`,
-                  height: `${Math.round(600 * (zoom / 100))}px`,
-                  minWidth: 200,
-                  minHeight: 150,
-                }}
-              >
-                <div className="text-center">
-                  <Ruler className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                  <p className="text-sm font-medium text-fg/50">{selectedDoc.fileName}</p>
-                  <p className="mt-1 text-xs text-fg/30">
-                    Page {page} of {totalPages}
-                  </p>
-                  <p className="mt-3 text-xs text-fg/25">
-                    PDF viewer placeholder &mdash; connect a document server to render drawings
-                  </p>
-                  <Badge tone="info" className="mt-3">
-                    {activeTool.charAt(0).toUpperCase() + activeTool.slice(1)} tool active
-                  </Badge>
-                </div>
-              </div>
+            <div className="relative inline-block m-4">
+              {/* PDF canvas */}
+              <PdfCanvasViewer
+                documentUrl={documentUrl}
+                pageNumber={page}
+                zoom={zoom}
+                onPageCount={handlePageCount}
+                canvasRef={pdfCanvasRef}
+              />
+              {/* Annotation overlay */}
+              <AnnotationCanvas
+                width={canvasSize.width}
+                height={canvasSize.height}
+                annotations={annotations.filter((a) => a.visible)}
+                activeTool={activeTool === "select" ? null : activeTool}
+                calibration={calibration}
+                activeColor={activeColor}
+                activeThickness={activeThickness}
+                onAnnotationComplete={handleAnnotationComplete}
+                onCalibrationRequest={handleCalibrationRequest}
+              />
             </div>
           )}
         </div>
 
-        {/* Right: Takeoff items list */}
-        <Card className="w-72 shrink-0 flex flex-col overflow-hidden">
-          <CardHeader className="py-3">
-            <CardTitle>Takeoff Items</CardTitle>
-          </CardHeader>
-          <CardBody className="flex flex-1 flex-col gap-3 overflow-auto py-3">
-            {/* Add new item */}
-            <div className="flex gap-1.5">
-              <Input
-                className="h-8 text-xs"
-                placeholder="New item label..."
-                value={nextItemLabel}
-                onChange={(e) => setNextItemLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleAddItem();
-                }}
-              />
-              <Button variant="secondary" size="xs" onClick={handleAddItem}>
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-
-            <Separator />
-
-            {/* Items list */}
-            {takeoffItems.length === 0 ? (
-              <EmptyState className="py-6">
-                <p className="text-xs">No takeoff items yet</p>
-                <p className="mt-1 text-[11px] text-fg/30">
-                  Add items above to start counting
-                </p>
-              </EmptyState>
-            ) : (
-              <div className="space-y-2">
-                {takeoffItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center gap-2 rounded-md border border-line bg-bg/30 px-2.5 py-2"
-                  >
-                    <div
-                      className="h-3 w-3 shrink-0 rounded-full"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-fg/80">
-                        {item.label}
-                      </p>
-                      <p className="text-[11px] text-fg/40">
-                        {item.tool} &middot; {item.unit}
-                      </p>
-                    </div>
-                    <Input
-                      className="h-7 w-16 px-1.5 text-center text-xs"
-                      type="number"
-                      min={0}
-                      value={item.quantity}
-                      onChange={(e) =>
-                        handleUpdateQuantity(
-                          item.id,
-                          parseFloat(e.target.value) || 0
-                        )
-                      }
-                    />
-                    <button
-                      onClick={() => handleRemoveItem(item.id)}
-                      className="text-fg/30 transition-colors hover:text-danger"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Summary */}
-            {takeoffItems.length > 0 && (
-              <>
-                <Separator />
-                <div className="rounded-md bg-panel2/50 px-3 py-2">
-                  <p className="text-xs font-medium text-fg/60">
-                    {takeoffItems.length} item{takeoffItems.length !== 1 ? "s" : ""} &middot;{" "}
-                    {takeoffItems.reduce((sum, i) => sum + i.quantity, 0)} total count
-                  </p>
-                </div>
-              </>
-            )}
-          </CardBody>
-        </Card>
+        {/* Right: Annotation sidebar */}
+        <AnnotationSidebar
+          annotations={annotations}
+          onToggleVisibility={handleToggleVisibility}
+          onDelete={handleDeleteAnnotation}
+          onEdit={handleEditAnnotation}
+          onSelectAnnotation={setSelectedAnnotationId}
+          selectedAnnotationId={selectedAnnotationId}
+        />
       </div>
+
+      {/* ─── Create Annotation Modal ─── */}
+      <CreateAnnotationModal
+        open={showCreateModal}
+        onClose={() => {
+          setShowCreateModal(false);
+          setActiveTool("select");
+        }}
+        onConfirm={handleAnnotationConfigConfirm}
+      />
+
+      {/* ─── Calibration Prompt ─── */}
+      {calibrationPromptOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => {
+              setCalibrationPromptOpen(false);
+              setCalibrationPoints(null);
+            }}
+          />
+          <Card className="relative z-10 w-full max-w-sm">
+            <div className="border-b border-line px-5 py-4">
+              <h3 className="text-sm font-semibold text-fg">Set Calibration</h3>
+              <p className="mt-0.5 text-xs text-fg/50">
+                Enter the real-world distance for the line you just drew.
+              </p>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  className="flex-1"
+                  type="number"
+                  min={0.01}
+                  step={0.01}
+                  placeholder="Distance..."
+                  value={calibrationInput}
+                  onChange={(e) => setCalibrationInput(e.target.value)}
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCalibrationConfirm();
+                  }}
+                />
+                <Select
+                  className="w-24"
+                  value={calibrationUnit}
+                  onChange={(e) => setCalibrationUnit(e.target.value)}
+                >
+                  <option value="ft">ft</option>
+                  <option value="in">in</option>
+                  <option value="m">m</option>
+                  <option value="cm">cm</option>
+                  <option value="mm">mm</option>
+                  <option value="yd">yd</option>
+                </Select>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setCalibrationPromptOpen(false);
+                    setCalibrationPoints(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button variant="accent" size="sm" onClick={handleCalibrationConfirm}>
+                  Apply
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

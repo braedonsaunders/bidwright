@@ -1,7 +1,50 @@
-import { createApiStore } from "../prisma-store.js";
-const apiStore = createApiStore(process.env.DEFAULT_ORG_ID || "default");
+import type { PrismaApiStore } from "../prisma-store.js";
 import { createLLMAdapter } from "@bidwright/agent";
+import { createPdfParser } from "@bidwright/ingestion";
+import { createEmbedder, PgVectorStore, type VectorRecord } from "@bidwright/vector";
+import { prisma } from "@bidwright/db";
 import type { KnowledgeBook, KnowledgeChunk, SourceDocument } from "@bidwright/domain";
+import { relativeKnowledgeBookPath, resolveApiPath } from "../paths.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+// Lazy-initialized vector infrastructure (keyed by orgId)
+const _vectorStores = new Map<string, PgVectorStore>();
+function getVectorStore(organizationId: string): PgVectorStore {
+  let store = _vectorStores.get(organizationId);
+  if (!store) {
+    store = new PgVectorStore(
+      async <T>(sql: string, params?: unknown[]) => {
+        return prisma.$queryRawUnsafe<T[]>(sql, ...(params ?? [])).then((r) => r as T[]);
+      },
+      organizationId,
+    );
+    _vectorStores.set(organizationId, store);
+  }
+  return store;
+}
+
+/** Resolve embedding configuration from environment variables. */
+function getEmbeddingConfig(): { provider: "openai" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number } | null {
+  const provider = process.env.EMBEDDING_PROVIDER as "openai" | "local" | undefined;
+
+  // Explicit local provider (TEI / Ollama)
+  if (provider === "local") {
+    return {
+      provider: "local",
+      baseUrl: process.env.EMBEDDING_BASE_URL || "http://localhost:11434/v1",
+      model: process.env.EMBEDDING_MODEL || "snowflake-arctic-embed",
+      dimensions: parseInt(process.env.EMBEDDING_DIMENSIONS || "1024", 10),
+    };
+  }
+
+  // OpenAI provider (needs API key)
+  if (process.env.OPENAI_API_KEY) {
+    return { provider: "openai", apiKey: process.env.OPENAI_API_KEY };
+  }
+
+  return null;
+}
 
 // ── Interfaces ────────────────────────────────────────────────────────
 
@@ -12,6 +55,7 @@ export interface IngestionRequest {
   category: KnowledgeBook["category"];
   scope: KnowledgeBook["scope"];
   projectId?: string;
+  organizationId?: string;
   options?: {
     chunkStrategy?: "recursive" | "section-aware" | "page";
     chunkSize?: number;
@@ -198,21 +242,19 @@ function smartChunk(
 
 /**
  * Extract text content from a file buffer based on MIME type.
- * Real parsers (packages/ingestion) will replace this later.
+ * Uses @bidwright/ingestion pdf-parse for PDFs.
  */
-function extractText(
+async function extractText(
   buffer: Buffer,
   mimeType: string,
-  _filename: string
-): { text: string; pageCount: number } {
-  // PDF: basic text extraction from buffer (placeholder — real parser will be plugged in)
+  filename: string
+): Promise<{ text: string; pageCount: number }> {
+  // PDF: use the real pdf-parse based parser from @bidwright/ingestion
   if (mimeType === "application/pdf") {
-    // For now, treat PDF as UTF-8 text with form-feed page separators
-    const raw = buffer.toString("utf-8");
-    // Filter out binary garbage, keep printable chars
-    const text = raw.replace(/[^\x20-\x7E\n\r\t\f]/g, " ").replace(/\s{3,}/g, "\n\n");
-    const pages = text.split("\f").filter((p) => p.trim());
-    return { text: text.replace(/\f/g, "\n\n--- Page Break ---\n\n"), pageCount: Math.max(pages.length, 1) };
+    const parser = createPdfParser({ provider: "local" });
+    const doc = await parser.parse(buffer, filename);
+    const text = doc.pages.map((p) => p.content).join("\n\n--- Page Break ---\n\n");
+    return { text: text || doc.content, pageCount: doc.metadata.pageCount || 1 };
   }
 
   // Excel/CSV: convert to text table
@@ -281,7 +323,7 @@ export class KnowledgeService {
    * 4. Store chunks
    * 5. Update book status
    */
-  async ingestDocument(request: IngestionRequest): Promise<IngestionResult> {
+  async ingestDocument(request: IngestionRequest, store?: PrismaApiStore): Promise<IngestionResult> {
     const startTime = Date.now();
     const errors: string[] = [];
 
@@ -295,7 +337,7 @@ export class KnowledgeService {
       sourceFileName = request.file.filename;
       sourceFileSize = request.file.buffer.length;
       try {
-        const extracted = extractText(request.file.buffer, request.file.mimeType, request.file.filename);
+        const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename);
         text = extracted.text;
         pageCount = extracted.pageCount;
       } catch (err) {
@@ -327,8 +369,18 @@ export class KnowledgeService {
       };
     }
 
-    // Step 2: Create KnowledgeBook record
-    const book = await apiStore.createKnowledgeBook({
+    // Step 2: Save source file to disk and create KnowledgeBook record
+    let storagePath: string | null = null;
+    if (request.file) {
+      const tempId = `kb-${Date.now()}`;
+      const relPath = relativeKnowledgeBookPath(tempId, sourceFileName);
+      const absPath = resolveApiPath(relPath);
+      await mkdir(path.dirname(absPath), { recursive: true });
+      await writeFile(absPath, request.file.buffer);
+      storagePath = relPath;
+    }
+
+    const book = await store!.createKnowledgeBook({
       name: request.title,
       description: `Ingested from ${sourceFileName}`,
       category: request.category,
@@ -336,7 +388,27 @@ export class KnowledgeService {
       projectId: request.projectId ?? null,
       sourceFileName,
       sourceFileSize,
+      storagePath,
     });
+
+    // Rename storage dir to use actual book ID
+    if (storagePath && request.file) {
+      const correctRelPath = relativeKnowledgeBookPath(book.id, sourceFileName);
+      const correctAbsPath = resolveApiPath(correctRelPath);
+      const oldAbsPath = resolveApiPath(storagePath);
+      if (oldAbsPath !== correctAbsPath) {
+        const { rename } = await import("node:fs/promises");
+        await mkdir(path.dirname(correctAbsPath), { recursive: true });
+        await rename(oldAbsPath, correctAbsPath);
+        // Clean up temp dir
+        const { rmdir } = await import("node:fs/promises");
+        await rmdir(path.dirname(oldAbsPath)).catch(() => {});
+        storagePath = correctRelPath;
+        await store!.updateKnowledgeBook(book.id, { metadata: { ...((book.metadata as Record<string, unknown>) ?? {}), storagePath: correctRelPath } });
+        // Update via raw prisma since updateKnowledgeBook doesn't handle storagePath
+        await prisma.knowledgeBook.update({ where: { id: book.id }, data: { storagePath: correctRelPath } });
+      }
+    }
 
     // Step 3: Chunk the content
     const chunkStrategy = request.options?.chunkStrategy ?? "section-aware";
@@ -352,7 +424,7 @@ export class KnowledgeService {
     for (let i = 0; i < chunkResults.length; i++) {
       const cr = chunkResults[i];
       try {
-        await apiStore.createKnowledgeChunk(book.id, {
+        await store!.createKnowledgeChunk(book.id, {
           text: cr.text,
           sectionTitle: cr.sectionTitle ?? "",
           pageNumber: cr.pageNumber ?? null,
@@ -365,8 +437,50 @@ export class KnowledgeService {
       }
     }
 
-    // Step 5: Update book status
-    await apiStore.updateKnowledgeBook(book.id, {
+    // Update page/chunk counts immediately so they're visible even if embeddings time out
+    await store!.updateKnowledgeBook(book.id, { pageCount, chunkCount, status: "processing" });
+
+    // Step 5: Generate embeddings if an embedding provider is available
+    let embeddingsGenerated = false;
+    const embeddingCfg = getEmbeddingConfig();
+    if (embeddingCfg && chunkCount > 0 && request.options?.enableEmbeddings !== false) {
+      try {
+        const embedder = createEmbedder({
+          provider: embeddingCfg.provider,
+          apiKey: embeddingCfg.apiKey,
+          baseUrl: embeddingCfg.baseUrl,
+          model: embeddingCfg.model,
+          dimensions: embeddingCfg.dimensions,
+        });
+        const chunkTexts = chunkResults.slice(0, chunkCount).map((cr) => cr.text);
+        const vectors = await embedder.embed(chunkTexts);
+        const vectorStore = getVectorStore(request.organizationId ?? "default");
+
+        const records: VectorRecord[] = vectors.map((embedding, i) => ({
+          id: `vec-${book.id}-${i}`,
+          chunkId: `chunk-${i}`,
+          documentId: book.id,
+          projectId: request.projectId ?? null,
+          scope: (request.scope === "project" ? "project" : "library") as "project" | "library",
+          embedding,
+          text: chunkTexts[i],
+          metadata: {
+            bookName: request.title,
+            category: request.category,
+            sectionTitle: chunkResults[i].sectionTitle ?? "",
+            pageNumber: chunkResults[i].pageNumber ?? 0,
+          },
+        }));
+
+        await vectorStore.upsert(records);
+        embeddingsGenerated = true;
+      } catch (err) {
+        errors.push(`Embedding generation failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    // Step 6: Update book status
+    await store!.updateKnowledgeBook(book.id, {
       status: errors.length > 0 && chunkCount === 0 ? "failed" : "indexed",
       pageCount,
       chunkCount,
@@ -377,7 +491,7 @@ export class KnowledgeService {
       status: errors.length > 0 && chunkCount === 0 ? "failed" : "completed",
       chunkCount,
       pageCount,
-      embeddingsGenerated: false, // pgvector not yet integrated
+      embeddingsGenerated,
       processingTimeMs: Date.now() - startTime,
       errors: errors.length > 0 ? errors : undefined,
     };
@@ -386,72 +500,107 @@ export class KnowledgeService {
   /**
    * Search across knowledge sources with hybrid search.
    *
-   * Uses text search on knowledge chunks. When pgvector is ready,
-   * this will integrate the HybridSearchEngine for vector + keyword search.
+   * When an embedding API key is available and vector_records table exists,
+   * uses pgvector hybrid search (vector + keyword). Otherwise falls back to
+   * text-based search on knowledge chunks.
    */
-  async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
+  async search(query: string, options: SearchOptions = {}, store?: PrismaApiStore): Promise<SearchResult[]> {
     const limit = options.limit ?? 20;
     const results: SearchResult[] = [];
 
-    // Search knowledge chunks
-    const chunks = await apiStore.searchKnowledgeChunks(
-      query,
-      options.bookId,
-      limit
-    );
+    // Try vector search first if an embedding provider is available
+    const embeddingCfg = getEmbeddingConfig();
+    if (embeddingCfg) {
+      try {
+        const embedder = createEmbedder({
+          provider: embeddingCfg.provider,
+          apiKey: embeddingCfg.apiKey,
+          baseUrl: embeddingCfg.baseUrl,
+          model: embeddingCfg.model,
+          dimensions: embeddingCfg.dimensions,
+        });
+        const queryVector = await embedder.embedQuery(query);
+        const vectorStore = getVectorStore(options?.organizationId ?? "default");
+        const scopeMap: Record<string, "project" | "library" | "all"> = {
+          global: "library",
+          project: "project",
+          all: "all",
+        };
+        const hits = await vectorStore.search({
+          query,
+          queryVector,
+          projectId: options.projectId,
+          scope: options.scope ? scopeMap[options.scope] ?? "all" : "all",
+          limit,
+          minScore: 0.2,
+        });
 
-    // Build a book lookup map for enrichment
-    const bookIds = [...new Set(chunks.map((c) => c.bookId))];
-    const bookMap = new Map<string, KnowledgeBook>();
-    for (const bid of bookIds) {
-      const book = await apiStore.getKnowledgeBook(bid);
-      if (book) bookMap.set(bid, book);
+        for (const hit of hits) {
+          results.push({
+            id: hit.record.id,
+            text: hit.record.text,
+            score: hit.score,
+            source: String(hit.record.metadata.bookName ?? "unknown"),
+            bookId: hit.record.documentId,
+            bookName: String(hit.record.metadata.bookName ?? ""),
+            sectionTitle: String(hit.record.metadata.sectionTitle ?? "") || undefined,
+            pageNumber: hit.record.metadata.pageNumber ? Number(hit.record.metadata.pageNumber) : undefined,
+            metadata: hit.record.metadata,
+          });
+        }
+      } catch {
+        // Vector search failed (table may not exist yet) — fall through to text search
+      }
     }
 
-    // Filter by scope if needed
-    const filteredChunks = chunks.filter((chunk) => {
-      const book = bookMap.get(chunk.bookId);
-      if (!book) return false;
-      if (options.scope === "global") return book.scope === "global";
-      if (options.scope === "project" && options.projectId) {
-        return book.projectId === options.projectId;
-      }
-      // "all" or unspecified: include everything visible
-      if (options.projectId) {
-        return book.scope === "global" || book.projectId === options.projectId;
-      }
-      return true;
-    });
+    // Fall back to text-based search if no vector results
+    if (results.length === 0) {
+      const chunks = await store!.searchKnowledgeChunks(query, options.bookId, limit);
 
-    // Score results (basic text similarity scoring)
-    const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    for (const chunk of filteredChunks) {
-      const book = bookMap.get(chunk.bookId);
-      const lowerText = chunk.text.toLowerCase();
-      let score = 0;
-      for (const term of queryTerms) {
-        const occurrences = lowerText.split(term).length - 1;
-        score += occurrences;
+      const bookIds = [...new Set(chunks.map((c) => c.bookId))];
+      const bookMap = new Map<string, KnowledgeBook>();
+      for (const bid of bookIds) {
+        const book = await store!.getKnowledgeBook(bid);
+        if (book) bookMap.set(bid, book);
       }
-      // Normalize score
-      score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
 
-      results.push({
-        id: chunk.id,
-        text: chunk.text,
-        score,
-        source: book?.sourceFileName ?? "unknown",
-        bookId: chunk.bookId,
-        bookName: book?.name,
-        sectionTitle: chunk.sectionTitle || undefined,
-        pageNumber: chunk.pageNumber ?? undefined,
-        metadata: chunk.metadata,
+      const filteredChunks = chunks.filter((chunk) => {
+        const book = bookMap.get(chunk.bookId);
+        if (!book) return false;
+        if (options.scope === "global") return book.scope === "global";
+        if (options.scope === "project" && options.projectId) return book.projectId === options.projectId;
+        if (options.projectId) return book.scope === "global" || book.projectId === options.projectId;
+        return true;
       });
+
+      const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
+      for (const chunk of filteredChunks) {
+        const book = bookMap.get(chunk.bookId);
+        const lowerText = chunk.text.toLowerCase();
+        let score = 0;
+        for (const term of queryTerms) {
+          const occurrences = lowerText.split(term).length - 1;
+          score += occurrences;
+        }
+        score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
+
+        results.push({
+          id: chunk.id,
+          text: chunk.text,
+          score,
+          source: book?.sourceFileName ?? "unknown",
+          bookId: chunk.bookId,
+          bookName: book?.name,
+          sectionTitle: chunk.sectionTitle || undefined,
+          pageNumber: chunk.pageNumber ?? undefined,
+          metadata: chunk.metadata,
+        });
+      }
     }
 
     // Also search project source documents if requested
     if (options.includeProjectDocs && options.projectId) {
-      const docs = await apiStore.listDocuments(options.projectId);
+      const docs = await store!.listDocuments(options.projectId);
       const lowerQuery = query.toLowerCase();
       for (const doc of docs) {
         const docText = doc.extractedText ?? "";
@@ -459,7 +608,7 @@ export class KnowledgeService {
           results.push({
             id: doc.id,
             text: docText.slice(0, 500),
-            score: 0.5, // moderate baseline score for document-level matches
+            score: 0.5,
             source: doc.fileName,
             metadata: { documentType: doc.documentType, fileType: doc.fileType },
           });
@@ -467,7 +616,6 @@ export class KnowledgeService {
       }
     }
 
-    // Sort by score descending, limit
     results.sort((a, b) => b.score - a.score);
     return results.slice(0, limit);
   }
@@ -481,10 +629,11 @@ export class KnowledgeService {
     documentId: string,
     projectId: string,
     analysisType: string,
-    focusArea?: string
+    focusArea?: string,
+    store?: PrismaApiStore,
   ): Promise<{ analysis: string; extractedData?: Record<string, unknown> }> {
     // Try to get the document from source documents first
-    const docs = await apiStore.listDocuments(projectId);
+    const docs = await store!.listDocuments(projectId);
     const doc = docs.find((d: any) => d.id === documentId);
 
     let content = "";
@@ -495,10 +644,10 @@ export class KnowledgeService {
       docName = doc.fileName;
     } else {
       // Try knowledge books — maybe it's a bookId
-      const book = await apiStore.getKnowledgeBook(documentId);
+      const book = await store!.getKnowledgeBook(documentId);
       if (book) {
         docName = book.name;
-        const chunks = await apiStore.listKnowledgeChunks(documentId);
+        const chunks = await store!.listKnowledgeChunks(documentId);
         content = chunks.map((c) => c.text).join("\n\n");
       }
     }

@@ -41,6 +41,18 @@ export function relativePackageDocumentPath(packageId: string, documentId: strin
   return path.join("packages", packageId, "documents", `${sanitizeFileName(title || documentId)}-${documentId}.json`);
 }
 
+export function relativeKnowledgeBookPath(bookId: string, fileName: string) {
+  return path.join("knowledge", bookId, sanitizeFileName(fileName));
+}
+
+export function relativeKnowledgeBookThumbnailPath(bookId: string) {
+  return path.join("knowledge", bookId, "thumbnail.png");
+}
+
+export function relativeProjectFilePath(projectId: string, nodeId: string, fileName: string) {
+  return path.join("projects", projectId, "files", nodeId, sanitizeFileName(fileName));
+}
+
 export function resolveRelativePath(relativePath: string) {
   return resolveApiPath(relativePath);
 }

@@ -71,14 +71,24 @@ function computeItemHours(item: WorksheetItem) {
     return {
       reg: 0,
       over: 0,
-      double: 0
+      double: 0,
+      tierUnits: {} as Record<string, number>,
     };
+  }
+
+  // If item has tierUnits set (rate-schedule-driven), aggregate those
+  const tierUnits: Record<string, number> = {};
+  if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
+    for (const [tierId, hours] of Object.entries(item.tierUnits)) {
+      tierUnits[tierId] = (Number(hours) || 0) * item.quantity;
+    }
   }
 
   return {
     reg: item.laborHourReg * item.quantity,
     over: item.laborHourOver * item.quantity,
-    double: item.laborHourDouble * item.quantity
+    double: item.laborHourDouble * item.quantity,
+    tierUnits,
   };
 }
 
@@ -466,10 +476,21 @@ export function calculateTotals(
     breakout = breakoutOverride;
   }
 
-  const regHours = roundMoney(lineItems.reduce((sum, item) => sum + computeItemHours(item).reg, 0));
-  const overHours = roundMoney(lineItems.reduce((sum, item) => sum + computeItemHours(item).over, 0));
-  const doubleHours = roundMoney(lineItems.reduce((sum, item) => sum + computeItemHours(item).double, 0));
+  const allItemHours = lineItems.map((item) => computeItemHours(item));
+  const regHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.reg, 0));
+  const overHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.over, 0));
+  const doubleHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.double, 0));
   const totalHours = roundMoney(regHours + overHours + doubleHours);
+
+  // Aggregate tier hours across all items
+  const tierUnitTotals: Record<string, number> = {};
+  for (const h of allItemHours) {
+    if (h.tierUnits) {
+      for (const [tierId, hours] of Object.entries(h.tierUnits)) {
+        tierUnitTotals[tierId] = roundMoney((tierUnitTotals[tierId] ?? 0) + hours);
+      }
+    }
+  }
   const estimatedProfit = roundMoney(subtotal - cost);
   const estimatedMargin = subtotal === 0 ? 0 : roundMoney(estimatedProfit / subtotal);
   const calculatedTotal = roundMoney(categoryTotals.reduce((sum, entry) => sum + entry.value, 0) + shownModifierTotal);
@@ -485,6 +506,7 @@ export function calculateTotals(
     doubleHours,
     totalHours,
     categoryTotals,
+    tierUnitTotals: Object.keys(tierUnitTotals).length > 0 ? tierUnitTotals : undefined,
     breakout: breakout.map((entry) => ({
       ...entry,
       value: roundMoney(entry.value),
@@ -592,6 +614,11 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     catalogs: getCatalogs(store, projectId),
     aiRuns,
     citations,
+    scheduleTasks: (store.scheduleTasks || []).filter((t) => t.projectId === projectId && t.revisionId === revision.id),
+    scheduleDependencies: (store.scheduleDependencies || []).filter((d) => {
+      const taskIds = new Set((store.scheduleTasks || []).filter((t) => t.projectId === projectId && t.revisionId === revision.id).map((t) => t.id));
+      return taskIds.has(d.predecessorId) || taskIds.has(d.successorId);
+    }),
     estimate: {
       revisionId: revision.id,
       totals,

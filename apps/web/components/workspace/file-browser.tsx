@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
+  AlertTriangle,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Download,
   Edit3,
   ExternalLink,
   File,
@@ -13,11 +16,17 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Image as ImageIcon,
+  Loader2,
+  Minus,
   MoreHorizontal,
+  Plus,
   Search,
   Trash2,
   Upload,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import type {
   FileNode,
@@ -28,8 +37,11 @@ import type {
 import {
   createFileNode,
   deleteFileNode,
+  getFileDownloadUrl,
+  getDocumentDownloadUrl,
   getFileTree,
   updateFileNode,
+  uploadFile,
 } from "@/lib/api";
 import {
   Badge,
@@ -52,7 +64,6 @@ interface TreeItem {
   type: "file" | "directory";
   parentId: string | null;
   children: TreeItem[];
-  // source data
   fileNode?: FileNode;
   sourceDocument?: SourceDocument;
   isAutoFolder?: boolean;
@@ -89,6 +100,10 @@ const TYPE_BADGE_TONE: Record<string, "default" | "success" | "warning" | "dange
   reference: "default",
 };
 
+const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "svg"]);
+const PDF_EXTENSIONS = new Set(["pdf"]);
+const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv", "log", "cfg", "ini", "html", "css", "js", "ts"]);
+
 /* ─── Helpers ─── */
 
 function truncateText(text: string, maxLength: number) {
@@ -101,6 +116,30 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getFileExtension(name: string): string {
+  return name.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function getPreviewType(item: TreeItem): "pdf" | "image" | "text" | "none" {
+  const ext = getFileExtension(item.name);
+  if (PDF_EXTENSIONS.has(ext)) return "pdf";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (TEXT_EXTENSIONS.has(ext)) return "text";
+  // Source documents with extracted text can show text preview
+  if (item.extractedText) return "text";
+  return "none";
+}
+
+function getDownloadUrl(item: TreeItem, projectId: string, inline = false): string | null {
+  if (item.fileNode?.storagePath) {
+    return getFileDownloadUrl(projectId, item.fileNode.id, inline);
+  }
+  if (item.sourceDocument) {
+    return getDocumentDownloadUrl(projectId, item.sourceDocument.id, inline);
+  }
+  return null;
 }
 
 function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
@@ -126,7 +165,6 @@ function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
     for (const child of children) {
       child.children = attachChildren(child.id);
     }
-    // Sort: directories first, then alphabetical
     return children.sort((a, b) => {
       if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
       return a.name.localeCompare(b.name);
@@ -166,7 +204,6 @@ function buildAutoFolders(documents: SourceDocument[]): TreeItem[] {
     });
   }
 
-  // Uncategorized docs
   const knownTypes = new Set(FOLDER_CONFIG.map((c) => c.documentType));
   const uncategorized = documents.filter((d) => !knownTypes.has(d.documentType));
   if (uncategorized.length > 0) {
@@ -217,6 +254,275 @@ function filterTree(items: TreeItem[], query: string): TreeItem[] {
   }
 
   return prune(items);
+}
+
+/* ─── PDF Preview (lazy loaded) ─── */
+
+function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pdfDocRef = useRef<any>(null);
+  const renderTaskRef = useRef<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageCount, setPageCount] = useState(0);
+  const [zoom, setZoom] = useState(1.2);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPdf() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        if (pdfDocRef.current) {
+          pdfDocRef.current.destroy();
+          pdfDocRef.current = null;
+        }
+
+        const pdfjs = await import("pdfjs-dist");
+        if (typeof window !== "undefined" && !pdfjs.GlobalWorkerOptions.workerSrc) {
+          pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+            "pdfjs-dist/build/pdf.worker.min.mjs",
+            import.meta.url
+          ).toString();
+        }
+
+        const loadingTask = pdfjs.getDocument(url);
+        const doc = await loadingTask.promise;
+
+        if (cancelled) {
+          doc.destroy();
+          return;
+        }
+
+        pdfDocRef.current = doc;
+        setPageCount(doc.numPages);
+        setPageNumber(1);
+        setLoading(false);
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load PDF");
+          setLoading(false);
+        }
+      }
+    }
+
+    loadPdf();
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  const renderPage = useCallback(async () => {
+    const doc = pdfDocRef.current;
+    const canvas = canvasRef.current;
+    if (!doc || !canvas) return;
+
+    const clampedPage = Math.max(1, Math.min(pageNumber, doc.numPages));
+
+    try {
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
+        renderTaskRef.current = null;
+      }
+
+      const page = await doc.getPage(clampedPage);
+      const viewport = page.getViewport({ scale: zoom });
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+
+      const renderTask = page.render({ canvas, viewport });
+      renderTaskRef.current = renderTask;
+      await renderTask.promise;
+      renderTaskRef.current = null;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message?.includes("Rendering cancelled")) return;
+    }
+  }, [pageNumber, zoom]);
+
+  useEffect(() => {
+    if (!loading && !error) renderPage();
+  }, [loading, error, renderPage]);
+
+  useEffect(() => {
+    return () => {
+      if (renderTaskRef.current) renderTaskRef.current.cancel();
+      if (pdfDocRef.current) {
+        pdfDocRef.current.destroy();
+        pdfDocRef.current = null;
+      }
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 p-8 text-sm text-danger">
+        <AlertTriangle className="h-5 w-5" />
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        <span className="ml-2 text-sm text-fg/50">Loading PDF...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col pb-1">
+      {/* PDF Controls */}
+      <div className="flex items-center justify-between border-b border-line px-3 py-2 bg-panel2/30">
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
+            disabled={pageNumber <= 1}
+            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="text-xs text-fg/60 min-w-[80px] text-center">
+            {pageNumber} / {pageCount}
+          </span>
+          <button
+            onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}
+            disabled={pageNumber >= pageCount}
+            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setZoom((z) => Math.max(0.5, z - 0.2))}
+            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <span className="text-xs text-fg/50 min-w-[40px] text-center">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            onClick={() => setZoom((z) => Math.min(3, z + 0.2))}
+            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* PDF Canvas */}
+      <div className="overflow-auto bg-bg/30 flex-1 flex justify-center p-4">
+        <canvas ref={canvasRef} className="block shadow-lg" />
+      </div>
+    </div>
+  );
+}
+
+/* ─── Image Preview ─── */
+
+function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  return (
+    <div className="flex flex-col items-center justify-center p-4 overflow-auto bg-bg/30">
+      {loading && !error && (
+        <div className="flex items-center gap-2 py-4">
+          <Loader2 className="h-5 w-5 animate-spin text-accent" />
+          <span className="text-sm text-fg/50">Loading image...</span>
+        </div>
+      )}
+      {error ? (
+        <div className="flex flex-col items-center gap-2 p-8 text-sm text-danger">
+          <ImageIcon className="h-5 w-5" />
+          <p>Failed to load image</p>
+        </div>
+      ) : (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={url}
+          alt={fileName}
+          className={cn("max-w-full max-h-[70vh] object-contain rounded shadow-lg", loading && "hidden")}
+          onLoad={() => setLoading(false)}
+          onError={() => {
+            setLoading(false);
+            setError(true);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ─── Text Preview ─── */
+
+function TextPreview({ url, extractedText }: { url: string | null; extractedText?: string }) {
+  const [content, setContent] = useState<string | null>(extractedText ?? null);
+  const [loading, setLoading] = useState(!extractedText);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (extractedText || !url) return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        const text = await res.text();
+        if (!cancelled) {
+          setContent(text);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to load");
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [url, extractedText]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        <span className="ml-2 text-sm text-fg/50">Loading content...</span>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center gap-2 p-8 text-sm text-danger">
+        <AlertTriangle className="h-5 w-5" />
+        <p>Failed to load: {error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-auto bg-bg/30 p-4 flex-1">
+      <pre className="text-xs text-fg/70 leading-relaxed whitespace-pre-wrap font-mono">
+        {truncateText(content ?? "", 50000)}
+      </pre>
+    </div>
+  );
 }
 
 /* ─── TreeNode Component ─── */
@@ -362,6 +668,10 @@ function TreeNode({
   }
 
   // File node
+  const ext = getFileExtension(item.name);
+  const isImage = IMAGE_EXTENSIONS.has(ext);
+  const isPdf = PDF_EXTENSIONS.has(ext);
+
   return (
     <div
       className={cn(
@@ -372,20 +682,18 @@ function TreeNode({
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
       onClick={() => onSelect(item)}
-      onContextMenu={(e) => {
-        if (!item.sourceDocument) {
-          e.preventDefault();
-          // Could show context menu for user files
-        }
-      }}
     >
-      {item.sourceDocument ? (
+      {isPdf ? (
+        <FileText className="h-3.5 w-3.5 shrink-0 text-danger/70" />
+      ) : isImage ? (
+        <ImageIcon className="h-3.5 w-3.5 shrink-0 text-success/70" />
+      ) : item.sourceDocument ? (
         <FileText className="h-3.5 w-3.5 shrink-0" />
       ) : (
         <File className="h-3.5 w-3.5 shrink-0" />
       )}
       <span className="flex-1 truncate">{item.name}</span>
-      {item.pageCount && (
+      {item.pageCount != null && item.pageCount > 0 && (
         <span className="shrink-0 text-[10px] text-fg/30">
           {item.pageCount}p
         </span>
@@ -398,6 +706,7 @@ function TreeNode({
 
 export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   const projectId = workspace.project.id;
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     new Set(["auto-specs", "auto-drawings"])
@@ -405,6 +714,10 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [userNodes, setUserNodes] = useState<FileNode[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(true);
+
+  // Upload state
+  const [uploading, setUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
 
   // New folder creation
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -415,6 +728,13 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
+  // Error feedback
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const showError = useCallback((msg: string) => {
+    setErrorMessage(msg);
+    setTimeout(() => setErrorMessage(null), 5000);
+  }, []);
+
   // Load user file nodes
   useEffect(() => {
     setLoadingNodes(true);
@@ -424,7 +744,7 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       .finally(() => setLoadingNodes(false));
   }, [projectId]);
 
-  // Build tree: auto-folders from source documents + user-created folders/files
+  // Build tree
   const tree = useMemo(() => {
     const autoFolders = buildAutoFolders(workspace.sourceDocuments ?? []);
     const userTree = buildTreeFromNodes(userNodes);
@@ -436,7 +756,6 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
     [tree, searchQuery]
   );
 
-  // Find the selected item in the tree
   const selectedItem = useMemo(() => {
     function findItem(items: TreeItem[]): TreeItem | null {
       for (const item of items) {
@@ -462,6 +781,58 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
     setSelectedId(item.id);
   }, []);
 
+  // ── Upload handling ────────────────────────────────────────────────────
+
+  const handleUploadFiles = useCallback(async (files: FileList | File[]) => {
+    if (files.length === 0) return;
+    setUploading(true);
+    setErrorMessage(null);
+
+    // Determine parent: if a directory is selected, upload into it
+    let parentId: string | null = null;
+    if (selectedItem?.type === "directory" && selectedItem.fileNode) {
+      parentId = selectedItem.fileNode.id;
+    }
+
+    try {
+      for (const file of Array.from(files)) {
+        const node = await uploadFile(projectId, file, parentId);
+        setUserNodes((prev) => [...prev, node]);
+      }
+      // Expand parent if uploading into a folder
+      if (parentId) {
+        setExpandedFolders((prev) => new Set([...prev, parentId!]));
+      }
+    } catch (err) {
+      showError(`Upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setUploading(false);
+    }
+  }, [projectId, selectedItem, showError]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files.length > 0) {
+      handleUploadFiles(e.dataTransfer.files);
+    }
+  }, [handleUploadFiles]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+  }, []);
+
+  // ── CRUD handlers ──────────────────────────────────────────────────────
+
   const handleCreateFolder = useCallback(async () => {
     if (!newFolderName.trim()) return;
     try {
@@ -474,14 +845,13 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       setCreatingFolder(false);
       setNewFolderName("");
       setNewFolderParentId(null);
-      // Expand to show new folder
       if (newFolderParentId) {
         setExpandedFolders((prev) => new Set([...prev, newFolderParentId!]));
       }
     } catch (err) {
-      console.error("Failed to create folder:", err);
+      showError(`Failed to create folder: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, newFolderName, newFolderParentId]);
+  }, [projectId, newFolderName, newFolderParentId, showError]);
 
   const handleRename = useCallback(async () => {
     if (!renamingId || !renameValue.trim()) return;
@@ -494,16 +864,15 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       );
       setRenamingId(null);
     } catch (err) {
-      console.error("Failed to rename:", err);
+      showError(`Failed to rename: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, renamingId, renameValue]);
+  }, [projectId, renamingId, renameValue, showError]);
 
   const handleDelete = useCallback(async (item: TreeItem) => {
     if (!item.fileNode) return;
     try {
       await deleteFileNode(projectId, item.fileNode.id);
       setUserNodes((prev) => {
-        // Remove node and all descendants
         const toDelete = new Set<string>([item.fileNode!.id]);
         let changed = true;
         while (changed) {
@@ -519,9 +888,9 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       });
       if (selectedId === item.id) setSelectedId(null);
     } catch (err) {
-      console.error("Failed to delete:", err);
+      showError(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, selectedId]);
+  }, [projectId, selectedId, showError]);
 
   const handleContextAction = useCallback((action: string, item: TreeItem) => {
     if (action === "rename" && item.fileNode) {
@@ -531,6 +900,20 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       handleDelete(item);
     }
   }, [handleDelete]);
+
+  // ── Preview URL ────────────────────────────────────────────────────────
+
+  const previewUrl = useMemo(() => {
+    if (!selectedItem || selectedItem.type === "directory") return null;
+    return getDownloadUrl(selectedItem, projectId, true);
+  }, [selectedItem, projectId]);
+
+  const downloadUrl = useMemo(() => {
+    if (!selectedItem || selectedItem.type === "directory") return null;
+    return getDownloadUrl(selectedItem, projectId, false);
+  }, [selectedItem, projectId]);
+
+  const previewType = selectedItem ? getPreviewType(selectedItem) : "none";
 
   return (
     <div className="flex h-full gap-4">
@@ -551,10 +934,29 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
                 <FolderPlus className="h-3.5 w-3.5" />
                 New Folder
               </Button>
-              <Button variant="secondary" size="xs" disabled>
-                <Upload className="h-3.5 w-3.5" />
+              <Button
+                variant="secondary"
+                size="xs"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Upload className="h-3.5 w-3.5" />
+                )}
                 Upload
               </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files) handleUploadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
             </div>
           </CardHeader>
 
@@ -655,15 +1057,56 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
             )}
           </AnimatePresence>
 
-          {/* Tree */}
-          <div className="flex-1 overflow-y-auto px-2 py-2">
+          {/* Error banner */}
+          <AnimatePresence>
+            {errorMessage && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                className="border-b border-danger/20 bg-danger/5 px-4 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" />
+                  <span className="flex-1 text-xs text-danger">{errorMessage}</span>
+                  <button
+                    onClick={() => setErrorMessage(null)}
+                    className="text-danger/50 hover:text-danger"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Tree with drag-and-drop */}
+          <div
+            className={cn(
+              "flex-1 overflow-y-auto px-2 py-2 transition-colors relative",
+              dragActive && "bg-accent/5 ring-2 ring-inset ring-accent/30"
+            )}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+          >
+            {/* Drag overlay */}
+            {dragActive && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-accent/5 pointer-events-none">
+                <div className="flex flex-col items-center gap-2 text-accent">
+                  <Upload className="h-8 w-8" />
+                  <p className="text-sm font-medium">Drop files to upload</p>
+                </div>
+              </div>
+            )}
+
             {loadingNodes ? (
               <div className="flex items-center justify-center py-8">
                 <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
               </div>
             ) : filteredTree.length === 0 ? (
               <EmptyState className="mt-4">
-                No documents or files yet.
+                No documents or files yet. Upload files or drag and drop.
               </EmptyState>
             ) : (
               filteredTree.map((item) => (
@@ -683,157 +1126,45 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
         </Card>
       </div>
 
-      {/* ─── Right Panel: File Details ─── */}
+      {/* ─── Right Panel: Preview + Details ─── */}
       <div className="w-[60%]">
         <Card className="flex h-full flex-col overflow-hidden">
-          <CardHeader>
-            <CardTitle>
-              {selectedItem ? "File Details" : "Select a File"}
-            </CardTitle>
-          </CardHeader>
-
-          <CardBody className="flex-1 overflow-y-auto">
-            {!selectedItem ? (
-              <EmptyState>
-                Click a file or folder in the tree to view its details.
-              </EmptyState>
-            ) : selectedItem.type === "directory" ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                    Folder
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-fg">
-                    {selectedItem.name}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                    Contents
-                  </p>
-                  <p className="mt-1 text-sm text-fg/70">
-                    {selectedItem.children.length} item
-                    {selectedItem.children.length !== 1 ? "s" : ""}
-                  </p>
-                </div>
+          {!selectedItem ? (
+            <>
+              <CardHeader>
+                <CardTitle>Select a File</CardTitle>
+              </CardHeader>
+              <CardBody className="flex-1">
+                <EmptyState>
+                  Click a file or folder in the tree to view its details and preview.
+                </EmptyState>
+              </CardBody>
+            </>
+          ) : selectedItem.type === "directory" ? (
+            <>
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
+                <CardTitle>{selectedItem.name}</CardTitle>
                 {selectedItem.isAutoFolder && (
-                  <div>
-                    <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType ?? ""] ?? "default"}>
-                      Auto-organized from packages
-                    </Badge>
-                  </div>
+                  <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType ?? ""] ?? "default"}>
+                    Auto-organized
+                  </Badge>
                 )}
-                {selectedItem.fileNode && (
-                  <div className="flex gap-2 pt-2">
-                    <Button
-                      variant="secondary"
-                      size="xs"
-                      onClick={() => {
-                        setRenamingId(selectedItem.fileNode!.id);
-                        setRenameValue(selectedItem.name);
-                      }}
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                      Rename
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="xs"
-                      onClick={() => handleDelete(selectedItem)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* File name */}
-                <div>
-                  <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                    Name
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-fg break-all">
-                    {selectedItem.name}
-                  </p>
-                </div>
-
-                {/* Type & pages row */}
-                <div className="flex items-center gap-4">
-                  {selectedItem.documentType && (
+              </CardHeader>
+              <CardBody className="flex-1">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-4">
                     <div>
                       <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                        Document Type
-                      </p>
-                      <div className="mt-1">
-                        <Badge
-                          tone={
-                            TYPE_BADGE_TONE[selectedItem.documentType] ??
-                            "default"
-                          }
-                        >
-                          {selectedItem.documentType}
-                        </Badge>
-                      </div>
-                    </div>
-                  )}
-                  {selectedItem.pageCount != null && (
-                    <div>
-                      <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                        Pages
-                      </p>
-                      <p className="mt-1 text-sm text-fg">
-                        {selectedItem.pageCount}
-                      </p>
-                    </div>
-                  )}
-                  {selectedItem.size != null && (
-                    <div>
-                      <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                        Size
+                        Contents
                       </p>
                       <p className="mt-1 text-sm text-fg/70">
-                        {formatBytes(selectedItem.size)}
+                        {selectedItem.children.length} item
+                        {selectedItem.children.length !== 1 ? "s" : ""}
                       </p>
                     </div>
-                  )}
-                </div>
-
-                {/* File type */}
-                {selectedItem.fileType && (
-                  <div>
-                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                      File Type
-                    </p>
-                    <p className="mt-1 text-sm text-fg/70">
-                      {selectedItem.fileType}
-                    </p>
                   </div>
-                )}
-
-                {/* Upload/create date */}
-                {selectedItem.createdAt && (
-                  <div>
-                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                      Uploaded
-                    </p>
-                    <p className="mt-1 text-sm text-fg/70">
-                      {formatDate(selectedItem.createdAt)}
-                    </p>
-                  </div>
-                )}
-
-                {/* Actions */}
-                <div className="flex gap-2 pt-2">
-                  {selectedItem.sourceDocument && (
-                    <Button variant="secondary" size="xs" disabled>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      Open
-                    </Button>
-                  )}
                   {selectedItem.fileNode && (
-                    <>
+                    <div className="flex gap-2 pt-2">
                       <Button
                         variant="secondary"
                         size="xs"
@@ -853,36 +1184,136 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
                         <Trash2 className="h-3.5 w-3.5" />
                         Delete
                       </Button>
+                    </div>
+                  )}
+                </div>
+              </CardBody>
+            </>
+          ) : (
+            <>
+              {/* File header with actions */}
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <CardTitle className="truncate">{selectedItem.name}</CardTitle>
+                  {selectedItem.documentType && (
+                    <Badge
+                      tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}
+                    >
+                      {selectedItem.documentType}
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {downloadUrl && (
+                    <a href={downloadUrl} download>
+                      <Button variant="secondary" size="xs">
+                        <Download className="h-3.5 w-3.5" />
+                        Download
+                      </Button>
+                    </a>
+                  )}
+                  {previewUrl && (
+                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
+                      <Button variant="secondary" size="xs">
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        Open
+                      </Button>
+                    </a>
+                  )}
+                  {selectedItem.fileNode && (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="xs"
+                        onClick={() => {
+                          setRenamingId(selectedItem.fileNode!.id);
+                          setRenameValue(selectedItem.name);
+                        }}
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="xs"
+                        onClick={() => handleDelete(selectedItem)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </>
                   )}
                 </div>
+              </CardHeader>
 
-                {/* Extracted text preview */}
-                {selectedItem.extractedText && (
-                  <div>
-                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                      Extracted Text Preview
-                    </p>
-                    <div className="mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">
-                      {truncateText(selectedItem.extractedText, 2000)}
-                    </div>
-                  </div>
+              {/* File metadata bar */}
+              <div className="flex items-center gap-4 border-b border-line px-4 py-2 text-xs text-fg/50">
+                {selectedItem.fileType && (
+                  <span className="uppercase font-medium">{selectedItem.fileType}</span>
                 )}
+                {selectedItem.pageCount != null && selectedItem.pageCount > 0 && (
+                  <span>{selectedItem.pageCount} pages</span>
+                )}
+                {selectedItem.size != null && (
+                  <span>{formatBytes(selectedItem.size)}</span>
+                )}
+                {selectedItem.createdAt && (
+                  <span>{formatDate(selectedItem.createdAt)}</span>
+                )}
+              </div>
 
-                {/* Source document metadata */}
-                {selectedItem.sourceDocument && (
-                  <div>
-                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                      Checksum
+              {/* Preview area */}
+              <div className="flex-1 overflow-hidden flex flex-col">
+                {previewType === "pdf" && previewUrl && (
+                  <PdfPreview
+                    key={previewUrl}
+                    url={previewUrl}
+                    fileName={selectedItem.name}
+                  />
+                )}
+                {previewType === "image" && previewUrl && (
+                  <ImagePreview
+                    key={previewUrl}
+                    url={previewUrl}
+                    fileName={selectedItem.name}
+                  />
+                )}
+                {previewType === "text" && (
+                  <TextPreview
+                    key={selectedItem.id}
+                    url={previewUrl}
+                    extractedText={selectedItem.extractedText}
+                  />
+                )}
+                {previewType === "none" && (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+                    <File className="h-12 w-12 text-fg/15" />
+                    <p className="text-sm text-fg/40">
+                      Preview not available for this file type
                     </p>
-                    <p className="mt-1 truncate text-[11px] font-mono text-fg/30">
-                      {selectedItem.sourceDocument.checksum}
-                    </p>
+                    {downloadUrl && (
+                      <a href={downloadUrl} download>
+                        <Button variant="secondary" size="sm">
+                          <Download className="h-4 w-4" />
+                          Download File
+                        </Button>
+                      </a>
+                    )}
+
+                    {/* Show extracted text if available */}
+                    {selectedItem.extractedText && (
+                      <div className="w-full mt-4">
+                        <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">
+                          Extracted Text
+                        </p>
+                        <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">
+                          {truncateText(selectedItem.extractedText, 2000)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-          </CardBody>
+            </>
+          )}
         </Card>
       </div>
     </div>

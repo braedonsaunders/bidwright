@@ -54,6 +54,57 @@ export interface Quote {
   updatedAt: string;
 }
 
+// ── Customers ──────────────────────────────────────────────────────────
+
+export interface Customer {
+  id: string;
+  organizationId: string;
+  name: string;
+  shortName: string;
+  phone: string;
+  email: string;
+  website: string;
+  addressStreet: string;
+  addressCity: string;
+  addressProvince: string;
+  addressPostalCode: string;
+  addressCountry: string;
+  notes: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerContact {
+  id: string;
+  customerId: string;
+  name: string;
+  title: string;
+  phone: string;
+  email: string;
+  isPrimary: boolean;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerWithContacts extends Customer {
+  contacts: CustomerContact[];
+}
+
+// ── Departments ────────────────────────────────────────────────────────
+
+export interface Department {
+  id: string;
+  organizationId: string;
+  name: string;
+  code: string;
+  description: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface QuoteRevision {
   id: string;
   quoteId: string;
@@ -125,6 +176,8 @@ export interface WorksheetItem {
   laborHourOver: number;
   laborHourDouble: number;
   lineOrder: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export interface Phase {
@@ -134,6 +187,44 @@ export interface Phase {
   name: string;
   description: string;
   order: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
+}
+
+// ── Schedule Tasks ──────────────────────────────────────────────────────
+
+export type ScheduleTaskType = "task" | "milestone";
+export type ScheduleTaskStatus = "not_started" | "in_progress" | "complete" | "on_hold";
+export type DependencyType = "FS" | "SS" | "FF" | "SF";
+
+export interface ScheduleTask {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  phaseId: string | null;
+  name: string;
+  description: string;
+  taskType: ScheduleTaskType;
+  status: ScheduleTaskStatus;
+  startDate: string | null;
+  endDate: string | null;
+  duration: number;
+  progress: number;
+  assignee: string;
+  order: number;
+  baselineStart: string | null;
+  baselineEnd: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleDependency {
+  id: string;
+  predecessorId: string;
+  successorId: string;
+  type: DependencyType;
+  lagDays: number;
 }
 
 export interface Modifier {
@@ -176,6 +267,13 @@ export interface Catalog {
   scope: "global" | "project";
   projectId: string | null;
   description: string;
+  source: string;
+  sourceDescription: string;
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  itemCount?: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CatalogItem {
@@ -216,13 +314,56 @@ export interface Citation {
   confidence: number;
 }
 
-export interface LabourRate {
+// ── Rate Schedules ──────────────────────────────────────────────────────
+
+export type RateScheduleScope = "global" | "revision";
+export type RateScheduleCategory = "labour" | "equipment" | "materials" | "general";
+
+export interface RateScheduleTier {
   id: string;
-  revisionId: string;
+  scheduleId: string;
   name: string;
-  regularRate: number;
-  overtimeRate: number;
-  doubleRate: number;
+  multiplier: number;
+  sortOrder: number;
+}
+
+export interface RateScheduleItem {
+  id: string;
+  scheduleId: string;
+  catalogItemId: string | null;
+  code: string;
+  name: string;
+  unit: string;
+  rates: Record<string, number>;
+  costRates: Record<string, number>;
+  burden: number;
+  perDiem: number;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
+}
+
+export interface RateSchedule {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  category: string;
+  scope: RateScheduleScope;
+  projectId: string | null;
+  revisionId: string | null;
+  sourceScheduleId: string | null;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  defaultMarkup: number;
+  autoCalculate: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RateScheduleWithChildren extends RateSchedule {
+  tiers: RateScheduleTier[];
+  items: RateScheduleItem[];
 }
 
 export interface Activity {
@@ -272,6 +413,7 @@ export interface FileNode {
   parentId: string | null;
   name: string;
   type: "file" | "directory";
+  scope: "project" | "knowledge";
   fileType?: string;
   size?: number;
   documentId?: string;
@@ -280,6 +422,33 @@ export interface FileNode {
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
+}
+
+// ── Takeoff Annotations ──────────────────────────────────────────────────
+
+export type TakeoffAnnotationType =
+  | "linear" | "linear-polyline" | "linear-drop"
+  | "count" | "count-by-distance"
+  | "area-vertical-wall" | "area-rectangle" | "area-triangle" | "area-ellipse" | "area-polygon";
+
+export interface TakeoffAnnotation {
+  id: string;
+  projectId: string;
+  documentId: string;
+  pageNumber: number;
+  annotationType: TakeoffAnnotationType;
+  label: string;
+  color: string;
+  lineThickness: number;
+  visible: boolean;
+  groupName: string;
+  points: Array<{ x: number; y: number }>;
+  measurement: { value?: number; unit?: string; area?: number; volume?: number; height?: number };
+  calibration?: { pixelsPerUnit: number; unit: string } | null;
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ── Plugin UI Schema ──────────────────────────────────────────────────────
@@ -391,6 +560,20 @@ export interface PluginScoringCriterion {
   scale: { min: number; max: number; step: number; labels?: Record<number, string> };
 }
 
+export interface PluginScoringEffect {
+  type: "revision_patch" | "modifier" | "both";
+  // For revision_patch: which field to write (e.g., "necaDifficulty", "defaultMarkup")
+  revisionField?: string;
+  // For modifier: create/update a quote modifier from the scoring result
+  modifier?: {
+    name: string;                                          // modifier name (e.g., "Difficulty Factor")
+    appliesTo: "All" | "Labour" | "Material" | "Equipment"; // what it affects
+    show: "Yes" | "No";                                    // visible on breakout?
+    // The result band's `value` is parsed as a number and used as the percentage.
+    // e.g., resultMapping value "0.15" → 15% modifier
+  };
+}
+
 export interface PluginScoring {
   id: string;
   label: string;
@@ -404,7 +587,8 @@ export interface PluginScoring {
     color?: string;
     description?: string;
   }>;
-  outputField?: string;  // which revision/item field to write the result to
+  outputField?: string;           // DEPRECATED — use outputEffect.revisionField instead
+  outputEffect?: PluginScoringEffect;  // what to do with the resolved result
 }
 
 export interface PluginFieldGroup {
@@ -494,16 +678,28 @@ export interface PluginOutputSummary {
   }>;
 }
 
+export interface PluginOutputModifier {
+  name: string;
+  type: "percentage" | "amount";
+  appliesTo: string;        // "All", "Labour", "Material", "Equipment"
+  percentage?: number;       // decimal, e.g., 0.15 = 15%
+  amount?: number;
+  show: "Yes" | "No";
+}
+
 export interface PluginOutput {
-  type: "line_items" | "worksheet" | "text_content" | "revision_patch" | "score" | "summary" | "composite";
+  type: "line_items" | "worksheet" | "text_content" | "revision_patch" | "score" | "modifier" | "summary" | "composite";
   lineItems?: PluginOutputLineItem[];
   worksheet?: PluginOutputWorksheet;
   textContent?: PluginOutputTextContent;
   revisionPatches?: PluginOutputRevisionPatch[];
   scores?: PluginOutputScore[];
+  modifier?: PluginOutputModifier;
   summary?: PluginOutputSummary;
   displayText?: string;    // human-readable summary of what was produced
   children?: PluginOutput[]; // for "composite" type - multiple outputs
+  // Applied effects — populated by the execution handler after applying
+  appliedEffects?: Array<{ type: string; description: string }>;
 }
 
 // ── Plugin Tool Definition (enhanced) ─────────────────────────────────────
@@ -606,11 +802,27 @@ export interface AuthSession {
   createdAt: string;
 }
 
+export interface BrandProfile {
+  companyName: string;
+  tagline: string;
+  industry: string;
+  description: string;
+  services: string[];
+  targetMarkets: string[];
+  brandVoice: string;
+  colors: { primary: string; secondary: string; accent: string };
+  logoUrl: string;
+  socialLinks: Record<string, string>;
+  websiteUrl: string;
+  lastCapturedAt: string | null;
+}
+
 export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
-  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string };
+  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+  brand: BrandProfile;
 }
 
 // ── Knowledge Base ──
@@ -627,6 +839,7 @@ export interface KnowledgeBook {
   status: "uploading" | "processing" | "indexed" | "failed";
   sourceFileName: string;
   sourceFileSize: number;
+  storagePath: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -654,8 +867,10 @@ export interface Dataset {
   projectId: string | null;
   columns: DatasetColumn[];
   rowCount: number;
-  source: "manual" | "import" | "ai_generated" | "plugin";
+  source: "manual" | "import" | "ai_generated" | "plugin" | "library";
   sourceDescription: string;
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -679,6 +894,16 @@ export interface DatasetRow {
   updatedAt: string;
 }
 
+export type CalculationType =
+  | "auto_labour"
+  | "auto_equipment"
+  | "auto_stock"
+  | "auto_consumable"
+  | "auto_subcontract"
+  | "direct_price"
+  | "manual"
+  | "formula";
+
 export interface EntityCategory {
   id: string;
   name: string;
@@ -700,7 +925,12 @@ export interface EntityCategory {
     over: string;
     double: string;
   };
-  calculationType: "auto_labour" | "auto_equipment" | "auto_stock" | "auto_consumable" | "direct_price" | "manual";
+  calculationType: CalculationType;
+  calcFormula: string;
+  color: string;
+  order: number;
+  isBuiltIn: boolean;
+  enabled: boolean;
 }
 
 export interface BidwrightStore {
@@ -718,7 +948,6 @@ export interface BidwrightStore {
   catalogItems: CatalogItem[];
   aiRuns: AiRun[];
   citations: Citation[];
-  labourRates: LabourRate[];
   activities: Activity[];
   conditionLibrary: ConditionLibraryEntry[];
   reportSections: ReportSection[];
@@ -733,6 +962,11 @@ export interface BidwrightStore {
   datasets: Dataset[];
   datasetRows: DatasetRow[];
   entityCategories: EntityCategory[];
+  scheduleTasks: ScheduleTask[];
+  scheduleDependencies: ScheduleDependency[];
+  rateSchedules: RateSchedule[];
+  rateScheduleTiers: RateScheduleTier[];
+  rateScheduleItems: RateScheduleItem[];
 }
 
 export interface BreakoutEntry {
@@ -764,6 +998,7 @@ export interface RevisionTotals {
     name: string;
     value: number;
   }>;
+  tierUnitTotals?: Record<string, number>;
   breakout: BreakoutEntry[];
 }
 
@@ -780,6 +1015,8 @@ export interface ProjectWorkspace {
   catalogs: Array<Catalog & { items: CatalogItem[] }>;
   aiRuns: AiRun[];
   citations: Citation[];
+  scheduleTasks: ScheduleTask[];
+  scheduleDependencies: ScheduleDependency[];
   estimate: {
     revisionId: string;
     totals: RevisionTotals;

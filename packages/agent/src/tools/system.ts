@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { Tool, ToolExecutionContext, ToolResult } from "../types.js";
+import { apiFetch } from "./api-fetch.js";
 
-type StoreOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<ToolResult>;
+type StoreOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<Omit<ToolResult, 'duration_ms'>>;
 
 function createSystemTool(def: {
   id: string;
@@ -43,12 +44,21 @@ export const listToolsTool = createSystemTool({
   name: "List Available Tools",
   description: "List all available tools, optionally filtered by category or search query. Use this to discover what tools are available.",
   inputSchema: z.object({
-    category: z.enum(["quote", "knowledge", "vision", "analysis", "dynamic", "system"]).optional().describe("Filter by tool category"),
+    category: z.enum(["quote", "knowledge", "vision", "analysis", "dynamic", "system", "web"]).optional().describe("Filter by tool category"),
     search: z.string().optional().describe("Search tools by name or description"),
   }),
   tags: ["tools", "discovery", "read"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Tool list would be returned here", filters: input }, duration_ms: 0 };
+  const params = new URLSearchParams();
+  if (input.category) params.set("category", input.category as string);
+  if (input.search) params.set("search", input.search as string);
+
+  const qs = params.toString();
+  const url = `${ctx.apiBaseUrl}/api/tools${qs ? `?${qs}` : ""}`;
+  const res = await apiFetch(ctx, url);
+  if (!res.ok) return { success: false, error: `API error: ${res.status}`, duration_ms: 0 };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -61,7 +71,31 @@ export const getProjectSummaryTool = createSystemTool({
   inputSchema: z.object({}),
   tags: ["project", "summary", "read"],
 }, async (ctx) => {
-  return { success: true, data: { message: "Project summary would be returned here", projectId: ctx.projectId }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status}` };
+  const workspace: any = await res.json();
+
+  const items: any[] = workspace.items ?? workspace.lineItems ?? [];
+  const documents: any[] = workspace.documents ?? [];
+  const totalValue = items.reduce((sum: number, i: any) => sum + Number(i.totalCost ?? i.total ?? 0), 0);
+
+  return {
+    success: true,
+    data: {
+      projectId: ctx.projectId,
+      name: workspace.name ?? workspace.projectName ?? "Untitled Project",
+      description: workspace.description ?? null,
+      client: workspace.client ?? workspace.clientName ?? null,
+      revisionId: ctx.revisionId,
+      quoteId: ctx.quoteId,
+      totalValue,
+      itemCount: items.length,
+      documentCount: documents.length,
+      categories: [...new Set(items.map((i: any) => (i.category ?? i.division ?? "Uncategorized").toString()))],
+      createdAt: workspace.createdAt ?? null,
+      updatedAt: workspace.updatedAt ?? null,
+    },
+  };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -76,7 +110,37 @@ export const getDocumentListTool = createSystemTool({
   }),
   tags: ["documents", "read"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Document list would be returned here", projectId: ctx.projectId, filters: input }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/documents/${ctx.projectId}`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status}` };
+  let documents: any = await res.json();
+
+  // Handle if response is wrapped in an object
+  if (!Array.isArray(documents) && documents.documents) {
+    documents = documents.documents;
+  }
+
+  // Filter by status if provided
+  const status = input.status as string | undefined;
+  if (status) {
+    documents = documents.filter((d: any) => d.status === status);
+  }
+
+  return {
+    success: true,
+    data: {
+      projectId: ctx.projectId,
+      totalDocuments: documents.length,
+      documents: documents.map((d: any) => ({
+        id: d.id,
+        name: d.name ?? d.filename,
+        mimeType: d.mimeType ?? null,
+        status: d.status ?? null,
+        pageCount: d.pageCount ?? d.pages ?? null,
+        fileSize: d.fileSize ?? d.size ?? null,
+        uploadedAt: d.uploadedAt ?? d.createdAt ?? null,
+      })),
+    },
+  };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -93,7 +157,39 @@ export const getCitationsTool = createSystemTool({
   }),
   tags: ["citations", "documents", "read"],
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Citations would be returned here", filters: input }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/workspace`);
+  if (!res.ok) return { success: false, error: `API error: ${res.status}` };
+  const workspace: any = await res.json();
+
+  let citations: any[] = workspace.citations ?? [];
+
+  const documentId = input.documentId as string | undefined;
+  const itemId = input.itemId as string | undefined;
+  const limit = (input.limit as number) ?? 20;
+
+  if (documentId) {
+    citations = citations.filter((c: any) => c.documentId === documentId);
+  }
+  if (itemId) {
+    citations = citations.filter((c: any) => c.itemId === itemId || c.lineItemId === itemId);
+  }
+
+  citations = citations.slice(0, limit);
+
+  return {
+    success: true,
+    data: {
+      totalCitations: citations.length,
+      citations: citations.map((c: any) => ({
+        documentId: c.documentId,
+        itemId: c.itemId ?? c.lineItemId ?? null,
+        excerpt: c.excerpt ?? null,
+        pageStart: c.pageStart ?? c.page ?? null,
+        pageEnd: c.pageEnd ?? null,
+        confidence: c.confidence ?? null,
+      })),
+    },
+  };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -112,7 +208,22 @@ export const logActivityTool = createSystemTool({
   tags: ["activity", "audit", "write"],
   mutates: true,
 }, async (ctx, input) => {
-  return { success: true, data: { message: "Activity logged", input }, duration_ms: 0 };
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/activities`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: input.action,
+      category: input.category ?? "system",
+      details: input.details ?? null,
+      relatedItemIds: input.relatedItemIds ?? [],
+      userId: ctx.userId,
+      sessionId: ctx.sessionId,
+      timestamp: new Date().toISOString(),
+    }),
+  });
+  if (!res.ok) return { success: false, error: `API error: ${res.status}`, duration_ms: 0 };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -128,7 +239,7 @@ export const askUserTool = createSystemTool({
     context: z.string().optional().describe("Additional context explaining why you are asking"),
   }),
   tags: ["user", "interaction", "pause"],
-}, async (ctx, input) => {
+}, async (_ctx, input) => {
   return {
     success: true,
     data: {

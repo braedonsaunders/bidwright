@@ -14,7 +14,7 @@ export interface ToolParameter {
 export interface ToolDefinition {
   id: ToolId;
   name: string;
-  category: "quote" | "knowledge" | "vision" | "analysis" | "dynamic" | "system";
+  category: "quote" | "knowledge" | "vision" | "analysis" | "dynamic" | "system" | "web";
   description: string;
   parameters: ToolParameter[];
   inputSchema: ZodType;
@@ -39,6 +39,7 @@ export interface ToolExecutionContext {
   userId: string;
   sessionId: string;
   apiBaseUrl: string;
+  authToken?: string;
 }
 
 export interface Tool<TInput = unknown, TOutput = unknown> {
@@ -122,6 +123,8 @@ export interface AgentConfig {
   maxTokens: number;
   temperature: number;
   systemPrompt: string;
+  onToolCall?: (toolCall: { id: string; toolId: string; input: unknown; result: ToolResult }) => void;
+  onMessage?: (message: { role: "user" | "assistant"; content: string }) => void;
 }
 
 export interface AgentSession {

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { IBM_Plex_Mono, Sora } from "next/font/google";
+import { AuthProvider, ImpersonationBanner } from "@/components/auth-provider";
 import "./globals.css";
 
 const sora = Sora({
@@ -26,7 +27,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <AuthProvider>
+          <ImpersonationBanner />
+          {children}
+        </AuthProvider>
+      </body>
     </html>
   );
 }

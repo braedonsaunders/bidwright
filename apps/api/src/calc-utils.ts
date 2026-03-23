@@ -8,20 +8,38 @@ export function roundMoney(value: number): number {
 export function calculateLineItem(
   item: WorksheetItem,
   _revision: QuoteRevision,
-  labourRates: { name: string; regularRate: number; overtimeRate: number; doubleRate: number }[]
+  rateSchedules?: Array<{
+    items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
+  }>,
 ): Partial<WorksheetItem> {
   const category = item.category;
 
   switch (category) {
     case "Labour": {
-      const rate = labourRates.find((r) => r.name === item.entityName) ?? labourRates[0];
-      if (!rate) return {};
-      const price =
-        ((rate.regularRate * item.laborHourReg) +
-          (rate.overtimeRate * item.laborHourOver) +
-          (rate.doubleRate * item.laborHourDouble)) *
-        item.quantity;
-      return { price, cost: roundMoney(price * 0.7) };
+      // Use rate schedule if item has rateScheduleItemId and tierUnits
+      if (item.rateScheduleItemId && item.tierUnits && Object.keys(item.tierUnits).length > 0 && rateSchedules?.length) {
+        for (const sched of rateSchedules) {
+          const rsItem = sched.items.find((i) => i.id === item.rateScheduleItemId);
+          if (rsItem) {
+            let totalPrice = 0;
+            let totalCost = 0;
+            let totalHours = 0;
+            for (const [tierId, hours] of Object.entries(item.tierUnits)) {
+              const h = Number(hours) || 0;
+              totalPrice += (rsItem.rates[tierId] ?? 0) * h;
+              totalCost += (rsItem.costRates[tierId] ?? 0) * h;
+              totalHours += h;
+            }
+            totalPrice *= item.quantity;
+            totalCost *= item.quantity;
+            totalCost += rsItem.burden * totalHours * item.quantity;
+            totalCost += rsItem.perDiem * Math.ceil(totalHours / 8) * item.quantity;
+            return { price: roundMoney(totalPrice), cost: roundMoney(totalCost) };
+          }
+        }
+      }
+
+      return {};
     }
     case "Equipment": {
       const days = item.laborHourReg;

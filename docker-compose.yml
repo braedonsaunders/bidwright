@@ -79,7 +79,21 @@ services:
     volumes:
       - filedata:/data
 
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "11434:11434"
+
 volumes:
   pgdata:
   redisdata:
   filedata:
+  ollama_data:

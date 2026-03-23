@@ -1,13 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BookOpen,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Database,
   Download,
+  Eye,
   FileText,
+  Library,
+  Loader2,
+  Minus,
   Plus,
   Search,
   Sparkles,
@@ -15,8 +21,11 @@ import {
   Trash2,
   Upload,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Badge,
   Button,
@@ -25,6 +34,7 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  FadeIn,
   Input,
   Label,
   ModalBackdrop,
@@ -56,7 +66,19 @@ import {
   updateDatasetRow,
   deleteDatasetRow,
   searchDatasetRows,
+  listDatasetLibrary,
+  adoptDatasetTemplate,
+  getBookFileUrl,
+  getBookThumbnailUrl,
+  searchBookChunks,
+  ingestKnowledgeFile,
 } from "@/lib/api";
+import dynamic from "next/dynamic";
+
+const PdfCanvasViewer = dynamic(
+  () => import("@/components/workspace/takeoff/pdf-canvas-viewer").then((m) => m.PdfCanvasViewer),
+  { ssr: false },
+);
 
 type Tab = "books" | "datasets";
 
@@ -145,8 +167,15 @@ export function KnowledgePage({
     } catch { /* noop */ }
   }, []);
 
+  // Fetch on mount since initialBooks may be empty due to race condition
+  useEffect(() => {
+    refreshBooks();
+    refreshDatasets();
+  }, [refreshBooks, refreshDatasets]);
+
   return (
     <div className="space-y-5">
+      <FadeIn>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-fg">Knowledge & Datasets</h1>
@@ -155,8 +184,10 @@ export function KnowledgePage({
           </p>
         </div>
       </div>
+      </FadeIn>
 
       {/* Tab bar */}
+      <FadeIn delay={0.05}>
       <div className="flex items-center gap-1 border-b border-line">
         {(
           [
@@ -182,13 +213,16 @@ export function KnowledgePage({
           </button>
         ))}
       </div>
+      </FadeIn>
 
+      <FadeIn delay={0.1}>
       {tab === "books" && (
         <BooksTab books={books} onRefresh={refreshBooks} />
       )}
       {tab === "datasets" && (
         <DatasetsTab datasets={datasets} onRefresh={refreshDatasets} />
       )}
+      </FadeIn>
     </div>
   );
 }
@@ -198,7 +232,7 @@ export function KnowledgePage({
 // ────────────────────────────────────────────────────────────────────
 
 function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefresh: () => void }) {
-  const [expandedBookId, setExpandedBookId] = useState<string | null>(null);
+  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -210,7 +244,10 @@ function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefres
       )
     : books;
 
+  const selectedBook = books.find((b) => b.id === selectedBookId) ?? null;
+
   return (
+    <>
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <div className="relative flex-1 max-w-sm">
@@ -242,11 +279,13 @@ function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefres
             <BookCard
               key={book.id}
               book={book}
-              expanded={expandedBookId === book.id}
-              onToggle={() =>
-                setExpandedBookId(expandedBookId === book.id ? null : book.id)
-              }
-              onRefresh={onRefresh}
+              selected={book.id === selectedBookId}
+              onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
+              onDelete={async () => {
+                await deleteKnowledgeBook(book.id);
+                if (selectedBookId === book.id) setSelectedBookId(null);
+                onRefresh();
+              }}
             />
           ))}
         </div>
@@ -261,40 +300,137 @@ function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefres
           }}
         />
       )}
+
     </div>
+
+    {typeof document !== "undefined" && createPortal(
+      <AnimatePresence>
+        {selectedBook && (
+          <BookDetailPanel
+            key={selectedBook.id}
+            book={selectedBook}
+            onClose={() => setSelectedBookId(null)}
+            onRefresh={onRefresh}
+          />
+        )}
+      </AnimatePresence>,
+      document.body,
+    )}
+    </>
   );
 }
 
 function BookCard({
   book,
-  expanded,
-  onToggle,
+  selected,
+  onSelect,
+  onDelete,
+}: {
+  book: KnowledgeBookRecord;
+  selected: boolean;
+  onSelect: () => void;
+  onDelete: () => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [imgError, setImgError] = useState(false);
+
+  return (
+    <Card
+      className={cn(
+        "cursor-pointer transition-all hover:ring-1 hover:ring-accent/30",
+        selected && "ring-2 ring-accent"
+      )}
+      onClick={onSelect}
+    >
+      {/* Thumbnail */}
+      <div className="relative h-36 bg-panel2 rounded-t-lg overflow-hidden flex items-center justify-center">
+        {book.storagePath && !imgError ? (
+          <img
+            src={getBookThumbnailUrl(book.id)}
+            alt={book.name}
+            className="w-full h-full object-contain"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <BookOpen className="h-12 w-12 text-fg/10" />
+        )}
+        <Badge
+          tone={statusTone(book.status)}
+          className="absolute top-2 right-2 text-[10px]"
+        >
+          {book.status}
+        </Badge>
+      </div>
+
+      {/* Info */}
+      <div className="px-3 py-2.5">
+        <h3 className="text-sm font-medium text-fg truncate">{book.name}</h3>
+        <p className="text-[11px] text-fg/40 mt-0.5 truncate">{book.sourceFileName}</p>
+        <div className="flex flex-wrap items-center gap-1.5 mt-2">
+          <Badge tone="default">{categoryLabel(book.category)}</Badge>
+          <Badge tone={scopeTone(book.scope)}>{book.scope}</Badge>
+        </div>
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-[10px] text-fg/30">
+            {book.pageCount} pages · {book.chunkCount} chunks · {formatBytes(book.sourceFileSize)}
+          </span>
+          <Button
+            variant="danger"
+            size="xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDeleting(true);
+              onDelete();
+            }}
+            disabled={deleting}
+          >
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+type DetailTab = "view" | "chunks" | "search";
+
+function BookDetailPanel({
+  book,
+  onClose,
   onRefresh,
 }: {
   book: KnowledgeBookRecord;
-  expanded: boolean;
-  onToggle: () => void;
+  onClose: () => void;
   onRefresh: () => void;
 }) {
+  const [detailTab, setDetailTab] = useState<DetailTab>("view");
   const [chunks, setChunks] = useState<KnowledgeChunkRecord[]>([]);
   const [chunkSearch, setChunkSearch] = useState("");
   const [showAddChunk, setShowAddChunk] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+
+  // PDF viewer state
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageCount, setPageCount] = useState(0);
+  const [zoom, setZoom] = useState(1.0);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{ id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number }>>([]);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
-    if (expanded) {
-      listKnowledgeChunks(book.id).then(setChunks).catch(() => {});
-    }
-  }, [expanded, book.id]);
+    listKnowledgeChunks(book.id).then(setChunks).catch(() => {});
+  }, [book.id]);
 
-  const handleDelete = async () => {
-    setDeleting(true);
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
     try {
-      await deleteKnowledgeBook(book.id);
-      onRefresh();
-    } catch {
-      setDeleting(false);
-    }
+      const res = await searchBookChunks(book.id, searchQuery);
+      setSearchResults(res.hits);
+    } catch { /* noop */ }
+    setSearching(false);
   };
 
   const filteredChunks = chunkSearch
@@ -305,100 +441,190 @@ function BookCard({
       )
     : chunks;
 
+  const hasPdf = book.sourceFileName.toLowerCase().endsWith(".pdf") && book.storagePath;
+  const fileUrl = getBookFileUrl(book.id);
+
+  const detailTabs: Array<{ key: DetailTab; label: string; icon: typeof Eye }> = [
+    ...(hasPdf ? [{ key: "view" as const, label: "View", icon: Eye }] : []),
+    { key: "chunks", label: "Chunks", icon: FileText },
+    { key: "search", label: "Search", icon: Search },
+  ];
+
+  // If no PDF, default to chunks tab
+  useEffect(() => {
+    if (!hasPdf && detailTab === "view") setDetailTab("chunks");
+  }, [hasPdf, detailTab]);
+
   return (
-    <Card className={cn(expanded && "col-span-full")}>
-      <div
-        className="flex items-start gap-3 px-4 py-3 cursor-pointer"
-        onClick={onToggle}
-      >
-        <div className="mt-0.5">
-          {expanded ? (
-            <ChevronDown className="h-4 w-4 text-fg/40" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-fg/40" />
-          )}
-        </div>
+    <motion.div
+      initial={{ x: 640 }}
+      animate={{ x: 0 }}
+      exit={{ x: 640 }}
+      transition={{ type: "spring", damping: 30, stiffness: 300 }}
+      className="fixed inset-y-0 right-0 z-[101] w-[640px] bg-panel border-l border-line shadow-2xl flex flex-col"
+    >
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-line bg-panel2/40">
+        <BookOpen className="h-4 w-4 text-accent shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <FileText className="h-4 w-4 text-fg/40 shrink-0" />
-            <span className="text-sm font-medium text-fg truncate">
-              {book.name}
-            </span>
-          </div>
-          <p className="text-xs text-fg/50 mt-0.5 line-clamp-2">
-            {book.description}
-          </p>
-          <div className="flex flex-wrap items-center gap-1.5 mt-2">
-            <Badge tone="default">{categoryLabel(book.category)}</Badge>
-            <Badge tone={scopeTone(book.scope)}>{book.scope}</Badge>
-            <Badge tone={statusTone(book.status)}>{book.status}</Badge>
-            <span className="text-[10px] text-fg/30">
-              {book.chunkCount} chunks | {formatBytes(book.sourceFileSize)}
-            </span>
-          </div>
+          <h3 className="text-sm font-medium text-fg truncate">{book.name}</h3>
+          <p className="text-[11px] text-fg/40 truncate">{book.sourceFileName} · {book.pageCount} pages · {formatBytes(book.sourceFileSize)}</p>
         </div>
-        <Button
-          variant="danger"
-          size="xs"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDelete();
-          }}
-          disabled={deleting}
-        >
-          <Trash2 className="h-3 w-3" />
+        <Button size="xs" variant="secondary" onClick={onClose}>
+          <X className="h-3.5 w-3.5" />
         </Button>
       </div>
 
-      {expanded && (
-        <div className="border-t border-line px-4 py-3 space-y-3">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-              <Input
-                className="h-7 pl-8 text-xs"
-                placeholder="Search chunks..."
-                value={chunkSearch}
-                onChange={(e) => setChunkSearch(e.target.value)}
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 px-4 border-b border-line">
+        {detailTabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setDetailTab(t.key)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
+              detailTab === t.key
+                ? "border-accent text-accent"
+                : "border-transparent text-fg/50 hover:text-fg/70"
+            )}
+          >
+            <t.icon className="h-3 w-3" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-auto">
+        <AnimatePresence mode="wait">
+        {detailTab === "view" && hasPdf && (
+          <motion.div key="view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex flex-col h-full">
+            {/* PDF controls */}
+            <div className="flex items-center justify-center gap-2 px-3 py-2 border-b border-line bg-panel2/30">
+              <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
+                <ChevronLeft className="h-3 w-3" />
+              </Button>
+              <span className="text-xs text-fg/60 min-w-[80px] text-center">
+                Page {pageNumber} / {pageCount || "..."}
+              </span>
+              <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+                <ChevronRight className="h-3 w-3" />
+              </Button>
+              <Separator orientation="vertical" className="h-4 mx-1" />
+              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
+                <ZoomOut className="h-3 w-3" />
+              </Button>
+              <span className="text-xs text-fg/60 min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
+              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+                <ZoomIn className="h-3 w-3" />
+              </Button>
+            </div>
+            {/* PDF canvas */}
+            <div className="flex-1 overflow-auto flex items-start justify-center p-4 bg-panel2/20">
+              <PdfCanvasViewer
+                documentUrl={fileUrl}
+                pageNumber={pageNumber}
+                zoom={zoom}
+                onPageCount={setPageCount}
+                canvasRef={canvasRef}
               />
             </div>
-            <Button
-              size="xs"
-              variant="secondary"
-              onClick={() => setShowAddChunk(true)}
-            >
-              <Plus className="h-3 w-3" />
-              Add Text
-            </Button>
-          </div>
+          </motion.div>
+        )}
 
-          {filteredChunks.length === 0 ? (
-            <p className="text-xs text-fg/40 py-4 text-center">
-              No chunks yet. Add text content to this book.
-            </p>
-          ) : (
-            <div className="space-y-1.5 max-h-96 overflow-y-auto">
-              {filteredChunks.map((chunk) => (
-                <ChunkItem key={chunk.id} chunk={chunk} />
-              ))}
+        {detailTab === "chunks" && (
+          <motion.div key="chunks" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+                <Input
+                  className="h-7 pl-8 text-xs"
+                  placeholder="Filter chunks..."
+                  value={chunkSearch}
+                  onChange={(e) => setChunkSearch(e.target.value)}
+                />
+              </div>
+              <Button size="xs" variant="secondary" onClick={() => setShowAddChunk(true)}>
+                <Plus className="h-3 w-3" />
+                Add
+              </Button>
             </div>
-          )}
 
-          {showAddChunk && (
-            <AddChunkForm
-              bookId={book.id}
-              onClose={() => setShowAddChunk(false)}
-              onCreated={async () => {
-                setShowAddChunk(false);
-                const updatedChunks = await listKnowledgeChunks(book.id);
-                setChunks(updatedChunks);
-                onRefresh();
-              }}
-            />
-          )}
-        </div>
-      )}
-    </Card>
+            {filteredChunks.length === 0 ? (
+              <p className="text-xs text-fg/40 py-4 text-center">
+                No chunks{chunkSearch ? " matching filter" : " yet"}.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {filteredChunks.map((chunk) => (
+                  <ChunkItem key={chunk.id} chunk={chunk} />
+                ))}
+              </div>
+            )}
+
+            {showAddChunk && (
+              <AddChunkForm
+                bookId={book.id}
+                onClose={() => setShowAddChunk(false)}
+                onCreated={async () => {
+                  setShowAddChunk(false);
+                  const updatedChunks = await listKnowledgeChunks(book.id);
+                  setChunks(updatedChunks);
+                  onRefresh();
+                }}
+              />
+            )}
+          </motion.div>
+        )}
+
+        {detailTab === "search" && (
+          <motion.div key="search" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+                <Input
+                  className="h-8 pl-8 text-xs"
+                  placeholder="Semantic search this book..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                />
+              </div>
+              <Button size="sm" onClick={handleSearch} disabled={searching}>
+                {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
+                Search
+              </Button>
+            </div>
+
+            {searchResults.length > 0 ? (
+              <div className="space-y-2">
+                {searchResults.map((hit) => (
+                  <div key={hit.id} className="rounded-lg border border-line bg-panel2/50 px-3 py-2">
+                    <div className="flex items-center gap-2 mb-1">
+                      {hit.sectionTitle && (
+                        <span className="text-xs font-medium text-fg/70 truncate">{hit.sectionTitle}</span>
+                      )}
+                      {hit.pageNumber && (
+                        <span className="text-[10px] text-fg/30">p.{hit.pageNumber}</span>
+                      )}
+                      <span className="text-[10px] text-accent ml-auto">{(hit.score * 100).toFixed(0)}% match</span>
+                    </div>
+                    <p className="text-xs text-fg/50 line-clamp-3">{hit.text}</p>
+                  </div>
+                ))}
+              </div>
+            ) : searchQuery && !searching ? (
+              <p className="text-xs text-fg/40 py-4 text-center">No results. Try different search terms.</p>
+            ) : (
+              <p className="text-xs text-fg/40 py-4 text-center">
+                Search across this book using semantic similarity. Results are ranked by relevance.
+              </p>
+            )}
+          </motion.div>
+        )}
+        </AnimatePresence>
+      </div>
+    </motion.div>
   );
 }
 
@@ -502,25 +728,47 @@ function CreateBookModal({
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
   const [category, setCategory] = useState<KnowledgeBookRecord["category"]>("general");
   const [scope, setScope] = useState<KnowledgeBookRecord["scope"]>("global");
+  const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const ACCEPTED = ".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls";
+
+  const handleFiles = (files: FileList | File[]) => {
+    const f = files[0];
+    if (!f) return;
+    setFile(f);
+    if (!name.trim()) {
+      setName(f.name.replace(/\.[^.]+$/, ""));
+    }
+    setError("");
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+  };
 
   const handleSubmit = async () => {
-    if (!name.trim()) return;
+    if (!file) { setError("Please select a file to upload"); return; }
+    if (!name.trim()) { setError("Name is required"); return; }
     setSaving(true);
+    setError("");
     try {
-      await createKnowledgeBook({
-        name: name.trim(),
-        description: description.trim(),
+      await ingestKnowledgeFile({
+        file,
+        title: name.trim(),
         category,
         scope,
-        sourceFileName: `${name.trim()}.txt`,
-        sourceFileSize: 0,
       });
       onCreated();
-    } catch {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
       setSaving(false);
     }
   };
@@ -531,8 +779,59 @@ function CreateBookModal({
         className="bg-panel border border-line rounded-xl shadow-xl w-full max-w-md p-5 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-sm font-semibold text-fg">Create Knowledge Book</h2>
+        <h2 className="text-sm font-semibold text-fg">Upload Knowledge Book</h2>
         <div className="space-y-3">
+          {/* Drop zone */}
+          <div
+            className={cn(
+              "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
+              dragging
+                ? "border-accent bg-accent/5"
+                : file
+                  ? "border-green-500/40 bg-green-500/5"
+                  : "border-line hover:border-fg/30",
+            )}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {file ? (
+              <div className="space-y-1">
+                <FileText className="h-8 w-8 mx-auto text-green-500/70" />
+                <p className="text-sm font-medium text-fg truncate">{file.name}</p>
+                <p className="text-[11px] text-fg/40">{formatBytes(file.size)}</p>
+                <button
+                  type="button"
+                  className="text-[11px] text-fg/50 hover:text-fg underline"
+                  onClick={(e) => { e.stopPropagation(); setFile(null); }}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Upload className="h-8 w-8 mx-auto text-fg/20" />
+                <p className="text-sm font-medium text-fg/60">
+                  Drop a file here or click to browse
+                </p>
+                <p className="text-[11px] text-fg/30">
+                  PDF, Word, TXT, CSV, Excel
+                </p>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPTED}
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) handleFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+
           <div>
             <Label className="text-xs">Name</Label>
             <Input
@@ -540,15 +839,6 @@ function CreateBookModal({
               placeholder="e.g., NECA Manual of Labour Units"
               value={name}
               onChange={(e) => setName(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label className="text-xs">Description</Label>
-            <Textarea
-              className="mt-1 text-xs min-h-[60px]"
-              placeholder="Brief description of the book's contents"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -584,13 +874,25 @@ function CreateBookModal({
               </Select>
             </div>
           </div>
+
+          {error && <p className="text-xs text-red-500">{error}</p>}
         </div>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button size="sm" onClick={handleSubmit} disabled={saving || !name.trim()}>
-            {saving ? "Creating..." : "Create Book"}
+          <Button size="sm" onClick={handleSubmit} disabled={saving || !file || !name.trim()}>
+            {saving ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <Upload className="h-3.5 w-3.5" />
+                Upload Book
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -611,6 +913,9 @@ function DatasetsTab({
 }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryDatasets, setLibraryDatasets] = useState<DatasetRecord[]>([]);
+  const [adopting, setAdopting] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const filtered = searchQuery
@@ -635,6 +940,13 @@ function DatasetsTab({
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+        <Button size="sm" variant="secondary" onClick={async () => {
+          try { setLibraryDatasets(await listDatasetLibrary()); } catch { /* noop */ }
+          setShowLibrary(true);
+        }}>
+          <Library className="h-3.5 w-3.5" />
+          Browse Library
+        </Button>
         <Button size="sm" onClick={() => setShowCreateModal(true)}>
           <Plus className="h-3.5 w-3.5" />
           Create Dataset
@@ -679,6 +991,76 @@ function DatasetsTab({
             onRefresh();
           }}
         />
+      )}
+
+      {showLibrary && (
+        <ModalBackdrop open={showLibrary} onClose={() => setShowLibrary(false)} size="lg">
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-fg">Dataset Library</h3>
+                <p className="text-xs text-fg/40 mt-0.5">Add standard datasets to your organization</p>
+              </div>
+              <button onClick={() => setShowLibrary(false)} className="rounded p-1 hover:bg-panel2 text-fg/40">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {libraryDatasets.length === 0 ? (
+              <div className="py-6 text-center text-sm text-fg/40">
+                No datasets available in the library yet.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                {libraryDatasets.map((tmpl) => {
+                  const alreadyAdopted = datasets.some((d) => d.sourceTemplateId === tmpl.id);
+                  return (
+                    <div key={tmpl.id} className="rounded-lg border border-line p-4 hover:border-accent/30 transition-colors">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <Database className="h-4 w-4 text-accent shrink-0" />
+                            <span className="text-sm font-medium text-fg">{tmpl.name}</span>
+                            <Badge tone="info" className="text-[10px]">{categoryLabel(tmpl.category)}</Badge>
+                          </div>
+                          <p className="text-xs text-fg/50 mt-1 ml-6">{tmpl.description}</p>
+                          <div className="text-xs text-fg/30 mt-1 ml-6">
+                            {tmpl.rowCount.toLocaleString()} rows · {tmpl.columns.length} columns
+                          </div>
+                        </div>
+                        <div className="shrink-0 ml-4">
+                          {alreadyAdopted ? (
+                            <Badge tone="success" className="text-[10px]">Added</Badge>
+                          ) : (
+                            <Button
+                              variant="accent"
+                              size="xs"
+                              disabled={adopting === tmpl.id}
+                              onClick={async () => {
+                                setAdopting(tmpl.id);
+                                try {
+                                  await adoptDatasetTemplate(tmpl.id);
+                                  onRefresh();
+                                } catch { /* noop */ }
+                                finally { setAdopting(null); }
+                              }}
+                            >
+                              {adopting === tmpl.id ? (
+                                <><Loader2 className="h-3 w-3 animate-spin" /> Adding...</>
+                              ) : (
+                                <><Plus className="h-3 w-3" /> Add</>
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </ModalBackdrop>
       )}
     </div>
   );
@@ -745,6 +1127,8 @@ function DatasetDetail({
   const [showAddRow, setShowAddRow] = useState(false);
   const [editingCell, setEditingCell] = useState<{ rowId: string; colKey: string } | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [page, setPage] = useState(0);
+  const pageSize = 50;
   const editRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -752,16 +1136,22 @@ function DatasetDetail({
     try {
       const result = await listDatasetRows(dataset.id, {
         filter: searchQuery || undefined,
-        limit: 200,
+        limit: pageSize,
+        offset: page * pageSize,
       });
       setRows(result.rows);
       setTotal(result.total);
     } catch { /* noop */ }
-  }, [dataset.id, searchQuery]);
+  }, [dataset.id, searchQuery, page]);
 
   useEffect(() => {
     fetchRows();
   }, [fetchRows]);
+
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0);
+  }, [searchQuery]);
 
   useEffect(() => {
     if (editRef.current) editRef.current.focus();
@@ -935,7 +1325,7 @@ function DatasetDetail({
                 key={row.id}
                 className="border-t border-line hover:bg-panel2/30 transition-colors"
               >
-                <td className="px-3 py-1.5 text-fg/30">{idx + 1}</td>
+                <td className="px-3 py-1.5 text-fg/30">{page * pageSize + idx + 1}</td>
                 {dataset.columns.map((col) => {
                   const isEditing =
                     editingCell?.rowId === row.id &&
@@ -993,6 +1383,38 @@ function DatasetDetail({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {total > pageSize && (
+        <div className="flex items-center justify-between text-xs text-fg/50">
+          <span>
+            Showing {page * pageSize + 1}&ndash;{Math.min((page + 1) * pageSize, total)} of {total}
+          </span>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={page === 0}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+              Prev
+            </Button>
+            <span className="px-2">
+              Page {page + 1} of {Math.ceil(total / pageSize)}
+            </span>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={(page + 1) * pageSize >= total}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {showAddRow && (
         <AddRowForm

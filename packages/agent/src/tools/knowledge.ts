@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Tool, ToolExecutionContext, ToolResult } from "../types.js";
+import { apiFetch } from "./api-fetch.js";
 
 type KnowledgeOperationResult = { success: boolean; data?: unknown; error?: string; citations?: ToolResult["citations"]; sideEffects?: string[]; duration_ms?: number };
 type KnowledgeOperation = (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<KnowledgeOperationResult>;
@@ -51,9 +52,29 @@ export const queryKnowledgeTool = createKnowledgeTool({
     limit: z.number().optional().default(10).describe("Maximum number of results to return"),
   }),
   tags: ["knowledge", "search", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Knowledge query results would be returned here", query: input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const scope = (input.scope as string) || "all";
+  const query = String(input.query);
+  const limit = input.limit ? String(input.limit) : "10";
+  const projectId = input.projectId ? String(input.projectId) : ctx.projectId;
+
+  const results: Record<string, unknown> = { query, scope };
+
+  if (scope === "project" || scope === "all") {
+    const params = new URLSearchParams({ q: query, projectId, limit });
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search?${params.toString()}`);
+    if (!res.ok) return { success: false, error: `Project search failed: ${res.status} ${res.statusText}` };
+    results.projectResults = await res.json();
+  }
+
+  if (scope === "library" || scope === "all") {
+    const params = new URLSearchParams({ q: query, limit });
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+    if (!res.ok) return { success: false, error: `Library search failed: ${res.status} ${res.statusText}` };
+    results.libraryResults = await res.json();
+  }
+
+  return { success: true, data: results };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -69,9 +90,16 @@ export const queryProjectDocsTool = createKnowledgeTool({
     limit: z.number().optional().default(10).describe("Maximum number of results to return"),
   }),
   tags: ["knowledge", "project", "search", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Project document query results would be returned here", query: input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const params = new URLSearchParams({
+    q: String(input.query),
+    projectId: String(input.projectId),
+  });
+  if (input.limit) params.set("limit", String(input.limit));
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/search?${params.toString()}`);
+  if (!res.ok) return { success: false, error: `Query project docs failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -86,9 +114,13 @@ export const queryGlobalLibraryTool = createKnowledgeTool({
     limit: z.number().optional().default(10).describe("Maximum number of results to return"),
   }),
   tags: ["knowledge", "library", "search", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Global library query results would be returned here", query: input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const params = new URLSearchParams({ q: String(input.query) });
+  if (input.limit) params.set("limit", String(input.limit));
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+  if (!res.ok) return { success: false, error: `Query global library failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -102,9 +134,12 @@ export const listDocumentsTool = createKnowledgeTool({
     projectId: z.string().describe("Project ID to list documents for"),
   }),
   tags: ["knowledge", "document", "list", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document list would be returned here", projectId: input.projectId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const projectId = String(input.projectId);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/documents/${projectId}`);
+  if (!res.ok) return { success: false, error: `List documents failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -118,9 +153,12 @@ export const getDocumentChunksTool = createKnowledgeTool({
     documentId: z.string().describe("ID of the document to get chunks for"),
   }),
   tags: ["knowledge", "document", "chunks", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document chunks would be returned here", documentId: input.documentId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const documentId = String(input.documentId);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${documentId}/chunks`);
+  if (!res.ok) return { success: false, error: `Get document chunks failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -134,9 +172,28 @@ export const summarizeDocumentTool = createKnowledgeTool({
     documentId: z.string().describe("ID of the document to summarize"),
   }),
   tags: ["knowledge", "document", "summarize", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document summary would be returned here", documentId: input.documentId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const documentId = String(input.documentId);
+  // Fetch the document's chunks to build a summary
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${documentId}/chunks`);
+  if (!res.ok) return { success: false, error: `Failed to fetch document chunks: ${res.status} ${res.statusText}` };
+  const chunksData = await res.json() as Record<string, unknown>;
+  const chunks = Array.isArray(chunksData) ? chunksData : (Array.isArray(chunksData.chunks) ? chunksData.chunks : []);
+  const totalChunks = chunks.length;
+  const sections = chunks.map((c: { sectionTitle?: string }) => c.sectionTitle).filter(Boolean);
+  const uniqueSections = [...new Set(sections)];
+  const totalCharacters = chunks.reduce((sum: number, c: { text?: string }) => sum + (c.text?.length ?? 0), 0);
+
+  return {
+    success: true,
+    data: {
+      documentId,
+      totalChunks,
+      totalCharacters,
+      sections: uniqueSections,
+      chunks,
+    },
+  };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -151,9 +208,46 @@ export const compareDocumentsTool = createKnowledgeTool({
     documentIdB: z.string().describe("ID of the second document"),
   }),
   tags: ["knowledge", "document", "compare", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document comparison would be returned here", documentIdA: input.documentIdA, documentIdB: input.documentIdB }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const docIdA = String(input.documentIdA);
+  const docIdB = String(input.documentIdB);
+
+  const [resA, resB] = await Promise.all([
+    fetch(`${ctx.apiBaseUrl}/knowledge/books/${docIdA}/chunks`),
+    fetch(`${ctx.apiBaseUrl}/knowledge/books/${docIdB}/chunks`),
+  ]);
+
+  if (!resA.ok) return { success: false, error: `Failed to fetch document A chunks: ${resA.status} ${resA.statusText}` };
+  if (!resB.ok) return { success: false, error: `Failed to fetch document B chunks: ${resB.status} ${resB.statusText}` };
+
+  const dataA = await resA.json() as Record<string, unknown>;
+  const dataB = await resB.json() as Record<string, unknown>;
+  const chunksA = Array.isArray(dataA) ? dataA : (Array.isArray(dataA.chunks) ? dataA.chunks : []);
+  const chunksB = Array.isArray(dataB) ? dataB : (Array.isArray(dataB.chunks) ? dataB.chunks : []);
+
+  const sectionsA = chunksA.map((c: { sectionTitle?: string }) => c.sectionTitle).filter(Boolean);
+  const sectionsB = chunksB.map((c: { sectionTitle?: string }) => c.sectionTitle).filter(Boolean);
+  const uniqueSectionsA = new Set(sectionsA);
+  const uniqueSectionsB = new Set(sectionsB);
+
+  const onlyInA = [...uniqueSectionsA].filter(s => !uniqueSectionsB.has(s));
+  const onlyInB = [...uniqueSectionsB].filter(s => !uniqueSectionsA.has(s));
+  const common = [...uniqueSectionsA].filter(s => uniqueSectionsB.has(s));
+
+  return {
+    success: true,
+    data: {
+      documentIdA: docIdA,
+      documentIdB: docIdB,
+      documentA: { totalChunks: chunksA.length, sections: [...uniqueSectionsA], chunks: chunksA },
+      documentB: { totalChunks: chunksB.length, sections: [...uniqueSectionsB], chunks: chunksB },
+      comparison: {
+        sectionsOnlyInA: onlyInA,
+        sectionsOnlyInB: onlyInB,
+        commonSections: common,
+      },
+    },
+  };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -168,9 +262,13 @@ export const searchCatalogsTool = createKnowledgeTool({
     catalogId: z.string().optional().describe("Limit search to a specific catalog"),
   }),
   tags: ["knowledge", "catalog", "search", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Catalog search results would be returned here", query: input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const params = new URLSearchParams({ q: String(input.query) });
+  if (input.catalogId) params.set("catalogId", String(input.catalogId));
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalogs/items/search?${params.toString()}`);
+  if (!res.ok) return { success: false, error: `Search catalogs failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -190,9 +288,22 @@ export const addCatalogItemTool = createKnowledgeTool({
   }),
   mutates: true,
   tags: ["knowledge", "catalog", "create", "write"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Catalog item added", input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const catalogId = String(input.catalogId);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalogs/${catalogId}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: input.code,
+      name: input.name,
+      unit: input.unit,
+      unitCost: input.unitCost,
+      unitPrice: input.unitPrice,
+    }),
+  });
+  if (!res.ok) return { success: false, error: `Add catalog item failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data, sideEffects: [`Created catalog item "${input.name}" in catalog ${catalogId}`] };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -212,9 +323,25 @@ export const updateCatalogItemTool = createKnowledgeTool({
   }),
   mutates: true,
   tags: ["knowledge", "catalog", "update", "write"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Catalog item updated", input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const itemId = String(input.itemId);
+  const { itemId: _, ...updates } = input;
+  // Only include defined fields
+  const body: Record<string, unknown> = {};
+  if (updates.code !== undefined) body.code = updates.code;
+  if (updates.name !== undefined) body.name = updates.name;
+  if (updates.unit !== undefined) body.unit = updates.unit;
+  if (updates.unitCost !== undefined) body.unitCost = updates.unitCost;
+  if (updates.unitPrice !== undefined) body.unitPrice = updates.unitPrice;
+
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalog-items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) return { success: false, error: `Update catalog item failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data, sideEffects: [`Updated catalog item ${itemId}`] };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -230,9 +357,16 @@ export const removeCatalogItemTool = createKnowledgeTool({
   requiresConfirmation: true,
   mutates: true,
   tags: ["knowledge", "catalog", "delete", "write"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Catalog item removed", itemId: input.itemId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const itemId = String(input.itemId);
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalog-items/${itemId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) return { success: false, error: `Remove catalog item failed: ${res.status} ${res.statusText}` };
+  // DELETE may return empty body
+  let data: unknown = { deleted: true, itemId };
+  try { data = await res.json(); } catch { /* empty response is fine */ }
+  return { success: true, data, sideEffects: [`Removed catalog item ${itemId}`] };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -244,9 +378,11 @@ export const listCatalogsTool = createKnowledgeTool({
   description: "List all available rate and material catalogs with their item counts.",
   inputSchema: z.object({}),
   tags: ["knowledge", "catalog", "list", "read"],
-}, async () => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Catalog list would be returned here" }, duration_ms: 0 };
+}, async (ctx) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/catalogs`);
+  if (!res.ok) return { success: false, error: `List catalogs failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -260,9 +396,13 @@ export const getCitationContextTool = createKnowledgeTool({
     citationId: z.string().describe("ID of the citation to get context for"),
   }),
   tags: ["knowledge", "citation", "context", "read"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Citation context would be returned here", citationId: input.citationId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const citationId = String(input.citationId);
+  // The citationId corresponds to a chunk ID; fetch the chunk and its siblings
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${citationId}/chunks`);
+  if (!res.ok) return { success: false, error: `Get citation context failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -279,9 +419,22 @@ export const ingestDocumentTool = createKnowledgeTool({
   }),
   mutates: true,
   tags: ["knowledge", "document", "ingest", "write"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document ingested", input }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const endpoint = (input.scope as string) === "library"
+    ? `${ctx.apiBaseUrl}/api/knowledge/library`
+    : `${ctx.apiBaseUrl}/api/knowledge/ingest`;
+
+  const res = await apiFetch(ctx, endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentId: input.documentId,
+      projectId: input.projectId,
+    }),
+  });
+  if (!res.ok) return { success: false, error: `Ingest document failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data, sideEffects: [`Queued document ${input.documentId} for ingestion (${input.scope})`] };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -296,9 +449,17 @@ export const indexDocumentTool = createKnowledgeTool({
   }),
   mutates: true,
   tags: ["knowledge", "document", "index", "write"],
-}, async (_ctx, input) => {
-  // TODO: wire to actual implementation
-  return { success: true, data: { message: "Document indexed", documentId: input.documentId }, duration_ms: 0 };
+}, async (ctx, input) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      documentId: input.documentId,
+    }),
+  });
+  if (!res.ok) return { success: false, error: `Index document failed: ${res.status} ${res.statusText}` };
+  const data = await res.json();
+  return { success: true, data, sideEffects: [`Queued document ${input.documentId} for indexing`] };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -319,7 +480,7 @@ export const searchBooksTool = createKnowledgeTool({
   if (input.bookId) params.set("bookId", String(input.bookId));
   if (input.limit) params.set("limit", String(input.limit));
   try {
-    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/search?${params.toString()}`);
     const data = await res.json();
     return { success: true, data };
   } catch (error) {
@@ -340,7 +501,7 @@ export const getBookChunksTool = createKnowledgeTool({
   tags: ["knowledge", "books", "chunks", "read"],
 }, async (ctx, input) => {
   try {
-    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`);
     const data = await res.json();
     return { success: true, data };
   } catch (error) {
@@ -366,7 +527,7 @@ export const queryDatasetTool = createKnowledgeTool({
   tags: ["knowledge", "dataset", "query", "read"],
 }, async (ctx, input) => {
   try {
-    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/query`, {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets/${input.datasetId}/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filters: input.filters }),
@@ -393,7 +554,7 @@ export const searchDatasetTool = createKnowledgeTool({
 }, async (ctx, input) => {
   try {
     const params = new URLSearchParams({ q: String(input.query) });
-    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/search?${params.toString()}`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets/${input.datasetId}/search?${params.toString()}`);
     const data = await res.json();
     return { success: true, data };
   } catch (error) {
@@ -415,7 +576,7 @@ export const listDatasetsTool = createKnowledgeTool({
 }, async (ctx, input) => {
   try {
     const params = input.projectId ? `?projectId=${input.projectId}` : "";
-    const res = await fetch(`${ctx.apiBaseUrl}/datasets${params}`);
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets${params}`);
     const data = await res.json();
     return { success: true, data };
   } catch (error) {
@@ -438,7 +599,7 @@ export const addDatasetRowTool = createKnowledgeTool({
   tags: ["knowledge", "dataset", "create", "write"],
 }, async (ctx, input) => {
   try {
-    const res = await fetch(`${ctx.apiBaseUrl}/datasets/${input.datasetId}/rows`, {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets/${input.datasetId}/rows`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ data: input.data }),
@@ -467,7 +628,7 @@ export const addKnowledgeChunkTool = createKnowledgeTool({
   tags: ["knowledge", "books", "create", "write"],
 }, async (ctx, input) => {
   try {
-    const res = await fetch(`${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`, {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -478,6 +639,116 @@ export const addKnowledgeChunkTool = createKnowledgeTool({
     });
     const data = await res.json();
     return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 22. knowledge.viewBook
+// ──────────────────────────────────────────────────────────────
+export const viewBookTool = createKnowledgeTool({
+  id: "knowledge.viewBook",
+  name: "View Knowledge Book",
+  description: "Read a knowledge book's content by returning its metadata and paginated chunks. Use this to read through a book's content in manageable portions.",
+  inputSchema: z.object({
+    bookId: z.string().describe("ID of the knowledge book to read"),
+    startChunk: z.number().optional().default(0).describe("Starting chunk index (0-based)"),
+    maxChunks: z.number().optional().default(50).describe("Maximum number of chunks to return (default 50)"),
+  }),
+  tags: ["knowledge", "books", "read"],
+}, async (ctx, input) => {
+  try {
+    const bookRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${input.bookId}`, {
+      headers: ctx.authToken ? { Authorization: `Bearer ${ctx.authToken}` } : {},
+    });
+    if (!bookRes.ok) return { success: false, error: `Book not found: ${bookRes.status}` };
+    const book = await bookRes.json();
+
+    const chunksRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`, {
+      headers: ctx.authToken ? { Authorization: `Bearer ${ctx.authToken}` } : {},
+    });
+    if (!chunksRes.ok) return { success: false, error: `Failed to fetch chunks: ${chunksRes.status}` };
+    const allChunks = await chunksRes.json();
+
+    const start = input.startChunk ?? 0;
+    const max = input.maxChunks ?? 50;
+    const paginatedChunks = allChunks.slice(start, start + max);
+
+    return {
+      success: true,
+      data: {
+        book: {
+          id: book.id,
+          name: book.name,
+          description: book.description,
+          category: book.category,
+          scope: book.scope,
+          pageCount: book.pageCount,
+          chunkCount: book.chunkCount,
+          status: book.status,
+          sourceFileName: book.sourceFileName,
+        },
+        chunks: paginatedChunks.map((c: any) => ({
+          index: c.order,
+          sectionTitle: c.sectionTitle,
+          pageNumber: c.pageNumber,
+          text: c.text,
+        })),
+        pagination: {
+          startChunk: start,
+          returnedChunks: paginatedChunks.length,
+          totalChunks: allChunks.length,
+          hasMore: start + max < allChunks.length,
+        },
+      },
+    };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 23. knowledge.viewBookPage
+// ──────────────────────────────────────────────────────────────
+export const viewBookPageTool = createKnowledgeTool({
+  id: "knowledge.viewBookPage",
+  name: "View Book Page",
+  description: "Get chunks from a knowledge book filtered by page number range. Useful for reading specific pages of a book.",
+  inputSchema: z.object({
+    bookId: z.string().describe("ID of the knowledge book"),
+    startPage: z.number().describe("Starting page number"),
+    endPage: z.number().optional().describe("Ending page number (defaults to startPage)"),
+  }),
+  tags: ["knowledge", "books", "read"],
+}, async (ctx, input) => {
+  try {
+    const chunksRes = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/books/${input.bookId}/chunks`, {
+      headers: ctx.authToken ? { Authorization: `Bearer ${ctx.authToken}` } : {},
+    });
+    if (!chunksRes.ok) return { success: false, error: `Failed to fetch chunks: ${chunksRes.status}` };
+    const allChunks = await chunksRes.json();
+
+    const startPage = input.startPage;
+    const endPage = input.endPage ?? startPage;
+
+    const pageChunks = allChunks.filter((c: any) =>
+      c.pageNumber !== null && c.pageNumber >= startPage && c.pageNumber <= endPage
+    );
+
+    return {
+      success: true,
+      data: {
+        bookId: input.bookId,
+        pageRange: { start: startPage, end: endPage },
+        chunks: pageChunks.map((c: any) => ({
+          sectionTitle: c.sectionTitle,
+          pageNumber: c.pageNumber,
+          text: c.text,
+        })),
+        chunkCount: pageChunks.length,
+      },
+    };
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -509,4 +780,6 @@ export const knowledgeTools: Tool[] = [
   listDatasetsTool,
   addDatasetRowTool,
   addKnowledgeChunkTool,
+  viewBookTool,
+  viewBookPageTool,
 ];

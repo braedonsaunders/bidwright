@@ -730,6 +730,8 @@ export interface PluginRuntimeProps {
   onCancel?: () => void;
   submitting?: boolean;
   output?: PluginOutput | null;
+  onAddItemsToWorksheet?: (items: NonNullable<PluginOutput["lineItems"]>, worksheetId: string) => void;
+  worksheets?: Array<{ id: string; name: string }>;
 }
 
 export function PluginRuntime({
@@ -741,6 +743,8 @@ export function PluginRuntime({
   onCancel,
   submitting,
   output,
+  onAddItemsToWorksheet,
+  worksheets,
 }: PluginRuntimeProps) {
   const [values, setValues] = useState<Record<string, unknown>>(initialValues ?? {});
   const [tableData, setTableData] = useState<Record<string, Record<string, unknown>[]>>(initialTableData ?? {});
@@ -856,7 +860,13 @@ export function PluginRuntime({
       ))}
 
       {/* Output Display */}
-      {output && <PluginOutputDisplay output={output} />}
+      {output && (
+        <PluginOutputDisplay
+          output={output}
+          onAddItemsToWorksheet={onAddItemsToWorksheet}
+          worksheets={worksheets}
+        />
+      )}
 
       {/* Actions */}
       <div className="flex items-center justify-end gap-2 pt-2 border-t border-line">
@@ -875,7 +885,17 @@ export function PluginRuntime({
 
 // ── Plugin Output Display ─────────────────────────────────────────────
 
-export function PluginOutputDisplay({ output }: { output: PluginOutput }) {
+export function PluginOutputDisplay({
+  output,
+  onAddItemsToWorksheet,
+  worksheets,
+}: {
+  output: PluginOutput;
+  onAddItemsToWorksheet?: (items: NonNullable<PluginOutput["lineItems"]>, worksheetId: string) => void;
+  worksheets?: Array<{ id: string; name: string }>;
+}) {
+  const [selectedWorksheet, setSelectedWorksheet] = useState("");
+
   return (
     <FadeIn>
       <div className="rounded-lg border border-success/20 bg-success/5 p-4 space-y-3">
@@ -908,16 +928,42 @@ export function PluginOutputDisplay({ output }: { output: PluginOutput }) {
                         {item.quantity} {item.uom}
                       </td>
                       <td className="px-2 py-1 text-right font-mono text-fg/60">
-                        {item.cost !== undefined ? `$${item.cost.toFixed(2)}` : "—"}
+                        {item.cost !== undefined ? `$${item.cost.toFixed(2)}` : "\u2014"}
                       </td>
                       <td className="px-2 py-1 text-right font-mono text-fg/80">
-                        {item.price !== undefined ? `$${item.price.toFixed(2)}` : "—"}
+                        {item.price !== undefined ? `$${item.price.toFixed(2)}` : "\u2014"}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {onAddItemsToWorksheet && (
+              <div className="mt-3 flex items-center gap-2">
+                <Select
+                  value={selectedWorksheet}
+                  onChange={(e) => setSelectedWorksheet(e.target.value)}
+                  className="text-xs h-7"
+                >
+                  <option value="">Select worksheet...</option>
+                  {(worksheets ?? []).map(ws => (
+                    <option key={ws.id} value={ws.id}>{ws.name}</option>
+                  ))}
+                </Select>
+                <Button
+                  variant="accent"
+                  size="sm"
+                  disabled={!selectedWorksheet}
+                  onClick={() => {
+                    if (selectedWorksheet && output.lineItems) {
+                      onAddItemsToWorksheet(output.lineItems, selectedWorksheet);
+                    }
+                  }}
+                >
+                  Add {output.lineItems.length} items to worksheet
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
@@ -983,7 +1029,12 @@ export function PluginOutputDisplay({ output }: { output: PluginOutput }) {
         {output.type === "composite" && output.children && (
           <div className="space-y-3">
             {output.children.map((child, i) => (
-              <PluginOutputDisplay key={i} output={child} />
+              <PluginOutputDisplay
+                key={i}
+                output={child}
+                onAddItemsToWorksheet={onAddItemsToWorksheet}
+                worksheets={worksheets}
+              />
             ))}
           </div>
         )}

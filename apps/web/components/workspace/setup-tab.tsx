@@ -1,35 +1,54 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, useRef, useCallback } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  BookOpen,
+  Calculator,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Loader2,
   Plus,
   Save,
-  Settings,
+  SaveAll,
   Trash2,
+  X,
 } from "lucide-react";
 import type {
   ConditionLibraryEntry,
-  LabourRate,
   ProjectCondition,
   ProjectWorkspaceData,
   QuotePatchInput,
+  RateSchedule,
+  RateScheduleItem,
+  RateScheduleTier,
   RevisionPatchInput,
   WorkspaceResponse,
 } from "@/lib/api";
 import {
+  autoCalculateProjectRateSchedule,
   createCondition,
-  createLabourRate,
+  createConditionLibraryEntry,
+  createCustomer,
   deleteCondition,
-  deleteLabourRate,
+  deleteConditionLibraryEntry,
+  deleteProjectRateSchedule,
   getConditionLibrary,
+  getCustomers,
+  getCustomer,
+  getDepartments,
+  importRateSchedule,
+  listRateSchedules,
   reorderConditions,
   updateCondition,
-  updateLabourRate,
+  updateProjectRateScheduleItem,
   updateQuote,
   updateRevision,
 } from "@/lib/api";
+import type { Customer, CustomerContact, Department } from "@/lib/api";
 import {
   Button,
   Card,
@@ -99,6 +118,29 @@ function fromDateInput(value: string): string | null {
   return value || null;
 }
 
+function useDebouncedSave(saveFn: () => void, delay = 800) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestFn = useRef(saveFn);
+  latestFn.current = saveFn;
+
+  const trigger = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => latestFn.current(), delay);
+  }, [delay]);
+
+  const flush = useCallback(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+      latestFn.current();
+    }
+  }, []);
+
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+
+  return { trigger, flush };
+}
+
 /* ─── Main Component ─── */
 
 export function SetupTab({
@@ -143,9 +185,9 @@ export function SetupTab({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col flex-1 min-h-0 gap-4">
       {/* Sub-tab navigation */}
-      <div className="flex items-center gap-1 border-b border-line pb-px">
+      <div className="flex items-center gap-1 shrink-0">
         {subTabs.map((t) => {
           const active = subTab === t.id;
           return (
@@ -153,10 +195,10 @@ export function SetupTab({
               key={t.id}
               onClick={() => setSubTab(t.id)}
               className={cn(
-                "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors",
+                "px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
                 active
-                  ? "border-accent text-accent"
-                  : "border-transparent text-fg/45 hover:text-fg/70"
+                  ? "bg-panel2 text-fg"
+                  : "text-fg/40 hover:text-fg/60"
               )}
             >
               {t.label}
@@ -165,52 +207,54 @@ export function SetupTab({
         })}
       </div>
 
-      {subTab === "general" && (
-        <GeneralSubTab
-          workspace={workspace}
-          revDraft={revDraft}
-          setRevDraft={setRevDraft}
-          saveRevision={saveRevision}
-          saveQuote={saveQuote}
-          busy={busy}
-        />
-      )}
-      {subTab === "notes" && (
-        <NotesSubTab
-          workspace={workspace}
-          revDraft={revDraft}
-          setRevDraft={setRevDraft}
-          saveRevision={saveRevision}
-          onApply={onApply}
-          onError={onError}
-          busy={busy}
-        />
-      )}
-      {subTab === "rates" && (
-        <RatesSubTab
-          workspace={workspace}
-          onApply={onApply}
-          onError={onError}
-          busy={busy}
-        />
-      )}
-      {subTab === "other" && (
-        <OtherSubTab
-          workspace={workspace}
-          saveRevision={saveRevision}
-          saveQuote={saveQuote}
-          busy={busy}
-        />
-      )}
-      {subTab === "settings" && (
-        <SettingsSubTab
-          workspace={workspace}
-          revDraft={revDraft}
-          setRevDraft={setRevDraft}
-          saveRevision={saveRevision}
-          busy={busy}
-        />
-      )}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {subTab === "general" && (
+          <GeneralSubTab
+            workspace={workspace}
+            revDraft={revDraft}
+            setRevDraft={setRevDraft}
+            saveRevision={saveRevision}
+            saveQuote={saveQuote}
+            busy={busy}
+          />
+        )}
+        {subTab === "notes" && (
+          <NotesSubTab
+            workspace={workspace}
+            revDraft={revDraft}
+            setRevDraft={setRevDraft}
+            saveRevision={saveRevision}
+            onApply={onApply}
+            onError={onError}
+            busy={busy}
+          />
+        )}
+        {subTab === "rates" && (
+          <RatesSubTab
+            workspace={workspace}
+            onApply={onApply}
+            onError={onError}
+            busy={busy}
+          />
+        )}
+        {subTab === "other" && (
+          <OtherSubTab
+            workspace={workspace}
+            saveRevision={saveRevision}
+            saveQuote={saveQuote}
+            busy={busy}
+          />
+        )}
+        {subTab === "settings" && (
+          <SettingsSubTab
+            workspace={workspace}
+            revDraft={revDraft}
+            setRevDraft={setRevDraft}
+            saveRevision={saveRevision}
+            busy={busy}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -237,41 +281,97 @@ function GeneralSubTab({
   const rev = workspace.currentRevision;
   const quote = workspace.quote;
 
-  const [customerMode, setCustomerMode] = useState<"Existing" | "New">(quote.customerExistingNew ?? "New");
   const [customerId, setCustomerId] = useState(quote.customerId ?? "");
-  const [customerString, setCustomerString] = useState(quote.customerString ?? "");
   const [customerContactId, setCustomerContactId] = useState(quote.customerContactId ?? "");
-  const [customerContactString, setCustomerContactString] = useState(quote.customerContactString ?? "");
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddSaving, setQuickAddSaving] = useState(false);
   const [departmentId, setDepartmentId] = useState(quote.departmentId ?? "");
   const [quoteType, setQuoteType] = useState<"Firm" | "Budget" | "BudgetDNE">(rev.type ?? "Firm");
   const [dateQuote, setDateQuote] = useState(toDateInput(rev.dateQuote));
   const [dateDue, setDateDue] = useState(toDateInput(rev.dateDue));
 
-  function handleSave() {
+  // Loaded dropdown options
+  const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
+  const [contactOptions, setContactOptions] = useState<CustomerContact[]>([]);
+  const [departmentOptions, setDepartmentOptions] = useState<Department[]>([]);
+
+  // Load customers and departments on mount
+  useEffect(() => {
+    getCustomers().then(setCustomerOptions).catch(() => {});
+    getDepartments().then(setDepartmentOptions).catch(() => {});
+  }, []);
+
+  // Load contacts when customer selection changes
+  useEffect(() => {
+    if (customerId) {
+      getCustomer(customerId).then((c) => {
+        setContactOptions(c.contacts);
+      }).catch(() => setContactOptions([]));
+    } else {
+      setContactOptions([]);
+    }
+  }, [customerId]);
+
+  // Refs for latest state values used by auto-save
+  const stateRef = useRef({ customerId, customerContactId, departmentId, quoteType, dateQuote, dateDue });
+  stateRef.current = { customerId, customerContactId, departmentId, quoteType, dateQuote, dateDue };
+  const optionsRef = useRef({ customerOptions, contactOptions });
+  optionsRef.current = { customerOptions, contactOptions };
+
+  const doSave = useCallback(() => {
+    const s = stateRef.current;
+    const o = optionsRef.current;
+    const selectedCustomer = o.customerOptions.find((c) => c.id === s.customerId);
+    const selectedContact = o.contactOptions.find((c) => c.id === s.customerContactId);
+
     saveQuote({
-      customerExistingNew: customerMode,
-      customerId: customerMode === "Existing" ? (customerId || null) : null,
-      customerString: customerMode === "New" ? customerString : "",
-      customerContactId: customerMode === "Existing" ? (customerContactId || null) : null,
-      customerContactString: customerMode === "New" ? customerContactString : "",
-      departmentId: departmentId || null,
+      customerExistingNew: "Existing",
+      customerId: s.customerId || null,
+      customerString: selectedCustomer?.name ?? "",
+      customerContactId: s.customerContactId || null,
+      customerContactString: selectedContact?.name ?? "",
+      customerContactEmailString: selectedContact?.email ?? "",
+      departmentId: s.departmentId || null,
     });
     saveRevision({
-      type: quoteType,
-      dateQuote: fromDateInput(dateQuote),
-      dateDue: fromDateInput(dateDue),
+      type: s.quoteType,
+      dateQuote: fromDateInput(s.dateQuote),
+      dateDue: fromDateInput(s.dateDue),
     });
+  }, [saveQuote, saveRevision]);
+
+  const { trigger: debouncedSave } = useDebouncedSave(doSave);
+
+  async function handleQuickAdd() {
+    if (!quickAddName.trim()) return;
+    setQuickAddSaving(true);
+    try {
+      const created = await createCustomer({ name: quickAddName.trim(), active: true });
+      setCustomerOptions((prev) => [...prev, created]);
+      setCustomerId(created.id);
+      setQuickAddName("");
+      setQuickAddOpen(false);
+      setTimeout(() => doSave(), 0);
+    } catch {
+      /* ignore */
+    } finally {
+      setQuickAddSaving(false);
+    }
+  }
+
+  // Auto-save on select/date changes
+  function onSelectChange(setter: (v: string) => void, value: string) {
+    setter(value);
+    // Use setTimeout to let state update before saving
+    setTimeout(() => doSave(), 0);
   }
 
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader className="flex items-center justify-between">
+        <CardHeader>
           <CardTitle>Quote Details</CardTitle>
-          <Button size="sm" onClick={handleSave} disabled={busy}>
-            <Save className="h-3.5 w-3.5" />
-            Save
-          </Button>
         </CardHeader>
         <CardBody className="space-y-4">
           {/* Title with quote number */}
@@ -284,76 +384,89 @@ function GeneralSubTab({
               <Input
                 value={revDraft.title}
                 onChange={(e) => setRevDraft((d) => ({ ...d, title: e.target.value }))}
+                onBlur={() => saveRevision()}
                 placeholder="Quote title"
               />
             </div>
           </div>
 
-          {/* Customer */}
+          {/* Client */}
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label>Customer</Label>
-              <Select
-                value={customerMode}
-                onChange={(e) => setCustomerMode(e.target.value as "Existing" | "New")}
-              >
-                <option value="Existing">Existing Customer</option>
-                <option value="New">New Customer</option>
-              </Select>
+              <Label>Client</Label>
+              {quickAddOpen ? (
+                <div className="flex gap-1.5">
+                  <Input
+                    placeholder="New client name"
+                    value={quickAddName}
+                    onChange={(e) => setQuickAddName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleQuickAdd())}
+                    autoFocus
+                  />
+                  <Button type="button" size="xs" variant="accent" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
+                    {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  </Button>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-1.5">
+                  <Select
+                    value={customerId}
+                    onChange={(e) => {
+                      setCustomerId(e.target.value);
+                      setCustomerContactId("");
+                      setTimeout(() => doSave(), 0);
+                    }}
+                    className="flex-1"
+                  >
+                    <option value="">Select client...</option>
+                    {customerOptions.filter((c) => c.active).map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</option>
+                    ))}
+                  </Select>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
             </div>
             <div>
-              {customerMode === "Existing" ? (
-                <>
-                  <Label>Customer ID</Label>
-                  <Input
-                    value={customerId}
-                    onChange={(e) => setCustomerId(e.target.value)}
-                    placeholder="Enter customer ID"
-                  />
-                </>
-              ) : (
-                <>
-                  <Label>Customer Name</Label>
-                  <Input
-                    value={customerString}
-                    onChange={(e) => setCustomerString(e.target.value)}
-                    placeholder="Enter customer name"
-                  />
-                </>
-              )}
+              <Label>Contact</Label>
+              <Select
+                value={customerContactId}
+                onChange={(e) => {
+                  setCustomerContactId(e.target.value);
+                  setTimeout(() => doSave(), 0);
+                }}
+                disabled={!customerId}
+              >
+                <option value="">Select contact...</option>
+                {contactOptions.filter((c) => c.active).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}{c.email ? ` (${c.email})` : ""}</option>
+                ))}
+              </Select>
+              {!customerId && <p className="mt-1 text-[11px] text-fg/40">Select a client first</p>}
             </div>
           </div>
 
-          {/* Customer Contact */}
+          {/* Department */}
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              {customerMode === "Existing" ? (
-                <>
-                  <Label>Customer Contact ID</Label>
-                  <Input
-                    value={customerContactId}
-                    onChange={(e) => setCustomerContactId(e.target.value)}
-                    placeholder="Select contact ID"
-                  />
-                </>
-              ) : (
-                <>
-                  <Label>Contact Name</Label>
-                  <Input
-                    value={customerContactString}
-                    onChange={(e) => setCustomerContactString(e.target.value)}
-                    placeholder="Enter contact name"
-                  />
-                </>
-              )}
-            </div>
-            <div>
               <Label>Department</Label>
-              <Input
+              <Select
                 value={departmentId}
-                onChange={(e) => setDepartmentId(e.target.value)}
-                placeholder="Department ID"
-              />
+                onChange={(e) => {
+                  setDepartmentId(e.target.value);
+                  setTimeout(() => doSave(), 0);
+                }}
+              >
+                <option value="">— Select a department —</option>
+                {departmentOptions.filter((d) => d.active).map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ""}</option>
+                ))}
+              </Select>
             </div>
           </div>
 
@@ -363,7 +476,10 @@ function GeneralSubTab({
               <Label>Type</Label>
               <Select
                 value={quoteType}
-                onChange={(e) => setQuoteType(e.target.value as "Firm" | "Budget" | "BudgetDNE")}
+                onChange={(e) => {
+                  setQuoteType(e.target.value as "Firm" | "Budget" | "BudgetDNE");
+                  setTimeout(() => doSave(), 0);
+                }}
               >
                 <option value="Firm">Firm</option>
                 <option value="Budget">Budget</option>
@@ -375,7 +491,10 @@ function GeneralSubTab({
               <Input
                 type="date"
                 value={dateQuote}
-                onChange={(e) => setDateQuote(e.target.value)}
+                onChange={(e) => {
+                  setDateQuote(e.target.value);
+                  setTimeout(() => doSave(), 0);
+                }}
               />
             </div>
             <div>
@@ -383,7 +502,10 @@ function GeneralSubTab({
               <Input
                 type="date"
                 value={dateDue}
-                onChange={(e) => setDateDue(e.target.value)}
+                onChange={(e) => {
+                  setDateDue(e.target.value);
+                  setTimeout(() => doSave(), 0);
+                }}
               />
             </div>
           </div>
@@ -391,12 +513,14 @@ function GeneralSubTab({
           {/* Description */}
           <div>
             <Label>Description / Scope of Work</Label>
-            <RichTextEditor
-              value={revDraft.description}
-              onChange={(html) => setRevDraft((d) => ({ ...d, description: html }))}
-              placeholder="Scope of work description..."
-              minHeight="100px"
-            />
+            <div onBlur={() => saveRevision()}>
+              <RichTextEditor
+                value={revDraft.description}
+                onChange={(html) => setRevDraft((d) => ({ ...d, description: html }))}
+                placeholder="Scope of work description..."
+                minHeight="100px"
+              />
+            </div>
           </div>
         </CardBody>
       </Card>
@@ -445,48 +569,48 @@ function NotesSubTab({
 
   return (
     <div className="space-y-5">
-      {/* Inclusions */}
-      <ConditionList
-        title="Inclusions"
-        type="inclusion"
-        conditions={inclusions}
-        allConditions={workspace.conditions ?? []}
-        projectId={workspace.project.id}
-        libraryEntries={inclusionLibrary}
-        onApply={onApply}
-        onError={onError}
-        loading={loading}
-      />
-
-      {/* Exclusions */}
-      <ConditionList
-        title="Exclusions"
-        type="exclusion"
-        conditions={exclusions}
-        allConditions={workspace.conditions ?? []}
-        projectId={workspace.project.id}
-        libraryEntries={exclusionLibrary}
-        onApply={onApply}
-        onError={onError}
-        loading={loading}
-      />
+      {/* Inclusions & Exclusions side-by-side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ConditionList
+          title="Inclusions"
+          type="inclusion"
+          conditions={inclusions}
+          allConditions={workspace.conditions ?? []}
+          projectId={workspace.project.id}
+          libraryEntries={inclusionLibrary}
+          onApply={onApply}
+          onError={onError}
+          loading={loading}
+          onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
+        />
+        <ConditionList
+          title="Exclusions"
+          type="exclusion"
+          conditions={exclusions}
+          allConditions={workspace.conditions ?? []}
+          projectId={workspace.project.id}
+          libraryEntries={exclusionLibrary}
+          onApply={onApply}
+          onError={onError}
+          loading={loading}
+          onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
+        />
+      </div>
 
       {/* Notes */}
       <Card>
-        <CardHeader className="flex items-center justify-between">
+        <CardHeader>
           <CardTitle>Notes</CardTitle>
-          <Button size="sm" onClick={saveRevision} disabled={loading}>
-            <Save className="h-3.5 w-3.5" />
-            Save
-          </Button>
         </CardHeader>
         <CardBody>
-          <RichTextEditor
-            value={revDraft.notes}
-            onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
-            placeholder="General notes..."
-            minHeight="100px"
-          />
+          <div onBlur={saveRevision}>
+            <RichTextEditor
+              value={revDraft.notes}
+              onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
+              placeholder="General notes..."
+              minHeight="100px"
+            />
+          </div>
         </CardBody>
       </Card>
     </div>
@@ -505,6 +629,7 @@ function ConditionList({
   onApply,
   onError,
   loading,
+  onLibraryChange,
 }: {
   title: string;
   type: string;
@@ -515,10 +640,12 @@ function ConditionList({
   onApply: (next: WorkspaceResponse) => void;
   onError: (msg: string) => void;
   loading: boolean;
+  onLibraryChange?: () => void;
 }) {
   const [newValue, setNewValue] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [showLibrary, setShowLibrary] = useState(false);
   const [isPending, startTransition] = useTransition();
   const busy = loading || isPending;
 
@@ -581,32 +708,70 @@ function ConditionList({
     });
   }
 
-  function handleImport(e: React.ChangeEvent<HTMLSelectElement>) {
-    const val = e.target.value;
-    if (!val) return;
-    addCondition(val);
-    e.target.value = "";
+  function saveToLibrary(value: string) {
+    startTransition(async () => {
+      try {
+        await createConditionLibraryEntry({ type, value });
+        onLibraryChange?.();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Failed to save to library.");
+      }
+    });
+  }
+
+  function removeFromLibrary(entryId: string) {
+    startTransition(async () => {
+      try {
+        await deleteConditionLibraryEntry(entryId);
+        onLibraryChange?.();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Failed to remove from library.");
+      }
+    });
   }
 
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
         <CardTitle>{title}</CardTitle>
-        {libraryEntries.length > 0 && (
-          <Select className="w-48" onChange={handleImport} value="">
-            <option value="">Import from library...</option>
-            {libraryEntries.map((entry) => (
-              <option key={entry.id} value={entry.value}>
-                {entry.value.length > 60 ? entry.value.slice(0, 57) + "..." : entry.value}
-              </option>
-            ))}
-          </Select>
-        )}
+        <Button size="xs" variant="ghost" onClick={() => setShowLibrary(!showLibrary)} disabled={busy}>
+          <BookOpen className="h-3.5 w-3.5" /> Library
+        </Button>
       </CardHeader>
       <CardBody className="space-y-3">
-        {conditions.length === 0 ? (
+        {/* Library panel */}
+        {showLibrary && (
+          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 space-y-2 max-h-48 overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-fg/60">Condition Library — {title}</span>
+              <button onClick={() => setShowLibrary(false)} className="text-fg/40 hover:text-fg/60">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {libraryEntries.length === 0 ? (
+              <p className="text-xs text-fg/40">No library entries. Save conditions to build your reusable library.</p>
+            ) : (
+              libraryEntries.map((entry) => (
+                <div key={entry.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="text-fg/70 truncate flex-1">{entry.value}</span>
+                  <div className="flex gap-1 shrink-0">
+                    <Button size="xs" variant="ghost" onClick={() => addCondition(entry.value)} disabled={busy}>
+                      <Plus className="h-3 w-3" /> Use
+                    </Button>
+                    <Button size="xs" variant="danger" onClick={() => removeFromLibrary(entry.id)} disabled={busy}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Condition list */}
+        {conditions.length === 0 && !showLibrary ? (
           <EmptyState>No {title.toLowerCase()} added</EmptyState>
-        ) : (
+        ) : conditions.length > 0 ? (
           <div className="space-y-1">
             {conditions.map((c, idx) => (
               <div
@@ -645,6 +810,14 @@ function ConditionList({
                     </span>
                     <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                       <button
+                        className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-accent disabled:opacity-30"
+                        onClick={() => saveToLibrary(c.value)}
+                        disabled={busy}
+                        title="Save to library"
+                      >
+                        <SaveAll className="h-3 w-3" />
+                      </button>
+                      <button
                         className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
                         onClick={() => moveCondition(idx, "up")}
                         disabled={idx === 0 || busy}
@@ -671,8 +844,9 @@ function ConditionList({
               </div>
             ))}
           </div>
-        )}
+        ) : null}
 
+        {/* Add new */}
         <div className="flex items-center gap-2">
           <Input
             className="flex-1"
@@ -711,202 +885,365 @@ function RatesSubTab({
   const [isPending, startTransition] = useTransition();
   const busy = parentBusy || isPending;
 
-  const [editingRateId, setEditingRateId] = useState<string | null>(null);
-  const [rateDraft, setRateDraft] = useState<{
-    name: string;
-    regularRate: string;
-    overtimeRate: string;
-    doubleRate: string;
-  }>({ name: "", regularRate: "", overtimeRate: "", doubleRate: "" });
+  /* ─── Rate Schedule state ─── */
 
-  function startEditRate(rate: LabourRate) {
-    setEditingRateId(rate.id);
-    setRateDraft({
-      name: rate.name,
-      regularRate: String(rate.regularRate),
-      overtimeRate: String(rate.overtimeRate),
-      doubleRate: String(rate.doubleRate),
+  const [showImportPicker, setShowImportPicker] = useState(false);
+  const [masterSchedules, setMasterSchedules] = useState<RateSchedule[]>([]);
+  const [selectedImportId, setSelectedImportId] = useState<string>("");
+  const [loadingMasters, setLoadingMasters] = useState(false);
+
+  const [editingCell, setEditingCell] = useState<{ scheduleId: string; itemId: string; tierId: string } | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  const [expandedSchedules, setExpandedSchedules] = useState<Set<string>>(
+    new Set(workspace.rateSchedules.map((s) => s.id))
+  );
+  function toggleSchedule(id: string) {
+    setExpandedSchedules((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
   }
 
-  function cancelEditRate() {
-    setEditingRateId(null);
-    setRateDraft({ name: "", regularRate: "", overtimeRate: "", doubleRate: "" });
+  async function handleOpenImportPicker() {
+    setShowImportPicker(true);
+    setLoadingMasters(true);
+    try {
+      const schedules = await listRateSchedules();
+      setMasterSchedules(schedules);
+    } catch {
+      onError("Failed to load rate schedule library.");
+    } finally {
+      setLoadingMasters(false);
+    }
   }
 
-  function saveRate(rateId: string) {
+  function handleImportSchedule() {
+    if (!selectedImportId) return;
     startTransition(async () => {
       try {
-        onApply(
-          await updateLabourRate(workspace.project.id, rateId, {
-            name: rateDraft.name,
-            regularRate: parseNum(rateDraft.regularRate),
-            overtimeRate: parseNum(rateDraft.overtimeRate),
-            doubleRate: parseNum(rateDraft.doubleRate),
-          })
-        );
-        setEditingRateId(null);
+        onApply(await importRateSchedule(workspace.project.id, selectedImportId));
+        setShowImportPicker(false);
+        setSelectedImportId("");
       } catch (e) {
-        onError(e instanceof Error ? e.message : "Update failed.");
+        onError(e instanceof Error ? e.message : "Import failed.");
       }
     });
   }
 
-  function addRate() {
+  function handleDeleteSchedule(scheduleId: string) {
     startTransition(async () => {
       try {
-        onApply(
-          await createLabourRate(workspace.project.id, {
-            name: "New Rate",
-            regularRate: 0,
-            overtimeRate: 0,
-            doubleRate: 0,
-          })
-        );
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Add failed.");
-      }
-    });
-  }
-
-  function removeRate(id: string) {
-    startTransition(async () => {
-      try {
-        onApply(await deleteLabourRate(workspace.project.id, id));
+        onApply(await deleteProjectRateSchedule(workspace.project.id, scheduleId));
       } catch (e) {
         onError(e instanceof Error ? e.message : "Delete failed.");
       }
     });
   }
 
+  function handleAutoCalculate(scheduleId: string) {
+    startTransition(async () => {
+      try {
+        onApply(await autoCalculateProjectRateSchedule(workspace.project.id, scheduleId));
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Auto-calculate failed.");
+      }
+    });
+  }
+
+  function startCellEdit(scheduleId: string, item: RateScheduleItem, tierId: string) {
+    setEditingCell({ scheduleId, itemId: item.id, tierId });
+    setEditValue(String(item.rates[tierId] ?? 0));
+  }
+
+  function cancelCellEdit() {
+    setEditingCell(null);
+    setEditValue("");
+  }
+
+  function saveCellEdit(item: RateScheduleItem) {
+    if (!editingCell) return;
+    const newRateValue = parseNum(editValue);
+    const updatedRates = { ...item.rates, [editingCell.tierId]: newRateValue };
+    startTransition(async () => {
+      try {
+        onApply(
+          await updateProjectRateScheduleItem(
+            workspace.project.id,
+            editingCell.scheduleId,
+            editingCell.itemId,
+            { rates: updatedRates }
+          )
+        );
+        setEditingCell(null);
+        setEditValue("");
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Update failed.");
+      }
+    });
+  }
+
+  const categoryColors: Record<string, string> = {
+    labour: "bg-blue-500/15 text-blue-400",
+    material: "bg-emerald-500/15 text-emerald-400",
+    equipment: "bg-amber-500/15 text-amber-400",
+    subcontract: "bg-purple-500/15 text-purple-400",
+  };
+
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
-        <CardTitle>Labour Rates</CardTitle>
-        <Button size="sm" onClick={addRate} disabled={busy}>
-          <Plus className="h-3.5 w-3.5" />
-          Add Rate
-        </Button>
-      </CardHeader>
-      <CardBody>
-        {(workspace.labourRates ?? []).length === 0 ? (
-          <EmptyState>No labour rates defined</EmptyState>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-line text-left text-xs text-fg/40">
-                  <th className="pb-2 pr-4 font-medium">Name</th>
-                  <th className="pb-2 pr-4 font-medium text-right">Regular Rate ($)</th>
-                  <th className="pb-2 pr-4 font-medium text-right">Overtime Rate ($)</th>
-                  <th className="pb-2 pr-4 font-medium text-right">Double-Time Rate ($)</th>
-                  <th className="pb-2 font-medium text-right w-20" />
-                </tr>
-              </thead>
-              <tbody>
-                {(workspace.labourRates ?? []).map((rate) => (
-                  <tr key={rate.id} className="border-b border-line/50 last:border-0">
-                    {editingRateId === rate.id ? (
-                      <>
-                        <td className="py-2 pr-4">
-                          <Input
-                            value={rateDraft.name}
-                            onChange={(e) => setRateDraft((d) => ({ ...d, name: e.target.value }))}
-                            className="h-8"
-                            autoFocus
-                          />
-                        </td>
-                        <td className="py-2 pr-4">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={rateDraft.regularRate}
-                            onChange={(e) => setRateDraft((d) => ({ ...d, regularRate: e.target.value }))}
-                            className="h-8 text-right"
-                          />
-                        </td>
-                        <td className="py-2 pr-4">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={rateDraft.overtimeRate}
-                            onChange={(e) => setRateDraft((d) => ({ ...d, overtimeRate: e.target.value }))}
-                            className="h-8 text-right"
-                          />
-                        </td>
-                        <td className="py-2 pr-4">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={rateDraft.doubleRate}
-                            onChange={(e) => setRateDraft((d) => ({ ...d, doubleRate: e.target.value }))}
-                            className="h-8 text-right"
-                          />
-                        </td>
-                        <td className="py-2 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button size="xs" onClick={() => saveRate(rate.id)} disabled={busy}>
-                              <Save className="h-3 w-3" />
-                            </Button>
-                            <Button size="xs" variant="ghost" onClick={cancelEditRate}>
-                              Cancel
-                            </Button>
+    <div className="space-y-5">
+      {/* ═══ Section 1: Rate Schedules ═══ */}
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <CardTitle>Rate Schedules</CardTitle>
+          <Button size="sm" onClick={handleOpenImportPicker} disabled={busy}>
+            <Download className="h-3.5 w-3.5" />
+            Import from Library
+          </Button>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          {/* Import picker */}
+          {showImportPicker && (
+            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 p-3">
+              {loadingMasters ? (
+                <span className="text-sm text-fg/50">Loading schedules...</span>
+              ) : (
+                <>
+                  <Select
+                    className="flex-1"
+                    value={selectedImportId}
+                    onChange={(e) => setSelectedImportId(e.target.value)}
+                  >
+                    <option value="">Select a rate schedule...</option>
+                    {masterSchedules.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.category})
+                      </option>
+                    ))}
+                  </Select>
+                  <Button
+                    size="sm"
+                    onClick={handleImportSchedule}
+                    disabled={busy || !selectedImportId}
+                  >
+                    Import
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setShowImportPicker(false);
+                      setSelectedImportId("");
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Schedule list or empty state */}
+          {workspace.rateSchedules.length === 0 ? (
+            <EmptyState>
+              No rate schedules imported. Import from your organization&apos;s rate library.
+            </EmptyState>
+          ) : (
+            <div className="space-y-3">
+              {workspace.rateSchedules.map((schedule) => {
+                const expanded = expandedSchedules.has(schedule.id);
+                const colorClass = categoryColors[schedule.category.toLowerCase()] ?? "bg-fg/10 text-fg/60";
+                return (
+                  <div
+                    key={schedule.id}
+                    className="rounded-lg border border-line bg-bg/30"
+                  >
+                    {/* Schedule header */}
+                    <div
+                      className="flex cursor-pointer items-center gap-3 px-4 py-3"
+                      onClick={() => toggleSchedule(schedule.id)}
+                    >
+                      {expanded ? (
+                        <ChevronDown className="h-4 w-4 shrink-0 text-fg/40" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 shrink-0 text-fg/40" />
+                      )}
+                      <div className="flex flex-1 items-center gap-2">
+                        <span className="text-sm font-medium text-fg">{schedule.name}</span>
+                        <span className={cn("rounded px-1.5 py-0.5 text-[10px] font-medium uppercase", colorClass)}>
+                          {schedule.category}
+                        </span>
+                        {schedule.description && (
+                          <span className="text-xs text-fg/40">{schedule.description}</span>
+                        )}
+                      </div>
+                      <div
+                        className="flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {schedule.autoCalculate && (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => handleAutoCalculate(schedule.id)}
+                            disabled={busy}
+                            title="Auto-calculate rates"
+                          >
+                            <Calculator className="h-3 w-3" />
+                          </Button>
+                        )}
+                        <button
+                          className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger"
+                          onClick={() => handleDeleteSchedule(schedule.id)}
+                          disabled={busy}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Expanded content: rate table */}
+                    {expanded && (
+                      <div className="border-t border-line px-4 py-3">
+                        {schedule.items.length === 0 ? (
+                          <p className="text-xs text-fg/40">No rate items in this schedule.</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b border-line text-left text-xs text-fg/40">
+                                  <th className="pb-2 pr-4 font-medium">Item</th>
+                                  {schedule.tiers
+                                    .sort((a, b) => a.sortOrder - b.sortOrder)
+                                    .map((tier) => (
+                                      <th
+                                        key={tier.id}
+                                        className="pb-2 pr-4 font-medium text-right"
+                                      >
+                                        {tier.name}
+                                      </th>
+                                    ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {schedule.items
+                                  .sort((a, b) => a.sortOrder - b.sortOrder)
+                                  .map((item) => (
+                                    <tr
+                                      key={item.id}
+                                      className="border-b border-line/50 last:border-0"
+                                    >
+                                      <td className="py-2 pr-4">
+                                        <span className="text-fg">{item.name}</span>
+                                        {item.code && (
+                                          <span className="ml-1.5 text-xs text-fg/35">
+                                            ({item.code})
+                                          </span>
+                                        )}
+                                      </td>
+                                      {schedule.tiers
+                                        .sort((a, b) => a.sortOrder - b.sortOrder)
+                                        .map((tier) => {
+                                          const isEditing =
+                                            editingCell?.scheduleId === schedule.id &&
+                                            editingCell?.itemId === item.id &&
+                                            editingCell?.tierId === tier.id;
+                                          return (
+                                            <td
+                                              key={tier.id}
+                                              className="py-2 pr-4 text-right tabular-nums"
+                                            >
+                                              {isEditing ? (
+                                                <Input
+                                                  type="number"
+                                                  step="0.01"
+                                                  value={editValue}
+                                                  onChange={(e) => setEditValue(e.target.value)}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Enter") saveCellEdit(item);
+                                                    if (e.key === "Escape") cancelCellEdit();
+                                                  }}
+                                                  onBlur={() => saveCellEdit(item)}
+                                                  className="h-7 w-24 text-right"
+                                                  autoFocus
+                                                />
+                                              ) : (
+                                                <span
+                                                  className="cursor-pointer rounded px-1 py-0.5 hover:bg-panel2"
+                                                  onDoubleClick={() =>
+                                                    startCellEdit(schedule.id, item, tier.id)
+                                                  }
+                                                >
+                                                  ${(item.rates[tier.id] ?? 0).toFixed(2)}
+                                                </span>
+                                              )}
+                                            </td>
+                                          );
+                                        })}
+                                    </tr>
+                                  ))}
+                                {/* Cost rates footer row */}
+                                {schedule.items.some(
+                                  (item) => Object.keys(item.costRates).length > 0
+                                ) && (
+                                  <>
+                                    <tr>
+                                      <td
+                                        colSpan={1 + schedule.tiers.length}
+                                        className="pt-2 pb-1"
+                                      >
+                                        <span className="text-[10px] font-medium uppercase text-fg/30">
+                                          Cost Rates
+                                        </span>
+                                      </td>
+                                    </tr>
+                                    {schedule.items
+                                      .filter(
+                                        (item) =>
+                                          Object.keys(item.costRates).length > 0
+                                      )
+                                      .sort((a, b) => a.sortOrder - b.sortOrder)
+                                      .map((item) => (
+                                        <tr
+                                          key={`cost-${item.id}`}
+                                          className="text-fg/35"
+                                        >
+                                          <td className="py-1 pr-4 text-xs">
+                                            {item.name}
+                                          </td>
+                                          {schedule.tiers
+                                            .sort((a, b) => a.sortOrder - b.sortOrder)
+                                            .map((tier) => (
+                                              <td
+                                                key={tier.id}
+                                                className="py-1 pr-4 text-right text-xs tabular-nums"
+                                              >
+                                                {item.costRates[tier.id] != null
+                                                  ? `$${item.costRates[tier.id].toFixed(2)}`
+                                                  : ""}
+                                              </td>
+                                            ))}
+                                        </tr>
+                                      ))}
+                                  </>
+                                )}
+                              </tbody>
+                            </table>
                           </div>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td
-                          className="py-2 pr-4 cursor-pointer"
-                          onDoubleClick={() => startEditRate(rate)}
-                        >
-                          {rate.name}
-                        </td>
-                        <td
-                          className="py-2 pr-4 text-right tabular-nums cursor-pointer"
-                          onDoubleClick={() => startEditRate(rate)}
-                        >
-                          ${rate.regularRate.toFixed(2)}
-                        </td>
-                        <td
-                          className="py-2 pr-4 text-right tabular-nums cursor-pointer"
-                          onDoubleClick={() => startEditRate(rate)}
-                        >
-                          ${rate.overtimeRate.toFixed(2)}
-                        </td>
-                        <td
-                          className="py-2 pr-4 text-right tabular-nums cursor-pointer"
-                          onDoubleClick={() => startEditRate(rate)}
-                        >
-                          ${rate.doubleRate.toFixed(2)}
-                        </td>
-                        <td className="py-2 text-right">
-                          <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity [tr:hover_&]:opacity-100">
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
-                              onClick={() => startEditRate(rate)}
-                            >
-                              <Settings className="h-3 w-3" />
-                            </button>
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger"
-                              onClick={() => removeRate(rate.id)}
-                              disabled={busy}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </td>
-                      </>
+                        )}
+                      </div>
                     )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardBody>
-    </Card>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+    </div>
   );
 }
 
@@ -937,30 +1274,32 @@ function OtherSubTab({
   const [followUpNote, setFollowUpNote] = useState(rev.followUpNote ?? "");
   const [userId, setUserId] = useState(quote.userId ?? "");
 
-  function handleSave() {
+  const otherStateRef = useRef({ dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote, userId });
+  otherStateRef.current = { dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote, userId };
+
+  const doSaveOther = useCallback(() => {
+    const s = otherStateRef.current;
     saveRevision({
-      dateEstimatedShip: fromDateInput(dateEstimatedShip),
-      shippingMethod,
-      freightOnBoard,
-      dateWalkdown: fromDateInput(dateWalkdown),
-      dateWorkStart: fromDateInput(dateWorkStart),
-      dateWorkEnd: fromDateInput(dateWorkEnd),
-      followUpNote,
+      dateEstimatedShip: fromDateInput(s.dateEstimatedShip),
+      shippingMethod: s.shippingMethod,
+      freightOnBoard: s.freightOnBoard,
+      dateWalkdown: fromDateInput(s.dateWalkdown),
+      dateWorkStart: fromDateInput(s.dateWorkStart),
+      dateWorkEnd: fromDateInput(s.dateWorkEnd),
+      followUpNote: s.followUpNote,
     });
-    if (userId !== (quote.userId ?? "")) {
-      saveQuote({ userId: userId || null });
+    if (s.userId !== (quote.userId ?? "")) {
+      saveQuote({ userId: s.userId || null });
     }
-  }
+  }, [saveRevision, saveQuote, quote.userId]);
+
+  const { trigger: debouncedSaveOther } = useDebouncedSave(doSaveOther);
 
   return (
     <div className="space-y-5">
       <Card>
-        <CardHeader className="flex items-center justify-between">
+        <CardHeader>
           <CardTitle>Shipping & Logistics</CardTitle>
-          <Button size="sm" onClick={handleSave} disabled={busy}>
-            <Save className="h-3.5 w-3.5" />
-            Save
-          </Button>
         </CardHeader>
         <CardBody className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
@@ -969,7 +1308,10 @@ function OtherSubTab({
               <Input
                 type="date"
                 value={dateEstimatedShip}
-                onChange={(e) => setDateEstimatedShip(e.target.value)}
+                onChange={(e) => {
+                  setDateEstimatedShip(e.target.value);
+                  setTimeout(() => doSaveOther(), 0);
+                }}
               />
             </div>
             <div>
@@ -977,6 +1319,7 @@ function OtherSubTab({
               <Input
                 value={shippingMethod}
                 onChange={(e) => setShippingMethod(e.target.value)}
+                onBlur={debouncedSaveOther}
                 placeholder="e.g. Ground, Air, LTL"
               />
             </div>
@@ -985,6 +1328,7 @@ function OtherSubTab({
               <Input
                 value={freightOnBoard}
                 onChange={(e) => setFreightOnBoard(e.target.value)}
+                onBlur={debouncedSaveOther}
                 placeholder="e.g. Origin, Destination"
               />
             </div>
@@ -1003,7 +1347,10 @@ function OtherSubTab({
               <Input
                 type="date"
                 value={dateWalkdown}
-                onChange={(e) => setDateWalkdown(e.target.value)}
+                onChange={(e) => {
+                  setDateWalkdown(e.target.value);
+                  setTimeout(() => doSaveOther(), 0);
+                }}
               />
             </div>
             <div>
@@ -1011,7 +1358,10 @@ function OtherSubTab({
               <Input
                 type="date"
                 value={dateWorkStart}
-                onChange={(e) => setDateWorkStart(e.target.value)}
+                onChange={(e) => {
+                  setDateWorkStart(e.target.value);
+                  setTimeout(() => doSaveOther(), 0);
+                }}
               />
             </div>
             <div>
@@ -1019,7 +1369,10 @@ function OtherSubTab({
               <Input
                 type="date"
                 value={dateWorkEnd}
-                onChange={(e) => setDateWorkEnd(e.target.value)}
+                onChange={(e) => {
+                  setDateWorkEnd(e.target.value);
+                  setTimeout(() => doSaveOther(), 0);
+                }}
               />
             </div>
           </div>
@@ -1037,6 +1390,7 @@ function OtherSubTab({
               rows={3}
               value={followUpNote}
               onChange={(e) => setFollowUpNote(e.target.value)}
+              onBlur={debouncedSaveOther}
               placeholder="Follow-up notes..."
             />
           </div>
@@ -1046,6 +1400,7 @@ function OtherSubTab({
               <Input
                 value={userId}
                 onChange={(e) => setUserId(e.target.value)}
+                onBlur={debouncedSaveOther}
                 placeholder="User ID"
               />
             </div>
@@ -1076,50 +1431,16 @@ function SettingsSubTab({
   const rev = workspace.currentRevision;
 
   const [defaultMarkup, setDefaultMarkup] = useState(String(rev.defaultMarkup ?? 0));
-  const [printEmptyNotesColumn, setPrintEmptyNotesColumn] = useState(rev.printEmptyNotesColumn ?? false);
-  const [printPhaseTotalOnly, setPrintPhaseTotalOnly] = useState(rev.printPhaseTotalOnly ?? false);
   const [showOvertimeDoubletime, setShowOvertimeDoubletime] = useState(rev.showOvertimeDoubletime ?? false);
-  const [necaDifficulty, setNecaDifficulty] = useState(rev.necaDifficulty ?? "Normal");
-
-  function handleSave() {
-    saveRevision({
-      defaultMarkup: parseNum(defaultMarkup),
-      printEmptyNotesColumn,
-      printPhaseTotalOnly,
-      showOvertimeDoubletime,
-      necaDifficulty,
-    });
-  }
 
   return (
     <div className="space-y-5">
+      {/* Estimate Behavior */}
       <Card>
-        <CardHeader className="flex items-center justify-between">
-          <CardTitle>Worksheet Settings</CardTitle>
-          <Button size="sm" onClick={handleSave} disabled={busy}>
-            <Save className="h-3.5 w-3.5" />
-            Save
-          </Button>
+        <CardHeader>
+          <CardTitle>Estimate Behavior</CardTitle>
         </CardHeader>
         <CardBody className="space-y-5">
-          {/* Phase worksheet toggle */}
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium text-fg">Phase Worksheet Mode</div>
-              <div className="text-xs text-fg/40">Enable phase-based worksheet organization</div>
-            </div>
-            <Toggle
-              checked={revDraft.phaseWorksheetEnabled}
-              onChange={(checked) => {
-                setRevDraft((d) => ({ ...d, phaseWorksheetEnabled: checked }));
-                saveRevision({ phaseWorksheetEnabled: checked });
-              }}
-            />
-          </div>
-
-          <Separator />
-
-          {/* Use calculated total */}
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-medium text-fg">Use Calculated Total</div>
@@ -1138,55 +1459,17 @@ function SettingsSubTab({
 
           <Separator />
 
-          {/* Default Markup */}
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <Label>Default Markup (%)</Label>
-              <Input
-                type="number"
-                step="0.1"
-                value={defaultMarkup}
-                onChange={(e) => setDefaultMarkup(e.target.value)}
-                placeholder="0"
-              />
-            </div>
-            <div>
-              <Label>NECA Difficulty</Label>
-              <Select
-                value={necaDifficulty}
-                onChange={(e) => setNecaDifficulty(e.target.value)}
-              >
-                <option value="Normal">Normal</option>
-                <option value="Difficult">Difficult</option>
-                <option value="Very Difficult">Very Difficult</option>
-              </Select>
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Print settings */}
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-sm font-medium text-fg">Print Empty Notes Column</div>
-              <div className="text-xs text-fg/40">Include an empty notes column on printed output</div>
+              <div className="text-sm font-medium text-fg">Phase Worksheet Mode</div>
+              <div className="text-xs text-fg/40">Organize line items into phases for structured takeoff</div>
             </div>
             <Toggle
-              checked={printEmptyNotesColumn}
-              onChange={setPrintEmptyNotesColumn}
-            />
-          </div>
-
-          <Separator />
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium text-fg">Print Phase Total Only</div>
-              <div className="text-xs text-fg/40">Show only phase totals on printed output, hide line details</div>
-            </div>
-            <Toggle
-              checked={printPhaseTotalOnly}
-              onChange={setPrintPhaseTotalOnly}
+              checked={revDraft.phaseWorksheetEnabled}
+              onChange={(checked) => {
+                setRevDraft((d) => ({ ...d, phaseWorksheetEnabled: checked }));
+                saveRevision({ phaseWorksheetEnabled: checked });
+              }}
             />
           </div>
 
@@ -1195,12 +1478,53 @@ function SettingsSubTab({
           <div className="flex items-center justify-between">
             <div>
               <div className="text-sm font-medium text-fg">Show Overtime / Doubletime</div>
-              <div className="text-xs text-fg/40">Display overtime and double-time columns in worksheets</div>
+              <div className="text-xs text-fg/40">Display OT and DT labor columns in the estimate grid</div>
             </div>
             <Toggle
               checked={showOvertimeDoubletime}
-              onChange={setShowOvertimeDoubletime}
+              onChange={(checked) => {
+                setShowOvertimeDoubletime(checked);
+                saveRevision({ showOvertimeDoubletime: checked });
+              }}
             />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* Pricing */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Pricing</CardTitle>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <Label>Default Markup (%)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                value={defaultMarkup}
+                onChange={(e) => setDefaultMarkup(e.target.value)}
+                onBlur={() => saveRevision({ defaultMarkup: parseNum(defaultMarkup) })}
+                placeholder="0"
+              />
+              <p className="mt-1 text-[11px] text-fg/40">Applied to new line items added to this estimate</p>
+            </div>
+            <div>
+              <Label>Breakout Style</Label>
+              <Select
+                value={revDraft.breakoutStyle}
+                onChange={(e) => {
+                  setRevDraft((d) => ({ ...d, breakoutStyle: e.target.value }));
+                  saveRevision({ breakoutStyle: e.target.value });
+                }}
+              >
+                <option value="category">By Category</option>
+                <option value="phase">By Phase</option>
+                <option value="flat">Flat (No Breakout)</option>
+              </Select>
+              <p className="mt-1 text-[11px] text-fg/40">How line items are grouped in the estimate view</p>
+            </div>
           </div>
         </CardBody>
       </Card>

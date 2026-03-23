@@ -19,6 +19,7 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  FadeIn,
   Input,
   Select,
   Separator,
@@ -53,13 +54,13 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
   }, [projects]);
 
   const statuses = useMemo(() => {
-    const set = new Set(projects.map((p) => p.quote.status).filter(Boolean));
+    const set = new Set(projects.map((p) => p.quote?.status).filter(Boolean));
     return Array.from(set).sort();
   }, [projects]);
 
   const filtered = useMemo(() => {
     return projects.filter((p) => {
-      if (filters.status && p.quote.status !== filters.status) return false;
+      if (filters.status && p.quote?.status !== filters.status) return false;
       if (filters.client && p.clientName !== filters.client) return false;
       if (filters.dateFrom) {
         const from = new Date(filters.dateFrom);
@@ -108,7 +109,7 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
       .slice(0, 20)
       .map((p) => ({
         id: p.id,
-        label: p.quote.quoteNumber || p.name,
+        label: p.quote?.quoteNumber || p.name,
         margin: p.latestRevision?.estimatedMargin ?? 0,
         profit: p.latestRevision?.estimatedProfit ?? 0,
       }));
@@ -143,14 +144,17 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
   return (
     <div className="space-y-6">
       {/* ─── Page header ─── */}
+      <FadeIn>
       <div>
         <h1 className="text-lg font-semibold text-fg">Performance</h1>
         <p className="mt-0.5 text-sm text-fg/50">
           Quote performance overview across all projects
         </p>
       </div>
+      </FadeIn>
 
       {/* ─── KPI Cards ─── */}
+      <FadeIn delay={0.05}>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           icon={DollarSign}
@@ -175,8 +179,10 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
           value={kpis.quoteCount.toString()}
         />
       </div>
+      </FadeIn>
 
       {/* ─── Filter Bar ─── */}
+      <FadeIn delay={0.1}>
       <Card>
         <CardBody className="py-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -245,8 +251,10 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
           </div>
         </CardBody>
       </Card>
+      </FadeIn>
 
       {/* ─── Chart: Margin % per Quote ─── */}
+      <FadeIn delay={0.15}>
       {chartData.length > 0 && (
         <Card>
           <CardHeader>
@@ -318,40 +326,40 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
                     className="border-b border-line/50 transition-colors hover:bg-panel2/20"
                   >
                     <td className="px-4 py-2.5 text-xs font-medium text-fg/80">
-                      {p.quote.quoteNumber || "—"}
+                      {p.quote?.quoteNumber || "—"}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/70 max-w-[200px] truncate">
-                      {p.quote.title || p.name}
+                      {p.quote?.title || p.name}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/60">
                       {p.clientName || "—"}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/70 text-right font-mono">
-                      {formatMoney(p.latestRevision?.subtotal)}
+                      {formatMoney(p.latestRevision?.subtotal ?? 0)}
                     </td>
                     <td
                       className={cn(
                         "px-4 py-2.5 text-xs text-right font-mono",
-                        p.latestRevision?.estimatedProfit >= 0
+                        (p.latestRevision?.estimatedProfit ?? 0) >= 0
                           ? "text-success"
                           : "text-danger"
                       )}
                     >
-                      {formatMoney(p.latestRevision?.estimatedProfit)}
+                      {formatMoney(p.latestRevision?.estimatedProfit ?? 0)}
                     </td>
                     <td
                       className={cn(
                         "px-4 py-2.5 text-xs text-right font-mono",
-                        p.latestRevision?.estimatedMargin >= 0
+                        (p.latestRevision?.estimatedMargin ?? 0) >= 0
                           ? "text-success"
                           : "text-danger"
                       )}
                     >
-                      {formatPercent(p.latestRevision?.estimatedMargin)}
+                      {formatPercent(p.latestRevision?.estimatedMargin ?? 0)}
                     </td>
                     <td className="px-4 py-2.5">
-                      <Badge tone={statusTone(p.quote.status)}>
-                        {p.quote.status}
+                      <Badge tone={statusTone(p.quote?.status ?? "")}>
+                        {p.quote?.status ?? "—"}
                       </Badge>
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/50">
@@ -393,6 +401,7 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
           )}
         </div>
       </Card>
+      </FadeIn>
     </div>
   );
 }

@@ -76,3 +76,30 @@ export async function sendQuoteEmail(input: SendQuoteInput, config?: EmailConfig
     return { sent: false, message: `Email send failed: ${msg}` };
   }
 }
+
+export async function testEmailConnection(config: EmailConfig): Promise<{ success: boolean; message: string }> {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.port === 465,
+      auth: config.user ? { user: config.user, pass: config.pass } : undefined,
+      connectionTimeout: 5000,
+    });
+
+    await transporter.verify();
+    return { success: true, message: "SMTP connection verified successfully" };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `SMTP connection failed: ${msg}` };
+  }
+}
+
+export function validateEmailConfig(config: Partial<EmailConfig>): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  if (!config.host) errors.push("SMTP host is required");
+  if (!config.port || config.port < 1 || config.port > 65535) errors.push("Valid SMTP port is required (1-65535)");
+  if (!config.from) errors.push("From address is required");
+  if (config.from && !config.from.includes("@")) errors.push("From address must be a valid email");
+  return { valid: errors.length === 0, errors };
+}

@@ -9,6 +9,7 @@ import {
   CardTitle,
   Input,
   Label,
+  ModalBackdrop as AnimatedModalBackdrop,
   Select,
   Textarea,
   Badge,
@@ -19,7 +20,7 @@ import { cn } from "@/lib/utils";
 import type { Activity } from "@/lib/api";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Shared Modal Shell
+   Shared Modal Shell (uses animated ModalBackdrop from ui.tsx)
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function ModalBackdrop({
@@ -33,36 +34,11 @@ function ModalBackdrop({
   children: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
 }) {
-  const overlayRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const widths = {
-    sm: "max-w-sm",
-    md: "max-w-md",
-    lg: "max-w-lg",
-    xl: "max-w-2xl",
-  }[size];
-
+  const sizeMap = { sm: "sm" as const, md: "md" as const, lg: "lg" as const, xl: "xl" as const };
   return (
-    <div
-      ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 animate-in fade-in duration-150"
-      onClick={(e) => {
-        if (e.target === overlayRef.current) onClose();
-      }}
-    >
-      <Card className={cn("w-full shadow-xl", widths)}>{children}</Card>
-    </div>
+    <AnimatedModalBackdrop open={open} onClose={onClose} size={sizeMap[size]}>
+      <Card className="w-full shadow-xl">{children}</Card>
+    </AnimatedModalBackdrop>
   );
 }
 
@@ -437,6 +413,7 @@ export function ImportBOMModal({
   const [file, setFile] = useState<File | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -444,6 +421,7 @@ export function ImportBOMModal({
       setFile(null);
       setHeaders([]);
       setMapping({});
+      setPreviewRows([]);
       if (fileRef.current) fileRef.current.value = "";
     }
   }, [open]);
@@ -470,6 +448,11 @@ export function ImportBOMModal({
         autoMap[col] = match ?? "(skip)";
       });
       setMapping(autoMap);
+
+      // Parse first 5 data rows for preview
+      const lines = text.split("\n").slice(1, 6);
+      const rows = lines.filter(l => l.trim()).map(l => l.split(",").map(c => c.trim().replace(/^"|"$/g, "")));
+      setPreviewRows(rows);
     };
     reader.readAsText(f);
   }, []);
@@ -524,6 +507,35 @@ export function ImportBOMModal({
                             ))}
                           </Select>
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Preview */}
+          {file && headers.length > 0 && previewRows.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-fg/50 mb-2">Preview (first 5 rows)</p>
+              <div className="overflow-x-auto border border-line rounded">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-panel2/40">
+                      {BOM_TARGET_COLUMNS.filter(c => c !== "(skip)" && Object.values(mapping).includes(c)).map(col => (
+                        <th key={col} className="px-2 py-1 text-left font-medium text-fg/50">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row, i) => (
+                      <tr key={i} className="border-t border-line/50">
+                        {BOM_TARGET_COLUMNS.filter(c => c !== "(skip)" && Object.values(mapping).includes(c)).map(col => {
+                          const sourceCol = Object.entries(mapping).find(([_, target]) => target === col)?.[0];
+                          const colIdx = headers.indexOf(sourceCol ?? "");
+                          return <td key={col} className="px-2 py-1 text-fg/70">{colIdx >= 0 ? row[colIdx] : "\u2014"}</td>;
+                        })}
                       </tr>
                     ))}
                   </tbody>
@@ -870,6 +882,7 @@ export interface PDFDownloadOptions {
   includeConditions: boolean;
   includeCoverPage: boolean;
   includeLabourSummary: boolean;
+  includeReport: boolean;
   selectedDocumentIds: string[];
 }
 
@@ -895,6 +908,7 @@ export function PDFModal({
     includeConditions: true,
     includeCoverPage: true,
     includeLabourSummary: false,
+    includeReport: true,
     selectedDocumentIds: [],
   });
 
@@ -907,6 +921,7 @@ export function PDFModal({
         includeConditions: true,
         includeCoverPage: true,
         includeLabourSummary: false,
+        includeReport: true,
         selectedDocumentIds: [],
       });
     }
@@ -960,6 +975,7 @@ export function PDFModal({
                   ["includePhases", "Phases"],
                   ["includeConditions", "Conditions"],
                   ["includeLabourSummary", "Labour Summary"],
+                  ["includeReport", "Report Sections"],
                 ] as const
               ).map(([key, label]) => (
                 <div key={key} className="flex items-center justify-between">

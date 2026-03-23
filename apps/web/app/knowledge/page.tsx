@@ -1,20 +1,31 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { KnowledgePage } from "@/components/knowledge-page";
-import { getProjects, listKnowledgeBooks, listDatasets } from "@/lib/api";
+import {
+  getProjects,
+  listKnowledgeBooks,
+  listDatasets,
+  type ProjectListItem,
+  type KnowledgeBookRecord,
+  type DatasetRecord,
+} from "@/lib/api";
 
-export default async function KnowledgeRoute() {
-  const [projectsResult, booksResult, datasetsResult] = await Promise.allSettled([
-    getProjects(),
-    listKnowledgeBooks(),
-    listDatasets(),
-  ]);
+export default function KnowledgeRoute() {
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
+  const [books, setBooks] = useState<KnowledgeBookRecord[]>([]);
+  const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
 
-  const projects =
-    projectsResult.status === "fulfilled" ? projectsResult.value : [];
-  const books =
-    booksResult.status === "fulfilled" ? booksResult.value : [];
-  const datasets =
-    datasetsResult.status === "fulfilled" ? datasetsResult.value : [];
+  useEffect(() => {
+    Promise.allSettled([getProjects(), listKnowledgeBooks(), listDatasets()]).then(
+      ([projectsResult, booksResult, datasetsResult]) => {
+        if (projectsResult.status === "fulfilled") setProjects(projectsResult.value);
+        if (booksResult.status === "fulfilled") setBooks(booksResult.value);
+        if (datasetsResult.status === "fulfilled") setDatasets(datasetsResult.value);
+      },
+    );
+  }, []);
 
   return (
     <AppShell projects={projects}>

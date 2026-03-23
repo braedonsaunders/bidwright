@@ -11,6 +11,8 @@ coverage
 *.log
 *.tsbuildinfo
 data/
+packages/db/seed-datasets/
+packages/db/seed-items/
 venv/
 __pycache__/
 *.pyc

@@ -1,18 +1,32 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
+import { motion, AnimatePresence } from "motion/react";
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  Clipboard,
+  Columns,
   Copy,
+  Download,
   GripVertical,
+  Maximize2,
   MoreHorizontal,
+  Package,
   Plus,
   Search,
   Trash2,
   X,
 } from "lucide-react";
 import type {
+  CatalogItem,
+  CatalogSummary,
   CreateWorksheetItemInput,
   EntityCategory,
   ProjectWorkspaceData,
@@ -42,7 +56,9 @@ import {
   ModalBackdrop,
   Select,
 } from "@/components/ui";
+import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
+import { ItemDetailDrawer } from "./item-detail-drawer";
 
 /* ─── Types ─── */
 
@@ -77,11 +93,36 @@ type ContextMenuState = {
   y: number;
 } | null;
 
-type WorksheetTabId = string | "all" | "summary";
+type SortDirection = "asc" | "desc";
+type SortState = { column: ColumnId; direction: SortDirection } | null;
+
+type WorksheetTabId = string | "all";
+
+type ColumnId =
+  | "expand"
+  | "checkbox"
+  | "reorder"
+  | "lineOrder"
+  | "entityName"
+  | "vendor"
+  | "description"
+  | "quantity"
+  | "uom"
+  | "laborHourReg"
+  | "laborHourOver"
+  | "laborHourDouble"
+  | "cost"
+  | "markup"
+  | "price"
+  | "extCost"
+  | "margin"
+  | "phaseId"
+  | "actions";
 
 /* ─── Constants ─── */
 
-const CATEGORY_COLORS: Record<string, string> = {
+/** Fallback badge tones when no dynamic category color is available */
+const CATEGORY_COLORS_FALLBACK: Record<string, string> = {
   Labour: "info",
   Equipment: "warning",
   Material: "success",
@@ -92,6 +133,32 @@ const CATEGORY_COLORS: Record<string, string> = {
   Subcontractors: "info",
   "Rental Equipment": "warning",
 };
+
+/** Resolve badge tone from entity categories state, falling back to hardcoded map */
+function getCategoryBadgeTone(
+  categoryName: string,
+  entityCategories: EntityCategory[]
+): "default" | "success" | "warning" | "danger" | "info" {
+  const catDef = entityCategories.find((c) => c.name === categoryName);
+  if (catDef?.color) {
+    // Map common hex colors to badge tones
+    const hex = catDef.color.toLowerCase();
+    if (hex.includes("22c55e") || hex.includes("10b981") || hex.includes("16a34a")) return "success";
+    if (hex.includes("f59e0b") || hex.includes("eab308") || hex.includes("d97706")) return "warning";
+    if (hex.includes("ef4444") || hex.includes("dc2626") || hex.includes("f43f5e")) return "danger";
+    if (hex.includes("3b82f6") || hex.includes("6366f1") || hex.includes("0ea5e9")) return "info";
+  }
+  return (CATEGORY_COLORS_FALLBACK[categoryName] ?? "default") as "default" | "success" | "warning" | "danger" | "info";
+}
+
+/** Get the hex color for a category (for inline style borders) */
+function getCategoryHexColor(
+  categoryName: string,
+  entityCategories: EntityCategory[]
+): string {
+  const catDef = entityCategories.find((c) => c.name === categoryName);
+  return catDef?.color ?? "#6b7280";
+}
 
 const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
   "entityName",
@@ -105,6 +172,60 @@ const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
   "cost",
   "markup",
   "price",
+  "phaseId",
+];
+
+const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
+  "expand",
+  "checkbox",
+  "lineOrder",
+  "entityName",
+  "quantity",
+  "uom",
+  "cost",
+  "extCost",
+  "margin",
+  "actions",
+];
+
+const COLUMN_LABELS: Record<ColumnId, string> = {
+  expand: "Expand",
+  checkbox: "Select",
+  reorder: "Reorder",
+  lineOrder: "#",
+  entityName: "Entity Name",
+  vendor: "Vendor",
+  description: "Description",
+  quantity: "Qty",
+  uom: "UOM",
+  laborHourReg: "Units 1",
+  laborHourOver: "Units 2",
+  laborHourDouble: "Units 3",
+  cost: "Cost",
+  markup: "Markup",
+  price: "Price",
+  extCost: "Ext. Cost",
+  margin: "Margin",
+  phaseId: "Phase",
+  actions: "Actions",
+};
+
+/** Columns that the user can toggle on/off */
+const TOGGLEABLE_COLUMNS: ColumnId[] = [
+  "lineOrder",
+  "entityName",
+  "vendor",
+  "description",
+  "quantity",
+  "uom",
+  "laborHourReg",
+  "laborHourOver",
+  "laborHourDouble",
+  "cost",
+  "markup",
+  "price",
+  "extCost",
+  "margin",
   "phaseId",
 ];
 
@@ -164,6 +285,17 @@ function getLaborColumnLabel(
   return label || (column === "laborHourReg" ? "Reg Hrs" : column === "laborHourOver" ? "OT Hrs" : "DT Hrs");
 }
 
+/** Entity option item with optional pricing data from catalog */
+interface EntityOptionItem {
+  label: string;
+  value: string;
+  unitCost?: number;
+  unitPrice?: number;
+  unit?: string;
+  description?: string;
+  rateScheduleItemId?: string;
+}
+
 /** Build entity dropdown options grouped by category */
 function buildEntityOptions(
   workspace: ProjectWorkspaceData,
@@ -173,30 +305,44 @@ function buildEntityOptions(
   categoryId: string;
   entityType: string;
   defaultUom: string;
-  items: Array<{ label: string; value: string }>;
+  items: EntityOptionItem[];
 }> {
   const groups: Array<{
     categoryName: string;
     categoryId: string;
     entityType: string;
     defaultUom: string;
-    items: Array<{ label: string; value: string }>;
+    items: EntityOptionItem[];
   }> = [];
 
   for (const cat of categories) {
-    const items: Array<{ label: string; value: string }> = [];
+    const items: EntityOptionItem[] = [];
 
     if (cat.name === "Labour") {
-      // Labour rates from the project
-      for (const lr of workspace.labourRates ?? []) {
-        items.push({ label: lr.name, value: lr.name });
+      // Rate schedule items first (preferred)
+      for (const sched of workspace.rateSchedules ?? []) {
+        if (sched.category === "labour" || sched.category === "general") {
+          for (const rsItem of sched.items ?? []) {
+            const firstTier = sched.tiers?.[0];
+            const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
+            if (!items.some((i) => i.rateScheduleItemId === rsItem.id)) {
+              items.push({
+                label: `${rsItem.name}${rsItem.code ? ` (${rsItem.code})` : ""}`,
+                value: rsItem.name,
+                unitCost: rate,
+                unit: rsItem.unit,
+                rateScheduleItemId: rsItem.id,
+              });
+            }
+          }
+        }
       }
       // Also include labor catalog items
       for (const catalog of workspace.catalogs ?? []) {
         if (catalog.kind === "labor") {
           for (const ci of catalog.items ?? []) {
             if (!items.some((i) => i.value === ci.name)) {
-              items.push({ label: ci.name, value: ci.name });
+              items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
             }
           }
         }
@@ -208,7 +354,7 @@ function buildEntityOptions(
       for (const catalog of workspace.catalogs ?? []) {
         if (catalog.kind === "equipment") {
           for (const ci of catalog.items ?? []) {
-            items.push({ label: ci.name, value: ci.name });
+            items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
           }
         }
       }
@@ -219,7 +365,7 @@ function buildEntityOptions(
       for (const catalog of workspace.catalogs ?? []) {
         if (catalog.kind === "materials") {
           for (const ci of catalog.items ?? []) {
-            items.push({ label: ci.name, value: ci.name });
+            items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit });
           }
         }
       }
@@ -243,10 +389,11 @@ function buildEntityOptions(
   return groups;
 }
 
-/** Group rows by category */
+/** Group rows by category. When preserveOrder is true (user has an active sort), skip the default lineOrder sort. */
 function groupRowsByCategory(
   rows: WorkspaceWorksheetItem[],
-  categories: EntityCategory[]
+  categories: EntityCategory[],
+  preserveOrder = false
 ): Array<{
   category: string;
   catDef: EntityCategory | undefined;
@@ -272,7 +419,9 @@ function groupRowsByCategory(
 
   for (const catName of catOrder) {
     if (grouped[catName]) {
-      const items = grouped[catName].sort((a, b) => a.lineOrder - b.lineOrder);
+      const items = preserveOrder
+        ? grouped[catName]
+        : grouped[catName].sort((a, b) => a.lineOrder - b.lineOrder);
       result.push({
         category: catName,
         catDef: categories.find((c) => c.name === catName),
@@ -285,7 +434,9 @@ function groupRowsByCategory(
 
   // Any remaining categories not in the entity categories list
   for (const [catName, items] of Object.entries(grouped)) {
-    const sorted = items.sort((a, b) => a.lineOrder - b.lineOrder);
+    const sorted = preserveOrder
+      ? items
+      : items.sort((a, b) => a.lineOrder - b.lineOrder);
     result.push({
       category: catName,
       catDef: undefined,
@@ -295,6 +446,20 @@ function groupRowsByCategory(
   }
 
   return result;
+}
+
+/** Map catalog kind to category name */
+function catalogKindToCategory(kind: string): string {
+  switch (kind) {
+    case "labor":
+      return "Labour";
+    case "equipment":
+      return "Equipment";
+    case "materials":
+      return "Material";
+    default:
+      return "Material";
+  }
 }
 
 /* ─── Component ─── */
@@ -319,6 +484,8 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
+  const [entityDropdownPos, setEntityDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const entityCellRef = useRef<HTMLTableCellElement | null>(null);
 
   // Filter state
   const [searchTerm, setSearchTerm] = useState("");
@@ -351,6 +518,28 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   const [inlineRenameName, setInlineRenameName] = useState("");
   const inlineRenameRef = useRef<HTMLInputElement | null>(null);
 
+  // ─── NEW STATE: Detail Drawer ───
+  const [detailItem, setDetailItem] = useState<WorkspaceWorksheetItem | null>(null);
+
+  // ─── NEW STATE: Row Selection / Bulk Operations ───
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkMarkupValue, setBulkMarkupValue] = useState("");
+
+  // ─── NEW STATE: Column Visibility ───
+  const [visibleColumns, setVisibleColumns] = useState<Set<ColumnId>>(
+    new Set(DEFAULT_VISIBLE_COLUMNS)
+  );
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const userToggledColumnsRef = useRef(false);
+
+  // ─── Sort State ───
+  const [sortState, setSortState] = useState<SortState>(null);
+
+  // ─── NEW STATE: Catalog Quick-Add ───
+  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
+  const [catalogSearchTerm, setCatalogSearchTerm] = useState("");
+  const [selectedCatalogItemIds, setSelectedCatalogItemIds] = useState<Set<string>>(new Set());
+
   // Load entity categories on mount
   useEffect(() => {
     let cancelled = false;
@@ -366,7 +555,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
 
   // Sync active tab when worksheets change
   useEffect(() => {
-    if (activeTab !== "all" && activeTab !== "summary" && !findWs(workspace, activeTab)) {
+    if (activeTab !== "all" && !findWs(workspace, activeTab)) {
       setActiveTab(workspace.worksheets[0]?.id ?? "all");
     }
   }, [workspace.worksheets, activeTab]);
@@ -388,16 +577,69 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     }
   }, [inlineRenameWsId]);
 
+  // Clear selection when worksheet tab changes
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [activeTab]);
+
   // Entity dropdown options
   const entityOptions = useMemo(
     () => buildEntityOptions(workspace, entityCategories),
     [workspace, entityCategories]
   );
 
+  // ─── Dynamic Column Visibility (auto-default) ───
+  // Analyzes active rows' categories to auto-hide irrelevant labor columns.
+  // Only applies when user hasn't manually toggled columns yet.
+  const autoDefaultColumns = useMemo(() => {
+    if (entityCategories.length === 0) return null;
+
+    const allItems = (workspace.worksheets ?? []).flatMap((w) => w.items);
+    const activeCats = new Set(allItems.map((r) => r.category));
+    const activeCatDefs = entityCategories.filter((c) => activeCats.has(c.name));
+
+    const cols = new Set(DEFAULT_VISIBLE_COLUMNS);
+
+    // If no rows have auto_labour calculation type, hide overtime and doubletime
+    const hasAutoLabour = activeCatDefs.some((c) => c.calculationType === "auto_labour");
+    if (!hasAutoLabour) {
+      cols.delete("laborHourOver");
+      cols.delete("laborHourDouble");
+    }
+
+    // If no active categories allow laborHourReg editing, hide it too
+    const hasLaborRegEditable = activeCatDefs.some((c) => c.editableFields.laborHourReg);
+    if (!hasLaborRegEditable && allItems.length > 0) {
+      cols.delete("laborHourReg");
+    }
+
+    return cols;
+  }, [entityCategories, workspace.worksheets]);
+
+  // Apply auto-default columns when categories first load (and user hasn't toggled)
+  useEffect(() => {
+    if (autoDefaultColumns && !userToggledColumnsRef.current) {
+      setVisibleColumns(autoDefaultColumns);
+    }
+  }, [autoDefaultColumns]);
+
+  // Toggle sort on column click
+  function handleSortToggle(column: ColumnId) {
+    setSortState((prev) => {
+      if (prev?.column === column) {
+        if (prev.direction === "asc") return { column, direction: "desc" };
+        // Third click clears sort
+        return null;
+      }
+      return { column, direction: "asc" };
+    });
+  }
+
   // Get visible rows
   const visibleRows = useMemo(() => {
     let rows: WorkspaceWorksheetItem[];
-    if (activeTab === "all" || activeTab === "summary") {
+
+    if (activeTab === "all") {
       rows = (workspace.worksheets ?? []).flatMap((w) => w.items);
     } else {
       const ws = findWs(workspace, activeTab);
@@ -422,35 +664,52 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       rows = rows.filter((r) => r.phaseId === phaseFilter);
     }
 
+    // Apply sorting
+    if (sortState) {
+      const { column, direction } = sortState;
+      const mult = direction === "asc" ? 1 : -1;
+      rows = [...rows].sort((a, b) => {
+        let aVal: string | number = 0;
+        let bVal: string | number = 0;
+
+        switch (column) {
+          case "lineOrder": aVal = a.lineOrder; bVal = b.lineOrder; break;
+          case "entityName": aVal = a.entityName.toLowerCase(); bVal = b.entityName.toLowerCase(); break;
+          case "vendor": aVal = (a.vendor ?? "").toLowerCase(); bVal = (b.vendor ?? "").toLowerCase(); break;
+          case "description": aVal = a.description.toLowerCase(); bVal = b.description.toLowerCase(); break;
+          case "quantity": aVal = a.quantity; bVal = b.quantity; break;
+          case "uom": aVal = a.uom; bVal = b.uom; break;
+          case "laborHourReg": aVal = a.laborHourReg; bVal = b.laborHourReg; break;
+          case "laborHourOver": aVal = a.laborHourOver; bVal = b.laborHourOver; break;
+          case "laborHourDouble": aVal = a.laborHourDouble; bVal = b.laborHourDouble; break;
+          case "cost": aVal = a.cost; bVal = b.cost; break;
+          case "markup": aVal = a.markup; bVal = b.markup; break;
+          case "price": aVal = a.price; bVal = b.price; break;
+          case "extCost": aVal = a.cost * a.quantity; bVal = b.cost * b.quantity; break;
+          case "margin": {
+            const aExt = a.cost * a.quantity;
+            const bExt = b.cost * b.quantity;
+            aVal = a.price > 0 ? (a.price - aExt) / a.price : 0;
+            bVal = b.price > 0 ? (b.price - bExt) / b.price : 0;
+            break;
+          }
+          default: return 0;
+        }
+
+        if (aVal < bVal) return -1 * mult;
+        if (aVal > bVal) return 1 * mult;
+        return 0;
+      });
+    }
+
     return rows;
-  }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets]);
+  }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState]);
 
   // Grouped rows
   const groupedRows = useMemo(
-    () => groupRowsByCategory(visibleRows, entityCategories),
-    [visibleRows, entityCategories]
+    () => groupRowsByCategory(visibleRows, entityCategories, sortState !== null),
+    [visibleRows, entityCategories, sortState]
   );
-
-  // Summary data
-  const summaryData = useMemo(() => {
-    const allItems = (workspace.worksheets ?? []).flatMap((w) => w.items);
-    const byCategory: Record<string, { count: number; cost: number; price: number; regHrs: number; otHrs: number; dtHrs: number }> = {};
-
-    for (const item of allItems) {
-      const cat = item.category || "Uncategorized";
-      if (!byCategory[cat]) {
-        byCategory[cat] = { count: 0, cost: 0, price: 0, regHrs: 0, otHrs: 0, dtHrs: 0 };
-      }
-      byCategory[cat].count++;
-      byCategory[cat].cost += item.cost * item.quantity;
-      byCategory[cat].price += item.price;
-      byCategory[cat].regHrs += item.laborHourReg;
-      byCategory[cat].otHrs += item.laborHourOver;
-      byCategory[cat].dtHrs += item.laborHourDouble;
-    }
-
-    return byCategory;
-  }, [workspace.worksheets]);
 
   // Totals
   const totals = useMemo(() => {
@@ -463,6 +722,50 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       count: visibleRows.length,
     };
   }, [visibleRows]);
+
+  // All catalog items flattened (for catalog quick-add)
+  const allCatalogItems = useMemo(() => {
+    const items: Array<CatalogItem & { catalogKind: string; catalogName: string }> = [];
+    for (const catalog of workspace.catalogs ?? []) {
+      for (const ci of catalog.items ?? []) {
+        items.push({ ...ci, catalogKind: catalog.kind, catalogName: catalog.name });
+      }
+    }
+    return items;
+  }, [workspace.catalogs]);
+
+  // Filtered catalog items for picker
+  const filteredCatalogItems = useMemo(() => {
+    const q = catalogSearchTerm.trim().toLowerCase();
+    if (!q) return allCatalogItems;
+    return allCatalogItems.filter(
+      (ci) =>
+        ci.name.toLowerCase().includes(q) ||
+        ci.code.toLowerCase().includes(q) ||
+        ci.catalogName.toLowerCase().includes(q)
+    );
+  }, [allCatalogItems, catalogSearchTerm]);
+
+  // Helper to check if a column is visible
+  const isColVisible = useCallback(
+    (col: ColumnId) => visibleColumns.has(col),
+    [visibleColumns]
+  );
+
+  // Count visible data columns for colSpan on group header
+  const visibleColumnCount = useMemo(() => {
+    let count = 0;
+    // expand, checkbox, reorder are always-visible structural columns
+    if (isColVisible("expand")) count++;
+    if (isColVisible("checkbox")) count++;
+    if (isColVisible("reorder")) count++;
+    for (const col of TOGGLEABLE_COLUMNS) {
+      if (isColVisible(col)) count++;
+    }
+    // actions column
+    if (isColVisible("actions")) count++;
+    return count;
+  }, [isColVisible]);
 
   // ─── Cell editing ───
 
@@ -627,19 +930,74 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     entityName: string,
     categoryName: string,
     entityType: string,
-    defaultUom: string
+    defaultUom: string,
+    /** Optional auto-populate fields from catalog item */
+    catalogData?: { cost?: number; uom?: string; description?: string },
+    /** Optional rate schedule item ID to link */
+    rateScheduleItemId?: string,
   ) {
     setEntityDropdownRowId(null);
     setEntitySearchTerm("");
 
+    const row = visibleRows.find((r) => r.id === rowId);
+    const newCatDef = entityCategories.find((c) => c.name === categoryName);
+    const oldCategory = row?.category;
+    const categoryChanged = oldCategory !== categoryName;
+
+    // Build patch with the basic entity fields
+    const patch: Record<string, unknown> = {
+      entityName,
+      category: categoryName,
+      entityType,
+      uom: catalogData?.uom ?? defaultUom,
+    };
+
+    // Auto-populate from catalog item if provided
+    if (catalogData?.cost !== undefined) {
+      patch.cost = catalogData.cost;
+    }
+    if (catalogData?.description) {
+      patch.description = catalogData.description;
+    }
+
+    // Link to rate schedule item if provided
+    if (rateScheduleItemId) {
+      patch.rateScheduleItemId = rateScheduleItemId;
+      // Initialize tier hours from revision's rate schedules
+      const schedule = (workspace.rateSchedules ?? []).find((s) =>
+        s.items.some((i) => i.id === rateScheduleItemId),
+      );
+      if (schedule) {
+        const tierUnits: Record<string, number> = {};
+        for (const tier of schedule.tiers) {
+          tierUnits[tier.id] = 0;
+        }
+        patch.tierUnits = tierUnits;
+      }
+    } else if (categoryChanged) {
+      // Clear rate schedule link when category changes
+      patch.rateScheduleItemId = null;
+      patch.tierUnits = {};
+    }
+
+    // Category Change Reset: when switching categories, reset fields
+    // based on new category's editableFields
+    if (categoryChanged && newCatDef) {
+      // Reset UOM to the new category's default
+      patch.uom = catalogData?.uom ?? newCatDef.defaultUom;
+
+      // Clear computed fields that are non-editable in the new category
+      if (!newCatDef.editableFields.laborHourReg) patch.laborHourReg = 0;
+      if (!newCatDef.editableFields.laborHourOver) patch.laborHourOver = 0;
+      if (!newCatDef.editableFields.laborHourDouble) patch.laborHourDouble = 0;
+      if (!newCatDef.editableFields.cost) patch.cost = catalogData?.cost ?? 0;
+      if (!newCatDef.editableFields.markup) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
+      if (!newCatDef.editableFields.price) patch.price = 0;
+    }
+
     startTransition(async () => {
       try {
-        const next = await updateWorksheetItem(workspace.project.id, rowId, {
-          entityName,
-          category: categoryName,
-          entityType,
-          uom: defaultUom,
-        });
+        const next = await updateWorksheetItem(workspace.project.id, rowId, patch);
         onApply(next);
       } catch (e) {
         onError(e instanceof Error ? e.message : "Save failed.");
@@ -650,7 +1008,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   // ─── Row operations ───
 
   function addNewItem(categoryOverride?: string) {
-    const wsId = activeTab !== "all" && activeTab !== "summary" ? activeTab : workspace.worksheets[0]?.id;
+    const wsId = activeTab !== "all" ? activeTab : workspace.worksheets[0]?.id;
     if (!wsId) return;
 
     const ws = findWs(workspace, wsId);
@@ -690,6 +1048,12 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
         const next = await deleteWorksheetItem(workspace.project.id, itemId);
         onApply(next);
         if (selectedRowId === itemId) setSelectedRowId(null);
+        if (detailItem?.id === itemId) setDetailItem(null);
+        setSelectedIds((prev) => {
+          const n = new Set(prev);
+          n.delete(itemId);
+          return n;
+        });
       } catch (e) {
         onError(e instanceof Error ? e.message : "Delete failed.");
       }
@@ -728,6 +1092,274 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     });
   }
 
+  // ─── Reorder ───
+
+  function handleMoveUp(row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) {
+    const idx = groupItems.findIndex((r) => r.id === row.id);
+    if (idx <= 0) return;
+    const prev = groupItems[idx - 1];
+    const prevOrder = prev.lineOrder;
+    const thisOrder = row.lineOrder;
+
+    startTransition(async () => {
+      try {
+        // Swap lineOrder values
+        const r1 = await updateWorksheetItem(workspace.project.id, row.id, { lineOrder: prevOrder });
+        const r2 = await updateWorksheetItem(workspace.project.id, prev.id, { lineOrder: thisOrder });
+        onApply(r2);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Reorder failed.");
+      }
+    });
+  }
+
+  function handleMoveDown(row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) {
+    const idx = groupItems.findIndex((r) => r.id === row.id);
+    if (idx < 0 || idx >= groupItems.length - 1) return;
+    const next = groupItems[idx + 1];
+    const nextOrder = next.lineOrder;
+    const thisOrder = row.lineOrder;
+
+    startTransition(async () => {
+      try {
+        const r1 = await updateWorksheetItem(workspace.project.id, row.id, { lineOrder: nextOrder });
+        const r2 = await updateWorksheetItem(workspace.project.id, next.id, { lineOrder: thisOrder });
+        onApply(r2);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Reorder failed.");
+      }
+    });
+  }
+
+  // ─── Bulk Operations ───
+
+  function toggleSelectRow(rowId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowId)) {
+        next.delete(rowId);
+      } else {
+        next.add(rowId);
+      }
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === visibleRows.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(visibleRows.map((r) => r.id)));
+    }
+  }
+
+  function handleBulkDelete() {
+    const ids = Array.from(selectedIds);
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const id of ids) {
+          last = await deleteWorksheetItem(workspace.project.id, id);
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+        if (detailItem && ids.includes(detailItem.id)) setDetailItem(null);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Bulk delete failed.");
+      }
+    });
+  }
+
+  function handleBulkMoveToWorksheet(targetWsId: string) {
+    const ids = Array.from(selectedIds);
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const id of ids) {
+          // Moving means updating worksheetId - but the API takes item id and patch
+          // We need to delete from old and create in new, or if the API supports worksheetId update
+          // For now, let's try setting worksheetId via update
+          last = await updateWorksheetItem(workspace.project.id, id, { worksheetId: targetWsId } as Record<string, unknown>);
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Move failed.");
+      }
+    });
+  }
+
+  function handleBulkAssignPhase(phaseId: string) {
+    const ids = Array.from(selectedIds);
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const id of ids) {
+          last = await updateWorksheetItem(workspace.project.id, id, { phaseId: phaseId || null });
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Assign phase failed.");
+      }
+    });
+  }
+
+  function handleBulkSetMarkup() {
+    const val = parseNum(bulkMarkupValue) / 100;
+    if (!Number.isFinite(val)) return;
+    const ids = Array.from(selectedIds);
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const id of ids) {
+          last = await updateWorksheetItem(workspace.project.id, id, { markup: val });
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+        setBulkMarkupValue("");
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Set markup failed.");
+      }
+    });
+  }
+
+  function handleBulkDuplicate() {
+    const ids = Array.from(selectedIds);
+    const rows = ids.map((id) => visibleRows.find((r) => r.id === id)).filter(Boolean) as WorkspaceWorksheetItem[];
+    if (rows.length === 0) return;
+
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const row of rows) {
+          const payload: CreateWorksheetItemInput = {
+            phaseId: row.phaseId ?? null,
+            category: row.category,
+            entityType: row.entityType,
+            entityName: row.entityName,
+            vendor: row.vendor ?? null,
+            description: row.description,
+            quantity: row.quantity,
+            uom: row.uom,
+            cost: row.cost,
+            markup: row.markup,
+            price: row.price,
+            laborHourReg: row.laborHourReg,
+            laborHourOver: row.laborHourOver,
+            laborHourDouble: row.laborHourDouble,
+          };
+          last = await createWorksheetItem(workspace.project.id, row.worksheetId, payload);
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Bulk duplicate failed.");
+      }
+    });
+  }
+
+  // ─── Catalog Quick-Add ───
+
+  function handleAddFromCatalog() {
+    const wsId = activeTab !== "all" ? activeTab : workspace.worksheets[0]?.id;
+    if (!wsId) return;
+
+    const selected = allCatalogItems.filter((ci) => selectedCatalogItemIds.has(ci.id));
+    if (selected.length === 0) return;
+
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const ci of selected) {
+          const catName = catalogKindToCategory(ci.catalogKind);
+          const catDef = entityCategories.find((c) => c.name === catName);
+
+          const payload: CreateWorksheetItemInput = {
+            category: catName,
+            entityType: catDef?.entityType ?? "Material",
+            entityName: ci.name,
+            description: "",
+            quantity: 1,
+            uom: ci.unit,
+            cost: ci.unitCost,
+            markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+            price: ci.unitPrice,
+            laborHourReg: 0,
+            laborHourOver: 0,
+            laborHourDouble: 0,
+          };
+
+          last = await createWorksheetItem(workspace.project.id, wsId, payload);
+        }
+        if (last) onApply(last);
+        setShowCatalogPicker(false);
+        setSelectedCatalogItemIds(new Set());
+        setCatalogSearchTerm("");
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Add from catalog failed.");
+      }
+    });
+  }
+
+  // ─── Copy & Export ───
+
+  function copyRowToClipboard(rowId: string) {
+    const row = visibleRows.find((r) => r.id === rowId);
+    if (!row) return;
+    const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
+    const extCost = row.cost * row.quantity;
+    const text = [
+      row.entityName,
+      row.category,
+      row.vendor ?? "",
+      row.description,
+      `Qty: ${row.quantity}`,
+      `UOM: ${row.uom}`,
+      `Cost: ${row.cost}`,
+      `Ext. Cost: ${extCost.toFixed(2)}`,
+      `Markup: ${(row.markup * 100).toFixed(1)}%`,
+      `Price: ${row.price}`,
+      phase ? `Phase: ${phase.number} - ${phase.name}` : "",
+    ].filter(Boolean).join("\t");
+    navigator.clipboard.writeText(text);
+  }
+
+  function exportTableAsCsv() {
+    const headers = ["#", "Category", "Entity Name", "Vendor", "Description", "Qty", "UOM", "Cost", "Ext. Cost", "Markup", "Price", "Margin", "Phase"];
+    const csvRows = [headers.join(",")];
+
+    for (const row of visibleRows) {
+      const extCost = row.cost * row.quantity;
+      const margin = row.price > 0 ? ((row.price - extCost) / row.price * 100).toFixed(1) : "0";
+      const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
+      const cells = [
+        row.lineOrder,
+        `"${row.category}"`,
+        `"${row.entityName.replace(/"/g, '""')}"`,
+        `"${(row.vendor ?? "").replace(/"/g, '""')}"`,
+        `"${row.description.replace(/"/g, '""')}"`,
+        row.quantity,
+        row.uom,
+        row.cost.toFixed(2),
+        extCost.toFixed(2),
+        `${(row.markup * 100).toFixed(1)}%`,
+        row.price.toFixed(2),
+        `${margin}%`,
+        phase ? `"${phase.number} - ${phase.name}"` : "",
+      ];
+      csvRows.push(cells.join(","));
+    }
+
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `estimate-${workspace.project.name.replace(/\s+/g, "-").toLowerCase()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   // ─── Context menu ───
 
   function handleContextMenu(e: React.MouseEvent, rowId: string) {
@@ -742,6 +1374,7 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       setTabMenu(null);
       if (entityDropdownRowId) {
         setEntityDropdownRowId(null);
+        setEntityDropdownPos(null);
       }
     }
     if (contextMenu || tabMenu || entityDropdownRowId) {
@@ -754,6 +1387,22 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       };
     }
   }, [contextMenu, tabMenu, entityDropdownRowId]);
+
+  // Close column picker on outside click
+  useEffect(() => {
+    if (!showColumnPicker) return;
+    function close(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-column-picker]")) {
+        setShowColumnPicker(false);
+      }
+    }
+    const timer = setTimeout(() => document.addEventListener("click", close), 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("click", close);
+    };
+  }, [showColumnPicker]);
 
   // ─── Worksheet operations ───
 
@@ -843,6 +1492,32 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       }
       return next;
     });
+  }
+
+  // ─── Column visibility toggle ───
+
+  function toggleColumn(col: ColumnId) {
+    userToggledColumnsRef.current = true;
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(col)) {
+        next.delete(col);
+      } else {
+        next.add(col);
+      }
+      return next;
+    });
+  }
+
+  // ─── Sort indicator helper ───
+
+  function renderSortIcon(col: ColumnId) {
+    if (sortState?.column !== col) {
+      return <ArrowUpDown className="h-2.5 w-2.5 opacity-0 group-hover/th:opacity-40 transition-opacity" />;
+    }
+    return sortState.direction === "asc"
+      ? <ArrowUp className="h-2.5 w-2.5 text-accent" />
+      : <ArrowDown className="h-2.5 w-2.5 text-accent" />;
   }
 
   // ─── Render cell helpers ───
@@ -958,83 +1633,146 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
       const isDropdownOpen = entityDropdownRowId === row.id;
       return (
         <td
+          ref={isDropdownOpen ? entityCellRef : undefined}
           className={cn(
-            "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors relative",
+            "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors",
             "hover:bg-accent/5",
             className
           )}
           onClick={(e) => {
             e.stopPropagation();
-            setEntityDropdownRowId(isDropdownOpen ? null : row.id);
-            setEntitySearchTerm("");
-            setSelectedRowId(row.id);
+            if (isDropdownOpen) {
+              setEntityDropdownRowId(null);
+              setEntityDropdownPos(null);
+            } else {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setEntityDropdownPos({ top: rect.bottom + 4, left: rect.left });
+              setEntityDropdownRowId(row.id);
+              setEntitySearchTerm("");
+              setSelectedRowId(row.id);
+            }
           }}
         >
           <div className="flex items-center gap-1">
             <Badge
-              tone={(CATEGORY_COLORS[row.category] ?? "default") as "default" | "success" | "warning" | "danger" | "info"}
+              tone={getCategoryBadgeTone(row.category, entityCategories)}
               className="text-[9px] px-1 py-0"
             >
               {findCategoryForRow(row, entityCategories)?.shortform ?? row.category.charAt(0)}
             </Badge>
             <span className="truncate">{row.entityName}</span>
           </div>
-          {/* Entity dropdown */}
-          {isDropdownOpen && (
-            <div
-              className="absolute left-0 top-full z-50 mt-1 w-72 rounded-lg border border-line bg-panel shadow-xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="p-2 border-b border-line">
-                <input
-                  ref={entitySearchRef}
-                  type="text"
-                  className="w-full h-7 rounded border border-line bg-bg px-2 text-xs outline-none focus:border-accent/50"
-                  placeholder="Search entities..."
-                  value={entitySearchTerm}
-                  onChange={(e) => setEntitySearchTerm(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setEntityDropdownRowId(null);
-                    }
-                  }}
-                />
-              </div>
-              <div className="max-h-64 overflow-y-auto py-1">
-                {entityOptions.map((group) => {
-                  const q = entitySearchTerm.toLowerCase();
-                  const filtered = q
-                    ? group.items.filter((it) => it.label.toLowerCase().includes(q))
-                    : group.items;
-                  if (filtered.length === 0 && q) return null;
-                  return (
-                    <div key={group.categoryId}>
-                      <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/35 tracking-wider bg-panel2/40">
-                        {group.categoryName}
+          {/* Entity dropdown rendered via portal */}
+          {isDropdownOpen && entityDropdownPos && (() => {
+            const q = entitySearchTerm.toLowerCase();
+            // Separate matching category groups from others
+            const matchingGroups = entityOptions.filter((g) => g.categoryName === row.category);
+            const otherGroups = entityOptions.filter((g) => g.categoryName !== row.category);
+
+            const renderGroupItems = (group: typeof entityOptions[0], filtered: EntityOptionItem[]) =>
+              filtered.map((item) => (
+                <button
+                  key={`${group.categoryId}-${item.value}-${item.rateScheduleItemId ?? ""}`}
+                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition-colors flex items-center justify-between"
+                  onClick={() =>
+                    handleEntitySelect(
+                      row.id,
+                      item.value,
+                      group.categoryName,
+                      group.entityType,
+                      group.defaultUom,
+                      item.unitCost !== undefined
+                        ? { cost: item.unitCost, uom: item.unit, description: item.label }
+                        : undefined,
+                      item.rateScheduleItemId,
+                    )
+                  }
+                >
+                  <span className="truncate">
+                    {item.rateScheduleItemId && <span className="text-accent mr-1">&#9679;</span>}
+                    {item.label}
+                  </span>
+                  {(item.unitCost !== undefined || item.unitPrice !== undefined) && (
+                    <span className="ml-2 text-[10px] text-fg/30 tabular-nums whitespace-nowrap">
+                      {item.unitCost !== undefined && `$${item.unitCost.toFixed(2)}`}
+                      {item.unitCost !== undefined && item.unitPrice !== undefined && " / "}
+                      {item.unitPrice !== undefined && `$${item.unitPrice.toFixed(2)}`}
+                    </span>
+                  )}
+                </button>
+              ));
+
+            return createPortal(
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ duration: 0.12 }}
+                className="fixed z-[200] w-80 rounded-lg border border-line bg-panel shadow-xl"
+                style={{ top: entityDropdownPos.top, left: entityDropdownPos.left }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="p-2 border-b border-line">
+                  <input
+                    ref={entitySearchRef}
+                    type="text"
+                    className="w-full h-7 rounded border border-line bg-bg px-2 text-xs outline-none focus:border-accent/50"
+                    placeholder="Search entities..."
+                    value={entitySearchTerm}
+                    onChange={(e) => setEntitySearchTerm(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setEntityDropdownRowId(null);
+                      }
+                    }}
+                  />
+                </div>
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {/* Matching category first */}
+                  {matchingGroups.map((group) => {
+                    const filtered = q
+                      ? group.items.filter((it) => it.label.toLowerCase().includes(q))
+                      : group.items;
+                    if (filtered.length === 0 && q) return null;
+                    return (
+                      <div key={group.categoryId}>
+                        <div className="px-3 py-1 text-[10px] font-semibold uppercase text-accent/60 tracking-wider bg-accent/5">
+                          Matching &mdash; {group.categoryName}
+                        </div>
+                        {renderGroupItems(group, filtered)}
                       </div>
-                      {filtered.map((item) => (
-                        <button
-                          key={`${group.categoryId}-${item.value}`}
-                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition-colors"
-                          onClick={() =>
-                            handleEntitySelect(
-                              row.id,
-                              item.value,
-                              group.categoryName,
-                              group.entityType,
-                              group.defaultUom
-                            )
-                          }
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                    );
+                  })}
+
+                  {/* Other categories */}
+                  {otherGroups.length > 0 && (
+                    <>
+                      {matchingGroups.length > 0 && (
+                        <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/25 tracking-wider bg-panel2/20 border-t border-line mt-1">
+                          Other
+                        </div>
+                      )}
+                      {otherGroups.map((group) => {
+                        const filtered = q
+                          ? group.items.filter((it) => it.label.toLowerCase().includes(q))
+                          : group.items;
+                        if (filtered.length === 0 && q) return null;
+                        return (
+                          <div key={group.categoryId}>
+                            <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/35 tracking-wider bg-panel2/40">
+                              {group.categoryName}
+                            </div>
+                            {renderGroupItems(group, filtered)}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              </motion.div>,
+              document.body,
+            );
+          })()}
         </td>
       );
     }
@@ -1042,8 +1780,10 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
     return (
       <td
         className={cn(
-          "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors",
-          disabled ? "text-fg/25 cursor-not-allowed opacity-40" : "hover:bg-accent/5",
+          "border-b border-line px-2 py-2 text-xs transition-colors",
+          disabled
+            ? "bg-surface/50 cursor-not-allowed"
+            : "cursor-pointer hover:bg-accent/5",
           className
         )}
         onClick={() => {
@@ -1053,7 +1793,14 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
           }
         }}
       >
-        {displayValue}
+        {disabled ? (
+          <span className="flex items-center gap-1 italic opacity-40">
+            {displayValue}
+            <span className="text-[8px] font-medium uppercase tracking-wide text-fg/30 not-italic">auto</span>
+          </span>
+        ) : (
+          displayValue
+        )}
       </td>
     );
   }
@@ -1061,9 +1808,9 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
   // ─── Render ───
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
       {/* ─── Worksheet Tabs ─── */}
-      <div className="flex items-center gap-0.5 border-b border-line overflow-x-auto">
+      <div className="flex items-center gap-0.5 border-b border-line overflow-x-auto shrink-0">
         <button
           onClick={() => setActiveTab("all")}
           className={cn(
@@ -1120,18 +1867,6 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
         ))}
 
         <button
-          onClick={() => setActiveTab("summary")}
-          className={cn(
-            "px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
-            activeTab === "summary"
-              ? "border-accent text-accent bg-accent/5"
-              : "border-transparent text-fg/40 hover:text-fg/60"
-          )}
-        >
-          Summary
-        </button>
-
-        <button
           onClick={() => {
             setNewWsName("");
             setShowNewWsModal(true);
@@ -1142,103 +1877,157 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
           <Plus className="h-3.5 w-3.5" />
         </button>
 
-        {/* Toolbar inline with tabs */}
-        {activeTab !== "summary" && (
-          <div className="ml-auto flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-fg/30" />
-              <Input className="pl-7 h-7 w-40 text-[11px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-            </div>
-            <Select className="w-28 h-7 text-[11px]" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-              <option value="">All types</option>
-              {entityCategories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-            </Select>
-            <Button size="xs" onClick={() => addNewItem()} disabled={isPending}><Plus className="h-3 w-3" /> Item</Button>
-          </div>
-        )}
       </div>
 
-      {/* ─── Summary View ─── */}
-      {activeTab === "summary" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Category Summary</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <div className="overflow-x-auto rounded-lg border border-line">
-              <table className="w-full text-sm">
-                <thead className="bg-panel2/60 text-[11px] font-medium uppercase text-fg/35">
-                  <tr>
-                    <th className="border-b border-line px-3 py-2 text-left">Category</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Items</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Cost</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Price</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Units 1</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Units 2</th>
-                    <th className="border-b border-line px-3 py-2 text-right">Units 3</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(summaryData).map(([cat, data]) => (
-                    <tr key={cat} className="hover:bg-panel2/20">
-                      <td className="border-b border-line px-3 py-2">
-                        <Badge tone={(CATEGORY_COLORS[cat] ?? "default") as "default" | "success" | "warning" | "danger" | "info"}>
-                          {cat}
-                        </Badge>
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {data.count}
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {formatMoney(data.cost)}
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums font-medium">
-                        {formatMoney(data.price)}
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {data.regHrs > 0 ? data.regHrs.toLocaleString() : "--"}
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {data.otHrs > 0 ? data.otHrs.toLocaleString() : "--"}
-                      </td>
-                      <td className="border-b border-line px-3 py-2 text-right tabular-nums">
-                        {data.dtHrs > 0 ? data.dtHrs.toLocaleString() : "--"}
-                      </td>
-                    </tr>
+      {/* ─── Toolbar ─── */}
+      <div className="flex items-center gap-2 shrink-0">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-fg/30" />
+            <Input className="pl-7 h-6 w-56 text-[11px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+          </div>
+          <RadixSelect.Root value={categoryFilter} onValueChange={(v) => setCategoryFilter(v === "__all__" ? "" : v)}>
+            <RadixSelect.Trigger className="inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors">
+              <RadixSelect.Value placeholder="All types" />
+              <RadixSelect.Icon><ChevronDown className="h-3 w-3 text-fg/40" /></RadixSelect.Icon>
+            </RadixSelect.Trigger>
+            <RadixSelect.Portal>
+              <RadixSelect.Content className="z-[100] overflow-hidden rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
+                <RadixSelect.Viewport className="p-1">
+                  <RadixSelect.Item value="__all__" className="flex items-center gap-2 px-2 py-1 text-[11px] rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg">
+                    <RadixSelect.ItemText>All types</RadixSelect.ItemText>
+                  </RadixSelect.Item>
+                  {entityCategories.map((c) => (
+                    <RadixSelect.Item key={c.id} value={c.name} className="flex items-center gap-2 px-2 py-1 text-[11px] rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg">
+                      <RadixSelect.ItemText>{c.name}</RadixSelect.ItemText>
+                    </RadixSelect.Item>
                   ))}
-                </tbody>
-                <tfoot className="bg-panel2/40 text-xs font-medium">
-                  <tr>
-                    <td className="border-t border-line px-3 py-2 text-fg/50">Total</td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {Object.values(summaryData).reduce((s, d) => s + d.count, 0)}
-                    </td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {formatMoney(Object.values(summaryData).reduce((s, d) => s + d.cost, 0))}
-                    </td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums font-medium">
-                      {formatMoney(Object.values(summaryData).reduce((s, d) => s + d.price, 0))}
-                    </td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {Object.values(summaryData).reduce((s, d) => s + d.regHrs, 0).toLocaleString()}
-                    </td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {Object.values(summaryData).reduce((s, d) => s + d.otHrs, 0).toLocaleString()}
-                    </td>
-                    <td className="border-t border-line px-3 py-2 text-right tabular-nums">
-                      {Object.values(summaryData).reduce((s, d) => s + d.dtHrs, 0).toLocaleString()}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                </RadixSelect.Viewport>
+              </RadixSelect.Content>
+            </RadixSelect.Portal>
+          </RadixSelect.Root>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            {/* Column visibility toggle */}
+            <div className="relative" data-column-picker>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setShowColumnPicker(!showColumnPicker)}
+                title="Toggle columns"
+              >
+                <Columns className="h-3 w-3" />
+              </Button>
+              {showColumnPicker && (
+                <div className="absolute right-0 top-full z-50 mt-1 w-48 rounded-lg border border-line bg-panel shadow-xl py-1">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase text-fg/35 tracking-wider border-b border-line">
+                    Visible Columns
+                  </div>
+                  {TOGGLEABLE_COLUMNS.map((col) => (
+                    <button
+                      key={col}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition-colors flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleColumn(col);
+                      }}
+                    >
+                      <span className={cn("h-3.5 w-3.5 flex items-center justify-center rounded border", visibleColumns.has(col) ? "bg-accent border-accent text-white" : "border-line")}>
+                        {visibleColumns.has(col) && <Check className="h-2.5 w-2.5" />}
+                      </span>
+                      {COLUMN_LABELS[col]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </CardBody>
-        </Card>
+
+            <Button size="xs" variant="ghost" onClick={exportTableAsCsv} title="Export as CSV">
+              <Download className="h-3 w-3" />
+            </Button>
+            <Button size="xs" onClick={() => addNewItem()} disabled={isPending}><Plus className="h-3 w-3" /> Item</Button>
+
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                setShowCatalogPicker(true);
+                setCatalogSearchTerm("");
+                setSelectedCatalogItemIds(new Set());
+              }}
+              disabled={isPending}
+            >
+              <Package className="h-3 w-3" /> Catalog
+            </Button>
+          </div>
+        </div>
+
+      {/* ─── Bulk Operations Toolbar ─── */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 bg-accent/5 border border-accent/20 rounded-lg text-xs">
+          <span className="font-medium text-accent">{selectedIds.size} selected</span>
+
+          <Button size="xs" variant="danger" onClick={handleBulkDelete} disabled={isPending}>
+            <Trash2 className="h-3 w-3" /> Delete Selected
+          </Button>
+
+          <Button size="xs" variant="ghost" onClick={handleBulkDuplicate} disabled={isPending}>
+            <Copy className="h-3 w-3" /> Duplicate Selected
+          </Button>
+
+          {/* Move to Worksheet dropdown */}
+          <Select
+            className="w-36 h-7 text-[11px]"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) handleBulkMoveToWorksheet(e.target.value);
+            }}
+          >
+            <option value="">Move to...</option>
+            {(workspace.worksheets ?? []).map((ws) => (
+              <option key={ws.id} value={ws.id}>{ws.name}</option>
+            ))}
+          </Select>
+
+          {/* Assign Phase dropdown */}
+          <Select
+            className="w-36 h-7 text-[11px]"
+            value=""
+            onChange={(e) => {
+              handleBulkAssignPhase(e.target.value);
+            }}
+          >
+            <option value="">Assign Phase...</option>
+            <option value="">None</option>
+            {(workspace.phases ?? []).map((p) => (
+              <option key={p.id} value={p.id}>{p.number} - {p.name}</option>
+            ))}
+          </Select>
+
+          {/* Set Markup */}
+          <div className="flex items-center gap-1">
+            <Input
+              className="h-7 w-16 text-[11px]"
+              type="number"
+              placeholder="Markup %"
+              value={bulkMarkupValue}
+              onChange={(e) => setBulkMarkupValue(e.target.value)}
+            />
+            <Button size="xs" variant="ghost" onClick={handleBulkSetMarkup} disabled={!bulkMarkupValue || isPending}>
+              Apply
+            </Button>
+          </div>
+
+          <button
+            className="ml-auto text-fg/40 hover:text-fg/60 transition-colors"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
 
       {/* ─── Grid ─── */}
-      {activeTab !== "summary" && (
-        <>
+      <div className="flex-1 min-h-0">
           {visibleRows.length === 0 ? (
             <EmptyState>
               No line items found.{" "}
@@ -1247,24 +2036,107 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
               </button>
             </EmptyState>
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-line">
+            <div className="overflow-auto rounded-lg border border-line h-full">
               <table className="w-full text-sm">
                 <thead className="bg-panel2/60 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
-                    <th className="border-b border-line px-2 py-2 text-left w-8">#</th>
-                    <th className="border-b border-line px-2 py-2 text-left min-w-[200px]">Entity Name</th>
-                    <th className="border-b border-line px-2 py-2 text-left min-w-[100px]">Vendor</th>
-                    <th className="border-b border-line px-2 py-2 text-left min-w-[160px]">Description</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-16">Qty</th>
-                    <th className="border-b border-line px-2 py-2 text-center w-14">UOM</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 1</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 2</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-20">Units 3</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-20">Cost</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-16">Markup</th>
-                    <th className="border-b border-line px-2 py-2 text-right w-24">Price</th>
-                    <th className="border-b border-line px-2 py-2 text-left w-24">Phase</th>
-                    <th className="border-b border-line px-2 py-2 text-center w-10"></th>
+                    {/* Expand button column */}
+                    {isColVisible("expand") && (
+                      <th className="border-b border-line px-1 py-2 w-8" />
+                    )}
+                    {/* Checkbox column */}
+                    {isColVisible("checkbox") && (
+                      <th className="border-b border-line px-1 py-2 w-8">
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 rounded border-line accent-accent cursor-pointer"
+                          checked={visibleRows.length > 0 && selectedIds.size === visibleRows.length}
+                          onChange={toggleSelectAll}
+                        />
+                      </th>
+                    )}
+                    {/* Reorder column */}
+                    {isColVisible("reorder") && (
+                      <th className="border-b border-line px-1 py-2 w-14" />
+                    )}
+                    {isColVisible("lineOrder") && (
+                      <th className="border-b border-line px-2 py-2 text-left w-8 cursor-pointer select-none group/th" onClick={() => handleSortToggle("lineOrder")}>
+                        <span className="flex items-center gap-1"># {renderSortIcon("lineOrder")}</span>
+                      </th>
+                    )}
+                    {isColVisible("entityName") && (
+                      <th className="border-b border-line px-2 py-2 text-left min-w-[200px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
+                        <span className="flex items-center gap-1">Entity Name {renderSortIcon("entityName")}</span>
+                      </th>
+                    )}
+                    {isColVisible("vendor") && (
+                      <th className="border-b border-line px-2 py-2 text-left min-w-[100px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("vendor")}>
+                        <span className="flex items-center gap-1">Vendor {renderSortIcon("vendor")}</span>
+                      </th>
+                    )}
+                    {isColVisible("description") && (
+                      <th className="border-b border-line px-2 py-2 text-left min-w-[160px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("description")}>
+                        <span className="flex items-center gap-1">Description {renderSortIcon("description")}</span>
+                      </th>
+                    )}
+                    {isColVisible("quantity") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("quantity")}>
+                        <span className="flex items-center justify-end gap-1">Qty {renderSortIcon("quantity")}</span>
+                      </th>
+                    )}
+                    {isColVisible("uom") && (
+                      <th className="border-b border-line px-2 py-2 text-center w-14 cursor-pointer select-none group/th" onClick={() => handleSortToggle("uom")}>
+                        <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
+                      </th>
+                    )}
+                    {isColVisible("laborHourReg") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourReg")}>
+                        <span className="flex items-center justify-end gap-1">Units 1 {renderSortIcon("laborHourReg")}</span>
+                      </th>
+                    )}
+                    {isColVisible("laborHourOver") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourOver")}>
+                        <span className="flex items-center justify-end gap-1">Units 2 {renderSortIcon("laborHourOver")}</span>
+                      </th>
+                    )}
+                    {isColVisible("laborHourDouble") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourDouble")}>
+                        <span className="flex items-center justify-end gap-1">Units 3 {renderSortIcon("laborHourDouble")}</span>
+                      </th>
+                    )}
+                    {isColVisible("cost") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("cost")}>
+                        <span className="flex items-center justify-end gap-1">Cost {renderSortIcon("cost")}</span>
+                      </th>
+                    )}
+                    {isColVisible("markup") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("markup")}>
+                        <span className="flex items-center justify-end gap-1">Markup {renderSortIcon("markup")}</span>
+                      </th>
+                    )}
+                    {isColVisible("price") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("price")}>
+                        <span className="flex items-center justify-end gap-1">Price {renderSortIcon("price")}</span>
+                      </th>
+                    )}
+                    {isColVisible("extCost") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("extCost")}>
+                        <span className="flex items-center justify-end gap-1">Ext. Cost {renderSortIcon("extCost")}</span>
+                      </th>
+                    )}
+                    {isColVisible("margin") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("margin")}>
+                        <span className="flex items-center justify-end gap-1">Margin {renderSortIcon("margin")}</span>
+                      </th>
+                    )}
+                    {isColVisible("phaseId") && (
+                      <th className="border-b border-line px-2 py-2 text-left w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
+                        <span className="flex items-center gap-1">Phase {renderSortIcon("phaseId")}</span>
+                      </th>
+                    )}
+                    {isColVisible("actions") && (
+                      <th className="border-b border-line px-2 py-2 text-center w-10"></th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -1283,6 +2155,16 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                         renderEditableCell={renderEditableCell}
                         entityCategories={entityCategories}
                         workspace={workspace}
+                        visibleColumns={visibleColumns}
+                        isColVisible={isColVisible}
+                        visibleColumnCount={visibleColumnCount}
+                        selectedIds={selectedIds}
+                        onToggleSelectRow={toggleSelectRow}
+                        onMoveUp={handleMoveUp}
+                        onMoveDown={handleMoveDown}
+                        detailItem={detailItem}
+                        onOpenDetail={setDetailItem}
+                        isPending={isPending}
                       />
                     );
                   })}
@@ -1290,45 +2172,101 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
                 {/* ─── Totals footer ─── */}
                 <tfoot className="bg-panel2/40 text-xs font-medium sticky bottom-0">
                   <tr>
-                    <td className="border-t border-line px-2 py-2" colSpan={2}>
-                      <span className="text-fg/50">{totals.count} items</span>
-                    </td>
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                      {totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}
-                    </td>
-                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                      {totals.otHrs > 0 ? totals.otHrs.toLocaleString() : ""}
-                    </td>
-                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                      {totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : ""}
-                    </td>
-                    <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                      {formatMoney(totals.cost)}
-                    </td>
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2 text-right tabular-nums font-semibold">
-                      {formatMoney(totals.price)}
-                    </td>
-                    <td className="border-t border-line px-2 py-2" />
-                    <td className="border-t border-line px-2 py-2" />
+                    {isColVisible("expand") && <td className="border-t border-line px-1 py-2" />}
+                    {isColVisible("checkbox") && <td className="border-t border-line px-1 py-2" />}
+                    {isColVisible("reorder") && <td className="border-t border-line px-1 py-2" />}
+                    {isColVisible("lineOrder") && (
+                      <td className="border-t border-line px-2 py-2" />
+                    )}
+                    {isColVisible("entityName") && (
+                      <td className="border-t border-line px-2 py-2">
+                        <span className="text-fg/50">{totals.count} items</span>
+                      </td>
+                    )}
+                    {isColVisible("vendor") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("description") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("quantity") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("uom") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("laborHourReg") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}
+                      </td>
+                    )}
+                    {isColVisible("laborHourOver") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {totals.otHrs > 0 ? totals.otHrs.toLocaleString() : ""}
+                      </td>
+                    )}
+                    {isColVisible("laborHourDouble") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : ""}
+                      </td>
+                    )}
+                    {isColVisible("cost") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {formatMoney(totals.cost)}
+                      </td>
+                    )}
+                    {isColVisible("markup") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("price") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums font-semibold">
+                        {formatMoney(totals.price)}
+                      </td>
+                    )}
+                    {isColVisible("extCost") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {formatMoney(totals.cost)}
+                      </td>
+                    )}
+                    {isColVisible("margin") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("phaseId") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("actions") && <td className="border-t border-line px-2 py-2" />}
                   </tr>
                 </tfoot>
               </table>
             </div>
           )}
-        </>
-      )}
+        </div>
 
       {/* ─── Context menu ─── */}
       {contextMenu && (
         <div
-          className="fixed z-50 rounded-lg border border-line bg-panel shadow-xl py-1 text-xs min-w-[140px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          ref={(el) => {
+            if (!el) return;
+            const rect = el.getBoundingClientRect();
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            let x = contextMenu.x;
+            let y = contextMenu.y;
+            if (x + rect.width > vw) x = vw - rect.width - 8;
+            if (y + rect.height > vh) y = vh - rect.height - 8;
+            if (x < 0) x = 8;
+            if (y < 0) y = 8;
+            el.style.left = `${x}px`;
+            el.style.top = `${y}px`;
+          }}
+          className="fixed z-50 rounded-lg border border-line bg-panel shadow-xl py-1 text-xs min-w-[160px]"
+          style={{ left: -9999, top: -9999 }}
         >
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
+            onClick={() => {
+              const row = visibleRows.find((r) => r.id === contextMenu.rowId);
+              if (row) setDetailItem(row);
+              setContextMenu(null);
+            }}
+          >
+            <Maximize2 className="h-3 w-3" /> Open Detail
+          </button>
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
+            onClick={() => {
+              copyRowToClipboard(contextMenu.rowId);
+              setContextMenu(null);
+            }}
+          >
+            <Clipboard className="h-3 w-3" /> Copy Row
+          </button>
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
             onClick={() => {
@@ -1338,6 +2276,21 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
           >
             <Copy className="h-3 w-3" /> Duplicate
           </button>
+
+          <div className="my-1 border-t border-line" />
+
+          <button
+            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
+            onClick={() => {
+              exportTableAsCsv();
+              setContextMenu(null);
+            }}
+          >
+            <Download className="h-3 w-3" /> Export Table as CSV
+          </button>
+
+          <div className="my-1 border-t border-line" />
+
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-danger/10 text-danger flex items-center gap-2"
             onClick={() => {
@@ -1430,6 +2383,165 @@ export function EstimateGrid({ workspace, onApply, onError }: EstimateGridProps)
           </div>
         </ModalBackdrop>
       )}
+
+      {/* ─── Catalog Quick-Add Modal ─── */}
+      {showCatalogPicker && (
+        <ModalBackdrop open={showCatalogPicker} onClose={() => setShowCatalogPicker(false)}>
+          <div className="w-[600px] max-h-[70vh] flex flex-col rounded-xl border border-line bg-panel p-5 shadow-xl">
+            <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
+              <Package className="h-4 w-4" />
+              Add from Catalog
+            </h4>
+
+            {/* Search */}
+            <div className="relative mb-3">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
+              <Input
+                autoFocus
+                className="pl-8"
+                placeholder="Search catalog items..."
+                value={catalogSearchTerm}
+                onChange={(e) => setCatalogSearchTerm(e.target.value)}
+              />
+            </div>
+
+            {/* Items list */}
+            <div className="flex-1 overflow-y-auto border border-line rounded-lg max-h-[400px]">
+              {filteredCatalogItems.length === 0 ? (
+                <div className="p-6 text-center text-xs text-fg/40">
+                  {allCatalogItems.length === 0
+                    ? "No catalog items available."
+                    : "No items match your search."}
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-panel2/60 text-[10px] font-medium uppercase text-fg/35 sticky top-0">
+                    <tr>
+                      <th className="border-b border-line px-2 py-1.5 w-8">
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3 rounded border-line accent-accent cursor-pointer"
+                          checked={
+                            filteredCatalogItems.length > 0 &&
+                            filteredCatalogItems.every((ci) => selectedCatalogItemIds.has(ci.id))
+                          }
+                          onChange={() => {
+                            if (filteredCatalogItems.every((ci) => selectedCatalogItemIds.has(ci.id))) {
+                              setSelectedCatalogItemIds(new Set());
+                            } else {
+                              setSelectedCatalogItemIds(new Set(filteredCatalogItems.map((ci) => ci.id)));
+                            }
+                          }}
+                        />
+                      </th>
+                      <th className="border-b border-line px-2 py-1.5 text-left">Code</th>
+                      <th className="border-b border-line px-2 py-1.5 text-left">Name</th>
+                      <th className="border-b border-line px-2 py-1.5 text-left">Catalog</th>
+                      <th className="border-b border-line px-2 py-1.5 text-center">Unit</th>
+                      <th className="border-b border-line px-2 py-1.5 text-right">Cost</th>
+                      <th className="border-b border-line px-2 py-1.5 text-right">Price</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCatalogItems.map((ci) => {
+                      const checked = selectedCatalogItemIds.has(ci.id);
+                      return (
+                        <tr
+                          key={ci.id}
+                          className={cn(
+                            "cursor-pointer transition-colors",
+                            checked ? "bg-accent/5" : "hover:bg-panel2/20"
+                          )}
+                          onClick={() => {
+                            setSelectedCatalogItemIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(ci.id)) {
+                                next.delete(ci.id);
+                              } else {
+                                next.add(ci.id);
+                              }
+                              return next;
+                            });
+                          }}
+                        >
+                          <td className="border-b border-line px-2 py-1.5">
+                            <input
+                              type="checkbox"
+                              className="h-3 w-3 rounded border-line accent-accent cursor-pointer"
+                              checked={checked}
+                              readOnly
+                            />
+                          </td>
+                          <td className="border-b border-line px-2 py-1.5 font-mono text-fg/50">{ci.code}</td>
+                          <td className="border-b border-line px-2 py-1.5 font-medium">{ci.name}</td>
+                          <td className="border-b border-line px-2 py-1.5">
+                            <Badge
+                              tone={getCategoryBadgeTone(catalogKindToCategory(ci.catalogKind), entityCategories)}
+                              className="text-[9px]"
+                            >
+                              {ci.catalogKind}
+                            </Badge>
+                          </td>
+                          <td className="border-b border-line px-2 py-1.5 text-center">{ci.unit}</td>
+                          <td className="border-b border-line px-2 py-1.5 text-right tabular-nums">{formatMoney(ci.unitCost, 2)}</td>
+                          <td className="border-b border-line px-2 py-1.5 text-right tabular-nums">{formatMoney(ci.unitPrice, 2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-between items-center mt-3">
+              <span className="text-xs text-fg/40">
+                {selectedCatalogItemIds.size} item{selectedCatalogItemIds.size !== 1 ? "s" : ""} selected
+              </span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setShowCatalogPicker(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleAddFromCatalog}
+                  disabled={selectedCatalogItemIds.size === 0 || isPending}
+                >
+                  Add Selected
+                </Button>
+              </div>
+            </div>
+          </div>
+        </ModalBackdrop>
+      )}
+
+      {/* ─── Item Detail Drawer ─── */}
+      <AnimatePresence>
+        {detailItem && (
+          <ItemDetailDrawer
+            key={detailItem.id}
+            item={detailItem}
+            workspace={workspace}
+            entityCategories={entityCategories}
+            onSave={(next) => {
+              onApply(next as WorkspaceResponse);
+              // Keep the drawer open but refresh the item data
+              const updated = (next as WorkspaceResponse).workspace.worksheets
+                .flatMap((w) => w.items)
+                .find((i) => i.id === detailItem.id);
+              if (updated) setDetailItem(updated);
+            }}
+            onDelete={(id) => {
+              deleteRow(id);
+              setDetailItem(null);
+            }}
+            onDuplicate={(id) => {
+              duplicateRow(id);
+            }}
+            onClose={() => setDetailItem(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1447,6 +2559,16 @@ function GroupRows({
   renderEditableCell,
   entityCategories,
   workspace,
+  visibleColumns,
+  isColVisible,
+  visibleColumnCount,
+  selectedIds,
+  onToggleSelectRow,
+  onMoveUp,
+  onMoveDown,
+  detailItem,
+  onOpenDetail,
+  isPending,
 }: {
   group: {
     category: string;
@@ -1468,6 +2590,16 @@ function GroupRows({
   ) => React.ReactNode;
   entityCategories: EntityCategory[];
   workspace: ProjectWorkspaceData;
+  visibleColumns: Set<ColumnId>;
+  isColVisible: (col: ColumnId) => boolean;
+  visibleColumnCount: number;
+  selectedIds: Set<string>;
+  onToggleSelectRow: (id: string) => void;
+  onMoveUp: (row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) => void;
+  onMoveDown: (row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) => void;
+  detailItem: WorkspaceWorksheetItem | null;
+  onOpenDetail: (item: WorkspaceWorksheetItem) => void;
+  isPending: boolean;
 }) {
   const catDef = group.catDef;
   const regLabel = catDef ? catDef.laborHourLabels.reg : "";
@@ -1478,10 +2610,11 @@ function GroupRows({
     <>
       {/* Category group header */}
       <tr
-        className="bg-panel2/30 cursor-pointer hover:bg-panel2/50 transition-colors"
+        className="bg-panel2/30 cursor-pointer hover:bg-panel2/50 transition-colors border-l-4"
+        style={{ borderLeftColor: catDef?.color ?? "#6b7280" }}
         onClick={onToggleCollapse}
       >
-        <td colSpan={14} className="border-b border-line px-2 py-1.5">
+        <td colSpan={visibleColumnCount} className="border-b border-line px-2 py-1.5">
           <div className="flex items-center gap-2">
             {isCollapsed ? (
               <ChevronRight className="h-3.5 w-3.5 text-fg/40" />
@@ -1489,7 +2622,7 @@ function GroupRows({
               <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
             )}
             <Badge
-              tone={(CATEGORY_COLORS[group.category] ?? "default") as "default" | "success" | "warning" | "danger" | "info"}
+              tone={getCategoryBadgeTone(group.category, entityCategories)}
             >
               {group.category}
             </Badge>
@@ -1506,117 +2639,235 @@ function GroupRows({
       {!isCollapsed &&
         group.items.map((row, idx) => {
           const isSelected = selectedRowId === row.id;
+          const isChecked = selectedIds.has(row.id);
+          const isDetailOpen = detailItem?.id === row.id;
           const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
+          const extCost = row.cost * row.quantity;
+          const margin = row.price > 0 ? ((row.price - extCost) / row.price * 100).toFixed(1) + "%" : "--";
 
           return (
             <tr
               key={row.id}
               className={cn(
-                "transition-colors",
-                isSelected ? "bg-accent/5" : "hover:bg-panel2/15"
+                "transition-colors border-l-2",
+                isDetailOpen
+                  ? "bg-accent/10"
+                  : isSelected
+                  ? "bg-accent/5"
+                  : "hover:bg-panel2/15"
               )}
-              onClick={() => onSelectRow(row.id)}
+              style={{ borderLeftColor: (catDef?.color ?? "#6b7280") + "40" }}
+              onClick={() => {
+                onSelectRow(row.id);
+                onOpenDetail(row);
+              }}
               onContextMenu={(e) => onContextMenu(e, row.id)}
             >
+              {/* Expand button */}
+              {isColVisible("expand") && (
+                <td className="border-b border-line px-1 py-2 text-center">
+                  <button
+                    className={cn(
+                      "p-0.5 rounded hover:bg-panel2/60 transition-colors",
+                      isDetailOpen ? "text-accent" : "text-fg/25 hover:text-fg/50"
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenDetail(row);
+                    }}
+                    title="Open detail"
+                  >
+                    <Maximize2 className="h-3 w-3" />
+                  </button>
+                </td>
+              )}
+
+              {/* Checkbox */}
+              {isColVisible("checkbox") && (
+                <td className="border-b border-line px-1 py-2 text-center">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-line accent-accent cursor-pointer"
+                    checked={isChecked}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      onToggleSelectRow(row.id);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </td>
+              )}
+
+              {/* Reorder arrows */}
+              {isColVisible("reorder") && (
+                <td className="border-b border-line px-0.5 py-1 text-center">
+                  <div className="flex items-center gap-0">
+                    <button
+                      className={cn(
+                        "p-0.5 rounded transition-colors",
+                        idx === 0
+                          ? "text-fg/10 cursor-not-allowed"
+                          : "text-fg/30 hover:text-fg/60 hover:bg-panel2/60"
+                      )}
+                      disabled={idx === 0 || isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onMoveUp(row, group.items);
+                      }}
+                      title="Move up"
+                    >
+                      <ChevronUp className="h-3 w-3" />
+                    </button>
+                    <button
+                      className={cn(
+                        "p-0.5 rounded transition-colors",
+                        idx === group.items.length - 1
+                          ? "text-fg/10 cursor-not-allowed"
+                          : "text-fg/30 hover:text-fg/60 hover:bg-panel2/60"
+                      )}
+                      disabled={idx === group.items.length - 1 || isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onMoveDown(row, group.items);
+                      }}
+                      title="Move down"
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                    </button>
+                  </div>
+                </td>
+              )}
+
               {/* Row number */}
-              <td className="border-b border-line px-2 py-2 text-[10px] text-fg/25 tabular-nums">
-                {idx + 1}
-              </td>
+              {isColVisible("lineOrder") && (
+                <td className="border-b border-line px-2 py-2 text-[10px] text-fg/25 tabular-nums">
+                  {idx + 1}
+                </td>
+              )}
 
               {/* Entity Name (with dropdown) */}
-              {renderEditableCell(row, "entityName", row.entityName, "min-w-[200px]")}
+              {isColVisible("entityName") &&
+                renderEditableCell(row, "entityName", row.entityName, "min-w-[200px]")}
 
               {/* Vendor */}
-              {renderEditableCell(row, "vendor", row.vendor ?? "", "min-w-[100px]")}
+              {isColVisible("vendor") &&
+                renderEditableCell(row, "vendor", row.vendor ?? "", "min-w-[100px]")}
 
               {/* Description */}
-              <td
-                className="border-b border-line px-2 py-2 text-xs cursor-pointer hover:bg-accent/5 min-w-[160px] max-w-[200px] truncate"
-                onClick={() => onDescDoubleClick(row.id, row.description)}
-                title={row.description}
-              >
-                {row.description || <span className="text-fg/20 italic">Add description...</span>}
-              </td>
+              {isColVisible("description") && (
+                <td
+                  className="border-b border-line px-2 py-2 text-xs cursor-pointer hover:bg-accent/5 min-w-[160px] max-w-[200px] truncate"
+                  onClick={() => onDescDoubleClick(row.id, row.description)}
+                  title={row.description}
+                >
+                  {row.description || <span className="text-fg/20 italic">Add description...</span>}
+                </td>
+              )}
 
               {/* Quantity */}
-              {renderEditableCell(
-                row,
-                "quantity",
-                <span className="tabular-nums">{row.quantity}</span>,
-                "text-right"
-              )}
+              {isColVisible("quantity") &&
+                renderEditableCell(
+                  row,
+                  "quantity",
+                  <span className="tabular-nums">{row.quantity}</span>,
+                  "text-right"
+                )}
 
               {/* UOM */}
-              {renderEditableCell(row, "uom", row.uom, "text-center")}
+              {isColVisible("uom") &&
+                renderEditableCell(row, "uom", row.uom, "text-center")}
 
               {/* Labour Hours - dynamic labels */}
-              {renderEditableCell(
-                row,
-                "laborHourReg",
-                <span className="tabular-nums">{row.laborHourReg || "--"}</span>,
-                "text-right"
-              )}
-              {renderEditableCell(
-                row,
-                "laborHourOver",
-                <span className="tabular-nums">{row.laborHourOver || "--"}</span>,
-                "text-right"
-              )}
-              {renderEditableCell(
-                row,
-                "laborHourDouble",
-                <span className="tabular-nums">{row.laborHourDouble || "--"}</span>,
-                "text-right"
-              )}
+              {isColVisible("laborHourReg") &&
+                renderEditableCell(
+                  row,
+                  "laborHourReg",
+                  <span className="tabular-nums">{row.laborHourReg || "--"}</span>,
+                  "text-right"
+                )}
+              {isColVisible("laborHourOver") &&
+                renderEditableCell(
+                  row,
+                  "laborHourOver",
+                  <span className="tabular-nums">{row.laborHourOver || "--"}</span>,
+                  "text-right"
+                )}
+              {isColVisible("laborHourDouble") &&
+                renderEditableCell(
+                  row,
+                  "laborHourDouble",
+                  <span className="tabular-nums">{row.laborHourDouble || "--"}</span>,
+                  "text-right"
+                )}
 
               {/* Cost */}
-              {renderEditableCell(
-                row,
-                "cost",
-                <span className="tabular-nums">{formatMoney(row.cost, 2)}</span>,
-                "text-right"
-              )}
+              {isColVisible("cost") &&
+                renderEditableCell(
+                  row,
+                  "cost",
+                  <span className="tabular-nums">{formatMoney(row.cost, 2)}</span>,
+                  "text-right"
+                )}
 
               {/* Markup */}
-              {renderEditableCell(
-                row,
-                "markup",
-                <span className="tabular-nums">{formatPercent(row.markup)}</span>,
-                "text-right"
-              )}
+              {isColVisible("markup") &&
+                renderEditableCell(
+                  row,
+                  "markup",
+                  <span className="tabular-nums">{formatPercent(row.markup)}</span>,
+                  "text-right"
+                )}
 
               {/* Price */}
-              {renderEditableCell(
-                row,
-                "price",
-                <span className="tabular-nums font-medium">{formatMoney(row.price)}</span>,
-                "text-right"
+              {isColVisible("price") &&
+                renderEditableCell(
+                  row,
+                  "price",
+                  <span className="tabular-nums font-medium">{formatMoney(row.price)}</span>,
+                  "text-right"
+                )}
+
+              {/* Ext. Cost (read-only) */}
+              {isColVisible("extCost") && (
+                <td className="border-b border-line px-2 py-2 text-xs text-right tabular-nums text-fg/60">
+                  {formatMoney(extCost, 2)}
+                </td>
+              )}
+
+              {/* Margin (read-only) */}
+              {isColVisible("margin") && (
+                <td className="border-b border-line px-2 py-2 text-xs text-right tabular-nums text-fg/60">
+                  {margin}
+                </td>
               )}
 
               {/* Phase */}
-              {renderEditableCell(
-                row,
-                "phaseId",
-                phase ? (
-                  <span className="text-fg/60">{phase.number}</span>
-                ) : (
-                  <span className="text-fg/20">--</span>
-                ),
-                "text-left"
-              )}
+              {isColVisible("phaseId") &&
+                renderEditableCell(
+                  row,
+                  "phaseId",
+                  phase ? (
+                    <span className="text-fg/60">{phase.number}</span>
+                  ) : (
+                    <span className="text-fg/20">--</span>
+                  ),
+                  "text-left"
+                )}
 
               {/* Actions */}
-              <td className="border-b border-line px-1 py-2 text-center">
-                <button
-                  className="p-1 rounded hover:bg-panel2/60 text-fg/30 hover:text-fg/60 transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onContextMenu(e, row.id);
-                  }}
-                >
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                </button>
-              </td>
+              {isColVisible("actions") && (
+                <td className="border-b border-line px-1 py-2 text-center">
+                  <button
+                    className="p-1 rounded hover:bg-panel2/60 text-fg/30 hover:text-fg/60 transition-colors"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onContextMenu(e, row.id);
+                    }}
+                  >
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                </td>
+              )}
             </tr>
           );
         })}

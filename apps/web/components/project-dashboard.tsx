@@ -1,9 +1,11 @@
+"use client";
+
 import Link from "next/link";
 import { ArrowRight, TrendingUp } from "lucide-react";
 import type { AiRun, CatalogSummary, ProjectListItem } from "@/lib/api";
 import { formatCompactMoney, formatDateTime, formatMoney, formatPercent } from "@/lib/format";
 import { AIReviewQueue } from "@/components/ai-review-queue";
-import { Badge, Button, Card, CardBody, CardHeader, CardTitle, EmptyState, Progress } from "@/components/ui";
+import { Badge, Button, Card, CardBody, CardHeader, CardTitle, EmptyState, FadeIn, Progress } from "@/components/ui";
 
 function statusTone(status: string) {
   switch (status.toLowerCase()) {
@@ -34,19 +36,22 @@ export function ProjectDashboard({
     : 0;
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-1 flex-col gap-5 min-h-0 overflow-hidden">
       {/* KPI strip */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <FadeIn>
+      <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard label="Projects" value={String(projects.length)} sub={`${pipelineCount} active`} />
         <KpiCard label="Pipeline value" value={formatCompactMoney(totalValue)} sub={`${formatCompactMoney(totalProfit)} projected profit`} />
         <KpiCard label="Avg margin" value={formatPercent(avgMargin, 1)} />
         <KpiCard label="AI runs" value={String(aiRuns.length)} sub={`${catalogs.length} catalogs`} />
       </div>
+      </FadeIn>
 
-      <div className="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
+      <FadeIn delay={0.05}>
+      <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[1.3fr_0.7fr]">
         {/* Project list */}
-        <Card>
-          <CardHeader>
+        <Card className="min-h-0 flex flex-col overflow-hidden">
+          <CardHeader className="shrink-0">
             <div className="flex items-center justify-between">
               <CardTitle>Projects</CardTitle>
               <Button size="xs" asChild>
@@ -54,7 +59,7 @@ export function ProjectDashboard({
               </Button>
             </div>
           </CardHeader>
-          <CardBody>
+          <CardBody className="overflow-y-auto min-h-0 flex-1">
             {projects.length === 0 ? (
               <EmptyState>No projects yet. Upload a package to begin.</EmptyState>
             ) : (
@@ -75,7 +80,7 @@ export function ProjectDashboard({
                         <span>·</span>
                         <span>{project.location}</span>
                         <span>·</span>
-                        <span>{project.quote.quoteNumber}</span>
+                        {project.quote && <span>{project.quote.quoteNumber}</span>}
                       </div>
                     </div>
 
@@ -98,7 +103,7 @@ export function ProjectDashboard({
         </Card>
 
         {/* Right column */}
-        <div className="space-y-5">
+        <div className="space-y-5 overflow-y-auto min-h-0">
           <AIReviewQueue compact runs={aiRuns} />
 
           {catalogs.length > 0 && (
@@ -121,6 +126,7 @@ export function ProjectDashboard({
           )}
         </div>
       </div>
+      </FadeIn>
     </div>
   );
 }

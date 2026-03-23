@@ -1,10 +1,10 @@
 "use client";
 
-import { useRef, useState, useTransition, type FormEvent } from "react";
-import { FileUp, Loader2, UploadCloud, X } from "lucide-react";
+import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { ProjectListItem } from "@/lib/api";
-import { submitPackageIngest } from "@/lib/api";
+import type { Customer, ProjectListItem } from "@/lib/api";
+import { submitPackageIngest, getCustomers, createCustomer } from "@/lib/api";
 import { Badge, Button, Card, CardBody, Input, Label, Select, Textarea } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -14,14 +14,39 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [projectId, setProjectId] = useState("");
-  const [packageName, setPackageName] = useState("Customer package");
-  const [clientName, setClientName] = useState("");
+  const [packageName, setPackageName] = useState("Client package");
+  const [customerId, setCustomerId] = useState("");
+  const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddSaving, setQuickAddSaving] = useState(false);
   const [location, setLocation] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [scope, setScope] = useState("");
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    getCustomers().then(setCustomerOptions).catch(() => {});
+  }, []);
+
+  async function handleQuickAdd() {
+    if (!quickAddName.trim()) return;
+    setQuickAddSaving(true);
+    try {
+      const created = await createCustomer({ name: quickAddName.trim(), active: true });
+      setCustomerOptions((prev) => [...prev, created]);
+      setCustomerId(created.id);
+      setQuickAddName("");
+      setQuickAddOpen(false);
+    } catch {
+      /* ignore */
+    } finally {
+      setQuickAddSaving(false);
+    }
+  }
 
   function handleFile(nextFile: File | null) {
     if (!nextFile) return;
@@ -51,9 +76,10 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           file,
           projectId: projectId || undefined,
           packageName,
-          clientName: clientName || undefined,
+          clientName: customerOptions.find((c) => c.id === customerId)?.name || undefined,
           location: location || undefined,
           dueDate: dueDate || undefined,
+          scope: scope || undefined,
           notes: notes || undefined,
         });
 
@@ -66,7 +92,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
         setStatus("Package uploaded successfully.");
 
         if (nextProjectId) {
-          router.push(`/projects/${nextProjectId}`);
+          router.push(`/projects/${nextProjectId}?tab=estimate&intake=true`);
           router.refresh();
         }
       } catch (submissionError) {
@@ -145,7 +171,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               <option value="">New project</option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name} ({p.quote.quoteNumber})
+                  {p.name}{p.quote ? ` (${p.quote.quoteNumber})` : ""}
                 </option>
               ))}
             </Select>
@@ -158,7 +184,35 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             </div>
             <div>
               <Label>Client</Label>
-              <Input placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} />
+              {quickAddOpen ? (
+                <div className="flex gap-1.5">
+                  <Input
+                    placeholder="New client name"
+                    value={quickAddName}
+                    onChange={(e) => setQuickAddName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleQuickAdd())}
+                    autoFocus
+                  />
+                  <Button type="button" size="xs" variant="accent" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
+                    {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  </Button>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-1.5">
+                  <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="flex-1">
+                    <option value="">Select client...</option>
+                    {customerOptions.filter((c) => c.active).map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</option>
+                    ))}
+                  </Select>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -171,6 +225,16 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               <Label>Bid due</Label>
               <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
+          </div>
+
+          <div>
+            <Label>Scope</Label>
+            <Textarea
+              placeholder="What portion of this bid to estimate (e.g. 'Electrical only', 'HVAC for Building B'). Leave blank for full scope."
+              value={scope}
+              onChange={(e) => setScope(e.target.value)}
+              className="min-h-16"
+            />
           </div>
 
           <div>

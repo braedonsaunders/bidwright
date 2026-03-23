@@ -6,15 +6,37 @@ function resolveApiUrl(path: string) {
   return new URL(path, apiBaseUrl).toString();
 }
 
+function getAuthToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("bw_token");
+}
+
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...(init?.headers as Record<string, string> ?? {}),
+  };
+  if (token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const { headers: _discardHeaders, ...restInit } = init ?? {};
   const response = await fetch(resolveApiUrl(path), {
     cache: "no-store",
-    headers: {
-      Accept: "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
+    ...restInit,
+    headers,
   });
+
+  if (response.status === 401) {
+    // Clear auth state and redirect to login
+    if (typeof window !== "undefined" && !path.includes("/auth/")) {
+      localStorage.removeItem("bw_token");
+      localStorage.removeItem("bw_user");
+      localStorage.removeItem("bw_org");
+      window.location.href = "/login";
+    }
+  }
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => "");
@@ -43,14 +65,14 @@ export interface ProjectListItem {
     title: string;
     status: string;
     currentRevisionId: string;
-  };
+  } | null;
   latestRevision: {
     id: string;
     revisionNumber: number;
     subtotal: number;
     estimatedProfit: number;
     estimatedMargin: number;
-  };
+  } | null;
 }
 
 export interface SourceDocument {
@@ -131,6 +153,8 @@ export interface WorkspaceWorksheetItem {
   laborHourOver: number;
   laborHourDouble: number;
   lineOrder: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export interface WorkspaceWorksheet {
@@ -148,6 +172,44 @@ export interface ProjectPhase {
   name: string;
   description: string;
   order: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
+}
+
+// ── Schedule Types ──────────────────────────────────────────────────────
+
+export type ScheduleTaskType = "task" | "milestone";
+export type ScheduleTaskStatus = "not_started" | "in_progress" | "complete" | "on_hold";
+export type DependencyType = "FS" | "SS" | "FF" | "SF";
+
+export interface ScheduleTask {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  phaseId: string | null;
+  name: string;
+  description: string;
+  taskType: ScheduleTaskType;
+  status: ScheduleTaskStatus;
+  startDate: string | null;
+  endDate: string | null;
+  duration: number;
+  progress: number;
+  assignee: string;
+  order: number;
+  baselineStart: string | null;
+  baselineEnd: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleDependency {
+  id: string;
+  predecessorId: string;
+  successorId: string;
+  type: DependencyType;
+  lagDays: number;
 }
 
 export interface ProjectModifier {
@@ -167,15 +229,6 @@ export interface ProjectCondition {
   type: string;
   value: string;
   order: number;
-}
-
-export interface LabourRate {
-  id: string;
-  revisionId: string;
-  name: string;
-  regularRate: number;
-  overtimeRate: number;
-  doubleRate: number;
 }
 
 export interface AdditionalLineItem {
@@ -231,7 +284,14 @@ export interface CatalogSummary {
   scope: string;
   projectId: string | null;
   description: string;
+  source: string;
+  sourceDescription: string;
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  itemCount?: number;
   items?: CatalogItem[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface FileNode {
@@ -340,10 +400,12 @@ export interface ProjectWorkspaceData {
   modifiers: ProjectModifier[];
   conditions: ProjectCondition[];
   additionalLineItems: AdditionalLineItem[];
-  labourRates: LabourRate[];
+  rateSchedules: RateSchedule[];
   catalogs: CatalogSummary[];
   aiRuns: AiRun[];
   citations: Citation[];
+  scheduleTasks: ScheduleTask[];
+  scheduleDependencies: ScheduleDependency[];
   estimate: EstimateData;
 }
 
@@ -409,6 +471,16 @@ export interface WorkspaceResponse {
 // Entity Categories
 // ---------------------------------------------------------------------------
 
+export type CalculationType =
+  | "auto_labour"
+  | "auto_equipment"
+  | "auto_stock"
+  | "auto_consumable"
+  | "auto_subcontract"
+  | "direct_price"
+  | "manual"
+  | "formula";
+
 export interface EntityCategory {
   id: string;
   name: string;
@@ -430,11 +502,189 @@ export interface EntityCategory {
     over: string;
     double: string;
   };
-  calculationType: "auto_labour" | "auto_equipment" | "auto_stock" | "auto_consumable" | "direct_price" | "manual";
+  calculationType: CalculationType;
+  calcFormula: string;
+  color: string;
+  order: number;
+  isBuiltIn: boolean;
+  enabled: boolean;
 }
 
 export async function getEntityCategories() {
   return apiRequest<EntityCategory[]>("/entity-categories");
+}
+
+export async function createEntityCategory(input: Partial<EntityCategory>) {
+  return apiRequest<EntityCategory>("/entity-categories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateEntityCategory(id: string, patch: Partial<EntityCategory>) {
+  return apiRequest<EntityCategory>(`/entity-categories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteEntityCategory(id: string) {
+  return apiRequest<{ deleted: boolean }>(`/entity-categories/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function reorderEntityCategories(orderedIds: string[]) {
+  return apiRequest<void>("/entity-categories/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderedIds }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Customers
+// ---------------------------------------------------------------------------
+
+export interface Customer {
+  id: string;
+  organizationId: string;
+  name: string;
+  shortName: string;
+  phone: string;
+  email: string;
+  website: string;
+  addressStreet: string;
+  addressCity: string;
+  addressProvince: string;
+  addressPostalCode: string;
+  addressCountry: string;
+  notes: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerContact {
+  id: string;
+  customerId: string;
+  name: string;
+  title: string;
+  phone: string;
+  email: string;
+  isPrimary: boolean;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerWithContacts extends Customer {
+  contacts: CustomerContact[];
+}
+
+export async function getCustomers() {
+  return apiRequest<Customer[]>("/customers");
+}
+
+export async function searchCustomers(query: string) {
+  return apiRequest<Customer[]>(`/customers?q=${encodeURIComponent(query)}`);
+}
+
+export async function getCustomer(id: string) {
+  return apiRequest<CustomerWithContacts>(`/customers/${id}`);
+}
+
+export async function createCustomer(input: Partial<Customer>) {
+  return apiRequest<Customer>("/customers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCustomer(id: string, patch: Partial<Customer>) {
+  return apiRequest<Customer>(`/customers/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteCustomer(id: string) {
+  return apiRequest<{ deleted: boolean }>(`/customers/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// Customer Contacts
+
+export async function getCustomerContacts(customerId: string) {
+  return apiRequest<CustomerContact[]>(`/customers/${customerId}/contacts`);
+}
+
+export async function createCustomerContact(customerId: string, input: Partial<CustomerContact>) {
+  return apiRequest<CustomerContact>(`/customers/${customerId}/contacts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCustomerContact(customerId: string, contactId: string, patch: Partial<CustomerContact>) {
+  return apiRequest<CustomerContact>(`/customers/${customerId}/contacts/${contactId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteCustomerContact(customerId: string, contactId: string) {
+  return apiRequest<{ deleted: boolean }>(`/customers/${customerId}/contacts/${contactId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Departments
+// ---------------------------------------------------------------------------
+
+export interface Department {
+  id: string;
+  organizationId: string;
+  name: string;
+  code: string;
+  description: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getDepartments() {
+  return apiRequest<Department[]>("/departments");
+}
+
+export async function createDepartment(input: Partial<Department>) {
+  return apiRequest<Department>("/departments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateDepartment(id: string, patch: Partial<Department>) {
+  return apiRequest<Department>(`/departments/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteDepartment(id: string) {
+  return apiRequest<{ deleted: boolean }>(`/departments/${id}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +852,8 @@ export interface WorksheetItemPatchInput {
   laborHourOver?: number;
   laborHourDouble?: number;
   lineOrder?: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export interface CreateWorksheetItemInput {
@@ -620,6 +872,8 @@ export interface CreateWorksheetItemInput {
   laborHourOver: number;
   laborHourDouble: number;
   lineOrder?: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export async function updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
@@ -646,6 +900,36 @@ export async function deleteWorksheetItem(projectId: string, itemId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-items/${itemId}`, {
     method: "DELETE",
   });
+}
+
+export async function reorderWorksheetItems(
+  projectId: string,
+  worksheetId: string,
+  orderedIds: string[]
+): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(
+    `/projects/${projectId}/worksheets/${worksheetId}/items/reorder`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderedIds }),
+    }
+  );
+}
+
+export async function importWorksheetItems(
+  projectId: string,
+  worksheetId: string,
+  items: Array<Record<string, unknown>>
+): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(
+    `/projects/${projectId}/worksheets/${worksheetId}/import`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items }),
+    }
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -702,6 +986,9 @@ export interface PhasePatchInput {
   name?: string;
   description?: string;
   order?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
 }
 
 export async function createPhase(projectId: string, input: CreatePhaseInput) {
@@ -728,6 +1015,107 @@ export async function deletePhase(projectId: string, phaseId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/phases/${phaseId}`, {
     method: "DELETE",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Schedule Tasks
+// ---------------------------------------------------------------------------
+
+export interface CreateScheduleTaskInput {
+  phaseId?: string | null;
+  name?: string;
+  description?: string;
+  taskType?: ScheduleTaskType;
+  status?: ScheduleTaskStatus;
+  startDate?: string | null;
+  endDate?: string | null;
+  duration?: number;
+  progress?: number;
+  assignee?: string;
+  order?: number;
+}
+
+export interface ScheduleTaskPatchInput {
+  phaseId?: string | null;
+  name?: string;
+  description?: string;
+  taskType?: ScheduleTaskType;
+  status?: ScheduleTaskStatus;
+  startDate?: string | null;
+  endDate?: string | null;
+  duration?: number;
+  progress?: number;
+  assignee?: string;
+  order?: number;
+}
+
+export interface CreateDependencyInput {
+  predecessorId: string;
+  successorId: string;
+  type?: DependencyType;
+  lagDays?: number;
+}
+
+export async function createScheduleTask(projectId: string, input: CreateScheduleTaskInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateScheduleTask(projectId: string, taskId: string, patch: ScheduleTaskPatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-tasks/${taskId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteScheduleTask(projectId: string, taskId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-tasks/${taskId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function batchUpdateScheduleTasks(projectId: string, updates: Array<{ id: string } & ScheduleTaskPatchInput>) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-tasks/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  });
+}
+
+export async function createScheduleDependency(projectId: string, input: CreateDependencyInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-dependencies`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteScheduleDependency(projectId: string, depId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-dependencies/${depId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function saveScheduleBaseline(projectId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule/save-baseline`, {
+    method: "POST",
+  });
+}
+
+export async function clearScheduleBaseline(projectId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule/clear-baseline`, {
+    method: "DELETE",
+  });
+}
+
+export function getSchedulePdfUrl(projectId: string) {
+  const token = getAuthToken();
+  const url = resolveApiUrl(`/projects/${projectId}/pdf/schedule`);
+  return token ? `${url}?token=${token}` : url;
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +1190,19 @@ export async function getConditionLibrary() {
   return apiRequest<ConditionLibraryEntry[]>("/conditions/library");
 }
 
+export async function createConditionLibraryEntry(input: { type: string; value: string }) {
+  return apiRequest<ConditionLibraryEntry>("/conditions/library", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteConditionLibraryEntry(entryId: string) {
+  return apiRequest<ConditionLibraryEntry>(`/conditions/library/${entryId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function getConditions(projectId: string) {
   return apiRequest<ProjectCondition[]>(`/projects/${projectId}/conditions`);
 }
@@ -861,11 +1262,11 @@ export interface AdditionalLineItemPatchInput {
 }
 
 export async function getAdditionalLineItems(projectId: string) {
-  return apiRequest<AdditionalLineItem[]>(`/projects/${projectId}/additional-line-items`);
+  return apiRequest<AdditionalLineItem[]>(`/projects/${projectId}/ali`);
 }
 
 export async function createAdditionalLineItem(projectId: string, input: CreateAdditionalLineItemInput) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/additional-line-items`, {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/ali`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -875,7 +1276,7 @@ export async function createAdditionalLineItem(projectId: string, input: CreateA
 }
 
 export async function updateAdditionalLineItem(projectId: string, aliId: string, patch: AdditionalLineItemPatchInput) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/additional-line-items/${aliId}`, {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/ali/${aliId}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -885,56 +1286,188 @@ export async function updateAdditionalLineItem(projectId: string, aliId: string,
 }
 
 export async function deleteAdditionalLineItem(projectId: string, aliId: string) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/additional-line-items/${aliId}`, {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/ali/${aliId}`, {
     method: "DELETE",
   });
 }
 
 // ---------------------------------------------------------------------------
-// Labour Rates
+// Rate Schedules
 // ---------------------------------------------------------------------------
 
-export interface CreateLabourRateInput {
-  name?: string;
-  regularRate?: number;
-  overtimeRate?: number;
-  doubleRate?: number;
+export interface RateScheduleTier {
+  id: string;
+  scheduleId: string;
+  name: string;
+  multiplier: number;
+  sortOrder: number;
 }
 
-export interface LabourRatePatchInput {
-  name?: string;
-  regularRate?: number;
-  overtimeRate?: number;
-  doubleRate?: number;
+export interface RateScheduleItem {
+  id: string;
+  scheduleId: string;
+  catalogItemId: string | null;
+  code: string;
+  name: string;
+  unit: string;
+  rates: Record<string, number>;
+  costRates: Record<string, number>;
+  burden: number;
+  perDiem: number;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
 }
 
-export async function getLabourRates(projectId: string) {
-  return apiRequest<LabourRate[]>(`/projects/${projectId}/labour-rates`);
+export interface RateSchedule {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  category: string;
+  scope: "global" | "revision";
+  projectId: string | null;
+  revisionId: string | null;
+  sourceScheduleId: string | null;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  defaultMarkup: number;
+  autoCalculate: boolean;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  tiers: RateScheduleTier[];
+  items: RateScheduleItem[];
 }
 
-export async function createLabourRate(projectId: string, input: CreateLabourRateInput) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/labour-rates`, {
+// Org-level (master library)
+export async function listRateSchedules(): Promise<RateSchedule[]> {
+  return apiRequest<RateSchedule[]>("/api/rate-schedules");
+}
+
+export async function getRateSchedule(id: string): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${id}`);
+}
+
+export async function createRateSchedule(input: {
+  name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>("/api/rate-schedules", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
 
-export async function updateLabourRate(projectId: string, rateId: string, patch: LabourRatePatchInput) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/labour-rates/${rateId}`, {
+export async function updateRateSchedule(id: string, patch: {
+  name?: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${id}`, {
     method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
 }
 
-export async function deleteLabourRate(projectId: string, rateId: string) {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/labour-rates/${rateId}`, {
-    method: "DELETE",
+export async function deleteRateSchedule(id: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/rate-schedules/${id}`, { method: "DELETE" });
+}
+
+export async function addRateScheduleTier(scheduleId: string, input: {
+  name: string; multiplier?: number; sortOrder?: number;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/tiers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateRateScheduleTier(scheduleId: string, tierId: string, patch: {
+  name?: string; multiplier?: number; sortOrder?: number;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/tiers/${tierId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteRateScheduleTier(scheduleId: string, tierId: string): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/tiers/${tierId}`, { method: "DELETE" });
+}
+
+export async function addRateScheduleItem(scheduleId: string, input: {
+  name: string; code?: string; unit?: string; rates?: Record<string, number>; costRates?: Record<string, number>;
+  burden?: number; perDiem?: number; catalogItemId?: string; sortOrder?: number;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateRateScheduleItem(scheduleId: string, itemId: string, patch: {
+  name?: string; code?: string; unit?: string; rates?: Record<string, number>; costRates?: Record<string, number>;
+  burden?: number; perDiem?: number; sortOrder?: number;
+}): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteRateScheduleItem(scheduleId: string, itemId: string): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items/${itemId}`, { method: "DELETE" });
+}
+
+export async function autoCalculateRateSchedule(id: string): Promise<RateSchedule> {
+  return apiRequest<RateSchedule>(`/api/rate-schedules/${id}/auto-calculate`, {
+    method: "POST",
+  });
+}
+
+// Project-level (revision snapshots)
+export async function listProjectRateSchedules(projectId: string): Promise<RateSchedule[]> {
+  return apiRequest<RateSchedule[]>(`/projects/${projectId}/rate-schedules`);
+}
+
+export async function importRateSchedule(projectId: string, scheduleId: string): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scheduleId }),
+  });
+}
+
+export async function updateProjectRateSchedule(projectId: string, id: string, patch: {
+  name?: string; description?: string; defaultMarkup?: number;
+}): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteProjectRateSchedule(projectId: string, id: string): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}`, { method: "DELETE" });
+}
+
+export async function updateProjectRateScheduleItem(projectId: string, scheduleId: string, itemId: string, patch: {
+  rates?: Record<string, number>; costRates?: Record<string, number>; burden?: number; perDiem?: number;
+}): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${scheduleId}/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function autoCalculateProjectRateSchedule(projectId: string, id: string): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}/auto-calculate`, {
+    method: "POST",
   });
 }
 
@@ -1031,6 +1564,7 @@ export interface PackageIngestInput {
   clientName?: string;
   location?: string;
   dueDate?: string;
+  scope?: string;
   notes?: string;
 }
 
@@ -1040,6 +1574,17 @@ export interface PackageIngestInput {
 
 export function getQuotePdfUrl(projectId: string, templateType: string): string {
   return resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
+}
+
+export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "main"): Promise<string> {
+  const url = resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
+  const token = getAuthToken();
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
 // ---------------------------------------------------------------------------
@@ -1153,16 +1698,23 @@ export async function submitPackageIngest(input: PackageIngestInput) {
   if (input.clientName) formData.append("clientName", input.clientName);
   if (input.location) formData.append("location", input.location);
   if (input.dueDate) formData.append("dueDate", input.dueDate);
+  if (input.scope) formData.append("scope", input.scope);
   if (input.notes) formData.append("notes", input.notes);
 
   const path = input.projectId ? `/projects/${input.projectId}/packages/upload` : "/ingestion/package";
 
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const response = await fetch(resolveApiUrl(path), {
     method: "POST",
     body: formData,
-    headers: {
-      Accept: "application/json",
-    },
+    headers,
     cache: "no-store",
   });
 
@@ -1321,6 +1873,65 @@ export async function searchCatalogItems(query: string, catalogId?: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Catalog Library (browse + adopt templates)
+// ---------------------------------------------------------------------------
+
+export async function listCatalogLibrary() {
+  return apiRequest<CatalogSummary[]>("/catalogs/library");
+}
+
+export async function getCatalogLibraryItem(templateId: string, opts?: { limit?: number; offset?: number; filter?: string }) {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.filter) params.set("filter", opts.filter);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<CatalogSummary & { items: CatalogItem[]; total: number }>(`/catalogs/library/${templateId}${qs}`);
+}
+
+export async function adoptCatalogTemplate(templateId: string) {
+  return apiRequest<CatalogSummary>(`/catalogs/library/${templateId}/adopt`, {
+    method: "POST",
+  });
+}
+
+// Admin catalog template management
+export async function adminListCatalogTemplates() {
+  return apiRequest<CatalogSummary[]>("/api/admin/catalogs");
+}
+
+export async function adminGetCatalogTemplate(id: string, opts?: { limit?: number; offset?: number; filter?: string }) {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.filter) params.set("filter", opts.filter);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return apiRequest<CatalogSummary & { items: CatalogItem[]; total: number }>(`/api/admin/catalogs/${id}${qs}`);
+}
+
+export async function adminCreateCatalogTemplate(input: { name: string; description?: string; kind?: string; source?: string; sourceDescription?: string }) {
+  return apiRequest<CatalogSummary>("/api/admin/catalogs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function adminUpdateCatalogTemplate(id: string, patch: { name?: string; description?: string; kind?: string; sourceDescription?: string }) {
+  return apiRequest<CatalogSummary>(`/api/admin/catalogs/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function adminDeleteCatalogTemplate(id: string) {
+  return apiRequest<{ ok: boolean }>(`/api/admin/catalogs/${id}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
 // File Node CRUD
 // ---------------------------------------------------------------------------
 
@@ -1329,8 +1940,9 @@ export async function listFileNodes(projectId: string, parentId?: string) {
   return apiRequest<FileNode[]>(`/projects/${projectId}/files${params}`);
 }
 
-export async function getFileTree(projectId: string) {
-  return apiRequest<FileNode[]>(`/projects/${projectId}/files/tree`);
+export async function getFileTree(projectId: string, scope?: string) {
+  const qs = scope ? `?scope=${scope}` : "";
+  return apiRequest<FileNode[]>(`/projects/${projectId}/files/tree${qs}`);
 }
 
 export async function createFileNode(
@@ -1360,6 +1972,49 @@ export async function deleteFileNode(projectId: string, nodeId: string) {
   return apiRequest<{ deleted: boolean }>(`/projects/${projectId}/files/${nodeId}`, {
     method: "DELETE",
   });
+}
+
+export async function uploadFile(
+  projectId: string,
+  file: File,
+  parentId?: string | null
+): Promise<FileNode> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (parentId) formData.append("parentId", parentId);
+
+  const response = await fetch(resolveApiUrl(`/projects/${projectId}/files/upload`), {
+    method: "POST",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+      ...(typeof window !== "undefined" && getAuthToken()
+        ? { Authorization: `Bearer ${getAuthToken()}` }
+        : {}),
+    },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Upload failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export function getFileDownloadUrl(projectId: string, nodeId: string, inline = false): string {
+  const token = getAuthToken();
+  const url = resolveApiUrl(`/projects/${projectId}/files/${nodeId}/download${inline ? "?inline=1" : ""}`);
+  if (!token) return url;
+  return url + (inline ? "&" : "?") + `token=${token}`;
+}
+
+export function getDocumentDownloadUrl(projectId: string, docId: string, inline = false): string {
+  const token = getAuthToken();
+  const url = resolveApiUrl(`/projects/${projectId}/documents/${docId}/download${inline ? "?inline=1" : ""}`);
+  if (!token) return url;
+  return url + (inline ? "&" : "?") + `token=${token}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1443,19 +2098,85 @@ export async function listPluginExecutions(projectId: string) {
   return apiRequest<PluginExecutionRecord[]>(`/projects/${projectId}/plugin-executions`);
 }
 
+export interface PluginFetchRequest {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  timeout?: number;
+}
+
+export interface PluginFetchResponse {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+export async function pluginFetch(pluginId: string, request: PluginFetchRequest) {
+  return apiRequest<PluginFetchResponse>(`/plugins/${pluginId}/fetch`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
 
+export interface BrandProfile {
+  companyName: string;
+  tagline: string;
+  industry: string;
+  description: string;
+  services: string[];
+  targetMarkets: string[];
+  brandVoice: string;
+  colors: { primary: string; secondary: string; accent: string };
+  logoUrl: string;
+  socialLinks: Record<string, string>;
+  websiteUrl: string;
+  lastCapturedAt: string | null;
+}
+
 export interface AppSettingsRecord {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
-  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string };
+  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string };
+  brand: BrandProfile;
 }
 
 export async function getSettings() {
   return apiRequest<AppSettingsRecord>("/settings");
+}
+
+export async function testEmailConnection() {
+  return apiRequest<{ success: boolean; message: string }>("/settings/test-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function testProviderKey(provider: string, apiKey: string, baseUrl?: string) {
+  return apiRequest<{ success: boolean; message: string }>("/settings/integrations/test-key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, apiKey, baseUrl }),
+  });
+}
+
+export async function fetchProviderModels(provider: string, apiKey: string, baseUrl?: string) {
+  return apiRequest<{ models: { id: string; name: string }[] }>("/settings/integrations/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, apiKey, baseUrl }),
+  });
+}
+
+export async function searchTools(query: string) {
+  const params = new URLSearchParams({ search: query });
+  return apiRequest<Array<{ id: string; name: string; description: string; pluginId: string }>>(`/api/tools?${params.toString()}`);
 }
 
 export async function updateSettings(patch: Partial<AppSettingsRecord>) {
@@ -1463,6 +2184,26 @@ export async function updateSettings(patch: Partial<AppSettingsRecord>) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
+  });
+}
+
+export async function getBrand() {
+  return apiRequest<BrandProfile>("/settings/brand");
+}
+
+export async function updateBrand(patch: Partial<BrandProfile>) {
+  return apiRequest<BrandProfile>("/settings/brand", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function captureBrand(websiteUrl: string) {
+  return apiRequest<BrandProfile>("/settings/brand/capture", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ websiteUrl }),
   });
 }
 
@@ -1476,18 +2217,71 @@ export interface AuthUser {
   name: string;
   role: "admin" | "estimator" | "viewer";
   active: boolean;
-  lastLoginAt: string | null;
-  createdAt: string;
-  updatedAt: string;
+  organizationId?: string;
+  lastLoginAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface OrgInfo {
+  id: string;
+  name: string;
+  slug: string;
 }
 
 export interface LoginResponse {
   token: string;
   user: AuthUser;
+  organization: OrgInfo | null;
+  isSuperAdmin?: boolean;
 }
 
-export async function login(email: string, password?: string): Promise<LoginResponse> {
-  return apiRequest<LoginResponse>("/auth/login", {
+export interface MeResponse {
+  user: AuthUser;
+  organization: OrgInfo | null;
+  isSuperAdmin: boolean;
+  impersonating: boolean;
+}
+
+export interface SignupRequest {
+  orgName: string;
+  orgSlug: string;
+  email: string;
+  name: string;
+  password: string;
+}
+
+export interface SignupResponse {
+  token: string;
+  user: AuthUser;
+  organization: OrgInfo;
+}
+
+export interface SetupStatusResponse {
+  initialized: boolean;
+  hasOrganizations: boolean;
+  superAdminCount: number;
+  organizationCount: number;
+}
+
+export async function login(email: string, password: string, orgSlug?: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, orgSlug }),
+  });
+}
+
+export async function signup(data: SignupRequest): Promise<SignupResponse> {
+  return apiRequest<SignupResponse>("/api/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function superLogin(email: string, password: string): Promise<{ token: string; superAdmin: { id: string; email: string; name: string } }> {
+  return apiRequest("/api/auth/super-login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -1495,19 +2289,161 @@ export async function login(email: string, password?: string): Promise<LoginResp
 }
 
 export async function logout(): Promise<{ ok: boolean }> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") ?? "" : "";
-  return apiRequest<{ ok: boolean }>("/auth/logout", {
+  return apiRequest<{ ok: boolean }>("/api/auth/logout", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ token }),
+    headers: { "Content-Type": "application/json" },
   });
 }
 
-export async function getCurrentUser(): Promise<AuthUser> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") ?? "" : "";
-  return apiRequest<AuthUser>("/auth/me", {
-    headers: { Authorization: `Bearer ${token}` },
+export async function getCurrentUser(): Promise<MeResponse> {
+  return apiRequest<MeResponse>("/api/auth/me");
+}
+
+export async function getSetupStatus(): Promise<SetupStatusResponse> {
+  return apiRequest<SetupStatusResponse>("/api/setup/status");
+}
+
+export async function initSetup(data: {
+  email: string;
+  name: string;
+  password: string;
+  orgName?: string;
+  orgSlug?: string;
+}): Promise<{ token: string; superAdmin: { id: string; email: string; name: string }; organization: OrgInfo | null }> {
+  return apiRequest("/api/setup/init", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
   });
+}
+
+export async function seedSampleData(organizationId: string): Promise<{ ok: boolean; message: string }> {
+  return apiRequest("/api/setup/seed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+export async function seedEssentials(organizationId: string): Promise<{ ok: boolean }> {
+  return apiRequest("/api/setup/seed-essentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+// ── Admin API ─────────────────────────────────────────────────────────
+
+export interface OrgLimits {
+  maxUsers: number;
+  maxProjects: number;
+  maxStorage: number;
+  maxKnowledgeBooks: number;
+}
+
+export interface AdminOrg {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+  updatedAt: string;
+  userCount: number;
+  projectCount: number;
+  knowledgeBookCount: number;
+  limits: OrgLimits;
+}
+
+export async function adminListOrganizations(): Promise<AdminOrg[]> {
+  return apiRequest<AdminOrg[]>("/api/admin/organizations");
+}
+
+export async function adminCreateOrganization(data: {
+  name: string;
+  slug?: string;
+  adminEmail?: string;
+  adminName?: string;
+  adminPassword?: string;
+}): Promise<{ organization: OrgInfo; adminUser: { id: string; email: string; name: string } | null }> {
+  return apiRequest("/api/admin/organizations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function adminDeleteOrganization(orgId: string): Promise<{ ok: boolean }> {
+  return apiRequest(`/api/admin/organizations/${orgId}`, { method: "DELETE" });
+}
+
+export async function adminListOrgUsers(orgId: string): Promise<AuthUser[]> {
+  return apiRequest<AuthUser[]>(`/api/admin/organizations/${orgId}/users`);
+}
+
+export async function adminImpersonate(organizationId: string): Promise<{ token: string; organization: OrgInfo }> {
+  return apiRequest("/api/admin/impersonate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+export async function adminStopImpersonation(): Promise<{ ok: boolean }> {
+  return apiRequest("/api/admin/stop-impersonation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function adminUpdateOrgLimits(orgId: string, limits: Partial<OrgLimits>): Promise<OrgLimits> {
+  return apiRequest(`/api/admin/organizations/${orgId}/limits`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(limits),
+  });
+}
+
+export async function adminCreateOrgUser(orgId: string, data: {
+  email: string;
+  name: string;
+  role?: string;
+  password?: string;
+}): Promise<AuthUser> {
+  return apiRequest(`/api/admin/organizations/${orgId}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function adminUpdateUser(userId: string, patch: Partial<{
+  name: string;
+  email: string;
+  role: string;
+  active: boolean;
+  password: string;
+}>): Promise<AuthUser> {
+  return apiRequest(`/api/admin/users/${userId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function adminDeleteUser(userId: string): Promise<{ ok: boolean }> {
+  return apiRequest(`/api/admin/users/${userId}`, { method: "DELETE" });
+}
+
+export async function adminMoveUser(userId: string, organizationId: string): Promise<AuthUser> {
+  return apiRequest(`/api/admin/users/${userId}/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+export async function adminGetMyMemberships(): Promise<{ organizationIds: string[] }> {
+  return apiRequest("/api/admin/my-memberships");
 }
 
 export async function listUsers(): Promise<AuthUser[]> {
@@ -1537,6 +2473,38 @@ export async function deleteUser(userId: string): Promise<AuthUser> {
 }
 
 // ---------------------------------------------------------------------------
+// Profile & Org Switching
+// ---------------------------------------------------------------------------
+
+export async function updateProfile(data: { name?: string; currentPassword?: string; newPassword?: string }) {
+  return apiRequest<{ id: string; email: string; name: string }>("/api/auth/profile", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export interface UserOrganization {
+  organizationId: string;
+  name: string;
+  slug: string;
+  role: string;
+  current: boolean;
+}
+
+export async function listMyOrganizations(): Promise<UserOrganization[]> {
+  return apiRequest<UserOrganization[]>("/api/auth/organizations");
+}
+
+export async function switchOrganization(organizationId: string): Promise<LoginResponse> {
+  return apiRequest<LoginResponse>("/api/auth/switch-org", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ organizationId }),
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Knowledge Books
 // ---------------------------------------------------------------------------
 
@@ -1552,6 +2520,7 @@ export interface KnowledgeBookRecord {
   status: "uploading" | "processing" | "indexed" | "failed";
   sourceFileName: string;
   sourceFileSize: number;
+  storagePath: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -1589,6 +2558,36 @@ export async function createKnowledgeBook(input: {
   });
 }
 
+export async function ingestKnowledgeFile(input: {
+  file: File;
+  title: string;
+  category: string;
+  scope?: string;
+  projectId?: string;
+}): Promise<KnowledgeBookRecord> {
+  const form = new FormData();
+  form.append("file", input.file);
+  form.append("title", input.title);
+  form.append("category", input.category);
+  if (input.scope) form.append("scope", input.scope);
+  if (input.projectId) form.append("projectId", input.projectId);
+
+  const token = getAuthToken();
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(resolveApiUrl("/knowledge/ingest-file"), {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ message: response.statusText }));
+    throw new Error(err.message ?? "Upload failed");
+  }
+  return response.json();
+}
+
 export async function updateKnowledgeBook(bookId: string, patch: Partial<KnowledgeBookRecord>) {
   return apiRequest<KnowledgeBookRecord>(`/knowledge/books/${bookId}`, {
     method: "PATCH",
@@ -1601,6 +2600,24 @@ export async function deleteKnowledgeBook(bookId: string) {
   return apiRequest<KnowledgeBookRecord>(`/knowledge/books/${bookId}`, {
     method: "DELETE",
   });
+}
+
+export function getBookFileUrl(bookId: string) {
+  const token = getAuthToken();
+  const url = resolveApiUrl(`/knowledge/books/${bookId}/file?inline=1`);
+  return token ? `${url}&token=${token}` : url;
+}
+
+export function getBookThumbnailUrl(bookId: string) {
+  const token = getAuthToken();
+  const base = resolveApiUrl(`/knowledge/books/${bookId}/thumbnail`);
+  return token ? `${base}?token=${token}` : base;
+}
+
+export async function searchBookChunks(bookId: string, query: string, limit = 20) {
+  return apiRequest<{ hits: Array<{ id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number }>; query: string; count: number }>(
+    `/api/knowledge/search/enhanced?q=${encodeURIComponent(query)}&bookId=${bookId}&limit=${limit}`
+  );
 }
 
 export async function listKnowledgeChunks(bookId: string) {
@@ -1656,8 +2673,10 @@ export interface DatasetRecord {
   projectId: string | null;
   columns: DatasetColumnRecord[];
   rowCount: number;
-  source: "manual" | "import" | "ai_generated" | "plugin";
+  source: "manual" | "import" | "ai_generated" | "plugin" | "library";
   sourceDescription: string;
+  isTemplate?: boolean;
+  sourceTemplateId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -1759,4 +2778,139 @@ export async function queryDataset(datasetId: string, filters: Array<{ column: s
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ filters }),
   });
+}
+
+// ── Dataset Library (Templates) ──────────────────────────────────────────
+
+// Admin endpoints
+export async function adminListDatasetTemplates() {
+  return apiRequest<DatasetRecord[]>("/api/admin/datasets");
+}
+
+export async function adminGetDatasetTemplate(id: string, opts?: { limit?: number; offset?: number; filter?: string }) {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.offset) params.set("offset", String(opts.offset));
+  if (opts?.filter) params.set("filter", opts.filter);
+  const qs = params.toString();
+  return apiRequest<DatasetRecord & { rows: DatasetRowRecord[]; total: number }>(`/api/admin/datasets/${id}${qs ? `?${qs}` : ""}`);
+}
+
+export async function adminCreateDatasetTemplate(input: {
+  name: string;
+  description: string;
+  category: DatasetRecord["category"];
+  columns: DatasetColumnRecord[];
+  source?: DatasetRecord["source"];
+  sourceDescription?: string;
+}) {
+  return apiRequest<DatasetRecord>("/api/admin/datasets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function adminUpdateDatasetTemplate(id: string, patch: Partial<DatasetRecord>) {
+  return apiRequest<DatasetRecord>(`/api/admin/datasets/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function adminDeleteDatasetTemplate(id: string) {
+  return apiRequest<{ ok: boolean }>(`/api/admin/datasets/${id}`, { method: "DELETE" });
+}
+
+// Organization-facing library endpoints
+export async function listDatasetLibrary() {
+  return apiRequest<DatasetRecord[]>("/datasets/library");
+}
+
+export async function getDatasetLibraryItem(templateId: string) {
+  return apiRequest<DatasetRecord & { rows: DatasetRowRecord[]; total: number }>(`/datasets/library/${templateId}`);
+}
+
+export async function adoptDatasetTemplate(templateId: string) {
+  return apiRequest<DatasetRecord>(`/datasets/library/${templateId}/adopt`, { method: "POST" });
+}
+
+// ── Takeoff Annotations ──────────────────────────────────────────────────
+
+export async function listTakeoffAnnotations(projectId: string, documentId?: string, page?: number) {
+  const params = new URLSearchParams();
+  if (documentId) params.set("documentId", documentId);
+  if (page !== undefined) params.set("page", String(page));
+  const qs = params.toString();
+  return apiRequest<any[]>(`/api/takeoff/${projectId}/annotations${qs ? `?${qs}` : ""}`);
+}
+
+export async function createTakeoffAnnotation(projectId: string, data: Record<string, unknown>) {
+  return apiRequest<any>(`/api/takeoff/${projectId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function updateTakeoffAnnotation(projectId: string, annotationId: string, data: Record<string, unknown>) {
+  return apiRequest<any>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function deleteTakeoffAnnotation(projectId: string, annotationId: string) {
+  return apiRequest<void>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Intake Orchestration
+// ---------------------------------------------------------------------------
+
+export interface IntakeStartInput {
+  projectId: string;
+  scope?: string;
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  maxIterations?: number;
+}
+
+export interface IntakeStartResult {
+  sessionId: string;
+  projectId: string;
+  scope: string;
+  status: string;
+  documentCount: number;
+  message: string;
+}
+
+export interface IntakeStatusResult {
+  sessionId: string;
+  projectId: string;
+  scope: string;
+  status: "running" | "completed" | "failed";
+  toolCallCount: number;
+  messageCount: number;
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+  recentToolCalls: Array<{ toolId: string; success: boolean; duration_ms: number }>;
+}
+
+export async function startIntake(input: IntakeStartInput) {
+  return apiRequest<IntakeStartResult>("/api/intake/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getIntakeStatus(sessionId: string) {
+  return apiRequest<IntakeStatusResult>(`/api/intake/${sessionId}/status`);
 }

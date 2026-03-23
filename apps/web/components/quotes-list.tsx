@@ -71,6 +71,12 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
+  // Only include projects that have a quote
+  const projectsWithQuotes = useMemo(
+    () => projects.filter((p): p is ProjectListItem & { quote: NonNullable<ProjectListItem["quote"]> } => p.quote != null),
+    [projects],
+  );
+
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -81,7 +87,7 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
   };
 
   const filtered = useMemo(() => {
-    let list = [...projects];
+    let list = [...projectsWithQuotes];
 
     if (statusFilter !== "All") {
       list = list.filter(
@@ -116,12 +122,12 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
           cmp = a.quote.status.localeCompare(b.quote.status);
           break;
         case "subtotal":
-          cmp = a.latestRevision?.subtotal - b.latestRevision?.subtotal;
+          cmp = (a.latestRevision?.subtotal ?? 0) - (b.latestRevision?.subtotal ?? 0);
           break;
         case "margin":
           cmp =
-            a.latestRevision?.estimatedMargin -
-            b.latestRevision?.estimatedMargin;
+            (a.latestRevision?.estimatedMargin ?? 0) -
+            (b.latestRevision?.estimatedMargin ?? 0);
           break;
         case "updated":
           cmp =
@@ -133,18 +139,18 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
     });
 
     return list;
-  }, [projects, search, statusFilter, sortKey, sortDir]);
+  }, [projectsWithQuotes, search, statusFilter, sortKey, sortDir]);
 
-  const totalValue = projects.reduce(
-    (sum, p) => sum + p.latestRevision?.subtotal,
+  const totalValue = projectsWithQuotes.reduce(
+    (sum, p) => sum + (p.latestRevision?.subtotal ?? 0),
     0
   );
   const avgMargin =
-    projects.length > 0
-      ? projects.reduce(
-          (sum, p) => sum + p.latestRevision?.estimatedMargin,
+    projectsWithQuotes.length > 0
+      ? projectsWithQuotes.reduce(
+          (sum, p) => sum + (p.latestRevision?.estimatedMargin ?? 0),
           0
-        ) / projects.length
+        ) / projectsWithQuotes.length
       : 0;
 
   const headers: { key: SortKey; label: string; className?: string }[] = [
@@ -184,7 +190,7 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
             <div className="px-5 py-4">
               <p className="text-xs text-fg/50">Total Quotes</p>
               <p className="mt-1 text-xl font-semibold text-fg">
-                {projects.length}
+                {projectsWithQuotes.length}
               </p>
             </div>
           </Card>
@@ -315,11 +321,11 @@ export function QuotesList({ projects }: { projects: ProjectListItem[] }) {
                       </Badge>
                     </td>
                     <td className="px-5 py-3 text-right text-xs font-medium text-fg/80">
-                      {formatMoney(project.latestRevision?.subtotal)}
+                      {formatMoney(project.latestRevision?.subtotal ?? 0)}
                     </td>
                     <td className="px-5 py-3 text-right text-xs text-fg/60">
                       {formatPercent(
-                        project.latestRevision?.estimatedMargin
+                        project.latestRevision?.estimatedMargin ?? 0
                       )}
                     </td>
                     <td className="px-5 py-3 text-xs text-fg/50">

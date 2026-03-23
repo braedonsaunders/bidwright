@@ -18,6 +18,7 @@ export interface WorkspaceSnapshot {
   documentCount: number;
   citationCount: number;
   aiRunCount: number;
+  scheduleTaskCount: number;
 }
 
 export function buildSystemPrompt(snapshot: WorkspaceSnapshot, toolCategories: string[]): string {
@@ -40,6 +41,7 @@ export function buildSystemPrompt(snapshot: WorkspaceSnapshot, toolCategories: s
 - ${snapshot.phaseCount} phases, ${snapshot.modifierCount} modifiers
 - ${snapshot.documentCount} source documents, ${snapshot.citationCount} citations
 - ${snapshot.aiRunCount} AI runs
+- ${snapshot.scheduleTaskCount} schedule tasks
 
 ## Available Tool Categories
 ${toolCategories.map(c => `- **${c}**: Use \`system.listTools\` with category="${c}" to see available tools`).join("\n")}

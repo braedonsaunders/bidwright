@@ -21,11 +21,14 @@
     "seed": "tsx scripts/seed-db.ts"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["argon2", "msgpackr-extract"]
+    "onlyBuiltDependencies": [
+      "argon2",
+      "msgpackr-extract"
+    ]
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "typescript": "^5.9.2",
-    "tsx": "^4.20.5"
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Check,
@@ -24,7 +24,6 @@ import {
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,
-  searchCatalogItems,
 } from "@/lib/api";
 import {
   Badge,
@@ -68,8 +67,6 @@ const ITEM_UNITS = [
   "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG",
 ] as const;
 
-type EditingCell = { itemId: string; field: string } | null;
-
 const KIND_BADGE_TONE: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
   labor: "warning",
   equipment: "info",
@@ -85,6 +82,223 @@ function computeMargin(cost: number, price: number): number {
   return (price - cost) / price;
 }
 
+/* ─── Item Detail Drawer ─── */
+
+function CatalogItemDrawer({
+  item,
+  catalogId,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  item: CatalogItem;
+  catalogId: string;
+  onSave: (updated: CatalogItem) => void;
+  onDelete: (itemId: string) => void;
+  onClose: () => void;
+}) {
+  const [form, setForm] = useState({
+    code: item.code,
+    name: item.name,
+    unit: item.unit,
+    unitCost: item.unitCost,
+    unitPrice: item.unitPrice,
+    category: (item.metadata?.category as string) ?? "",
+  });
+
+  useEffect(() => {
+    setForm({
+      code: item.code,
+      name: item.name,
+      unit: item.unit,
+      unitCost: item.unitCost,
+      unitPrice: item.unitPrice,
+      category: (item.metadata?.category as string) ?? "",
+    });
+  }, [item]);
+
+  const margin = computeMargin(form.unitCost, form.unitPrice);
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    try {
+      const updated = await updateCatalogItem(catalogId, item.id, {
+        code: form.code,
+        name: form.name,
+        unit: form.unit,
+        unitCost: form.unitCost,
+        unitPrice: form.unitPrice,
+        category: form.category,
+      } as Partial<CatalogItem> & { category?: string });
+      onSave(updated);
+    } catch (err) {
+      console.error("Failed to update item:", err);
+    } finally {
+      setSaving(false);
+    }
+  }, [catalogId, item.id, form, onSave]);
+
+  return (
+    <motion.div
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 30, stiffness: 300 }}
+      className="fixed inset-y-0 right-0 z-40 w-[400px] bg-panel border-l border-line shadow-2xl flex flex-col"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
+        <div className="flex items-center gap-2 min-w-0">
+          {form.category && (
+            <Badge tone="default" className="shrink-0 text-[10px]">
+              {form.category}
+            </Badge>
+          )}
+          <span className="text-sm font-semibold truncate">
+            {form.name || "New Item"}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
+            onClick={() => onDelete(item.id)}
+            title="Delete item"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
+            onClick={onClose}
+            title="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+        <div>
+          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+            Item Code
+          </label>
+          <Input
+            className="mt-1"
+            value={form.code}
+            onChange={(e) => setForm({ ...form, code: e.target.value })}
+            placeholder="e.g. MAT-001"
+          />
+        </div>
+
+        <div>
+          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+            Name
+          </label>
+          <Input
+            className="mt-1"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="Item name"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+              Category
+            </label>
+            <Select
+              className="mt-1"
+              value={form.category}
+              onChange={(e) => setForm({ ...form, category: e.target.value })}
+            >
+              <option value="">None</option>
+              {ITEM_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+              Unit
+            </label>
+            <Select
+              className="mt-1"
+              value={form.unit}
+              onChange={(e) => setForm({ ...form, unit: e.target.value })}
+            >
+              {ITEM_UNITS.map((u) => (
+                <option key={u} value={u}>{u}</option>
+              ))}
+            </Select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+              Unit Cost
+            </label>
+            <Input
+              className="mt-1"
+              type="number"
+              step="0.01"
+              value={form.unitCost}
+              onChange={(e) =>
+                setForm({ ...form, unitCost: Number(e.target.value) || 0 })
+              }
+            />
+          </div>
+
+          <div>
+            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+              Unit Price
+            </label>
+            <Input
+              className="mt-1"
+              type="number"
+              step="0.01"
+              value={form.unitPrice}
+              onChange={(e) =>
+                setForm({ ...form, unitPrice: Number(e.target.value) || 0 })
+              }
+            />
+          </div>
+        </div>
+
+        {/* Calculated Margin */}
+        <div className="p-3 bg-panel2/30 rounded-lg">
+          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+            Margin
+          </label>
+          <div
+            className={cn(
+              "mt-1 text-lg font-semibold tabular-nums",
+              margin > 0 && "text-success",
+              margin < 0 && "text-danger",
+              margin === 0 && "text-fg/50"
+            )}
+          >
+            {formatPercent(margin)}
+          </div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-line px-5 py-3 flex items-center justify-end gap-2 bg-panel2/20">
+        <Button variant="secondary" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="accent" size="sm" onClick={handleSave} disabled={saving}>
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+    </motion.div>
+  );
+}
+
 /* ─── Component ─── */
 
 export function ItemsManager({
@@ -96,13 +310,18 @@ export function ItemsManager({
   const [selectedCatalogId, setSelectedCatalogId] = useState<string | null>(
     initialCatalogs[0]?.id ?? null
   );
+
+  // Sync when parent finishes fetching catalogs
+  useEffect(() => {
+    setCatalogs(initialCatalogs);
+    setSelectedCatalogId((prev) => prev ?? initialCatalogs[0]?.id ?? null);
+  }, [initialCatalogs]);
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
-  const [editingCell, setEditingCell] = useState<EditingCell>(null);
-  const [editValue, setEditValue] = useState("");
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [drawerItemId, setDrawerItemId] = useState<string | null>(null);
 
   // New catalog form
   const [showNewCatalog, setShowNewCatalog] = useState(false);
@@ -118,6 +337,7 @@ export function ItemsManager({
   const [editCatalogName, setEditCatalogName] = useState("");
 
   const selectedCatalog = catalogs.find((c) => c.id === selectedCatalogId);
+  const drawerItem = drawerItemId ? items.find((i) => i.id === drawerItemId) : null;
 
   // Load items when catalog changes
   useEffect(() => {
@@ -126,6 +346,7 @@ export function ItemsManager({
       return;
     }
     setLoadingItems(true);
+    setDrawerItemId(null);
     listCatalogItems(selectedCatalogId)
       .then((result) => setItems(result))
       .catch(() => setItems([]))
@@ -213,51 +434,11 @@ export function ItemsManager({
         category: "",
       });
       setItems((prev) => [...prev, created]);
+      setDrawerItemId(created.id);
     } catch (err) {
       console.error("Failed to create item:", err);
     }
   }, [selectedCatalogId]);
-
-  const startEdit = (itemId: string, field: string, currentValue: string | number) => {
-    setEditingCell({ itemId, field });
-    setEditValue(String(currentValue ?? ""));
-  };
-
-  const commitEdit = useCallback(async () => {
-    if (!editingCell || !selectedCatalogId) return;
-    const { itemId, field } = editingCell;
-    const numericFields = ["unitCost", "unitPrice"];
-    const value = numericFields.includes(field)
-      ? parseFloat(editValue) || 0
-      : editValue;
-
-    // Optimistic update
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id !== itemId) return item;
-        if (field === "category") {
-          return { ...item, metadata: { ...item.metadata, category: value as string } };
-        }
-        return { ...item, [field]: value };
-      })
-    );
-    setEditingCell(null);
-
-    // Persist
-    try {
-      const patch: Record<string, unknown> = {};
-      if (field === "category") {
-        patch.category = value;
-      } else {
-        patch[field] = value;
-      }
-      await updateCatalogItem(selectedCatalogId, itemId, patch as Partial<CatalogItem> & { category?: string });
-    } catch (err) {
-      console.error("Failed to update item:", err);
-    }
-  }, [editingCell, editValue, selectedCatalogId]);
-
-  const cancelEdit = () => setEditingCell(null);
 
   const handleDeleteItem = useCallback(async (itemId: string) => {
     if (!selectedCatalogId) return;
@@ -269,10 +450,11 @@ export function ItemsManager({
         next.delete(itemId);
         return next;
       });
+      if (drawerItemId === itemId) setDrawerItemId(null);
     } catch (err) {
       console.error("Failed to delete item:", err);
     }
-  }, [selectedCatalogId]);
+  }, [selectedCatalogId, drawerItemId]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedCatalogId || selectedItems.size === 0) return;
@@ -281,12 +463,18 @@ export function ItemsManager({
       await Promise.all(ids.map((id) => deleteCatalogItem(selectedCatalogId, id)));
       setItems((prev) => prev.filter((i) => !selectedItems.has(i.id)));
       setSelectedItems(new Set());
+      if (drawerItemId && ids.includes(drawerItemId)) setDrawerItemId(null);
     } catch (err) {
       console.error("Failed to delete items:", err);
     }
-  }, [selectedCatalogId, selectedItems]);
+  }, [selectedCatalogId, selectedItems, drawerItemId]);
 
-  const toggleSelectItem = (itemId: string) => {
+  const handleDrawerSave = useCallback((updated: CatalogItem) => {
+    setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+  }, []);
+
+  const toggleSelectItem = (e: React.MouseEvent, itemId: string) => {
+    e.stopPropagation();
     setSelectedItems((prev) => {
       const next = new Set(prev);
       if (next.has(itemId)) next.delete(itemId);
@@ -303,39 +491,14 @@ export function ItemsManager({
     }
   };
 
-  // Select handling for dropdowns
-  const handleSelectCommit = useCallback(async (itemId: string, field: string, value: string) => {
-    if (!selectedCatalogId) return;
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id !== itemId) return item;
-        if (field === "category") {
-          return { ...item, metadata: { ...item.metadata, category: value } };
-        }
-        return { ...item, [field]: value };
-      })
-    );
-    try {
-      const patch: Record<string, unknown> = {};
-      if (field === "category") {
-        patch.category = value;
-      } else {
-        patch[field] = value;
-      }
-      await updateCatalogItem(selectedCatalogId, itemId, patch as Partial<CatalogItem> & { category?: string });
-    } catch (err) {
-      console.error("Failed to update item:", err);
-    }
-  }, [selectedCatalogId]);
-
   const columns = [
-    { key: "code", label: "Code", className: "w-28", editable: true, type: "text" as const },
-    { key: "name", label: "Name", className: "min-w-[160px]", editable: true, type: "text" as const },
-    { key: "category", label: "Category", className: "w-32", editable: true, type: "select" as const },
-    { key: "unit", label: "Unit", className: "w-20", editable: true, type: "select" as const },
-    { key: "unitCost", label: "Unit Cost", className: "w-28 text-right", editable: true, type: "number" as const },
-    { key: "unitPrice", label: "Unit Price", className: "w-28 text-right", editable: true, type: "number" as const },
-    { key: "margin", label: "Margin", className: "w-24 text-right", editable: false, type: "text" as const },
+    { key: "code", label: "Code", className: "w-28" },
+    { key: "name", label: "Name", className: "min-w-[160px]" },
+    { key: "category", label: "Category", className: "w-32" },
+    { key: "unit", label: "Unit", className: "w-20" },
+    { key: "unitCost", label: "Unit Cost", className: "w-28 text-right" },
+    { key: "unitPrice", label: "Unit Price", className: "w-28 text-right" },
+    { key: "margin", label: "Margin", className: "w-24 text-right" },
   ];
 
   return (
@@ -551,6 +714,7 @@ export function ItemsManager({
               <Button
                 variant="accent"
                 size="sm"
+                className="whitespace-nowrap"
                 onClick={handleAddItem}
                 disabled={!selectedCatalogId}
               >
@@ -595,14 +759,13 @@ export function ItemsManager({
                           {col.label}
                         </th>
                       ))}
-                      <th className="w-12 px-3 py-3" />
                     </tr>
                   </thead>
                   <tbody>
                     {filteredItems.length === 0 && (
                       <tr>
                         <td
-                          colSpan={columns.length + 2}
+                          colSpan={columns.length + 1}
                           className="px-5 py-12 text-center text-sm text-fg/40"
                         >
                           <Package className="mx-auto mb-2 h-8 w-8 text-fg/20" />
@@ -617,6 +780,7 @@ export function ItemsManager({
                         item.unitCost,
                         item.unitPrice
                       );
+                      const isActive = drawerItemId === item.id;
 
                       return (
                         <motion.tr
@@ -628,23 +792,26 @@ export function ItemsManager({
                             delay: Math.min(i * 0.02, 0.3),
                             ease: "easeOut",
                           }}
-                          className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors group"
+                          onClick={() => setDrawerItemId(item.id)}
+                          className={cn(
+                            "border-b border-line last:border-0 transition-colors cursor-pointer",
+                            isActive
+                              ? "bg-accent/5"
+                              : "hover:bg-panel2/40"
+                          )}
                         >
                           {/* Checkbox */}
                           <td className="px-3 py-2.5">
                             <input
                               type="checkbox"
                               checked={selectedItems.has(item.id)}
-                              onChange={() => toggleSelectItem(item.id)}
+                              onChange={() => {}}
+                              onClick={(e) => toggleSelectItem(e, item.id)}
                               className="rounded border-line"
                             />
                           </td>
 
                           {columns.map((col) => {
-                            const isEditing =
-                              editingCell?.itemId === item.id &&
-                              editingCell?.field === col.key;
-
                             let rawValue: string | number;
                             if (col.key === "category") {
                               rawValue = category;
@@ -665,120 +832,34 @@ export function ItemsManager({
                               displayValue = String(rawValue ?? "");
                             }
 
-                            // Non-editable column (margin)
-                            if (!col.editable) {
-                              return (
-                                <td
-                                  key={col.key}
-                                  className={cn(
-                                    "px-4 py-2.5 text-xs",
-                                    col.className
-                                  )}
-                                >
-                                  <span
-                                    className={cn(
-                                      "text-fg/70",
-                                      col.key === "margin" &&
-                                        margin > 0 &&
-                                        "text-success",
-                                      col.key === "margin" &&
-                                        margin < 0 &&
-                                        "text-danger"
-                                    )}
-                                  >
-                                    {displayValue}
-                                  </span>
-                                </td>
-                              );
-                            }
-
-                            // Select-based edit (category, unit)
-                            if (col.type === "select") {
-                              const options =
-                                col.key === "category"
-                                  ? ITEM_CATEGORIES
-                                  : ITEM_UNITS;
-                              return (
-                                <td
-                                  key={col.key}
-                                  className={cn(
-                                    "px-4 py-2.5 text-xs",
-                                    col.className
-                                  )}
-                                >
-                                  <Select
-                                    className="h-7 text-xs w-full bg-transparent border-0 p-0"
-                                    value={String(rawValue)}
-                                    onChange={(e) =>
-                                      handleSelectCommit(
-                                        item.id,
-                                        col.key,
-                                        e.target.value
-                                      )
-                                    }
-                                  >
-                                    <option value="">--</option>
-                                    {options.map((o) => (
-                                      <option key={o} value={o}>
-                                        {o}
-                                      </option>
-                                    ))}
-                                  </Select>
-                                </td>
-                              );
-                            }
-
-                            // Text / number inline edit
                             return (
                               <td
                                 key={col.key}
                                 className={cn(
                                   "px-4 py-2.5 text-xs",
-                                  col.className,
-                                  !isEditing && "cursor-pointer"
+                                  col.className
                                 )}
-                                onClick={() => {
-                                  if (!isEditing)
-                                    startEdit(item.id, col.key, rawValue);
-                                }}
                               >
-                                {isEditing ? (
-                                  <Input
-                                    className="h-7 text-xs"
-                                    type={col.type === "number" ? "number" : "text"}
-                                    value={editValue}
-                                    onChange={(e) =>
-                                      setEditValue(e.target.value)
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") commitEdit();
-                                      if (e.key === "Escape") cancelEdit();
-                                    }}
-                                    onBlur={commitEdit}
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <span className="text-fg/70">
-                                    {displayValue || (
-                                      <span className="text-fg/25 italic">
-                                        empty
-                                      </span>
-                                    )}
-                                  </span>
-                                )}
+                                <span
+                                  className={cn(
+                                    "text-fg/70",
+                                    col.key === "margin" &&
+                                      margin > 0 &&
+                                      "text-success",
+                                    col.key === "margin" &&
+                                      margin < 0 &&
+                                      "text-danger"
+                                  )}
+                                >
+                                  {displayValue || (
+                                    <span className="text-fg/25 italic">
+                                      —
+                                    </span>
+                                  )}
+                                </span>
                               </td>
                             );
                           })}
-
-                          {/* Delete button */}
-                          <td className="px-3 py-2.5">
-                            <button
-                              onClick={() => handleDeleteItem(item.id)}
-                              className="opacity-0 group-hover:opacity-100 text-fg/30 hover:text-danger transition-all"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </td>
                         </motion.tr>
                       );
                     })}
@@ -789,6 +870,20 @@ export function ItemsManager({
           </Card>
         </FadeIn>
       </div>
+
+      {/* ─── Item Detail Drawer ─── */}
+      <AnimatePresence>
+        {drawerItem && selectedCatalogId && (
+          <CatalogItemDrawer
+            key={drawerItem.id}
+            item={drawerItem}
+            catalogId={selectedCatalogId}
+            onSave={handleDrawerSave}
+            onDelete={handleDeleteItem}
+            onClose={() => setDrawerItemId(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

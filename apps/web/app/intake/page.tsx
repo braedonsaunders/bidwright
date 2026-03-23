@@ -1,15 +1,21 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ProjectIntake } from "@/components/project-intake";
-import { getCatalogs, getProjects } from "@/lib/api";
+import { getProjects } from "@/lib/api";
+import type { ProjectListItem } from "@/lib/api";
 
-export default async function IntakePage() {
-  const [projectsResult, catalogsResult] = await Promise.allSettled([getProjects(), getCatalogs()]);
-  const projects = projectsResult.status === "fulfilled" ? projectsResult.value : [];
-  const catalogs = catalogsResult.status === "fulfilled" ? catalogsResult.value : [];
+export default function IntakePage() {
+  const [projects, setProjects] = useState<ProjectListItem[]>([]);
+
+  useEffect(() => {
+    getProjects().then(setProjects).catch(() => {});
+  }, []);
 
   return (
     <AppShell projects={projects}>
-      <ProjectIntake projects={projects} catalogs={catalogs} />
+      <ProjectIntake projects={projects} />
     </AppShell>
   );
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { useSearchParams } from "next/navigation";
 import {
-  BookMarked,
   ChevronDown,
   ClipboardList,
   Copy,
@@ -14,6 +15,7 @@ import {
   Save,
   Settings2,
   Sparkles,
+  Puzzle,
   Trash2,
 } from "lucide-react";
 import type {
@@ -68,7 +70,6 @@ import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
 import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";
-import { TotalsBar } from "@/components/workspace/totals-bar";
 import { RevisionCompare } from "@/components/workspace/revision-compare";
 import {
   ConfirmModal,
@@ -87,6 +88,7 @@ import {
   type AIEquipmentResult,
   type PDFDownloadOptions,
 } from "@/components/workspace/modals";
+import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import {
   Badge,
   Button,
@@ -107,7 +109,7 @@ import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
-type WorkspaceTab = "setup" | "estimate" | "summarize" | "documentation" | "knowledge" | "activity";
+type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "activity";
 type EstimateSubTab = "worksheets" | "phases" | "takeoff" | "schedule";
 
 type ItemDraft = {
@@ -169,8 +171,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
   { id: "setup", label: "Setup", icon: Settings2 },
   { id: "estimate", label: "Estimate", icon: Layers3 },
   { id: "summarize", label: "Summarize", icon: ClipboardList },
-  { id: "documentation", label: "Documentation", icon: FileText },
-  { id: "knowledge", label: "Knowledge", icon: BookMarked },
+  { id: "documents", label: "Documents", icon: FileText },
   { id: "activity", label: "Activity", icon: MessageSquareText },
 ];
 
@@ -202,6 +203,82 @@ function statusTone(s: string | undefined | null) {
   }
 }
 
+/* ─── Status Dropdown ─── */
+function StatusDropdown({ value, onChange, options }: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const tone = statusTone(value);
+  const toneClasses = {
+    success: "border-success/30 bg-success/10 text-success hover:bg-success/15",
+    warning: "border-warning/30 bg-warning/10 text-warning hover:bg-warning/15",
+    danger: "border-danger/30 bg-danger/10 text-danger hover:bg-danger/15",
+    default: "border-line bg-panel2/50 text-fg/60 hover:bg-panel2/70",
+    info: "border-accent/30 bg-accent/10 text-accent hover:bg-accent/15",
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        onClick={() => setOpen(!open)}
+        className={cn(
+          "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors",
+          toneClasses[tone]
+        )}
+      >
+        {options.find((o) => o.value === value)?.label ?? value}
+        <ChevronDown className={cn("h-2.5 w-2.5 transition-transform", open && "rotate-180")} />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: -4 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: -4 }}
+            transition={{ duration: 0.12 }}
+            className="absolute left-0 top-full z-50 mt-1 min-w-[120px] rounded-lg border border-line bg-panel shadow-xl py-1"
+          >
+            {options.map((o) => {
+              const t = statusTone(o.value);
+              return (
+                <button
+                  key={o.value}
+                  onClick={() => { onChange(o.value); setOpen(false); }}
+                  className={cn(
+                    "w-full text-left px-3 py-1.5 text-[11px] transition-colors flex items-center gap-2",
+                    value === o.value ? "bg-accent/10 text-accent font-medium" : "text-fg/70 hover:bg-panel2/60"
+                  )}
+                >
+                  <span className={cn(
+                    "h-1.5 w-1.5 rounded-full shrink-0",
+                    t === "success" && "bg-success",
+                    t === "warning" && "bg-warning",
+                    t === "danger" && "bg-danger",
+                    t === "default" && "bg-fg/30",
+                  )} />
+                  {o.label}
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 function findWs(workspace: ProjectWorkspaceData, id: string) {
   return (workspace.worksheets ?? []).find((w) => w.id === id) ?? (workspace.worksheets ?? [])[0] ?? null;
 }
@@ -229,6 +306,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [autoIntake, setAutoIntake] = useState(false);
+  const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
+  const searchParams = useSearchParams();
+  const intakeInitRef = useRef(false);
   const [isPending, startTransition] = useTransition();
 
   const workspace = data.workspace;
@@ -243,6 +324,22 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, [workspace, selectedWsId]);
 
   useEffect(() => { setWsNameDraft(selectedWs?.name ?? ""); }, [selectedWs?.id, selectedWs?.name]);
+
+  // Auto-open estimate tab + agent chat when redirected from intake
+  useEffect(() => {
+    if (intakeInitRef.current) return;
+    const urlTab = searchParams.get("tab");
+    const urlIntake = searchParams.get("intake");
+    if (urlTab === "estimate") {
+      setTab("estimate");
+      setEstimateSubTab("worksheets");
+    }
+    if (urlIntake === "true") {
+      setChatOpen(true);
+      setAutoIntake(true);
+      intakeInitRef.current = true;
+    }
+  }, [searchParams]);
 
   const visibleRows = useMemo(() => {
     const rows = selectedWs ? selectedWs.items : (workspace.worksheets ?? []).flatMap((w) => w.items);
@@ -391,48 +488,52 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col flex-1 min-h-0 gap-4">
       {/* ─── Header ─── */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+      <div className="flex items-center gap-4 shrink-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h1 className="text-lg font-semibold truncate">{workspace.project.name}</h1>
-            <Select
-              className="w-32 h-7 text-[11px]"
+            <h1 className="text-sm font-semibold truncate">{workspace.project.name}</h1>
+            <StatusDropdown
               value={workspace.currentRevision.status ?? "Open"}
-              onChange={(e) => handleStatusChange(e.target.value)}
-            >
-              {QUOTE_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </Select>
+              onChange={handleStatusChange}
+              options={QUOTE_STATUSES}
+            />
             <Badge tone={statusTone(workspace.currentRevision.status)}>{workspace.currentRevision.type ?? "Firm"}</Badge>
           </div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-fg/40 flex-wrap">
+          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg/40 truncate">
             <span>{workspace.project.clientName}</span>
             <span>·</span>
             <span>{workspace.quote.quoteNumber}</span>
             <span>·</span>
             <span>Rev {workspace.currentRevision.revisionNumber}</span>
             <span>·</span>
-            <span>{workspace.project.location}</span>
+            <span className="truncate">{workspace.project.location}</span>
             {workspace.currentRevision.dateDue && (
-              <><span>·</span><span>Due {workspace.currentRevision.dateDue}</span></>
+              <><span>·</span><span className="whitespace-nowrap">Due {workspace.currentRevision.dateDue}</span></>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex items-center gap-4 text-right">
-            <div>
-              <div className="text-lg font-semibold tabular-nums">{formatMoney(workspace.currentRevision.subtotal)}</div>
-              <div className="text-[11px] text-fg/35">{formatPercent(workspace.currentRevision.estimatedMargin, 1)} margin</div>
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="hidden lg:flex items-center gap-3 text-right">
+            <div className="flex items-center gap-3 text-[11px] text-fg/50">
+              <div className="whitespace-nowrap"><span className="text-fg/35">Cost</span> <span className="font-mono">{formatMoney(workspace.currentRevision.cost)}</span></div>
+              <div className="whitespace-nowrap"><span className="text-fg/35">Profit</span> <span className={cn("font-mono", (workspace.currentRevision.estimatedProfit ?? 0) >= 0 ? "text-success" : "text-danger")}>{formatMoney(workspace.currentRevision.estimatedProfit)}</span></div>
+              <div className="whitespace-nowrap"><span className="text-fg/35">Hrs</span> <span className="font-mono">{(workspace.currentRevision.totalHours ?? 0).toLocaleString()}</span></div>
             </div>
-            <div className="w-20">
-              <Progress value={Math.max(0, Math.min(100, Math.round((workspace.currentRevision.estimatedMargin ?? 0) * 100)))} />
+            <div className="border-l border-line pl-3">
+              <div className="text-base font-semibold tabular-nums whitespace-nowrap">{formatMoney(workspace.currentRevision.subtotal)}</div>
+              <div className="text-[10px] text-fg/35">{formatPercent(workspace.currentRevision.estimatedMargin, 1)} margin</div>
             </div>
           </div>
 
           <Button size="sm" variant="secondary" onClick={() => handleAction("compare")}>
-            <GitCompareArrows className="h-3 w-3" /> Compare
+            <GitCompareArrows className="h-3 w-3" />
+          </Button>
+
+          <Button size="sm" variant="secondary" onClick={() => setPluginToolsOpen(true)}>
+            <Puzzle className="h-3 w-3" />
           </Button>
 
           <Button size="sm" variant="accent" onClick={() => setChatOpen(true)}>
@@ -450,6 +551,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-line bg-panel shadow-lg py-1 text-xs">
                   <MenuSection label="PDF">
                     <MenuItem onClick={() => handleAction("pdf")}>Generate PDF</MenuItem>
+                  </MenuSection>
+                  <MenuSection label="Plugins">
+                    <MenuItem onClick={() => { setShowActions(false); setPluginToolsOpen(true); }}>Plugin Tools</MenuItem>
                   </MenuSection>
                   <MenuSection label="AI">
                     <MenuItem onClick={() => handleAction("aiDescription")}>Rewrite Description</MenuItem>
@@ -504,69 +608,72 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       {error && <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       {/* ─── Tab Content ─── */}
-      {tab === "setup" && <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} />}
-
-      {tab === "estimate" && (
-        <div className="space-y-4">
-          {/* Estimate sub-tabs */}
-          <div className="flex gap-1">
-            {(["worksheets", "phases", "takeoff", "schedule"] as const).map((st) => (
-              <button key={st} onClick={() => setEstimateSubTab(st)}
-                className={cn("px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                  estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
-                )}>
-                {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
-              </button>
-            ))}
-          </div>
-
-          {estimateSubTab === "worksheets" && (
-            <EstimateGrid workspace={workspace} onApply={apply} onError={setError} />
+      <div className="flex-1 min-h-0 flex flex-col">
+        <AnimatePresence mode="wait">
+          {tab === "setup" && (
+            <motion.div key="setup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+              <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} />
+            </motion.div>
           )}
 
-          {estimateSubTab === "phases" && (
-            <PhasesTab workspace={workspace} onApply={apply} onError={setError} />
+          {tab === "estimate" && (
+            <motion.div key="estimate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col gap-3">
+              {/* Estimate sub-tabs */}
+              <div className="flex items-center gap-1 shrink-0">
+                {(["worksheets", "phases", "takeoff", "schedule"] as const).map((st) => (
+                  <button key={st} onClick={() => setEstimateSubTab(st)}
+                    className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
+                      estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
+                    )}>
+                    {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
+                  </button>
+                ))}
+              </div>
+
+              <AnimatePresence mode="wait">
+                {estimateSubTab === "worksheets" && (
+                  <motion.div key="worksheets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                    <EstimateGrid workspace={workspace} onApply={apply} onError={setError} />
+                  </motion.div>
+                )}
+
+                {estimateSubTab === "phases" && (
+                  <motion.div key="phases" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                    <PhasesTab workspace={workspace} onApply={apply} onError={setError} />
+                  </motion.div>
+                )}
+
+                {estimateSubTab === "takeoff" && (
+                  <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                    <TakeoffTab workspace={workspace} />
+                  </motion.div>
+                )}
+
+                {estimateSubTab === "schedule" && (
+                  <motion.div key="schedule" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                    <ScheduleTab workspace={workspace} apply={apply} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
           )}
 
-          {estimateSubTab === "takeoff" && (
-            <TakeoffTab workspace={workspace} />
+          {tab === "summarize" && (
+            <motion.div key="summarize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+              <SummarizeTab workspace={workspace} onApply={apply} />
+            </motion.div>
           )}
-
-          {estimateSubTab === "schedule" && (
-            <ScheduleTab workspace={workspace} />
+          {tab === "documents" && (
+            <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+              <DocumentationTab workspace={workspace} apply={apply} packages={data.packages} />
+            </motion.div>
           )}
-        </div>
-      )}
-
-      {tab === "summarize" && <SummarizeTab workspace={workspace} onApply={apply} />}
-      {tab === "documentation" && <DocumentationTab workspace={workspace} apply={apply} />}
-      {tab === "knowledge" && <KnowledgeTab workspace={workspace} packages={data.packages} documents={data.documents} />}
-      {tab === "activity" && <ActivityTab workspace={workspace} jobs={data.jobs} workspaceState={data.workspaceState} />}
-
-      {/* ─── Totals Bar ─── */}
-      <TotalsBar workspace={workspace} />
-
-      {/* ─── Bottom row ─── */}
-      <div className="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
-        <AIReviewQueue runs={workspace.aiRuns} citations={workspace.citations} />
-        <Card>
-          <CardHeader><CardTitle>Summary</CardTitle></CardHeader>
-          <CardBody className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <Stat label="Subtotal" value={formatMoney(workspace.currentRevision.subtotal)} />
-              <Stat label="Cost" value={formatMoney(workspace.currentRevision.cost)} />
-              <Stat label="Profit" value={formatMoney(workspace.currentRevision.estimatedProfit)} />
-              <Stat label="Hours" value={(workspace.currentRevision.totalHours ?? 0).toLocaleString()} />
-            </div>
-            <Separator />
-            <div className="grid grid-cols-2 gap-3 text-xs text-fg/40">
-              <div>{data.documents.length} source docs</div>
-              <div>{(workspace.citations ?? []).length} citations</div>
-              <div>{(workspace.aiRuns ?? []).length} AI runs</div>
-              <div>{(workspace.worksheets ?? []).length} worksheets</div>
-            </div>
-          </CardBody>
-        </Card>
+          {tab === "activity" && (
+            <motion.div key="activity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+              <ActivityTab workspace={workspace} jobs={data.jobs} workspaceState={data.workspaceState} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ─── ALL MODALS ─── */}
@@ -729,7 +836,35 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
       <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 
-      <AgentChat projectId={workspace.project.id} open={chatOpen} onClose={() => setChatOpen(false)} />
+      <AgentChat
+        projectId={workspace.project.id}
+        open={chatOpen}
+        onClose={() => setChatOpen(false)}
+        autoStartIntake={autoIntake}
+        onIntakeStarted={() => setAutoIntake(false)}
+      />
+
+      <AnimatePresence>
+      {pluginToolsOpen && (
+      <PluginToolsPanel
+        projectId={workspace.project.id}
+        revisionId={workspace.currentRevision.id}
+        worksheetId={selectedWsId === "all" ? undefined : selectedWsId}
+        open={pluginToolsOpen}
+        onClose={() => setPluginToolsOpen(false)}
+        onItemsCreated={() => {
+          // Refresh workspace after plugin creates items
+          startTransition(async () => {
+            try {
+              const { getProjectWorkspace } = await import("@/lib/api");
+              const fresh = await getProjectWorkspace(workspace.project.id);
+              apply(fresh);
+            } catch {}
+          });
+        }}
+      />
+      )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1032,84 +1167,35 @@ function EstimateTab({
   );
 }
 
-/* ─── Knowledge Tab ─── */
-function KnowledgeTab({ workspace, packages, documents }: { workspace: ProjectWorkspaceData; packages: PackageRecord[]; documents: ProjectWorkspaceData["sourceDocuments"] }) {
-  return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      <Card>
-        <CardHeader><div className="flex items-center justify-between"><CardTitle>Source documents</CardTitle><Badge>{documents.length}</Badge></div></CardHeader>
-        <CardBody className="space-y-2">
-          {documents.length === 0 ? <EmptyState>No documents</EmptyState> : documents.map((doc) => (
-            <div key={doc.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-              <div className="flex items-center justify-between"><span className="text-sm font-medium truncate">{doc.fileName}</span><Badge>{doc.documentType}</Badge></div>
-              <div className="mt-1 flex gap-3 text-[11px] text-fg/35"><span>{doc.pageCount} pages</span><span>{doc.fileType}</span><span>{formatDateTime(doc.updatedAt)}</span></div>
-            </div>
-          ))}
-          {packages.length > 0 && (<><Separator className="my-3" />{packages.map((pkg) => (
-            <div key={pkg.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-              <div className="flex items-center justify-between"><span className="text-sm font-medium">{pkg.originalFileName}</span><Badge tone={statusTone(pkg.status)}>{pkg.status}</Badge></div>
-              <div className="mt-1 flex gap-3 text-[11px] text-fg/35"><span>{pkg.documentCount} docs</span><span>{pkg.chunkCount} chunks</span></div>
-            </div>
-          ))}</>)}
-        </CardBody>
-      </Card>
-      <Card>
-        <CardHeader><div className="flex items-center justify-between"><CardTitle>Catalogs & citations</CardTitle><Badge>{workspace.citations.length} citations</Badge></div></CardHeader>
-        <CardBody className="space-y-2">
-          {workspace.catalogs.map((cat) => (
-            <div key={cat.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-              <div className="flex items-center justify-between"><span className="text-sm font-medium">{cat.name}</span><Badge>{cat.kind.replace("_", " ")}</Badge></div>
-              <div className="mt-0.5 text-[11px] text-fg/40">{cat.description}</div>
-            </div>
-          ))}
-          {workspace.citations.length > 0 && <Separator className="my-3" />}
-          {workspace.citations.map((cit) => (
-            <div key={cit.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-              <div className="flex items-center justify-between"><span className="text-sm font-medium">{cit.resourceKey}</span><Badge tone="success">{Math.round(cit.confidence * 100)}%</Badge></div>
-              <div className="mt-0.5 text-[11px] text-fg/40 line-clamp-2">{cit.excerpt}</div>
-              <div className="mt-1 text-[10px] text-fg/25">pp. {cit.pageStart}–{cit.pageEnd}</div>
-            </div>
-          ))}
-        </CardBody>
-      </Card>
-    </div>
-  );
-}
-
 /* ─── Activity Tab ─── */
 function ActivityTab({ workspace, jobs, workspaceState }: { workspace: ProjectWorkspaceData; jobs: JobRecord[]; workspaceState: WorkspaceStateRecord | null }) {
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
-      <Card>
-        <CardHeader><div className="flex items-center justify-between"><CardTitle>Jobs</CardTitle><Badge>{jobs.length}</Badge></div></CardHeader>
-        <CardBody className="space-y-2">
-          {jobs.length === 0 ? <EmptyState>No jobs</EmptyState> : jobs.map((job) => (
-            <div key={job.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-              <div className="flex items-center justify-between"><span className="text-sm font-medium">{job.kind.replaceAll("_", " ")}</span><Badge tone={statusTone(job.status)}>{job.status}</Badge></div>
-              <Progress value={Math.round(job.progress * 100)} className="mt-2" />
-              <div className="mt-1 text-[11px] text-fg/30">{formatDateTime(job.updatedAt)}</div>
-              {job.error && <div className="mt-1 text-[11px] text-danger">{job.error}</div>}
-            </div>
-          ))}
-        </CardBody>
-      </Card>
-      <Card>
-        <CardHeader><CardTitle>Workspace state</CardTitle></CardHeader>
-        <CardBody className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Stat label="Revision" value={`Rev ${workspace.currentRevision.revisionNumber}`} />
-            <Stat label="Updated" value={formatDateTime(workspace.currentRevision.updatedAt)} />
-          </div>
-          {workspace.aiRuns.length > 0 && (<><Separator /><div className="space-y-2">
-            {workspace.aiRuns.map((run) => (
-              <div key={run.id} className="flex items-center justify-between rounded-lg bg-panel2/40 px-3 py-2">
-                <div><div className="text-xs font-medium">{run.kind}</div><div className="text-[11px] text-fg/35 truncate max-w-[200px]">{run.input.question}</div></div>
-                <Badge tone={statusTone(run.status)}>{run.status}</Badge>
+    <div className="space-y-5">
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card>
+          <CardHeader><div className="flex items-center justify-between"><CardTitle>Jobs</CardTitle><Badge>{jobs.length}</Badge></div></CardHeader>
+          <CardBody className="space-y-2">
+            {jobs.length === 0 ? <EmptyState>No jobs</EmptyState> : jobs.map((job) => (
+              <div key={job.id} className="rounded-lg border border-line bg-panel2/40 p-3">
+                <div className="flex items-center justify-between"><span className="text-sm font-medium">{job.kind.replaceAll("_", " ")}</span><Badge tone={statusTone(job.status)}>{job.status}</Badge></div>
+                <Progress value={Math.round(job.progress * 100)} className="mt-2" />
+                <div className="mt-1 text-[11px] text-fg/30">{formatDateTime(job.updatedAt)}</div>
+                {job.error && <div className="mt-1 text-[11px] text-danger">{job.error}</div>}
               </div>
             ))}
-          </div></>)}
-        </CardBody>
-      </Card>
+          </CardBody>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Workspace state</CardTitle></CardHeader>
+          <CardBody className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              <Stat label="Revision" value={`Rev ${workspace.currentRevision.revisionNumber}`} />
+              <Stat label="Updated" value={formatDateTime(workspace.currentRevision.updatedAt)} />
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+      <AIReviewQueue runs={workspace.aiRuns} citations={workspace.citations} />
     </div>
   );
 }

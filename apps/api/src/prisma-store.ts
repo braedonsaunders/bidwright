@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { hashPassword, verifyPassword } from "./services/auth-service.js";
+import { randomUUID, createHash } from "node:crypto";
+import { hashPassword } from "./services/auth-service.js";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -15,19 +15,28 @@ import type {
   CatalogItem,
   Condition,
   ConditionLibraryEntry,
+  Customer,
+  CustomerContact,
+  CustomerWithContacts,
   Dataset,
   DatasetRow,
+  Department,
+  EntityCategory,
   FileNode,
   Job,
   KnowledgeBook,
   KnowledgeChunk,
-  LabourRate,
   Modifier,
+  RateSchedule,
+  RateScheduleItem,
+  RateScheduleTier,
+  RateScheduleWithChildren,
   Phase,
   Plugin,
   PluginExecution,
   PluginOutput,
   PluginOutputLineItem,
+  PluginOutputModifier,
   PluginOutputRevisionPatch,
   PluginOutputScore,
   Project,
@@ -35,6 +44,8 @@ import type {
   Quote,
   QuoteRevision,
   ReportSection,
+  ScheduleDependency,
+  ScheduleTask,
   SourceDocument,
   User,
   WorksheetItem,
@@ -67,6 +78,24 @@ import {
   defaultProjectSummary,
   documentTypeFromIngestion,
 } from "./calc-utils.js";
+
+/** Map document type to knowledge category for vector indexing. */
+function knowledgeCategoryFromDocType(docType: string): "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general" {
+  switch (docType) {
+    case "spec":
+    case "rfq":
+    case "addendum":
+      return "estimating";
+    case "drawing":
+      return "general";
+    case "schedule":
+      return "general";
+    case "estimate_book":
+      return "estimating";
+    default:
+      return "general";
+  }
+}
 
 // ── Re-exported Interfaces ────────────────────────────────────────────────────
 // These interfaces are re-exported so that existing consumers (server.ts, routes)
@@ -127,6 +156,7 @@ export interface CreateProjectInput {
   clientName: string;
   location: string;
   packageName?: string;
+  scope?: string;
   summary?: string;
 }
 
@@ -221,6 +251,8 @@ export interface WorksheetItemPatchInput {
   laborHourOver?: number;
   laborHourDouble?: number;
   lineOrder?: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export interface CreateWorksheetItemInput {
@@ -239,6 +271,8 @@ export interface CreateWorksheetItemInput {
   laborHourOver: number;
   laborHourDouble: number;
   lineOrder?: number;
+  rateScheduleItemId?: string | null;
+  tierUnits?: Record<string, number>;
 }
 
 export interface CreateWorksheetInput {
@@ -261,6 +295,44 @@ export interface PhasePatchInput {
   name?: string;
   description?: string;
   order?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
+}
+
+export interface CreateScheduleTaskInput {
+  phaseId?: string | null;
+  name?: string;
+  description?: string;
+  taskType?: "task" | "milestone";
+  status?: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  duration?: number;
+  progress?: number;
+  assignee?: string;
+  order?: number;
+}
+
+export interface ScheduleTaskPatchInput {
+  phaseId?: string | null;
+  name?: string;
+  description?: string;
+  taskType?: "task" | "milestone";
+  status?: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  duration?: number;
+  progress?: number;
+  assignee?: string;
+  order?: number;
+}
+
+export interface CreateDependencyInput {
+  predecessorId: string;
+  successorId: string;
+  type?: "FS" | "SS" | "FF" | "SF";
+  lagDays?: number;
 }
 
 export interface CreateModifierInput {
@@ -305,20 +377,6 @@ export interface AdditionalLineItemPatchInput {
   type?: AdditionalLineItem["type"];
   description?: string;
   amount?: number;
-}
-
-export interface CreateLabourRateInput {
-  name?: string;
-  regularRate?: number;
-  overtimeRate?: number;
-  doubleRate?: number;
-}
-
-export interface LabourRatePatchInput {
-  name?: string;
-  regularRate?: number;
-  overtimeRate?: number;
-  doubleRate?: number;
 }
 
 export interface CreateReportSectionInput {
@@ -403,6 +461,7 @@ export interface CreateFileNodeInput {
 export interface FileNodePatchInput {
   name?: string;
   parentId?: string | null;
+  storagePath?: string;
 }
 
 export interface CreateTakeoffAnnotationInput {
@@ -472,7 +531,7 @@ const DEFAULT_BRAND: AppSettings["brand"] = {
 const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
-  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1 },
+  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
   integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514" },
   brand: DEFAULT_BRAND,
 };
@@ -654,11 +713,28 @@ function mapWorksheetItem(i: any): WorksheetItem {
     laborHourOver: i.laborHourOver,
     laborHourDouble: i.laborHourDouble,
     lineOrder: i.lineOrder,
+    rateScheduleItemId: i.rateScheduleItemId ?? null,
+    tierUnits: (i.tierUnits as Record<string, number>) ?? {},
   };
 }
 
 function mapPhase(p: any): Phase {
-  return { id: p.id, revisionId: p.revisionId, number: p.number, name: p.name, description: p.description, order: p.order };
+  return { id: p.id, revisionId: p.revisionId, number: p.number, name: p.name, description: p.description, order: p.order, startDate: p.startDate ?? null, endDate: p.endDate ?? null, color: p.color ?? "" };
+}
+
+function mapScheduleTask(t: any): ScheduleTask {
+  return {
+    id: t.id, projectId: t.projectId, revisionId: t.revisionId, phaseId: t.phaseId ?? null,
+    name: t.name, description: t.description, taskType: t.taskType as ScheduleTask["taskType"],
+    status: t.status as ScheduleTask["status"], startDate: t.startDate ?? null, endDate: t.endDate ?? null,
+    duration: t.duration, progress: t.progress, assignee: t.assignee, order: t.order,
+    baselineStart: t.baselineStart ?? null, baselineEnd: t.baselineEnd ?? null,
+    createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
+  };
+}
+
+function mapScheduleDependency(d: any): ScheduleDependency {
+  return { id: d.id, predecessorId: d.predecessorId, successorId: d.successorId, type: d.type as ScheduleDependency["type"], lagDays: d.lagDays };
 }
 
 function mapModifier(m: any): Modifier {
@@ -673,8 +749,41 @@ function mapCondition(c: any): Condition {
   return { id: c.id, revisionId: c.revisionId, type: c.type, value: c.value, order: c.order };
 }
 
-function mapLabourRate(r: any): LabourRate {
-  return { id: r.id, revisionId: r.revisionId, name: r.name, regularRate: r.regularRate, overtimeRate: r.overtimeRate, doubleRate: r.doubleRate };
+function mapRateScheduleTier(t: any): RateScheduleTier {
+  return { id: t.id, scheduleId: t.scheduleId, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder };
+}
+
+function mapRateScheduleItem(i: any): RateScheduleItem {
+  return {
+    id: i.id, scheduleId: i.scheduleId, catalogItemId: i.catalogItemId ?? null,
+    code: i.code, name: i.name, unit: i.unit,
+    rates: (i.rates as Record<string, number>) ?? {},
+    costRates: (i.costRates as Record<string, number>) ?? {},
+    burden: i.burden, perDiem: i.perDiem,
+    metadata: (i.metadata as Record<string, unknown>) ?? {},
+    sortOrder: i.sortOrder,
+  };
+}
+
+function mapRateSchedule(s: any): RateSchedule {
+  return {
+    id: s.id, organizationId: s.organizationId, name: s.name, description: s.description,
+    category: s.category, scope: s.scope as RateSchedule["scope"],
+    projectId: s.projectId ?? null, revisionId: s.revisionId ?? null,
+    sourceScheduleId: s.sourceScheduleId ?? null,
+    effectiveDate: s.effectiveDate ?? null, expiryDate: s.expiryDate ?? null,
+    defaultMarkup: s.defaultMarkup, autoCalculate: s.autoCalculate,
+    metadata: (s.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(s.createdAt), updatedAt: toISO(s.updatedAt),
+  };
+}
+
+function mapRateScheduleWithChildren(s: any): RateScheduleWithChildren {
+  return {
+    ...mapRateSchedule(s),
+    tiers: (s.tiers ?? []).map(mapRateScheduleTier),
+    items: (s.items ?? []).map(mapRateScheduleItem),
+  };
 }
 
 function mapActivity(a: any): Activity {
@@ -686,7 +795,14 @@ function mapReportSection(s: any): ReportSection {
 }
 
 function mapCatalog(c: any): Catalog {
-  return { id: c.id, name: c.name, kind: c.kind as Catalog["kind"], scope: c.scope as Catalog["scope"], projectId: c.projectId ?? null, description: c.description };
+  return {
+    id: c.id, name: c.name, kind: c.kind as Catalog["kind"], scope: c.scope as Catalog["scope"],
+    projectId: c.projectId ?? null, description: c.description,
+    source: c.source ?? "manual", sourceDescription: c.sourceDescription ?? "",
+    isTemplate: c.isTemplate ?? false, sourceTemplateId: c.sourceTemplateId ?? null,
+    itemCount: c._count?.items ?? undefined,
+    createdAt: toISO(c.createdAt), updatedAt: toISO(c.updatedAt),
+  };
 }
 
 function mapCatalogItem(i: any): CatalogItem {
@@ -806,6 +922,7 @@ function mapKnowledgeBook(b: any): KnowledgeBook {
     status: b.status as KnowledgeBook["status"],
     sourceFileName: b.sourceFileName,
     sourceFileSize: b.sourceFileSize,
+    storagePath: b.storagePath ?? null,
     metadata: (b.metadata as Record<string, unknown>) ?? {},
     createdAt: toISO(b.createdAt),
     updatedAt: toISO(b.updatedAt),
@@ -837,6 +954,8 @@ function mapDataset(d: any): Dataset {
     rowCount: d.rowCount,
     source: d.source as Dataset["source"],
     sourceDescription: d.sourceDescription,
+    isTemplate: d.isTemplate ?? false,
+    sourceTemplateId: d.sourceTemplateId ?? null,
     createdAt: toISO(d.createdAt),
     updatedAt: toISO(d.updatedAt),
   };
@@ -854,7 +973,7 @@ function mapDatasetRow(r: any): DatasetRow {
   };
 }
 
-function mapEntityCategory(e: any): { id: string; name: string; entityType: string; shortform: string; defaultUom: string; validUoms: string[]; editableFields: any; laborHourLabels: any; calculationType: string } {
+function mapEntityCategory(e: any): EntityCategory {
   return {
     id: e.id,
     name: e.name,
@@ -864,7 +983,12 @@ function mapEntityCategory(e: any): { id: string; name: string; entityType: stri
     validUoms: e.validUoms ?? [],
     editableFields: (e.editableFields as any) ?? {},
     laborHourLabels: (e.laborHourLabels as any) ?? {},
-    calculationType: e.calculationType,
+    calculationType: e.calculationType as EntityCategory["calculationType"],
+    calcFormula: e.calcFormula ?? "",
+    color: e.color ?? "#6b7280",
+    order: e.order ?? 0,
+    isBuiltIn: e.isBuiltIn ?? false,
+    enabled: e.enabled ?? true,
   };
 }
 
@@ -889,6 +1013,55 @@ function mapStoredPackage(p: any): StoredPackageRecord {
     ingestedAt: toISOString(p.ingestedAt),
     updatedAt: toISO(p.updatedAt),
     error: p.error ?? null,
+  };
+}
+
+function mapCustomer(c: any): Customer {
+  return {
+    id: c.id,
+    organizationId: c.organizationId,
+    name: c.name,
+    shortName: c.shortName ?? "",
+    phone: c.phone ?? "",
+    email: c.email ?? "",
+    website: c.website ?? "",
+    addressStreet: c.addressStreet ?? "",
+    addressCity: c.addressCity ?? "",
+    addressProvince: c.addressProvince ?? "",
+    addressPostalCode: c.addressPostalCode ?? "",
+    addressCountry: c.addressCountry ?? "",
+    notes: c.notes ?? "",
+    active: c.active ?? true,
+    createdAt: toISO(c.createdAt),
+    updatedAt: toISO(c.updatedAt),
+  };
+}
+
+function mapCustomerContact(c: any): CustomerContact {
+  return {
+    id: c.id,
+    customerId: c.customerId,
+    name: c.name,
+    title: c.title ?? "",
+    phone: c.phone ?? "",
+    email: c.email ?? "",
+    isPrimary: c.isPrimary ?? false,
+    active: c.active ?? true,
+    createdAt: toISO(c.createdAt),
+    updatedAt: toISO(c.updatedAt),
+  };
+}
+
+function mapDepartment(d: any): Department {
+  return {
+    id: d.id,
+    organizationId: d.organizationId,
+    name: d.name,
+    code: d.code ?? "",
+    description: d.description ?? "",
+    active: d.active ?? true,
+    createdAt: toISO(d.createdAt),
+    updatedAt: toISO(d.updatedAt),
   };
 }
 
@@ -960,7 +1133,6 @@ export class PrismaApiStore {
     const modifiers = await this.db.modifier.findMany({ where: { revisionId: { in: revisionIds } } });
     const additionalLineItems = await this.db.additionalLineItem.findMany({ where: { revisionId: { in: revisionIds } } });
     const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } } });
-    const labourRates = await this.db.labourRate.findMany({ where: { revisionId: { in: revisionIds } } });
     const reportSections = await this.db.reportSection.findMany({ where: { revisionId: { in: revisionIds } } });
     const sourceDocuments = await this.db.sourceDocument.findMany({ where: { projectId } });
     const aiRuns = await this.db.aiRun.findMany({ where: { projectId } });
@@ -969,6 +1141,11 @@ export class PrismaApiStore {
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
+    const scheduleTasks = await this.db.scheduleTask.findMany({ where: { projectId } });
+    const scheduleTaskIds = scheduleTasks.map((t) => t.id);
+    const scheduleDependencies = scheduleTaskIds.length > 0
+      ? await this.db.scheduleDependency.findMany({ where: { predecessorId: { in: scheduleTaskIds } } })
+      : [];
 
     // Global entities for the org
     const catalogs = await this.db.catalog.findMany({ where: { organizationId: this.organizationId } });
@@ -985,6 +1162,12 @@ export class PrismaApiStore {
     const datasetRows = await this.db.datasetRow.findMany({ where: { datasetId: { in: datasetIds } } });
     const entityCategories = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
+    // Rate schedules: both revision-scoped and org-level
+    const rateSchedules = await this.db.rateSchedule.findMany({
+      where: { OR: [{ revisionId: { in: revisionIds } }, { organizationId: this.organizationId, scope: "global" }] },
+      include: { tiers: true, items: true },
+    });
+
     return {
       projects: [mapProject(project)],
       sourceDocuments: sourceDocuments.map(mapSourceDocument),
@@ -1000,7 +1183,6 @@ export class PrismaApiStore {
       catalogItems: catalogItems.map(mapCatalogItem),
       aiRuns: aiRuns.map(mapAiRun) as any,
       citations: citations.map(mapCitation) as any,
-      labourRates: labourRates.map(mapLabourRate),
       activities: activities.map(mapActivity),
       conditionLibrary: conditionLibrary.map(mapConditionLibrary),
       reportSections: reportSections.map(mapReportSection),
@@ -1015,6 +1197,11 @@ export class PrismaApiStore {
       datasets: datasets.map(mapDataset),
       datasetRows: datasetRows.map(mapDatasetRow),
       entityCategories: entityCategories.map(mapEntityCategory) as any,
+      scheduleTasks: scheduleTasks.map(mapScheduleTask),
+      scheduleDependencies: scheduleDependencies.map(mapScheduleDependency),
+      rateSchedules: rateSchedules.map(mapRateSchedule),
+      rateScheduleTiers: rateSchedules.flatMap((s) => (s.tiers ?? []).map(mapRateScheduleTier)),
+      rateScheduleItems: rateSchedules.flatMap((s) => (s.items ?? []).map(mapRateScheduleItem)),
     };
   }
 
@@ -1327,6 +1514,12 @@ export class PrismaApiStore {
     return docs.map(mapSourceDocument);
   }
 
+  async getDocument(projectId: string, documentId: string) {
+    await this.requireProject(projectId);
+    const doc = await this.db.sourceDocument.findFirst({ where: { id: documentId, projectId } });
+    return doc ? mapSourceDocument(doc) : null;
+  }
+
   // ── AI Runs ────────────────────────────────────────────────────────────
 
   async listAiRuns(projectId?: string) {
@@ -1346,15 +1539,336 @@ export class PrismaApiStore {
   async listEntityCategories() {
     const categories = await this.db.entityCategory.findMany({
       where: { organizationId: this.organizationId },
+      orderBy: { order: "asc" },
     });
     return categories.map(mapEntityCategory);
+  }
+
+  async getEntityCategory(id: string): Promise<EntityCategory | null> {
+    const cat = await this.db.entityCategory.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    return cat ? mapEntityCategory(cat) : null;
+  }
+
+  async getEntityCategoryByName(name: string): Promise<EntityCategory | null> {
+    const cat = await this.db.entityCategory.findFirst({
+      where: { organizationId: this.organizationId, name },
+    });
+    return cat ? mapEntityCategory(cat) : null;
+  }
+
+  async createEntityCategory(input: {
+    name: string;
+    entityType: string;
+    shortform?: string;
+    defaultUom?: string;
+    validUoms?: string[];
+    editableFields?: Record<string, boolean>;
+    laborHourLabels?: Record<string, string>;
+    calculationType?: string;
+    calcFormula?: string;
+    color?: string;
+  }): Promise<EntityCategory> {
+    const maxOrder = await this.db.entityCategory.aggregate({
+      where: { organizationId: this.organizationId },
+      _max: { order: true },
+    });
+    const cat = await this.db.entityCategory.create({
+      data: {
+        id: createId("ecat"),
+        organizationId: this.organizationId,
+        name: input.name,
+        entityType: input.entityType,
+        shortform: input.shortform ?? input.name.charAt(0).toUpperCase(),
+        defaultUom: input.defaultUom ?? "EA",
+        validUoms: input.validUoms ?? ["EA"],
+        editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, laborHourReg: false, laborHourOver: false, laborHourDouble: false }) as any,
+        laborHourLabels: (input.laborHourLabels ?? { reg: "Reg Hrs", over: "OT Hrs", double: "DT Hrs" }) as any,
+        calculationType: input.calculationType ?? "manual",
+        calcFormula: input.calcFormula ?? "",
+        color: input.color ?? "#6b7280",
+        order: (maxOrder._max.order ?? 0) + 1,
+        isBuiltIn: false,
+        enabled: true,
+      },
+    });
+    return mapEntityCategory(cat);
+  }
+
+  async updateEntityCategory(id: string, patch: Record<string, unknown>): Promise<EntityCategory> {
+    const existing = await this.db.entityCategory.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Entity category ${id} not found`);
+
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.entityType !== undefined) data.entityType = patch.entityType;
+    if (patch.shortform !== undefined) data.shortform = patch.shortform;
+    if (patch.defaultUom !== undefined) data.defaultUom = patch.defaultUom;
+    if (patch.validUoms !== undefined) data.validUoms = patch.validUoms;
+    if (patch.editableFields !== undefined) data.editableFields = patch.editableFields as any;
+    if (patch.laborHourLabels !== undefined) data.laborHourLabels = patch.laborHourLabels as any;
+    if (patch.calculationType !== undefined) data.calculationType = patch.calculationType;
+    if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
+    if (patch.color !== undefined) data.color = patch.color;
+    if (patch.order !== undefined) data.order = patch.order;
+    if (patch.enabled !== undefined) data.enabled = patch.enabled;
+
+    const updated = await this.db.entityCategory.update({ where: { id }, data });
+    return mapEntityCategory(updated);
+  }
+
+  async deleteEntityCategory(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.entityCategory.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Entity category ${id} not found`);
+    if (existing.isBuiltIn) throw new Error("Cannot delete built-in entity category");
+
+    await this.db.entityCategory.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async reorderEntityCategories(orderedIds: string[]): Promise<void> {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await this.db.entityCategory.updateMany({
+        where: { id: orderedIds[i], organizationId: this.organizationId },
+        data: { order: i },
+      });
+    }
+  }
+
+  // ── Customers ──────────────────────────────────────────────────────────
+
+  async listCustomers(): Promise<Customer[]> {
+    const customers = await this.db.customer.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { name: "asc" },
+    });
+    return customers.map(mapCustomer);
+  }
+
+  async searchCustomers(query: string): Promise<Customer[]> {
+    const customers = await this.db.customer.findMany({
+      where: {
+        organizationId: this.organizationId,
+        name: { contains: query, mode: "insensitive" },
+      },
+      orderBy: { name: "asc" },
+      take: 25,
+    });
+    return customers.map(mapCustomer);
+  }
+
+  async getCustomer(id: string): Promise<Customer | null> {
+    const c = await this.db.customer.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    return c ? mapCustomer(c) : null;
+  }
+
+  async getCustomerWithContacts(id: string): Promise<CustomerWithContacts | null> {
+    const c = await this.db.customer.findFirst({
+      where: { id, organizationId: this.organizationId },
+      include: { contacts: { orderBy: { name: "asc" } } },
+    });
+    if (!c) return null;
+    return {
+      ...mapCustomer(c),
+      contacts: c.contacts.map(mapCustomerContact),
+    };
+  }
+
+  async createCustomer(input: {
+    name: string;
+    shortName?: string;
+    phone?: string;
+    email?: string;
+    website?: string;
+    addressStreet?: string;
+    addressCity?: string;
+    addressProvince?: string;
+    addressPostalCode?: string;
+    addressCountry?: string;
+    notes?: string;
+  }): Promise<Customer> {
+    const c = await this.db.customer.create({
+      data: {
+        id: createId("cust"),
+        organizationId: this.organizationId,
+        name: input.name,
+        shortName: input.shortName ?? "",
+        phone: input.phone ?? "",
+        email: input.email ?? "",
+        website: input.website ?? "",
+        addressStreet: input.addressStreet ?? "",
+        addressCity: input.addressCity ?? "",
+        addressProvince: input.addressProvince ?? "",
+        addressPostalCode: input.addressPostalCode ?? "",
+        addressCountry: input.addressCountry ?? "",
+        notes: input.notes ?? "",
+      },
+    });
+    return mapCustomer(c);
+  }
+
+  async updateCustomer(id: string, patch: Record<string, unknown>): Promise<Customer> {
+    const existing = await this.db.customer.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Customer ${id} not found`);
+
+    const data: any = {};
+    const fields = ["name", "shortName", "phone", "email", "website", "addressStreet", "addressCity", "addressProvince", "addressPostalCode", "addressCountry", "notes", "active"];
+    for (const f of fields) {
+      if (patch[f] !== undefined) data[f] = patch[f];
+    }
+
+    const updated = await this.db.customer.update({ where: { id }, data });
+    return mapCustomer(updated);
+  }
+
+  async deleteCustomer(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.customer.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Customer ${id} not found`);
+    // Null out FK references on quotes before deleting
+    await this.db.quote.updateMany({ where: { customerId: id }, data: { customerId: null } });
+    await this.db.customer.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // ── Customer Contacts ─────────────────────────────────────────────────
+
+  async listCustomerContacts(customerId: string): Promise<CustomerContact[]> {
+    const contacts = await this.db.customerContact.findMany({
+      where: { customerId },
+      orderBy: { name: "asc" },
+    });
+    return contacts.map(mapCustomerContact);
+  }
+
+  async createCustomerContact(customerId: string, input: {
+    name: string;
+    title?: string;
+    phone?: string;
+    email?: string;
+    isPrimary?: boolean;
+  }): Promise<CustomerContact> {
+    // Verify customer belongs to org
+    const customer = await this.db.customer.findFirst({
+      where: { id: customerId, organizationId: this.organizationId },
+    });
+    if (!customer) throw new Error(`Customer ${customerId} not found`);
+
+    const c = await this.db.customerContact.create({
+      data: {
+        id: createId("ccon"),
+        customerId,
+        name: input.name,
+        title: input.title ?? "",
+        phone: input.phone ?? "",
+        email: input.email ?? "",
+        isPrimary: input.isPrimary ?? false,
+      },
+    });
+    return mapCustomerContact(c);
+  }
+
+  async updateCustomerContact(contactId: string, patch: Record<string, unknown>): Promise<CustomerContact> {
+    const existing = await this.db.customerContact.findFirst({
+      where: { id: contactId },
+      include: { customer: true },
+    });
+    if (!existing || (existing.customer as any).organizationId !== this.organizationId) {
+      throw new Error(`Contact ${contactId} not found`);
+    }
+
+    const data: any = {};
+    const fields = ["name", "title", "phone", "email", "isPrimary", "active"];
+    for (const f of fields) {
+      if (patch[f] !== undefined) data[f] = patch[f];
+    }
+
+    const updated = await this.db.customerContact.update({ where: { id: contactId }, data });
+    return mapCustomerContact(updated);
+  }
+
+  async deleteCustomerContact(contactId: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.customerContact.findFirst({
+      where: { id: contactId },
+      include: { customer: true },
+    });
+    if (!existing || (existing.customer as any).organizationId !== this.organizationId) {
+      throw new Error(`Contact ${contactId} not found`);
+    }
+    await this.db.quote.updateMany({ where: { customerContactId: contactId }, data: { customerContactId: null } });
+    await this.db.customerContact.delete({ where: { id: contactId } });
+    return { deleted: true };
+  }
+
+  // ── Departments ───────────────────────────────────────────────────────
+
+  async listDepartments(): Promise<Department[]> {
+    const departments = await this.db.department.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { name: "asc" },
+    });
+    return departments.map(mapDepartment);
+  }
+
+  async createDepartment(input: {
+    name: string;
+    code?: string;
+    description?: string;
+  }): Promise<Department> {
+    const d = await this.db.department.create({
+      data: {
+        id: createId("dept"),
+        organizationId: this.organizationId,
+        name: input.name,
+        code: input.code ?? "",
+        description: input.description ?? "",
+      },
+    });
+    return mapDepartment(d);
+  }
+
+  async updateDepartment(id: string, patch: Record<string, unknown>): Promise<Department> {
+    const existing = await this.db.department.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Department ${id} not found`);
+
+    const data: any = {};
+    const fields = ["name", "code", "description", "active"];
+    for (const f of fields) {
+      if (patch[f] !== undefined) data[f] = patch[f];
+    }
+
+    const updated = await this.db.department.update({ where: { id }, data });
+    return mapDepartment(updated);
+  }
+
+  async deleteDepartment(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.department.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Department ${id} not found`);
+    await this.db.quote.updateMany({ where: { departmentId: id }, data: { departmentId: null } });
+    await this.db.department.delete({ where: { id } });
+    return { deleted: true };
   }
 
   // ── Catalogs ───────────────────────────────────────────────────────────
 
   async listCatalogs() {
     const catalogs = await this.db.catalog.findMany({
-      where: { organizationId: this.organizationId },
+      where: { organizationId: this.organizationId, isTemplate: false },
+      include: { _count: { select: { items: true } } },
     });
     return catalogs.map(mapCatalog);
   }
@@ -1484,10 +1998,18 @@ export class PrismaApiStore {
       laborHourOver: input.laborHourOver,
       laborHourDouble: input.laborHourDouble,
       lineOrder,
+      rateScheduleItemId: input.rateScheduleItemId ?? null,
+      tierUnits: input.tierUnits ?? {},
     };
 
-    const labourRates = await this.db.labourRate.findMany({ where: { revisionId: revision.id } });
-    const calculated = calculateLineItem(item, mapRevision(revision), labourRates.map(mapLabourRate));
+    const revisionSchedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const rateScheduleCtx = revisionSchedules.map((s) => ({
+      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
+    }));
+    const calculated = calculateLineItem(item, mapRevision(revision), rateScheduleCtx);
     Object.assign(item, calculated);
 
     const created = await this.db.worksheetItem.create({
@@ -1509,6 +2031,8 @@ export class PrismaApiStore {
         laborHourOver: item.laborHourOver,
         laborHourDouble: item.laborHourDouble,
         lineOrder: item.lineOrder,
+        rateScheduleItemId: item.rateScheduleItemId ?? null,
+        tierUnits: item.tierUnits ?? {},
       },
     });
 
@@ -1602,8 +2126,14 @@ export class PrismaApiStore {
       domainItem.vendor = undefined;
     }
 
-    const labourRates = await this.db.labourRate.findMany({ where: { revisionId: revision.id } });
-    const calculated = calculateLineItem(domainItem, mapRevision(revision), labourRates.map(mapLabourRate));
+    const revisionSchedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const rateScheduleCtx = revisionSchedules.map((s) => ({
+      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
+    }));
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), rateScheduleCtx);
     Object.assign(domainItem, calculated);
 
     const updated = await this.db.worksheetItem.update({
@@ -1624,6 +2154,8 @@ export class PrismaApiStore {
         laborHourOver: domainItem.laborHourOver,
         laborHourDouble: domainItem.laborHourDouble,
         lineOrder: domainItem.lineOrder,
+        rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
+        tierUnits: domainItem.tierUnits ?? {},
       },
     });
 
@@ -1670,9 +2202,14 @@ export class PrismaApiStore {
     });
     const baseOrder = (maxOrder._max.lineOrder ?? 0);
 
-    const labourRates = await this.db.labourRate.findMany({ where: { revisionId: revision.id } });
+    const revisionSchedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const rateScheduleCtx = revisionSchedules.map((s) => ({
+      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
+    }));
     const mappedRev = mapRevision(revision);
-    const mappedRates = labourRates.map(mapLabourRate);
 
     const created: WorksheetItem[] = [];
 
@@ -1698,7 +2235,7 @@ export class PrismaApiStore {
         lineOrder: baseOrder + idx + 1,
       };
 
-      const calculated = calculateLineItem(item, mappedRev, mappedRates);
+      const calculated = calculateLineItem(item, mappedRev, rateScheduleCtx);
       Object.assign(item, calculated);
 
       await this.db.worksheetItem.create({
@@ -1768,6 +2305,7 @@ export class PrismaApiStore {
           packageName,
           packageUploadedAt: nowISO,
           ingestionStatus: "queued",
+          scope: input.scope ?? "",
           summary: input.summary ?? defaultProjectSummary(packageName, input.clientName),
           createdAt: now,
           updatedAt: now,
@@ -2136,6 +2674,30 @@ export class PrismaApiStore {
       // Sync totals
       await this.syncProjectEstimate(project.id, timestampISO);
 
+      // Index documents into vector store for RAG search
+      // This bridges the zip→document pipeline to the knowledge/vector pipeline
+      // so the intake agent can immediately search document content.
+      try {
+        const { knowledgeService } = await import("../services/knowledge-service.js");
+        for (const doc of sourceDocuments) {
+          if (!doc.extractedText) continue;
+          await knowledgeService.ingestDocument({
+            content: doc.extractedText,
+            title: doc.fileName,
+            category: knowledgeCategoryFromDocType(doc.documentType),
+            scope: "project",
+            projectId: project.id,
+            organizationId: this.organizationId,
+            options: { chunkStrategy: "section-aware" },
+          }, this).catch((err: unknown) => {
+            // Non-fatal: log but don't fail the ingestion
+            console.warn(`[vector-index] Failed to index document ${doc.fileName}:`, err instanceof Error ? err.message : err);
+          });
+        }
+      } catch (indexError) {
+        console.warn("[vector-index] Vector indexing skipped:", indexError instanceof Error ? indexError.message : indexError);
+      }
+
       // Build result
       const store = await this.buildStoreSnapshot(project.id);
       const refreshedProject = store.projects[0];
@@ -2237,6 +2799,9 @@ export class PrismaApiStore {
     if (typeof patch.name === "string") data.name = patch.name;
     if (typeof patch.description === "string") data.description = patch.description;
     if (typeof patch.order === "number") data.order = patch.order;
+    if (patch.startDate !== undefined) data.startDate = patch.startDate;
+    if (patch.endDate !== undefined) data.endDate = patch.endDate;
+    if (typeof patch.color === "string") data.color = patch.color;
 
     const updated = await this.db.phase.update({ where: { id: phaseId }, data });
     await this.syncProjectEstimate(projectId);
@@ -2258,6 +2823,140 @@ export class PrismaApiStore {
     await this.pushActivity(projectId, phase.revisionId, "phase_deleted", { phaseId, name: phase.name });
     await this.syncProjectEstimate(projectId);
     return mapPhase(phase);
+  }
+
+  // ── Schedule Task CRUD ──────────────────────────────────────────────────
+
+  async listScheduleTasks(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    const tasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId: revision.id },
+      orderBy: { order: "asc" },
+    });
+    return tasks.map(mapScheduleTask);
+  }
+
+  async createScheduleTask(projectId: string, revisionId: string, input: CreateScheduleTaskInput) {
+    await this.requireProject(projectId);
+    const maxOrder = await this.db.scheduleTask.aggregate({
+      where: { projectId, revisionId },
+      _max: { order: true },
+    });
+    const order = input.order ?? (maxOrder._max.order ?? 0) + 1;
+
+    const task = await this.db.scheduleTask.create({
+      data: {
+        id: createId("schtask"),
+        projectId,
+        revisionId,
+        phaseId: input.phaseId ?? null,
+        name: input.name ?? "",
+        description: input.description ?? "",
+        taskType: input.taskType ?? "task",
+        status: input.status ?? "not_started",
+        startDate: input.startDate ?? null,
+        endDate: input.endDate ?? null,
+        duration: input.duration ?? 0,
+        progress: input.progress ?? 0,
+        assignee: input.assignee ?? "",
+        order,
+      },
+    });
+    await this.pushActivity(projectId, revisionId, "schedule_task_created", { taskId: task.id, name: task.name });
+    return mapScheduleTask(task);
+  }
+
+  async updateScheduleTask(projectId: string, taskId: string, patch: ScheduleTaskPatchInput) {
+    await this.requireProject(projectId);
+    const task = await this.db.scheduleTask.findFirst({ where: { id: taskId, projectId } });
+    if (!task) throw new Error(`Schedule task ${taskId} not found`);
+
+    const data: any = {};
+    if (patch.phaseId !== undefined) data.phaseId = patch.phaseId;
+    if (typeof patch.name === "string") data.name = patch.name;
+    if (typeof patch.description === "string") data.description = patch.description;
+    if (patch.taskType) data.taskType = patch.taskType;
+    if (typeof patch.status === "string") data.status = patch.status;
+    if (patch.startDate !== undefined) data.startDate = patch.startDate;
+    if (patch.endDate !== undefined) data.endDate = patch.endDate;
+    if (typeof patch.duration === "number") data.duration = patch.duration;
+    if (typeof patch.progress === "number") data.progress = patch.progress;
+    if (typeof patch.assignee === "string") data.assignee = patch.assignee;
+    if (typeof patch.order === "number") data.order = patch.order;
+
+    const updated = await this.db.scheduleTask.update({ where: { id: taskId }, data });
+    return mapScheduleTask(updated);
+  }
+
+  async batchUpdateScheduleTasks(projectId: string, updates: Array<{ id: string } & ScheduleTaskPatchInput>) {
+    await this.requireProject(projectId);
+    const results: ScheduleTask[] = [];
+    for (const upd of updates) {
+      const { id, ...patch } = upd;
+      const result = await this.updateScheduleTask(projectId, id, patch);
+      results.push(result);
+    }
+    return results;
+  }
+
+  async deleteScheduleTask(projectId: string, taskId: string) {
+    await this.requireProject(projectId);
+    const task = await this.db.scheduleTask.findFirst({ where: { id: taskId, projectId } });
+    if (!task) throw new Error(`Schedule task ${taskId} not found`);
+
+    await this.db.scheduleDependency.deleteMany({
+      where: { OR: [{ predecessorId: taskId }, { successorId: taskId }] },
+    });
+    await this.db.scheduleTask.delete({ where: { id: taskId } });
+    await this.pushActivity(projectId, task.revisionId, "schedule_task_deleted", { taskId, name: task.name });
+    return mapScheduleTask(task);
+  }
+
+  // ── Schedule Dependency CRUD ────────────────────────────────────────────
+
+  async createDependency(projectId: string, input: CreateDependencyInput) {
+    await this.requireProject(projectId);
+    const dep = await this.db.scheduleDependency.create({
+      data: {
+        id: createId("dep"),
+        predecessorId: input.predecessorId,
+        successorId: input.successorId,
+        type: input.type ?? "FS",
+        lagDays: input.lagDays ?? 0,
+      },
+    });
+    return mapScheduleDependency(dep);
+  }
+
+  async deleteDependency(projectId: string, depId: string) {
+    await this.requireProject(projectId);
+    const dep = await this.db.scheduleDependency.findFirst({ where: { id: depId } });
+    if (!dep) throw new Error(`Dependency ${depId} not found`);
+    await this.db.scheduleDependency.delete({ where: { id: depId } });
+    return mapScheduleDependency(dep);
+  }
+
+  // ── Schedule Baseline ──────────────────────────────────────────────────
+
+  async saveBaseline(projectId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    const tasks = await this.db.scheduleTask.findMany({ where: { projectId, revisionId: revision.id } });
+    for (const t of tasks) {
+      await this.db.scheduleTask.update({
+        where: { id: t.id },
+        data: { baselineStart: t.startDate, baselineEnd: t.endDate },
+      });
+    }
+  }
+
+  async clearBaseline(projectId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    await this.db.scheduleTask.updateMany({
+      where: { projectId, revisionId: revision.id },
+      data: { baselineStart: null, baselineEnd: null },
+    });
   }
 
   // ── Modifier CRUD ──────────────────────────────────────────────────────
@@ -2320,8 +3019,30 @@ export class PrismaApiStore {
   async listConditionLibrary() {
     const entries = await this.db.conditionLibraryEntry.findMany({
       where: { organizationId: this.organizationId },
+      orderBy: { type: "asc" },
     });
     return entries.map(mapConditionLibrary);
+  }
+
+  async createConditionLibraryEntry(input: { type: string; value: string }) {
+    const entry = await this.db.conditionLibraryEntry.create({
+      data: {
+        id: createId("clib"),
+        organizationId: this.organizationId,
+        type: input.type,
+        value: input.value,
+      },
+    });
+    return mapConditionLibrary(entry);
+  }
+
+  async deleteConditionLibraryEntry(entryId: string) {
+    const entry = await this.db.conditionLibraryEntry.findFirst({
+      where: { id: entryId, organizationId: this.organizationId },
+    });
+    if (!entry) throw new Error(`Condition library entry ${entryId} not found`);
+    await this.db.conditionLibraryEntry.delete({ where: { id: entryId } });
+    return mapConditionLibrary(entry);
   }
 
   async listConditions(projectId: string) {
@@ -2459,57 +3180,278 @@ export class PrismaApiStore {
     return mapAdditionalLineItem(ali);
   }
 
-  // ── Labour Rate CRUD ───────────────────────────────────────────────────
+  // ── Rate Schedule CRUD ─────────────────────────────────────────────────
 
-  async listLabourRates(projectId: string) {
-    const { revision } = await this.findCurrentRevision(projectId);
-    if (!revision) return [];
-    const rates = await this.db.labourRate.findMany({ where: { revisionId: revision.id } });
-    return rates.map(mapLabourRate);
+  async listRateSchedules(scope?: string): Promise<RateScheduleWithChildren[]> {
+    const where: any = { organizationId: this.organizationId };
+    if (scope) where.scope = scope;
+    const schedules = await this.db.rateSchedule.findMany({
+      where,
+      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+    return schedules.map(mapRateScheduleWithChildren);
   }
 
-  async createLabourRate(projectId: string, revisionId: string, input: CreateLabourRateInput) {
-    await this.requireProject(projectId);
-    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
-    if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+  async getRateSchedule(id: string): Promise<RateScheduleWithChildren> {
+    const schedule = await this.db.rateSchedule.findFirst({
+      where: { id, organizationId: this.organizationId },
+      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+    });
+    if (!schedule) throw new Error(`Rate schedule ${id} not found`);
+    return mapRateScheduleWithChildren(schedule);
+  }
 
-    const rate = await this.db.labourRate.create({
+  async createRateSchedule(input: {
+    name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean; metadata?: Record<string, unknown>;
+  }): Promise<RateScheduleWithChildren> {
+    const created = await this.db.rateSchedule.create({
       data: {
-        id: createId("rate"),
-        revisionId,
-        name: input.name ?? "New Rate",
-        regularRate: input.regularRate ?? 0,
-        overtimeRate: input.overtimeRate ?? 0,
-        doubleRate: input.doubleRate ?? 0,
+        id: createId("rs"),
+        organizationId: this.organizationId,
+        name: input.name,
+        description: input.description ?? "",
+        category: input.category ?? "labour",
+        scope: "global",
+        defaultMarkup: input.defaultMarkup ?? 0,
+        autoCalculate: input.autoCalculate ?? true,
+        metadata: (input.metadata ?? {}) as any,
+      },
+      include: { tiers: true, items: true },
+    });
+    return mapRateScheduleWithChildren(created);
+  }
+
+  async updateRateSchedule(id: string, patch: {
+    name?: string; description?: string; category?: string; defaultMarkup?: number;
+    autoCalculate?: boolean; effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
+  }): Promise<RateScheduleWithChildren> {
+    const existing = await this.db.rateSchedule.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Rate schedule ${id} not found`);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.defaultMarkup !== undefined) data.defaultMarkup = patch.defaultMarkup;
+    if (patch.autoCalculate !== undefined) data.autoCalculate = patch.autoCalculate;
+    if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
+    if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata;
+    const updated = await this.db.rateSchedule.update({
+      where: { id }, data,
+      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+    });
+    if (existing.scope === "revision" && existing.projectId) {
+      await this.syncProjectEstimate(existing.projectId);
+    }
+    return mapRateScheduleWithChildren(updated);
+  }
+
+  async deleteRateSchedule(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.rateSchedule.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Rate schedule ${id} not found`);
+    await this.db.rateSchedule.delete({ where: { id } });
+    if (existing.scope === "revision" && existing.projectId) {
+      await this.syncProjectEstimate(existing.projectId);
+    }
+    return { deleted: true };
+  }
+
+  async createRateScheduleTier(scheduleId: string, input: { name: string; multiplier?: number; sortOrder?: number }): Promise<RateScheduleWithChildren> {
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
+    const maxOrder = await this.db.rateScheduleTier.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
+    await this.db.rateScheduleTier.create({
+      data: { id: createId("rst"), scheduleId, name: input.name, multiplier: input.multiplier ?? 1.0, sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1) },
+    });
+    return this.getRateSchedule(scheduleId);
+  }
+
+  async updateRateScheduleTier(tierId: string, patch: { name?: string; multiplier?: number; sortOrder?: number }): Promise<RateScheduleWithChildren> {
+    const tier = await this.db.rateScheduleTier.findFirst({ where: { id: tierId } });
+    if (!tier) throw new Error(`Rate schedule tier ${tierId} not found`);
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: tier.scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule not found`);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.multiplier !== undefined) data.multiplier = patch.multiplier;
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+    await this.db.rateScheduleTier.update({ where: { id: tierId }, data });
+    return this.getRateSchedule(tier.scheduleId);
+  }
+
+  async deleteRateScheduleTier(tierId: string): Promise<RateScheduleWithChildren> {
+    const tier = await this.db.rateScheduleTier.findFirst({ where: { id: tierId } });
+    if (!tier) throw new Error(`Rate schedule tier ${tierId} not found`);
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: tier.scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule not found`);
+    await this.db.rateScheduleTier.delete({ where: { id: tierId } });
+    return this.getRateSchedule(tier.scheduleId);
+  }
+
+  async createRateScheduleItem(scheduleId: string, input: {
+    catalogItemId?: string; code?: string; name: string; unit?: string;
+    rates?: Record<string, number>; costRates?: Record<string, number>;
+    burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
+  }): Promise<RateScheduleWithChildren> {
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
+    const maxOrder = await this.db.rateScheduleItem.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
+    await this.db.rateScheduleItem.create({
+      data: {
+        id: createId("rsi"), scheduleId, catalogItemId: input.catalogItemId ?? null,
+        code: input.code ?? "", name: input.name, unit: input.unit ?? "HR",
+        rates: (input.rates ?? {}) as any, costRates: (input.costRates ?? {}) as any,
+        burden: input.burden ?? 0, perDiem: input.perDiem ?? 0,
+        metadata: (input.metadata ?? {}) as any,
+        sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
       },
     });
-
-    await this.syncProjectEstimate(projectId);
-    return mapLabourRate(rate);
+    if (schedule.scope === "revision" && schedule.projectId) {
+      await this.syncProjectEstimate(schedule.projectId);
+    }
+    return this.getRateSchedule(scheduleId);
   }
 
-  async updateLabourRate(projectId: string, rateId: string, patch: LabourRatePatchInput) {
-    await this.requireProject(projectId);
-    const rate = await this.db.labourRate.findFirst({ where: { id: rateId } });
-    if (!rate) throw new Error(`Labour rate ${rateId} not found for project ${projectId}`);
+  async updateRateScheduleItem(itemId: string, patch: {
+    code?: string; name?: string; unit?: string;
+    rates?: Record<string, number>; costRates?: Record<string, number>;
+    burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
+  }): Promise<RateScheduleWithChildren> {
+    const item = await this.db.rateScheduleItem.findFirst({ where: { id: itemId } });
+    if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule not found`);
+    const data: any = {};
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.unit !== undefined) data.unit = patch.unit;
+    if (patch.rates !== undefined) data.rates = patch.rates;
+    if (patch.costRates !== undefined) data.costRates = patch.costRates;
+    if (patch.burden !== undefined) data.burden = patch.burden;
+    if (patch.perDiem !== undefined) data.perDiem = patch.perDiem;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata;
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+    await this.db.rateScheduleItem.update({ where: { id: itemId }, data });
+    if (schedule.scope === "revision" && schedule.projectId) {
+      await this.syncProjectEstimate(schedule.projectId);
+    }
+    return this.getRateSchedule(item.scheduleId);
+  }
 
-    const updated = await this.db.labourRate.update({
-      where: { id: rateId },
-      data: patch as any,
+  async deleteRateScheduleItem(itemId: string): Promise<RateScheduleWithChildren> {
+    const item = await this.db.rateScheduleItem.findFirst({ where: { id: itemId } });
+    if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
+    const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
+    if (!schedule) throw new Error(`Rate schedule not found`);
+    await this.db.rateScheduleItem.delete({ where: { id: itemId } });
+    if (schedule.scope === "revision" && schedule.projectId) {
+      await this.syncProjectEstimate(schedule.projectId);
+    }
+    return this.getRateSchedule(item.scheduleId);
+  }
+
+  async importRateScheduleToRevision(projectId: string, scheduleId: string): Promise<RateScheduleWithChildren> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) throw new Error(`No active revision for project ${projectId}`);
+    const source = await this.db.rateSchedule.findFirst({
+      where: { id: scheduleId, organizationId: this.organizationId, scope: "global" },
+      include: { tiers: true, items: true },
     });
+    if (!source) throw new Error(`Rate schedule ${scheduleId} not found`);
 
-    await this.syncProjectEstimate(projectId);
-    return mapLabourRate(updated);
+    return await this.db.$transaction(async (tx) => {
+      const newSchedId = createId("rs");
+      const tierIdMap = new Map<string, string>();
+
+      await tx.rateSchedule.create({
+        data: {
+          id: newSchedId, organizationId: this.organizationId, name: source.name, description: source.description,
+          category: source.category, scope: "revision", projectId, revisionId: revision.id,
+          sourceScheduleId: source.id, effectiveDate: source.effectiveDate, expiryDate: source.expiryDate,
+          defaultMarkup: source.defaultMarkup, autoCalculate: source.autoCalculate,
+          metadata: source.metadata as any,
+        },
+      });
+
+      for (const tier of source.tiers) {
+        const newTierId = createId("rst");
+        tierIdMap.set(tier.id, newTierId);
+        await tx.rateScheduleTier.create({
+          data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder },
+        });
+      }
+
+      for (const item of source.items) {
+        const remappedRates: Record<string, number> = {};
+        const remappedCostRates: Record<string, number> = {};
+        for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
+          remappedRates[tierIdMap.get(oldTierId) ?? oldTierId] = val;
+        }
+        for (const [oldTierId, val] of Object.entries((item.costRates as Record<string, number>) ?? {})) {
+          remappedCostRates[tierIdMap.get(oldTierId) ?? oldTierId] = val;
+        }
+        await tx.rateScheduleItem.create({
+          data: {
+            id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId,
+            code: item.code, name: item.name, unit: item.unit,
+            rates: remappedRates, costRates: remappedCostRates,
+            burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
+          },
+        });
+      }
+
+      const result = await tx.rateSchedule.findFirst({
+        where: { id: newSchedId },
+        include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      });
+      return mapRateScheduleWithChildren(result);
+    });
   }
 
-  async deleteLabourRate(projectId: string, rateId: string) {
+  async listRevisionRateSchedules(projectId: string): Promise<RateScheduleWithChildren[]> {
     await this.requireProject(projectId);
-    const rate = await this.db.labourRate.findFirst({ where: { id: rateId } });
-    if (!rate) throw new Error(`Labour rate ${rateId} not found for project ${projectId}`);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const schedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+    return schedules.map(mapRateScheduleWithChildren);
+  }
 
-    await this.db.labourRate.delete({ where: { id: rateId } });
-    await this.syncProjectEstimate(projectId);
-    return mapLabourRate(rate);
+  async autoCalculateRateSchedule(id: string): Promise<RateScheduleWithChildren> {
+    const schedule = await this.db.rateSchedule.findFirst({
+      where: { id, organizationId: this.organizationId },
+      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: true },
+    });
+    if (!schedule) throw new Error(`Rate schedule ${id} not found`);
+    if (schedule.tiers.length === 0) return mapRateScheduleWithChildren(schedule);
+
+    const baseTier = schedule.tiers[0];
+    for (const item of schedule.items) {
+      const rates = (item.rates as Record<string, number>) ?? {};
+      const costRates = (item.costRates as Record<string, number>) ?? {};
+      const baseRate = rates[baseTier.id] ?? 0;
+      const baseCost = costRates[baseTier.id] ?? 0;
+      const newRates: Record<string, number> = {};
+      const newCostRates: Record<string, number> = {};
+      for (const tier of schedule.tiers) {
+        newRates[tier.id] = Math.round(baseRate * tier.multiplier * 100) / 100;
+        newCostRates[tier.id] = Math.round(baseCost * tier.multiplier * 100) / 100;
+      }
+      await this.db.rateScheduleItem.update({
+        where: { id: item.id },
+        data: { rates: newRates, costRates: newCostRates },
+      });
+    }
+
+    if (schedule.scope === "revision" && schedule.projectId) {
+      await this.syncProjectEstimate(schedule.projectId);
+    }
+    return this.getRateSchedule(id);
   }
 
   // ── Revision Management ────────────────────────────────────────────────
@@ -2632,10 +3574,51 @@ export class PrismaApiStore {
         await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
       }
 
-      // Copy labour rates
-      const oldRates = await tx.labourRate.findMany({ where: { revisionId: currentRevision.id } });
-      for (const r of oldRates) {
-        await tx.labourRate.create({ data: { id: createId("rate"), revisionId: newRevisionId, name: r.name, regularRate: r.regularRate, overtimeRate: r.overtimeRate, doubleRate: r.doubleRate } });
+      // Copy rate schedules (deep copy with tier ID remapping)
+      const oldSchedules = await tx.rateSchedule.findMany({
+        where: { revisionId: currentRevision.id },
+        include: { tiers: true, items: true },
+      });
+      for (const sched of oldSchedules) {
+        const newSchedId = createId("rs");
+        const tierIdMap = new Map<string, string>();
+        await tx.rateSchedule.create({
+          data: {
+            id: newSchedId, organizationId: sched.organizationId, name: sched.name, description: sched.description,
+            category: sched.category, scope: "revision", projectId: sched.projectId,
+            revisionId: newRevisionId, sourceScheduleId: sched.sourceScheduleId,
+            effectiveDate: sched.effectiveDate, expiryDate: sched.expiryDate,
+            defaultMarkup: sched.defaultMarkup, autoCalculate: sched.autoCalculate,
+            metadata: sched.metadata as any,
+          },
+        });
+        for (const tier of sched.tiers) {
+          const newTierId = createId("rst");
+          tierIdMap.set(tier.id, newTierId);
+          await tx.rateScheduleTier.create({
+            data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder },
+          });
+        }
+        for (const item of sched.items) {
+          const remappedRates: Record<string, number> = {};
+          const remappedCostRates: Record<string, number> = {};
+          for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
+            const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
+            remappedRates[newTierId] = val;
+          }
+          for (const [oldTierId, val] of Object.entries((item.costRates as Record<string, number>) ?? {})) {
+            const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
+            remappedCostRates[newTierId] = val;
+          }
+          await tx.rateScheduleItem.create({
+            data: {
+              id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId,
+              code: item.code, name: item.name, unit: item.unit,
+              rates: remappedRates, costRates: remappedCostRates,
+              burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
+            },
+          });
+        }
       }
 
       // Copy report sections with ID mapping
@@ -2704,7 +3687,6 @@ export class PrismaApiStore {
       await tx.modifier.deleteMany({ where: { revisionId } });
       await tx.additionalLineItem.deleteMany({ where: { revisionId } });
       await tx.condition.deleteMany({ where: { revisionId } });
-      await tx.labourRate.deleteMany({ where: { revisionId } });
       await tx.reportSection.deleteMany({ where: { revisionId } });
       await tx.quoteRevision.delete({ where: { id: revisionId } });
 
@@ -2851,7 +3833,7 @@ export class PrismaApiStore {
         }
       }
 
-      // Copy modifiers, ALIs, conditions, labour rates, report sections
+      // Copy modifiers, ALIs, conditions, report sections
       for (const m of await tx.modifier.findMany({ where: { revisionId: sourceRevision.id } })) {
         await tx.modifier.create({ data: { id: createId("mod"), revisionId: newRevisionId, name: m.name, type: m.type, appliesTo: m.appliesTo, percentage: m.percentage, amount: m.amount, show: m.show } });
       }
@@ -2861,10 +3843,6 @@ export class PrismaApiStore {
       for (const c of await tx.condition.findMany({ where: { revisionId: sourceRevision.id } })) {
         await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
       }
-      for (const r of await tx.labourRate.findMany({ where: { revisionId: sourceRevision.id } })) {
-        await tx.labourRate.create({ data: { id: createId("rate"), revisionId: newRevisionId, name: r.name, regularRate: r.regularRate, overtimeRate: r.overtimeRate, doubleRate: r.doubleRate } });
-      }
-
       const sectionIdMap = new Map<string, string>();
       for (const s of await tx.reportSection.findMany({ where: { revisionId: sourceRevision.id } })) {
         const newSId = createId("section");
@@ -2958,7 +3936,6 @@ export class PrismaApiStore {
         await tx.modifier.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.additionalLineItem.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.condition.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
-        await tx.labourRate.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.reportSection.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.quoteRevision.deleteMany({ where: { id: { in: otherRevisionIds } } });
       }
@@ -3295,6 +4272,7 @@ export class PrismaApiStore {
     const data: any = { updatedAt: new Date() };
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.parentId !== undefined) data.parentId = patch.parentId ?? null;
+    if (patch.storagePath !== undefined) data.storagePath = patch.storagePath;
 
     const updated = await this.db.fileNode.update({ where: { id: nodeId }, data });
     return mapFileNode(updated);
@@ -3586,7 +4564,8 @@ export class PrismaApiStore {
     const outputType = toolDef.outputType ?? plugin.defaultOutputType ?? "summary";
     const toolName = toolDef.name ?? plugin.name;
 
-    const output: PluginOutput = { type: outputType, displayText: `Executed ${toolName} with provided input` };
+    const output: PluginOutput = { type: outputType, displayText: `Executed ${toolName} with provided input`, appliedEffects: [] };
+    const appliedItemIds: string[] = [];
 
     switch (outputType) {
       case "line_items":
@@ -3605,8 +4584,41 @@ export class PrismaApiStore {
         output.revisionPatches = (input.patches as PluginOutputRevisionPatch[] | undefined) ?? [];
         output.summary = { title: toolName, sections: output.revisionPatches.map((p) => ({ label: p.field, value: String(p.value), format: "text" as const })) };
         break;
+      case "modifier":
+        output.modifier = (input.modifier as PluginOutputModifier | undefined) ?? {
+          name: (input.name as string) ?? toolName,
+          type: (input.modifierType as "percentage" | "amount") ?? "percentage",
+          appliesTo: (input.appliesTo as string) ?? "All",
+          percentage: input.percentage as number | undefined,
+          amount: input.amount as number | undefined,
+          show: (input.show as "Yes" | "No") ?? "Yes",
+        };
+        output.summary = { title: toolName, sections: [
+          { label: "Modifier", value: output.modifier.name, format: "text" as const },
+          { label: "Type", value: output.modifier.type, format: "text" as const },
+          ...(output.modifier.percentage != null ? [{ label: "Percentage", value: `${(output.modifier.percentage * 100).toFixed(1)}%`, format: "text" as const }] : []),
+          ...(output.modifier.amount != null ? [{ label: "Amount", value: String(output.modifier.amount), format: "currency" as const }] : []),
+        ] };
+        break;
       case "score":
         output.scores = (input.scores as PluginOutputScore[] | undefined) ?? [];
+        if (output.scores.length === 0 && opts?.formState?.scoringData) {
+          const scoringData = opts.formState.scoringData as Record<string, Record<string, number>>;
+          const uiSections = (toolDef.ui?.sections ?? []) as any[];
+          for (const section of uiSections) {
+            if (section.type !== "scoring" || !section.scoring) continue;
+            const scoring = section.scoring as any;
+            const scores = scoringData[scoring.id];
+            if (!scores) continue;
+            for (const criterion of (scoring.criteria ?? []) as any[]) {
+              output.scores.push({
+                criterionId: criterion.id, label: criterion.label,
+                score: scores[criterion.id] ?? criterion.scale?.min ?? 0,
+                maxScore: criterion.scale?.max ?? 10, weight: criterion.weight ?? 1,
+              });
+            }
+          }
+        }
         output.summary = { title: toolName, sections: output.scores.map((s) => ({ label: s.label, value: `${s.score}/${s.maxScore}`, format: "text" as const })) };
         break;
       case "composite":
@@ -3619,17 +4631,139 @@ export class PrismaApiStore {
         break;
     }
 
+    // ── Apply effects to the quote ────────────────────────────────────
+
+    if (output.lineItems && output.lineItems.length > 0) {
+      const wsId = opts?.worksheetId ?? await this._resolveDefaultWorksheetId(projectId, revisionId);
+      for (const item of output.lineItems) {
+        const created = await this.createWorksheetItem(projectId, wsId, {
+          category: item.category, entityType: item.entityType, entityName: item.entityName,
+          vendor: item.vendor ?? null, description: item.description,
+          quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
+          markup: item.markup ?? 0, price: item.price ?? 0,
+          laborHourReg: item.laborHourReg ?? 0, laborHourOver: item.laborHourOver ?? 0,
+          laborHourDouble: item.laborHourDouble ?? 0, phaseId: item.phaseId,
+        });
+        appliedItemIds.push(created.id);
+      }
+      output.appliedEffects!.push({ type: "line_items", description: `Created ${output.lineItems.length} line item(s)` });
+    }
+
+    if (output.worksheet) {
+      const ws = await this.createWorksheet(projectId, { name: output.worksheet.name });
+      for (const item of output.worksheet.items) {
+        const created = await this.createWorksheetItem(projectId, ws.id, {
+          category: item.category, entityType: item.entityType, entityName: item.entityName,
+          vendor: item.vendor ?? null, description: item.description,
+          quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
+          markup: item.markup ?? 0, price: item.price ?? 0,
+          laborHourReg: item.laborHourReg ?? 0, laborHourOver: item.laborHourOver ?? 0,
+          laborHourDouble: item.laborHourDouble ?? 0, phaseId: item.phaseId,
+        });
+        appliedItemIds.push(created.id);
+      }
+      output.appliedEffects!.push({ type: "worksheet", description: `Created worksheet "${output.worksheet.name}" with ${output.worksheet.items.length} item(s)` });
+    }
+
+    if (output.textContent) {
+      const tc = output.textContent;
+      const fieldMap: Record<string, string> = {
+        "revision.notes": "notes", "revision.scratchpad": "scratchpad",
+        "revision.leadLetter": "leadLetter", "revision.description": "description",
+      };
+      const dbField = fieldMap[tc.targetField] ?? tc.targetField.replace("revision.", "");
+      const rev = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+      if (rev) {
+        const existing = (rev as any)[dbField] as string ?? "";
+        let newValue: string;
+        if (tc.mode === "replace") newValue = tc.content;
+        else if (tc.mode === "prepend") newValue = tc.content + (existing ? "\n" + existing : "");
+        else newValue = (existing ? existing + "\n" : "") + tc.content;
+        await this.updateRevision(projectId, revisionId, { [dbField]: newValue } as any);
+        output.appliedEffects!.push({ type: "text_content", description: `${tc.mode} to ${tc.targetField}` });
+      }
+    }
+
+    if (output.revisionPatches && output.revisionPatches.length > 0) {
+      const patch: Record<string, unknown> = {};
+      for (const p of output.revisionPatches) patch[p.field] = p.value;
+      await this.updateRevision(projectId, revisionId, patch as any);
+      output.appliedEffects!.push({ type: "revision_patch", description: `Patched ${output.revisionPatches.map((p) => p.field).join(", ")}` });
+    }
+
+    if (output.modifier) {
+      const m = output.modifier;
+      await this.createModifier(projectId, revisionId, {
+        name: m.name, type: m.type, appliesTo: m.appliesTo,
+        percentage: m.percentage ?? null, amount: m.amount ?? null, show: m.show,
+      });
+      output.appliedEffects!.push({ type: "modifier", description: `Created modifier "${m.name}"` });
+    }
+
+    if (output.scores && output.scores.length > 0) {
+      const uiSections = (toolDef.ui?.sections ?? []) as any[];
+      for (const section of uiSections) {
+        if (section.type !== "scoring" || !section.scoring) continue;
+        const scoring = section.scoring as any;
+        const outputEffect = scoring.outputEffect;
+        const outputField = scoring.outputField;
+
+        let totalWeighted = 0, totalMaxWeighted = 0;
+        for (const criterion of (scoring.criteria ?? []) as any[]) {
+          const s = output.scores.find((sc) => sc.criterionId === criterion.id);
+          if (!s) continue;
+          totalWeighted += s.score * (criterion.weight ?? 1);
+          totalMaxWeighted += (criterion.scale?.max ?? 10) * (criterion.weight ?? 1);
+        }
+        const pct = totalMaxWeighted > 0 ? (totalWeighted / totalMaxWeighted) * 100 : 0;
+
+        const resultBand = (scoring.resultMapping ?? []).find(
+          (r: any) => pct >= r.minScore && pct <= r.maxScore
+        );
+        if (!resultBand) continue;
+        const resolvedValue = resultBand.value;
+
+        if (outputEffect) {
+          const effect = outputEffect as any;
+          if ((effect.type === "revision_patch" || effect.type === "both") && effect.revisionField) {
+            const numVal = Number(resolvedValue);
+            await this.updateRevision(projectId, revisionId, { [effect.revisionField]: Number.isFinite(numVal) ? numVal : resolvedValue } as any);
+            output.appliedEffects!.push({ type: "scoring_patch", description: `Set ${effect.revisionField} = ${resolvedValue} (band: ${resultBand.label})` });
+          }
+          if ((effect.type === "modifier" || effect.type === "both") && effect.modifier) {
+            const modCfg = effect.modifier;
+            const pctVal = Number(resolvedValue);
+            await this.createModifier(projectId, revisionId, {
+              name: modCfg.name ?? `${toolName} Factor`, type: "percentage",
+              appliesTo: modCfg.appliesTo ?? "All",
+              percentage: Number.isFinite(pctVal) ? pctVal : 0, show: modCfg.show ?? "Yes",
+            });
+            output.appliedEffects!.push({ type: "scoring_modifier", description: `Created modifier "${modCfg.name}" at ${(pctVal * 100).toFixed(1)}% (band: ${resultBand.label})` });
+          }
+        } else if (outputField) {
+          const numVal = Number(resolvedValue);
+          await this.updateRevision(projectId, revisionId, { [outputField]: Number.isFinite(numVal) ? numVal : resolvedValue } as any);
+          output.appliedEffects!.push({ type: "scoring_patch", description: `Set ${outputField} = ${resolvedValue} (band: ${resultBand.label})` });
+        }
+
+        output.summary?.sections.push(
+          { label: "Score", value: `${pct.toFixed(1)}%`, format: "percentage" as const },
+          { label: "Result", value: resultBand.label, format: "text" as const },
+        );
+      }
+    }
+
+    // ── Persist execution ─────────────────────────────────────────────
+
     const execution = await this.db.pluginExecution.create({
       data: {
         id: createId("pexec"),
-        pluginId,
-        toolId,
-        projectId,
-        revisionId,
+        pluginId, toolId, projectId, revisionId,
         worksheetId: opts?.worksheetId,
         input: input as any,
         formState: opts?.formState as any,
         output: output as any,
+        appliedLineItemIds: appliedItemIds.length > 0 ? appliedItemIds : undefined,
         status: "complete",
         executedBy: opts?.executedBy ?? "user",
         agentSessionId: opts?.agentSessionId,
@@ -3638,6 +4772,14 @@ export class PrismaApiStore {
     });
 
     return mapPluginExecution(execution);
+  }
+
+  /** Resolve the first worksheet for a revision, or create one. */
+  private async _resolveDefaultWorksheetId(projectId: string, revisionId: string): Promise<string> {
+    const existing = await this.db.worksheet.findFirst({ where: { revisionId }, orderBy: { order: "asc" } });
+    if (existing) return existing.id;
+    const ws = await this.createWorksheet(projectId, { name: "Generated" });
+    return ws.id;
   }
 
   async listPluginExecutions(projectId: string) {
@@ -3753,62 +4895,6 @@ export class PrismaApiStore {
     return mapUser(user);
   }
 
-  // ── Auth ───────────────────────────────────────────────────────────────
-  // Note: Auth sessions are not stored in Prisma DB in this schema.
-  // For backward compat we use an in-memory approach or could add a session model.
-  // Since there's no AuthSession model in the Prisma schema, we handle this
-  // using a simple token-based approach with the user table.
-
-  private authSessions = new Map<string, { userId: string; token: string; expiresAt: string; createdAt: string }>();
-
-  async login(email: string, password?: string): Promise<{ token: string; user: Omit<User, "passwordHash"> }> {
-    const user = await this.db.user.findFirst({ where: { organizationId: this.organizationId, email } });
-    if (!user) throw new Error("Invalid credentials");
-    if (!user.active) throw new Error("Account disabled");
-
-    if (user.passwordHash && password) {
-      const valid = await verifyPassword(password, user.passwordHash);
-      if (!valid) throw new Error("Invalid credentials");
-    } else if (user.passwordHash && !password) {
-      throw new Error("Invalid credentials");
-    }
-
-    const token = randomUUID();
-    const now = isoNow();
-    this.authSessions.set(token, {
-      userId: user.id,
-      token,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      createdAt: now,
-    });
-
-    await this.db.user.update({
-      where: { id: user.id },
-      data: { lastLoginAt: new Date(), updatedAt: new Date() },
-    });
-
-    const mapped = mapUser(user);
-    const { passwordHash, ...safeUser } = mapped;
-    return { token, user: structuredClone(safeUser) };
-  }
-
-  async validateToken(token: string): Promise<Omit<User, "passwordHash"> | null> {
-    const session = this.authSessions.get(token);
-    if (!session) return null;
-    if (new Date(session.expiresAt) < new Date()) return null;
-
-    const user = await this.db.user.findFirst({ where: { id: session.userId, organizationId: this.organizationId } });
-    if (!user || !user.active) return null;
-
-    const mapped = mapUser(user);
-    const { passwordHash, ...safeUser } = mapped;
-    return structuredClone(safeUser);
-  }
-
-  async logout(token: string): Promise<void> {
-    this.authSessions.delete(token);
-  }
-
   // ── Knowledge Books ────────────────────────────────────────────────────
 
   async listKnowledgeBooks(projectId?: string): Promise<KnowledgeBook[]> {
@@ -3833,6 +4919,7 @@ export class PrismaApiStore {
     projectId?: string | null;
     sourceFileName: string;
     sourceFileSize: number;
+    storagePath?: string | null;
   }): Promise<KnowledgeBook> {
     const book = await this.db.knowledgeBook.create({
       data: {
@@ -3846,6 +4933,7 @@ export class PrismaApiStore {
         status: "uploading",
         sourceFileName: input.sourceFileName,
         sourceFileSize: input.sourceFileSize,
+        storagePath: input.storagePath ?? null,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -3921,7 +5009,9 @@ export class PrismaApiStore {
   }
 
   async searchKnowledgeChunks(query: string, bookId?: string, limit = 20): Promise<KnowledgeChunk[]> {
-    const lowerQuery = query.toLowerCase();
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return [];
+
     const where: any = {};
     if (bookId) where.bookId = bookId;
     else {
@@ -3930,16 +5020,25 @@ export class PrismaApiStore {
     }
 
     const chunks = await this.db.knowledgeChunk.findMany({ where });
-    return chunks
-      .filter((c) => c.text.toLowerCase().includes(lowerQuery) || c.sectionTitle.toLowerCase().includes(lowerQuery))
-      .slice(0, limit)
-      .map(mapKnowledgeChunk);
+
+    // Score chunks by how many query terms they contain
+    const scored = chunks
+      .map((c) => {
+        const lower = c.text.toLowerCase() + " " + c.sectionTitle.toLowerCase();
+        const matchCount = terms.filter((t) => lower.includes(t)).length;
+        return { chunk: c, matchCount };
+      })
+      .filter((s) => s.matchCount > 0)
+      .sort((a, b) => b.matchCount - a.matchCount)
+      .slice(0, limit);
+
+    return scored.map((s) => mapKnowledgeChunk(s.chunk));
   }
 
   // ── Datasets ───────────────────────────────────────────────────────────
 
   async listDatasets(projectId?: string): Promise<Dataset[]> {
-    const where: any = { organizationId: this.organizationId };
+    const where: any = { organizationId: this.organizationId, isTemplate: false };
     if (projectId) {
       where.OR = [{ projectId }, { scope: "global" }];
     }
@@ -4156,5 +5255,325 @@ export function createApiStore(organizationId: string): PrismaApiStore {
   return new PrismaApiStore(sharedPrisma, organizationId);
 }
 
-// Placeholder for backward compatibility - will be removed once server.ts is updated
-export const apiStore = null as unknown as PrismaApiStore;
+// ── Dataset Library (system-level templates, not org-scoped) ─────────────────
+
+export const datasetLibrary = {
+  async listTemplates(): Promise<Dataset[]> {
+    const datasets = await sharedPrisma.dataset.findMany({
+      where: { isTemplate: true },
+      orderBy: { name: "asc" },
+    });
+    return datasets.map(mapDataset);
+  },
+
+  async getTemplate(id: string): Promise<Dataset | null> {
+    const dataset = await sharedPrisma.dataset.findFirst({
+      where: { id, isTemplate: true },
+    });
+    return dataset ? mapDataset(dataset) : null;
+  },
+
+  async createTemplate(input: {
+    name: string;
+    description: string;
+    category: Dataset["category"];
+    columns: Dataset["columns"];
+    source?: Dataset["source"];
+    sourceDescription?: string;
+  }): Promise<Dataset> {
+    const dataset = await sharedPrisma.dataset.create({
+      data: {
+        id: createId("ds"),
+        organizationId: null,
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        scope: "global",
+        columns: input.columns as any,
+        source: input.source ?? "import",
+        sourceDescription: input.sourceDescription ?? "",
+        isTemplate: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return mapDataset(dataset);
+  },
+
+  async updateTemplate(
+    id: string,
+    patch: Partial<Pick<Dataset, "name" | "description" | "category" | "columns" | "sourceDescription">>,
+  ): Promise<Dataset> {
+    const existing = await sharedPrisma.dataset.findFirst({ where: { id, isTemplate: true } });
+    if (!existing) throw new Error(`Template ${id} not found`);
+
+    const data: any = { updatedAt: new Date() };
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.columns !== undefined) data.columns = patch.columns as any;
+    if (patch.sourceDescription !== undefined) data.sourceDescription = patch.sourceDescription;
+
+    const updated = await sharedPrisma.dataset.update({ where: { id }, data });
+    return mapDataset(updated);
+  },
+
+  async deleteTemplate(id: string): Promise<void> {
+    const existing = await sharedPrisma.dataset.findFirst({ where: { id, isTemplate: true } });
+    if (!existing) throw new Error(`Template ${id} not found`);
+    await sharedPrisma.datasetRow.deleteMany({ where: { datasetId: id } });
+    await sharedPrisma.dataset.delete({ where: { id } });
+  },
+
+  async getTemplateRows(
+    id: string,
+    limit = 100,
+    offset = 0,
+    filter?: string,
+  ): Promise<{ rows: DatasetRow[]; total: number }> {
+    const allRows = await sharedPrisma.datasetRow.findMany({
+      where: { datasetId: id },
+      orderBy: { order: "asc" },
+    });
+    let mapped = allRows.map(mapDatasetRow);
+    if (filter) {
+      const lf = filter.toLowerCase();
+      mapped = mapped.filter((r) => JSON.stringify(r.data).toLowerCase().includes(lf));
+    }
+    const total = mapped.length;
+    return { rows: mapped.slice(offset, offset + limit), total };
+  },
+
+  async createTemplateRowsBatch(
+    datasetId: string,
+    rows: Array<Record<string, unknown>>,
+  ): Promise<number> {
+    const now = new Date();
+    const existing = await sharedPrisma.datasetRow.count({ where: { datasetId } });
+    const BATCH = 500;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH);
+      await sharedPrisma.datasetRow.createMany({
+        data: batch.map((data, idx) => ({
+          id: createId("dr"),
+          datasetId,
+          data: data as any,
+          order: existing + i + idx,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      });
+    }
+    await sharedPrisma.dataset.update({
+      where: { id: datasetId },
+      data: { rowCount: existing + rows.length, updatedAt: now },
+    });
+    return rows.length;
+  },
+
+  async deleteTemplateRows(id: string): Promise<void> {
+    await sharedPrisma.datasetRow.deleteMany({ where: { datasetId: id } });
+    await sharedPrisma.dataset.update({
+      where: { id },
+      data: { rowCount: 0, updatedAt: new Date() },
+    });
+  },
+
+  async adoptTemplate(templateId: string, organizationId: string): Promise<Dataset> {
+    const template = await sharedPrisma.dataset.findFirst({
+      where: { id: templateId, isTemplate: true },
+    });
+    if (!template) throw new Error(`Template ${templateId} not found`);
+
+    const now = new Date();
+    const newId = createId("ds");
+
+    const dataset = await sharedPrisma.dataset.create({
+      data: {
+        id: newId,
+        organizationId,
+        name: template.name,
+        description: template.description,
+        category: template.category,
+        scope: "global",
+        columns: template.columns as any,
+        source: "library",
+        sourceDescription: `Adopted from template: ${template.name}`,
+        isTemplate: false,
+        sourceTemplateId: templateId,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    // Clone all rows in batches
+    const allRows = await sharedPrisma.datasetRow.findMany({
+      where: { datasetId: templateId },
+      orderBy: { order: "asc" },
+    });
+
+    const BATCH = 500;
+    for (let i = 0; i < allRows.length; i += BATCH) {
+      const batch = allRows.slice(i, i + BATCH);
+      await sharedPrisma.datasetRow.createMany({
+        data: batch.map((r, idx) => ({
+          id: createId("dr"),
+          datasetId: newId,
+          data: r.data as any,
+          order: i + idx,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      });
+    }
+
+    await sharedPrisma.dataset.update({
+      where: { id: newId },
+      data: { rowCount: allRows.length, updatedAt: now },
+    });
+
+    return mapDataset({ ...dataset, rowCount: allRows.length });
+  },
+};
+
+// ── Catalog Library (global templates) ──────────────────────────────────────
+
+export const catalogLibrary = {
+  async listTemplates(): Promise<Catalog[]> {
+    const catalogs = await sharedPrisma.catalog.findMany({
+      where: { isTemplate: true },
+      include: { _count: { select: { items: true } } },
+      orderBy: { name: "asc" },
+    });
+    return catalogs.map(mapCatalog);
+  },
+
+  async getTemplate(id: string): Promise<Catalog | null> {
+    const catalog = await sharedPrisma.catalog.findFirst({
+      where: { id, isTemplate: true },
+      include: { _count: { select: { items: true } } },
+    });
+    return catalog ? mapCatalog(catalog) : null;
+  },
+
+  async createTemplate(input: {
+    name: string;
+    description: string;
+    kind: string;
+    source?: string;
+    sourceDescription?: string;
+  }): Promise<Catalog> {
+    const catalog = await sharedPrisma.catalog.create({
+      data: {
+        id: createId("cat"),
+        organizationId: null,
+        name: input.name,
+        description: input.description,
+        kind: input.kind,
+        scope: "global",
+        source: input.source ?? "import",
+        sourceDescription: input.sourceDescription ?? "",
+        isTemplate: true,
+      },
+    });
+    return mapCatalog(catalog);
+  },
+
+  async updateTemplate(
+    id: string,
+    patch: Partial<Pick<Catalog, "name" | "description" | "kind" | "sourceDescription">>,
+  ): Promise<Catalog> {
+    const existing = await sharedPrisma.catalog.findFirst({ where: { id, isTemplate: true } });
+    if (!existing) throw new Error(`Catalog template ${id} not found`);
+
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.kind !== undefined) data.kind = patch.kind;
+    if (patch.sourceDescription !== undefined) data.sourceDescription = patch.sourceDescription;
+
+    const updated = await sharedPrisma.catalog.update({ where: { id }, data });
+    return mapCatalog(updated);
+  },
+
+  async deleteTemplate(id: string): Promise<void> {
+    const existing = await sharedPrisma.catalog.findFirst({ where: { id, isTemplate: true } });
+    if (!existing) throw new Error(`Catalog template ${id} not found`);
+    await sharedPrisma.catalogItem.deleteMany({ where: { catalogId: id } });
+    await sharedPrisma.catalog.delete({ where: { id } });
+  },
+
+  async getTemplateItems(
+    id: string,
+    limit = 100,
+    offset = 0,
+    filter?: string,
+  ): Promise<{ items: CatalogItem[]; total: number }> {
+    const allItems = await sharedPrisma.catalogItem.findMany({
+      where: { catalogId: id },
+      orderBy: { order: "asc" },
+    });
+    let mapped = allItems.map(mapCatalogItem);
+    if (filter) {
+      const lf = filter.toLowerCase();
+      mapped = mapped.filter((i) =>
+        i.code.toLowerCase().includes(lf) ||
+        i.name.toLowerCase().includes(lf) ||
+        JSON.stringify(i.metadata).toLowerCase().includes(lf)
+      );
+    }
+    const total = mapped.length;
+    return { items: mapped.slice(offset, offset + limit), total };
+  },
+
+  async adoptTemplate(templateId: string, organizationId: string): Promise<Catalog> {
+    const template = await sharedPrisma.catalog.findFirst({
+      where: { id: templateId, isTemplate: true },
+    });
+    if (!template) throw new Error(`Catalog template ${templateId} not found`);
+
+    const now = new Date();
+    const newId = createId("cat");
+
+    const catalog = await sharedPrisma.catalog.create({
+      data: {
+        id: newId,
+        organizationId,
+        name: template.name,
+        description: template.description,
+        kind: template.kind,
+        scope: "global",
+        source: "library",
+        sourceDescription: `Adopted from template: ${template.name}`,
+        isTemplate: false,
+        sourceTemplateId: templateId,
+      },
+    });
+
+    // Clone all items in batches
+    const allItems = await sharedPrisma.catalogItem.findMany({
+      where: { catalogId: templateId },
+      orderBy: { order: "asc" },
+    });
+
+    const BATCH = 500;
+    for (let i = 0; i < allItems.length; i += BATCH) {
+      const batch = allItems.slice(i, i + BATCH);
+      await sharedPrisma.catalogItem.createMany({
+        data: batch.map((item, idx) => ({
+          id: createId("ci"),
+          catalogId: newId,
+          code: item.code,
+          name: item.name,
+          unit: item.unit,
+          unitCost: item.unitCost,
+          unitPrice: item.unitPrice,
+          metadata: item.metadata as any,
+          order: i + idx,
+        })),
+      });
+    }
+
+    return mapCatalog({ ...catalog, _count: { items: allItems.length } });
+  },
+};

@@ -1,7 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
-import { createApiStore } from "../prisma-store.js";
-const apiStore = createApiStore(process.env.DEFAULT_ORG_ID || "default");
 
 /**
  * Knowledge API routes — Fastify plugin.
@@ -53,13 +51,14 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         category: fields.category as "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general",
         scope: (fields.scope as "global" | "project") ?? "global",
         projectId: fields.projectId || undefined,
+        organizationId: request.user?.organizationId ?? undefined,
         options: {
           chunkStrategy: (fields.chunkStrategy as "recursive" | "section-aware" | "page") || undefined,
           chunkSize: fields.chunkSize ? parseInt(fields.chunkSize, 10) : undefined,
           enableContextualEnrichment: fields.enableContextualEnrichment === "true",
-          enableEmbeddings: fields.enableEmbeddings === "true",
+          enableEmbeddings: fields.enableEmbeddings === "false" ? false : true,
         },
-      });
+      }, request.store!);
 
       reply.code(201);
       return result;
@@ -106,13 +105,14 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         category: body.category as "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general",
         scope: (body.scope as "global" | "project") ?? "global",
         projectId: body.projectId || undefined,
+        organizationId: request.user?.organizationId ?? undefined,
         options: {
           chunkStrategy: (body.options?.chunkStrategy as "recursive" | "section-aware" | "page") || undefined,
           chunkSize: body.options?.chunkSize,
           enableContextualEnrichment: body.options?.enableContextualEnrichment,
           enableEmbeddings: body.options?.enableEmbeddings,
         },
-      });
+      }, request.store!);
 
       reply.code(201);
       return result;
@@ -127,7 +127,6 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
   // ── GET /api/knowledge/search/enhanced ──────────────────────────────
   // Enhanced knowledge search with hybrid scoring.
-  // Separate path from the basic /api/knowledge/search in agent-routes for backward compat.
   app.get("/api/knowledge/search/enhanced", async (request, reply) => {
     try {
       const query = request.query as {
@@ -144,12 +143,13 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
 
       const results = await knowledgeService.search(query.q, {
+        organizationId: request.user?.organizationId ?? undefined,
         projectId: query.projectId,
         bookId: query.bookId,
         scope: (query.scope as "global" | "project" | "all") || undefined,
         limit: query.limit ? parseInt(query.limit, 10) : undefined,
         includeProjectDocs: query.includeProjectDocs === "true",
-      });
+      }, request.store!);
 
       return {
         hits: results,
@@ -190,7 +190,8 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         body.documentId,
         body.projectId,
         body.analysisType,
-        body.focusArea
+        body.focusArea,
+        request.store!,
       );
 
       return result;
@@ -203,21 +204,20 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── GET /api/knowledge/documents/:projectId ─────────────────────────
+  // ── GET /api/knowledge/documents/:projectId/enhanced ──────────────────
   // List project documents with enhanced metadata (status, type, chunk count).
   app.get("/api/knowledge/documents/:projectId/enhanced", async (request, reply) => {
     try {
       const { projectId } = request.params as { projectId: string };
 
       // Get source documents
-      const docs = await apiStore.listDocuments(projectId);
+      const docs = await request.store!.listDocuments(projectId);
 
       // Get knowledge books scoped to this project
-      const books = await apiStore.listKnowledgeBooks(projectId);
+      const books = await request.store!.listKnowledgeBooks(projectId);
 
       // Build enhanced list
       const enhanced = docs.map((doc: any) => {
-        // Find a matching knowledge book for this document
         const matchingBook = books.find(
           (b) => b.sourceFileName === doc.fileName || b.name === doc.fileName
         );
@@ -230,7 +230,6 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           pageCount: doc.pageCount,
           hasExtractedText: !!doc.extractedText,
           createdAt: doc.createdAt,
-          // Enhanced fields
           knowledgeBookId: matchingBook?.id ?? null,
           indexingStatus: matchingBook?.status ?? "unprocessed",
           chunkCount: matchingBook?.chunkCount ?? 0,
@@ -256,7 +255,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       const { pages } = (request.query ?? {}) as { pages?: string };
 
       // Try source documents first
-      const docs = await apiStore.listDocuments(projectId);
+      const docs = await request.store!.listDocuments(projectId);
       const doc = docs.find((d: any) => d.id === documentId);
 
       if (doc) {
@@ -282,9 +281,9 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
 
       // Try knowledge books
-      const book = await apiStore.getKnowledgeBook(documentId);
+      const book = await request.store!.getKnowledgeBook(documentId);
       if (book) {
-        const chunks = await apiStore.listKnowledgeChunks(documentId);
+        const chunks = await request.store!.listKnowledgeChunks(documentId);
 
         let filteredChunks = chunks;
         if (pages) {

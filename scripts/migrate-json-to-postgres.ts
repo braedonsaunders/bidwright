@@ -325,21 +325,7 @@ async function main() {
       });
     }
 
-    // 14. Labour Rates
-    for (const rate of store.labourRates ?? []) {
-      await tx.labourRate.create({
-        data: {
-          id: rate.id,
-          revisionId: rate.revisionId,
-          name: rate.name ?? '',
-          regularRate: rate.regularRate ?? 0,
-          overtimeRate: rate.overtimeRate ?? 0,
-          doubleRate: rate.doubleRate ?? 0,
-        },
-      });
-    }
-
-    // 15. Report Sections
+    // 14. Report Sections
     for (const section of store.reportSections ?? []) {
       await tx.reportSection.create({
         data: {

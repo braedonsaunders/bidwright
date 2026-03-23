@@ -1,5 +1,4 @@
-import { createApiStore } from "../prisma-store.js";
-const apiStore = createApiStore(process.env.DEFAULT_ORG_ID || "default");
+import type { PrismaApiStore } from "../prisma-store.js";
 import { createLLMAdapter } from "@bidwright/agent";
 import type { Dataset, DatasetColumn, DatasetRow } from "@bidwright/domain";
 
@@ -138,17 +137,17 @@ export class DatasetService {
     projectId?: string;
     sampleOnly?: boolean;
     sampleRows?: number;
-  }): Promise<{
+  }, store: PrismaApiStore): Promise<{
     datasetId: string;
     rowCount: number;
     sampleRows?: Array<Record<string, unknown>>;
     status: "completed" | "processing";
   }> {
     // 1. Get book and its chunks
-    const book = await apiStore.getKnowledgeBook(params.bookId);
+    const book = await store!.getKnowledgeBook(params.bookId);
     if (!book) throw new Error(`Knowledge book ${params.bookId} not found`);
 
-    const chunks = await apiStore.listKnowledgeChunks(params.bookId);
+    const chunks = await store!.listKnowledgeChunks(params.bookId);
     if (chunks.length === 0) {
       throw new Error(`Knowledge book ${params.bookId} has no chunks`);
     }
@@ -162,7 +161,7 @@ export class DatasetService {
       unit: c.unit,
     }));
 
-    const dataset = await apiStore.createDataset({
+    const dataset = await store!.createDataset({
       name: params.datasetName,
       description: params.description ?? `Generated from ${book.name}`,
       category: params.category,
@@ -233,7 +232,7 @@ ${chunkTexts}`;
     if (params.sampleOnly) {
       const sampleLimit = params.sampleRows ?? 10;
       // Clean up the empty dataset we created
-      await apiStore.deleteDataset(dataset.id);
+      await store!.deleteDataset(dataset.id);
       return {
         datasetId: "",
         rowCount: allRows.length,
@@ -244,7 +243,7 @@ ${chunkTexts}`;
 
     // 5. Batch insert rows
     if (allRows.length > 0) {
-      await apiStore.createDatasetRowsBatch(dataset.id, allRows);
+      await store!.createDatasetRowsBatch(dataset.id, allRows);
     }
 
     return {
@@ -261,17 +260,18 @@ ${chunkTexts}`;
    */
   async suggestSchema(
     bookId: string,
-    purpose?: string
+    purpose?: string,
+    store?: PrismaApiStore,
   ): Promise<{
     suggestedName: string;
     suggestedCategory: string;
     columns: Array<{ key: string; name: string; type: string; unit?: string; description: string }>;
     rationale: string;
   }> {
-    const book = await apiStore.getKnowledgeBook(bookId);
+    const book = await store!.getKnowledgeBook(bookId);
     if (!book) throw new Error(`Knowledge book ${bookId} not found`);
 
-    const chunks = await apiStore.listKnowledgeChunks(bookId);
+    const chunks = await store!.listKnowledgeChunks(bookId);
     const sampleChunks = chunks.slice(0, 10);
     const sampleText = sampleChunks.map((c, i) => `--- Chunk ${i + 1} ---\n${c.text}`).join("\n\n");
 
@@ -334,9 +334,10 @@ Return JSON in this exact format:
     datasetId: string,
     format: "csv" | "json",
     data: string,
-    skipHeader?: boolean
+    skipHeader?: boolean,
+    store?: PrismaApiStore,
   ): Promise<{ rowsImported: number; errors: string[] }> {
-    const dataset = await apiStore.getDataset(datasetId);
+    const dataset = await store!.getDataset(datasetId);
     if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
 
     const errors: string[] = [];
@@ -410,7 +411,7 @@ Return JSON in this exact format:
 
     // Batch insert valid rows
     if (validRows.length > 0) {
-      await apiStore.createDatasetRowsBatch(datasetId, validRows);
+      await store!.createDatasetRowsBatch(datasetId, validRows);
     }
 
     return { rowsImported: validRows.length, errors };
