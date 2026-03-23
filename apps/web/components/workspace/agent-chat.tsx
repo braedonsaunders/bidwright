@@ -953,26 +953,32 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 timeline.push({ kind: "message", id: msg.id, role: msg.role, content: msg.content, toolCalls: msg.toolCalls });
               }
 
-              // Intake events (pre-sorted by backend with sequence numbers)
-              const events: Array<{ seq: number; type: "tool" | "message"; data: any }> = (intakeStatus as any)?.events ?? [];
-              for (const evt of events) {
-                if (evt.type === "message") {
-                  const content = evt.data.content;
+              // Intake events from DB (CLI format: type=tool_call/message/thinking/status, or legacy: type=tool/message with seq)
+              const events: any[] = (intakeStatus as any)?.events ?? [];
+              for (let i = 0; i < events.length; i++) {
+                const evt = events[i];
+                const evtType = evt.type;
+                const evtId = evt.seq != null ? `evt-${evt.seq}` : `evt-${i}`;
+
+                if (evtType === "message") {
+                  const content = evt.data?.content;
                   if (content && !content.includes("[Context limit")) {
-                    timeline.push({ kind: "message", id: `evt-${evt.seq}`, role: evt.data.role ?? "assistant", content });
+                    timeline.push({ kind: "message", id: evtId, role: evt.data?.role ?? "assistant", content });
                   }
-                } else if (evt.type === "tool") {
+                } else if (evtType === "tool" || evtType === "tool_call") {
+                  const toolId = evt.data?.toolId || evt.data?.toolName || "unknown";
                   timeline.push({
                     kind: "toolcall",
-                    id: `evt-tc-${evt.seq}`,
+                    id: `tc-${evtId}`,
                     tc: {
-                      id: `evt-tc-${evt.seq}`,
-                      toolId: evt.data.toolId,
-                      input: {},
-                      result: { success: evt.data.success, duration_ms: evt.data.duration_ms },
+                      id: `tc-${evtId}`,
+                      toolId,
+                      input: evt.data?.input || {},
+                      result: { success: evt.data?.success ?? true, duration_ms: evt.data?.duration_ms ?? 0 },
                     },
                   });
                 }
+                // thinking and status events are shown separately (thinkingBlocks state), not in timeline
               }
 
               // Summary as final message
