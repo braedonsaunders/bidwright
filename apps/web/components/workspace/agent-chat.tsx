@@ -437,7 +437,9 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     try {
       if (cliRuntime) {
         // CLI-based intake (preferred)
-        const result = await startCliSession({ projectId, runtime: cliRuntime, model });
+        // Use the agent-specific model, not the legacy LLM model setting
+        const cliModel = cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4";
+        const result = await startCliSession({ projectId, runtime: cliRuntime, model: cliModel });
         setIntakeSessionId(result.sessionId);
         setIntakeStatus({
           sessionId: result.sessionId, projectId, scope: "", status: "running",

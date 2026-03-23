@@ -44,7 +44,14 @@ export function registerCliRoutes(app: FastifyInstance) {
       prompt?: string;
     };
 
-    const { projectId, runtime = "claude-code", model, scope, prompt } = body;
+    const { projectId, runtime = "claude-code", scope, prompt } = body;
+    // Ensure model is valid for the chosen runtime — don't pass OpenRouter model IDs to Claude CLI
+    let model = body.model;
+    if (runtime === "claude-code" && (!model || model.includes("/"))) {
+      model = "sonnet"; // Default Claude model for CLI
+    } else if (runtime === "codex" && (!model || !model.startsWith("gpt"))) {
+      model = "gpt-5.4";
+    }
     const store = request.store!;
 
     // Get project context

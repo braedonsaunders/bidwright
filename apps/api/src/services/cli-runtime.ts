@@ -216,11 +216,11 @@ export async function spawnSession(opts: {
     }
   }
 
-  // Spawn the CLI process
+  // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
-    stdio: ["pipe", "pipe", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
 
   const events = new EventEmitter();
@@ -438,10 +438,12 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
  */
 export function sendMessage(projectId: string, message: string): boolean {
   const session = sessions.get(projectId);
-  if (!session || session.status !== "running" || !session.process.stdin) return false;
+  if (!session || session.status !== "running") return false;
 
-  session.process.stdin.write(message + "\n");
-  return true;
+  // stdin is "ignore" so we can't write to it directly.
+  // For follow-up messages, the session needs to be resumed with --resume
+  // For now, return false — use resumeSession instead
+  return false;
 }
 
 /**
