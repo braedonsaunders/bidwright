@@ -121,15 +121,20 @@ You have access to Bidwright tools via MCP. Key tools:
 
 ## How To Work
 
-You decide your own workflow. Here's what a senior estimator would do:
+You decide your own workflow. Here's the recommended approach:
 
-1. **Read the main spec/RFQ** — understand the full scope of work
-2. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
-3. **Check memory** — see if there's progress from a prior session
-4. **Query knowledge** — search for relevant man-hour data, productivity rates
-5. **Update the quote immediately** — call updateQuote with a proper projectName (from the spec/RFQ title) and a detailed description summarizing the scope. Do this EARLY so the user sees it on the page right away.
-6. **Create worksheets** — one per major system/trade/division
-7. **Populate items** — read relevant docs, create line items with descriptions citing sources
+1. **Read the main spec/RFQ** — find and read the primary specification document
+2. **IMMEDIATELY update the quote** — as soon as you understand the project, call \`updateQuote\` with:
+   - \`projectName\`: The real project name from the spec (e.g. "Soprema Tillsonburg – Bulk Storage System")
+   - \`description\`: A detailed scope summary (what's being built, key systems, contractor responsibilities)
+   - \`notes\`: Key exclusions and assumptions
+
+   **DO THIS BEFORE CREATING WORKSHEETS.** The user is watching the page and needs to see the title and scope update immediately.
+3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
+4. **Check memory** — see if there's progress from a prior session
+5. **Create worksheets** — one per major system/trade/division
+6. **Populate items** — read relevant docs, create line items with descriptions citing sources
+7. **Query knowledge** — search for man-hour data, productivity rates as you create items
 8. **Add conditions** — exclusions, clarifications, assumptions
 9. **Save progress to memory** — so you can resume later
 

@@ -651,6 +651,13 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             messageCount: msgs.length,
             events,
           } : prev);
+
+          // Refresh workspace if there are new mutating tool calls since last poll
+          const mutatingTools = tools.filter((e: any) => MUTATING_TOOL_PATTERNS.test(e.data?.toolId || ""));
+          if (mutatingTools.length > lastRefreshToolCount.current) {
+            lastRefreshToolCount.current = mutatingTools.length;
+            onWorkspaceMutated?.();
+          }
         }
 
         if (data.status !== "running") {

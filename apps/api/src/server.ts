@@ -766,6 +766,50 @@ export function buildServer() {
     return project;
   });
 
+  // PATCH /projects/:projectId — update project metadata (name, client, location, description, notes)
+  app.patch("/projects/:projectId", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = request.body as Record<string, unknown>;
+    const allowedFields = ["name", "clientName", "clientEmail", "clientPhone", "clientAddress", "projectAddress", "location", "scope", "summary", "notes", "description"];
+    const patch: Record<string, unknown> = {};
+    for (const key of allowedFields) {
+      if (body[key] !== undefined) {
+        // Map some aliases
+        if (key === "projectName") patch.name = body[key];
+        else patch[key] = body[key];
+      }
+    }
+    // Also handle projectName -> name alias
+    if (body.projectName !== undefined) patch.name = body.projectName;
+
+    if (Object.keys(patch).length === 0) {
+      return reply.code(400).send({ message: "No valid fields to update" });
+    }
+
+    try {
+      const updated = await prisma.project.update({
+        where: { id: projectId },
+        data: { ...patch, updatedAt: new Date() },
+      });
+      // Also update quote title/customer if those fields changed
+      if (patch.name || patch.clientName) {
+        const quote = await prisma.quote.findFirst({ where: { projectId } });
+        if (quote) {
+          await prisma.quote.update({
+            where: { id: quote.id },
+            data: {
+              ...(patch.name ? { title: patch.name as string } : {}),
+              ...(patch.clientName ? { customerString: patch.clientName as string } : {}),
+            },
+          });
+        }
+      }
+      return updated;
+    } catch (err) {
+      return reply.code(500).send({ message: err instanceof Error ? err.message : "Update failed" });
+    }
+  });
+
   app.get("/projects/:projectId/workspace", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const payload = await buildWorkspaceResponse(request.store!, projectId);
