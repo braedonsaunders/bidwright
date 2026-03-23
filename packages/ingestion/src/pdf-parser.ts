@@ -228,7 +228,7 @@ async function llamaParsePdf(
 
   // 1. Upload
   const form = new FormData();
-  form.append('file', new Blob([input]), filename);
+  form.append('file', new Blob([new Uint8Array(input)]), filename);
 
   if (config.options?.language) {
     form.append('language', config.options.language);

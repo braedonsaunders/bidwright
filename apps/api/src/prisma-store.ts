@@ -1447,8 +1447,42 @@ export class PrismaApiStore {
 
   async deleteProject(projectId: string) {
     await this.requireProject(projectId);
+
+    // Gather file references before cascade-deleting DB records
+    const [packages, knowledgeBooks] = await Promise.all([
+      this.db.storedPackage.findMany({ where: { projectId }, select: { id: true } }),
+      this.db.knowledgeBook.findMany({ where: { projectId }, select: { id: true } }),
+    ]);
+
     // Prisma cascade deletes handle child entities
     await this.db.project.delete({ where: { id: projectId } });
+
+    // Clean up files on disk (best-effort, don't fail the delete if cleanup fails)
+    const dirsToRemove: string[] = [
+      // Project file uploads: projects/{projectId}/
+      resolveApiPath("projects", projectId),
+      // Workspace state: workspaces/{projectId}.json
+      resolveApiPath(relativeWorkspacePath(projectId)),
+    ];
+
+    for (const pkg of packages) {
+      // Check if any surviving SourceDocument still references files in this package
+      const sharedRefs = await this.db.sourceDocument.count({
+        where: { storagePath: { startsWith: relativePackageRoot(pkg.id) } },
+      });
+      if (sharedRefs === 0) {
+        dirsToRemove.push(resolveApiPath(relativePackageRoot(pkg.id)));
+      }
+    }
+
+    for (const book of knowledgeBooks) {
+      dirsToRemove.push(resolveApiPath("knowledge", book.id));
+    }
+
+    await Promise.allSettled(
+      dirsToRemove.map((dir) => rm(dir, { recursive: true, force: true })),
+    );
+
     return { deleted: true };
   }
 
@@ -4282,7 +4316,7 @@ export class PrismaApiStore {
     const node = await this.db.fileNode.findFirst({ where: { id: nodeId } });
     if (!node) throw new Error(`File node ${nodeId} not found`);
 
-    // Recursive delete: collect all descendant IDs
+    // Recursive delete: collect all descendant IDs and their storagePaths
     const toDelete = new Set<string>([nodeId]);
     let changed = true;
     while (changed) {
@@ -4299,7 +4333,21 @@ export class PrismaApiStore {
       }
     }
 
+    // Gather storagePaths before deleting records
+    const nodes = await this.db.fileNode.findMany({
+      where: { id: { in: Array.from(toDelete) }, storagePath: { not: null } },
+      select: { storagePath: true },
+    });
+
     await this.db.fileNode.deleteMany({ where: { id: { in: Array.from(toDelete) } } });
+
+    // Clean up files on disk
+    await Promise.allSettled(
+      nodes
+        .filter((n) => n.storagePath)
+        .map((n) => rm(resolveApiPath(n.storagePath!), { recursive: true, force: true })),
+    );
+
     return { deleted: true };
   }
 
@@ -4965,6 +5013,8 @@ export class PrismaApiStore {
     if (!book) throw new Error(`Knowledge book ${bookId} not found`);
     await this.db.knowledgeChunk.deleteMany({ where: { bookId } });
     await this.db.knowledgeBook.delete({ where: { id: bookId } });
+    // Clean up files on disk
+    await rm(resolveApiPath("knowledge", bookId), { recursive: true, force: true }).catch(() => {});
     return mapKnowledgeBook(book);
   }
 

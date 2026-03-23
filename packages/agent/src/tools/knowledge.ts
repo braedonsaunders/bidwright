@@ -671,8 +671,8 @@ export const viewBookTool = createKnowledgeTool({
     if (!chunksRes.ok) return { success: false, error: `Failed to fetch chunks: ${chunksRes.status}` };
     const allChunks = await chunksRes.json();
 
-    const start = input.startChunk ?? 0;
-    const max = input.maxChunks ?? 50;
+    const start = (input.startChunk as number) ?? 0;
+    const max = (input.maxChunks as number) ?? 50;
     const paginatedChunks = allChunks.slice(start, start + max);
 
     return {
@@ -729,8 +729,8 @@ export const viewBookPageTool = createKnowledgeTool({
     if (!chunksRes.ok) return { success: false, error: `Failed to fetch chunks: ${chunksRes.status}` };
     const allChunks = await chunksRes.json();
 
-    const startPage = input.startPage;
-    const endPage = input.endPage ?? startPage;
+    const startPage = input.startPage as number;
+    const endPage = (input.endPage as number) ?? startPage;
 
     const pageChunks = allChunks.filter((c: any) =>
       c.pageNumber !== null && c.pageNumber >= startPage && c.pageNumber <= endPage

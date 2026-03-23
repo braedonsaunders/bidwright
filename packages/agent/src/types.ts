@@ -14,7 +14,7 @@ export interface ToolParameter {
 export interface ToolDefinition {
   id: ToolId;
   name: string;
-  category: "quote" | "knowledge" | "vision" | "analysis" | "dynamic" | "system" | "web";
+  category: "quote" | "knowledge" | "vision" | "analysis" | "dynamic" | "system" | "web" | "pricing";
   description: string;
   parameters: ToolParameter[];
   inputSchema: ZodType;

@@ -4,23 +4,15 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   Building2,
-  Calendar,
   Check,
   ChevronDown,
   ChevronRight,
-  DollarSign,
   Globe,
-  Key,
   Layers,
   Loader2,
   Lock,
   Mail,
-  Package,
-  Palette,
   Plus,
-  Puzzle,
-  Save,
-  ScrollText,
   Search,
   SlidersHorizontal,
   Trash2,
@@ -93,7 +85,7 @@ import { PluginsPage } from "@/components/plugins-page";
 
 const STORAGE_KEY = "bidwright-settings";
 
-type SettingsTab = "general" | "brand" | "email" | "defaults" | "users" | "integrations" | "categories" | "clients" | "departments" | "items" | "rates" | "conditions" | "plugins";
+type SettingsGroup = "organization" | "estimating" | "data" | "integrations" | "users";
 
 interface GeneralSettings {
   timezone: string;
@@ -198,20 +190,12 @@ const DEFAULT_SETTINGS: AllSettings = {
   },
 };
 
-const TABS: { key: SettingsTab; label: string; icon: typeof Building2 }[] = [
-  { key: "general", label: "General", icon: Building2 },
-  { key: "brand", label: "Brand", icon: Palette },
-  { key: "email", label: "Email", icon: Mail },
-  { key: "defaults", label: "Defaults", icon: SlidersHorizontal },
-  { key: "users", label: "Users", icon: Users },
-  { key: "integrations", label: "Integrations", icon: Key },
-  { key: "categories", label: "Categories", icon: Layers },
-  { key: "clients", label: "Clients", icon: Users },
-  { key: "departments", label: "Departments", icon: Building2 },
-  { key: "items", label: "Items & Catalogs", icon: Package },
-  { key: "rates", label: "Rate Schedules", icon: DollarSign },
-  { key: "conditions", label: "Inclusions / Exclusions", icon: ScrollText },
-  { key: "plugins", label: "Plugins", icon: Puzzle },
+const GROUPS: { key: SettingsGroup; label: string; icon: typeof Building2 }[] = [
+  { key: "organization", label: "Organization", icon: Building2 },
+  { key: "estimating", label: "Estimating", icon: SlidersHorizontal },
+  { key: "data", label: "Data Management", icon: Layers },
+  { key: "integrations", label: "Integrations", icon: Zap },
+  { key: "users", label: "Users & Access", icon: Users },
 ];
 
 const TIMEZONES = [
@@ -468,12 +452,15 @@ export function SettingsPage({
 } = {}) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const validTabs: SettingsTab[] = ["general", "brand", "email", "defaults", "users", "integrations", "categories", "clients", "departments", "items", "rates", "conditions", "plugins"];
-  const initialTab = validTabs.includes(tabParam as SettingsTab) ? (tabParam as SettingsTab) : "general";
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const validGroups: SettingsGroup[] = ["organization", "estimating", "data", "integrations", "users"];
+  const initialGroup = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : "organization";
+  const [activeGroup, setActiveGroup] = useState<SettingsGroup>(initialGroup);
   const [settings, setSettings] = useState<AllSettings>(DEFAULT_SETTINGS);
   const [brand, setBrand] = useState<BrandProfile>(DEFAULT_BRAND);
-  const [saved, setSaved] = useState(false);
+  const settingsLoaded = useRef(false);
+  const brandLoaded = useRef(false);
+  const settingsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const brandTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [emailTestStatus, setEmailTestStatus] = useState<{ loading: boolean; result?: { success: boolean; message: string } }>({ loading: false });
   const [userSaving, setUserSaving] = useState<string | null>(null);
   const [brandCapturing, setBrandCapturing] = useState(false);
@@ -563,6 +550,8 @@ export function SettingsPage({
           setBrand((prev) => ({ ...prev, ...apiSettings.brand }));
           if (apiSettings.brand.websiteUrl) setBrandCaptureUrl(apiSettings.brand.websiteUrl);
         }
+        // Mark loaded so auto-save skips the initial hydration
+        setTimeout(() => { settingsLoaded.current = true; brandLoaded.current = true; }, 0);
       })
       .catch(() => {
         try {
@@ -580,6 +569,7 @@ export function SettingsPage({
         } catch {
           // use defaults
         }
+        setTimeout(() => { settingsLoaded.current = true; brandLoaded.current = true; }, 0);
       });
   }, []);
 
@@ -871,27 +861,28 @@ export function SettingsPage({
       },
     };
 
-    apiUpdateSettings(apiPayload)
-      .then(() => {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      })
-      .catch(() => {
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-      });
+    apiUpdateSettings(apiPayload).catch(() => {});
   }, [settings]);
 
   const saveBrand = useCallback(async () => {
-    try {
-      await apiUpdateBrand(brand);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch {
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    }
+    try { await apiUpdateBrand(brand); } catch {}
   }, [brand]);
+
+  // Auto-save settings on change (debounced)
+  useEffect(() => {
+    if (!settingsLoaded.current) return;
+    clearTimeout(settingsTimer.current);
+    settingsTimer.current = setTimeout(save, 800);
+    return () => clearTimeout(settingsTimer.current);
+  }, [save]);
+
+  // Auto-save brand on change (debounced)
+  useEffect(() => {
+    if (!brandLoaded.current) return;
+    clearTimeout(brandTimer.current);
+    brandTimer.current = setTimeout(saveBrand, 800);
+    return () => clearTimeout(brandTimer.current);
+  }, [saveBrand]);
 
   const handleCaptureBrand = useCallback(async () => {
     if (!brandCaptureUrl.trim()) return;
@@ -955,7 +946,7 @@ export function SettingsPage({
 
   // Auto-fetch models when provider changes or on initial load for integrations tab
   useEffect(() => {
-    if (activeTab !== "integrations") return;
+    if (activeGroup !== "integrations") return;
     const provider = settings.integrations.llmProvider;
     const key = getProviderKey(provider);
     if (key || provider === "lmstudio") {
@@ -963,7 +954,7 @@ export function SettingsPage({
     } else {
       setProviderModels([]);
     }
-  }, [activeTab, settings.integrations.llmProvider]);
+  }, [activeGroup, settings.integrations.llmProvider]);
 
   const saveUser = useCallback(async (user: UserRecord) => {
     setUserSaving(user.id);
@@ -1014,43 +1005,36 @@ export function SettingsPage({
             <h1 className="text-lg font-semibold text-fg">Settings</h1>
             <p className="text-xs text-fg/50">Configure your Bidwright workspace</p>
           </div>
-          <Button variant="accent" size="sm" onClick={activeTab === "brand" ? saveBrand : save}>
-            <Save className="h-3.5 w-3.5" />
-            {saved ? "Saved!" : "Save Settings"}
-          </Button>
         </div>
       </FadeIn>
 
-      <div className="flex gap-5">
-        {/* Tab sidebar */}
-        <FadeIn delay={0.05} className="w-48 shrink-0">
-          <Card className="overflow-hidden">
-            <div className="p-2 space-y-0.5">
-              {TABS.map((tab) => {
-                const Icon = tab.icon;
-                return (
-                  <button
-                    key={tab.key}
-                    onClick={() => setActiveTab(tab.key)}
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs transition-colors",
-                      activeTab === tab.key
-                        ? "bg-accent/10 text-accent font-medium"
-                        : "text-fg/60 hover:bg-panel2 hover:text-fg/80"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {tab.label}
-                  </button>
-                );
-              })}
-            </div>
-          </Card>
-        </FadeIn>
+      {/* Horizontal tab bar */}
+      <FadeIn delay={0.05}>
+        <div className="flex items-center gap-1 border-b border-line pb-px">
+          {GROUPS.map((group) => {
+            const Icon = group.icon;
+            return (
+              <button
+                key={group.key}
+                onClick={() => setActiveGroup(group.key)}
+                className={cn(
+                  "flex items-center gap-2 rounded-t-lg px-4 py-2 text-xs transition-colors -mb-px border-b-2",
+                  activeGroup === group.key
+                    ? "border-accent text-accent font-medium"
+                    : "border-transparent text-fg/50 hover:text-fg/80 hover:border-line"
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {group.label}
+              </button>
+            );
+          })}
+        </div>
+      </FadeIn>
 
-        {/* Tab content */}
-        <FadeIn delay={0.1} className="min-w-0 flex-1">
-          {activeTab === "general" && (
+      {/* Tab content */}
+      <FadeIn delay={0.1} className="space-y-5">
+          {activeGroup === "organization" && (
             <Card>
               <CardHeader>
                 <CardTitle>General Settings</CardTitle>
@@ -1091,8 +1075,8 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeTab === "brand" && (
-            <div className="space-y-4">
+          {activeGroup === "organization" && (
+            <div className="space-y-5">
               <Card>
                 <CardHeader>
                   <CardTitle>Brand Capture</CardTitle>
@@ -1213,7 +1197,7 @@ export function SettingsPage({
             </div>
           )}
 
-          {activeTab === "email" && (
+          {activeGroup === "integrations" && (
             <Card>
               <CardHeader>
                 <CardTitle>Email (SMTP) Settings</CardTitle>
@@ -1266,7 +1250,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeTab === "defaults" && (
+          {activeGroup === "estimating" && (
             <Card>
               <CardHeader>
                 <CardTitle>Default Values</CardTitle>
@@ -1314,7 +1298,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeTab === "users" && (
+          {activeGroup === "users" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Users</CardTitle>
@@ -1366,7 +1350,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeTab === "integrations" && (() => {
+          {activeGroup === "integrations" && (() => {
             const provider = settings.integrations.llmProvider;
             const cfg = PROVIDER_CONFIG[provider];
             const currentKey = cfg ? (settings.integrations[cfg.keyField] as string) : "";
@@ -1464,7 +1448,7 @@ export function SettingsPage({
             );
           })()}
 
-          {activeTab === "categories" && (
+          {activeGroup === "data" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Entity Categories</CardTitle>
@@ -1506,7 +1490,7 @@ export function SettingsPage({
 
                       {/* Expanded editor */}
                       {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4">
+                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveCat(cat); }}>
                           <div className="grid grid-cols-3 gap-4">
                             <div>
                               <Label>Name</Label>
@@ -1650,19 +1634,6 @@ export function SettingsPage({
 
                           {/* Actions */}
                           <div className="flex items-center gap-2 pt-2">
-                            <Button
-                              variant="accent"
-                              size="sm"
-                              onClick={() => saveCat(cat)}
-                              disabled={catSaving === cat.id}
-                            >
-                              {catSaving === cat.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Save className="h-3.5 w-3.5" />
-                              )}
-                              Save
-                            </Button>
                             {!cat.isBuiltIn && (
                               <>
                                 {catDeleteConfirm === cat.id ? (
@@ -1702,7 +1673,7 @@ export function SettingsPage({
           )}
 
           {/* ── Clients Tab ────────────────────────────────────────── */}
-          {activeTab === "clients" && (
+          {activeGroup === "data" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Clients</CardTitle>
@@ -1737,7 +1708,7 @@ export function SettingsPage({
                         </span>
                       </button>
                       {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4">
+                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveCustomer(cust); }}>
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Name</Label>
@@ -1805,14 +1776,14 @@ export function SettingsPage({
                             )}
                           </div>
                           {cust.id.startsWith("new-") && (
-                            <p className="text-xs text-fg/40">Save the client first to add contacts.</p>
+                            <p className="text-xs text-fg/40">Fill in client details and click away to save, then add contacts.</p>
                           )}
                           {contacts.length > 0 && (
                             <div className="space-y-2">
                               {contacts.map((contact) => {
                                 const ce = getContactEdit(contact);
                                 return (
-                                  <div key={contact.id} className="rounded-lg border border-line bg-panel p-3 space-y-3">
+                                  <div key={contact.id} className="rounded-lg border border-line bg-panel p-3 space-y-3" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveContact(cust.id, contact); }}>
                                     <div className="grid grid-cols-2 gap-3">
                                       <div>
                                         <Label>Name</Label>
@@ -1844,14 +1815,6 @@ export function SettingsPage({
                                         Primary Contact
                                       </label>
                                       <span className="flex-1" />
-                                      <Button
-                                        variant="accent" size="xs"
-                                        onClick={() => saveContact(cust.id, contact)}
-                                        disabled={contactSaving === contact.id}
-                                      >
-                                        {contactSaving === contact.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                                        Save
-                                      </Button>
                                       {contactDeleteConfirm === contact.id ? (
                                         <div className="flex items-center gap-2">
                                           <Button variant="danger" size="xs" onClick={() => deleteContact(cust.id, contact.id)}>Confirm</Button>
@@ -1874,10 +1837,6 @@ export function SettingsPage({
 
                           {/* Actions */}
                           <div className="flex items-center gap-2 pt-2">
-                            <Button variant="accent" size="sm" onClick={() => saveCustomer(cust)} disabled={custSaving === cust.id}>
-                              {custSaving === cust.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                              Save Client
-                            </Button>
                             {custDeleteConfirm === cust.id ? (
                               <div className="flex items-center gap-2 ml-2">
                                 <span className="text-xs text-danger">Delete this client?</span>
@@ -1904,7 +1863,7 @@ export function SettingsPage({
           )}
 
           {/* ── Departments Tab ──────────────────────────────────────── */}
-          {activeTab === "departments" && (
+          {activeGroup === "organization" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Departments</CardTitle>
@@ -1924,9 +1883,12 @@ export function SettingsPage({
                   const isExpanded = expandedDeptId === dept.id;
                   return (
                     <div key={dept.id}>
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setExpandedDeptId(isExpanded ? null : dept.id)}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors"
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedDeptId(isExpanded ? null : dept.id); } }}
+                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
                       >
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
                         <span className="font-medium text-fg truncate">{dept.name || "Untitled"}</span>
@@ -1936,9 +1898,9 @@ export function SettingsPage({
                         <span onClick={(e) => e.stopPropagation()}>
                           <Toggle checked={dept.active} onChange={(val) => toggleDeptActive(dept, val)} />
                         </span>
-                      </button>
+                      </div>
                       {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4">
+                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveDepartment(dept); }}>
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Name</Label>
@@ -1955,10 +1917,6 @@ export function SettingsPage({
                           </div>
 
                           <div className="flex items-center gap-2 pt-2">
-                            <Button variant="accent" size="sm" onClick={() => saveDepartment(dept)} disabled={deptSaving === dept.id}>
-                              {deptSaving === dept.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                              Save
-                            </Button>
                             {deptDeleteConfirm === dept.id ? (
                               <div className="flex items-center gap-2 ml-2">
                                 <span className="text-xs text-danger">Delete this department?</span>
@@ -1985,17 +1943,17 @@ export function SettingsPage({
           )}
 
           {/* ── Items & Catalogs ─── */}
-          {activeTab === "items" && (
+          {activeGroup === "estimating" && (
             <ItemsManager catalogs={initialCatalogs} />
           )}
 
           {/* ── Rate Schedules ─── */}
-          {activeTab === "rates" && (
+          {activeGroup === "estimating" && (
             <RateScheduleManager schedules={rateSchedules} setSchedules={setRateSchedules} loading={ratesLoading} catalogs={initialCatalogs} />
           )}
 
           {/* ── Inclusions / Exclusions ─── */}
-          {activeTab === "conditions" && (
+          {activeGroup === "data" && (
             <Card>
               <CardHeader>
                 <CardTitle>Inclusions &amp; Exclusions Library</CardTitle>
@@ -2082,12 +2040,11 @@ export function SettingsPage({
           )}
 
           {/* ── Plugins ─── */}
-          {activeTab === "plugins" && (
+          {activeGroup === "integrations" && (
             <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} />
           )}
 
         </FadeIn>
-      </div>
     </div>
   );
 }

@@ -6,6 +6,8 @@ import {
   Check,
   ChevronDown,
   Edit3,
+  Library,
+  Loader2,
   Package,
   Plus,
   Search,
@@ -24,6 +26,9 @@ import {
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,
+  listCatalogLibrary,
+  getCatalogLibraryItem,
+  adoptCatalogTemplate,
 } from "@/lib/api";
 import {
   Badge,
@@ -336,6 +341,14 @@ export function ItemsManager({
   const [editingCatalogId, setEditingCatalogId] = useState<string | null>(null);
   const [editCatalogName, setEditCatalogName] = useState("");
 
+  // Library browser
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [libraryTemplates, setLibraryTemplates] = useState<CatalogSummary[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryPreview, setLibraryPreview] = useState<(CatalogSummary & { items: CatalogItem[]; total: number }) | null>(null);
+  const [libraryPreviewLoading, setLibraryPreviewLoading] = useState(false);
+  const [adoptingId, setAdoptingId] = useState<string | null>(null);
+
   const selectedCatalog = catalogs.find((c) => c.id === selectedCatalogId);
   const drawerItem = drawerItemId ? items.find((i) => i.id === drawerItemId) : null;
 
@@ -473,6 +486,49 @@ export function ItemsManager({
     setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
   }, []);
 
+  // Library handlers
+  const openLibrary = useCallback(async () => {
+    setShowLibrary(true);
+    setLibraryLoading(true);
+    setLibraryPreview(null);
+    try {
+      const templates = await listCatalogLibrary();
+      setLibraryTemplates(templates);
+    } catch (err) {
+      console.error("Failed to load catalog library:", err);
+      setLibraryTemplates([]);
+    } finally {
+      setLibraryLoading(false);
+    }
+  }, []);
+
+  const previewTemplate = useCallback(async (templateId: string) => {
+    setLibraryPreviewLoading(true);
+    try {
+      const preview = await getCatalogLibraryItem(templateId, { limit: 50 });
+      setLibraryPreview(preview);
+    } catch (err) {
+      console.error("Failed to preview template:", err);
+    } finally {
+      setLibraryPreviewLoading(false);
+    }
+  }, []);
+
+  const handleAdopt = useCallback(async (templateId: string) => {
+    setAdoptingId(templateId);
+    try {
+      const adopted = await adoptCatalogTemplate(templateId);
+      setCatalogs((prev) => [...prev, adopted]);
+      setSelectedCatalogId(adopted.id);
+      setShowLibrary(false);
+      setLibraryPreview(null);
+    } catch (err) {
+      console.error("Failed to adopt template:", err);
+    } finally {
+      setAdoptingId(null);
+    }
+  }, []);
+
   const toggleSelectItem = (e: React.MouseEvent, itemId: string) => {
     e.stopPropagation();
     setSelectedItems((prev) => {
@@ -512,6 +568,10 @@ export function ItemsManager({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={openLibrary}>
+              <Library className="h-3.5 w-3.5" />
+              Browse Library
+            </Button>
             <Button variant="secondary" size="sm" disabled>
               <Upload className="h-3.5 w-3.5" />
               Import
@@ -882,6 +942,170 @@ export function ItemsManager({
             onDelete={handleDeleteItem}
             onClose={() => setDrawerItemId(null)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* ─── Library Browser Modal ─── */}
+      <AnimatePresence>
+        {showLibrary && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            onClick={() => { setShowLibrary(false); setLibraryPreview(null); }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="bg-panel border border-line rounded-xl shadow-2xl w-[800px] max-h-[80vh] flex flex-col overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-line">
+                <div>
+                  <h2 className="text-base font-semibold text-fg">Catalog Library</h2>
+                  <p className="text-xs text-fg/50 mt-0.5">
+                    Browse and import catalog templates into your organization
+                  </p>
+                </div>
+                <button
+                  onClick={() => { setShowLibrary(false); setLibraryPreview(null); }}
+                  className="p-1.5 rounded-lg hover:bg-panel2/60 text-fg/40 hover:text-fg transition-colors"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="flex flex-1 min-h-0">
+                {/* Template list */}
+                <div className="w-64 border-r border-line overflow-y-auto p-3 space-y-1">
+                  {libraryLoading ? (
+                    <div className="flex items-center justify-center py-12 text-fg/40">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </div>
+                  ) : libraryTemplates.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Package className="h-8 w-8 mx-auto text-fg/20 mb-2" />
+                      <p className="text-xs text-fg/40">No templates available</p>
+                      <p className="text-[10px] text-fg/30 mt-1">Run the seed script to populate templates</p>
+                    </div>
+                  ) : (
+                    libraryTemplates.map((template) => (
+                      <button
+                        key={template.id}
+                        onClick={() => previewTemplate(template.id)}
+                        className={cn(
+                          "w-full text-left px-3 py-2.5 rounded-lg border transition-all",
+                          libraryPreview?.id === template.id
+                            ? "border-accent/40 bg-accent/5"
+                            : "border-transparent hover:bg-panel2/40"
+                        )}
+                      >
+                        <div className="text-sm font-medium text-fg truncate">{template.name}</div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <Badge tone={KIND_BADGE_TONE[template.kind] ?? "default"} className="text-[10px]">
+                            {template.kind}
+                          </Badge>
+                          {template.itemCount != null && (
+                            <span className="text-[10px] text-fg/40">{template.itemCount} items</span>
+                          )}
+                        </div>
+                        {template.description && (
+                          <p className="text-[10px] text-fg/40 mt-1 line-clamp-2">{template.description}</p>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                {/* Preview panel */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {!libraryPreview && !libraryPreviewLoading ? (
+                    <div className="flex items-center justify-center flex-1 text-sm text-fg/40">
+                      <div className="text-center space-y-2">
+                        <Library className="h-8 w-8 mx-auto text-fg/20" />
+                        <p>Select a template to preview</p>
+                      </div>
+                    </div>
+                  ) : libraryPreviewLoading ? (
+                    <div className="flex items-center justify-center flex-1 text-fg/40">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    </div>
+                  ) : libraryPreview ? (
+                    <>
+                      <div className="px-5 py-4 border-b border-line">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h3 className="text-sm font-semibold text-fg">{libraryPreview.name}</h3>
+                            {libraryPreview.description && (
+                              <p className="text-xs text-fg/50 mt-0.5">{libraryPreview.description}</p>
+                            )}
+                            <div className="flex items-center gap-3 mt-2 text-[10px] text-fg/40">
+                              <span>{libraryPreview.total} items total</span>
+                              {libraryPreview.sourceDescription && (
+                                <span>{libraryPreview.sourceDescription}</span>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={() => handleAdopt(libraryPreview.id)}
+                            disabled={adoptingId === libraryPreview.id}
+                          >
+                            {adoptingId === libraryPreview.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Plus className="h-3.5 w-3.5" />
+                            )}
+                            {adoptingId === libraryPreview.id ? "Importing..." : "Import to My Catalogs"}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="flex-1 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="sticky top-0 bg-panel2/80 backdrop-blur-sm">
+                            <tr className="border-b border-line">
+                              <th className="text-left py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Code</th>
+                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
+                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Category</th>
+                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Unit</th>
+                              <th className="text-right py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Cost</th>
+                              <th className="text-right py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Price</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {libraryPreview.items.map((item, idx) => (
+                              <tr key={item.id || idx} className="border-b border-line/30 hover:bg-panel2/20">
+                                <td className="py-1.5 px-4 font-mono text-fg/50">{item.code || "—"}</td>
+                                <td className="py-1.5 px-2 text-fg">{item.name}</td>
+                                <td className="py-1.5 px-2 text-fg/50">{(item.metadata as Record<string, string>)?.category || "—"}</td>
+                                <td className="py-1.5 px-2 text-fg/50">{item.unit}</td>
+                                <td className="py-1.5 px-4 text-right tabular-nums text-fg/60">
+                                  {item.unitCost > 0 ? `$${item.unitCost.toFixed(2)}` : "—"}
+                                </td>
+                                <td className="py-1.5 px-4 text-right tabular-nums text-fg/60">
+                                  {item.unitPrice > 0 ? `$${item.unitPrice.toFixed(2)}` : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {libraryPreview.total > libraryPreview.items.length && (
+                          <div className="text-center py-3 text-[10px] text-fg/30">
+                            Showing {libraryPreview.items.length} of {libraryPreview.total} items
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

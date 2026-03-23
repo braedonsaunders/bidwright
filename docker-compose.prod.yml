@@ -1,0 +1,142 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bidwright
+      POSTGRES_PASSWORD: bidwright
+      POSTGRES_DB: bidwright
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bidwright -d bidwright"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "11434:11434"
+
+  # Pulls the embedding model on first run, then exits
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "curl -sf -X POST http://ollama:11434/api/pull -d '{\"name\":\"${EMBEDDING_MODEL:-snowflake-arctic-embed}\"}' && echo 'Model ready'"
+
+  # Runs Prisma migrations against Postgres
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: builder
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://bidwright:bidwright@postgres:5432/bidwright
+    restart: "no"
+    command: >
+      sh -c "npx prisma db push --schema=packages/db/prisma/schema.prisma --accept-data-loss --skip-generate"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://bidwright:bidwright@postgres:5432/bidwright
+      REDIS_URL: redis://redis:6379
+      DATA_DIR: /data
+      API_PORT: "3001"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
+    volumes:
+      - filedata:/data
+    ports:
+      - "3001:3001"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://bidwright:bidwright@postgres:5432/bidwright
+      REDIS_URL: redis://redis:6379
+      DATA_DIR: /data
+      API_PORT: "3001"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      - filedata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  filedata:
+  ollama_data:
