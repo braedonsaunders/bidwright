@@ -204,10 +204,41 @@ export function registerQuoteTools(server: McpServer) {
     async (input) => {
       const { worksheetId, ...rest } = input;
       const cat = rest.category || "Material";
+
+      // ── Validation: check category requirements ──
+      // Fetch item config to check if this category requires a rate schedule or catalog item
+      try {
+        const config = await apiGet(projectPath("/item-config"));
+        const categories = config.categories || [];
+        const catConfig = categories.find((c: any) => c.name === cat || c.entityType === cat);
+        if (catConfig) {
+          const src = catConfig.itemSource || "freeform";
+          if (src === "rate_schedule" && !rest.rateScheduleItemId) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" requires a rateScheduleItemId. You must:\n1. Call listRateSchedules to find available schedules\n2. Call importRateSchedule to import one into the quote\n3. Call listRateScheduleItems to get item IDs\n4. Set rateScheduleItemId on this item\nWithout this, the item will have $0 rates.` }], isError: true };
+          }
+          if (src === "catalog" && !rest.itemId) {
+            return { content: [{ type: "text" as const, text: `WARNING: Category "${cat}" is catalog-backed but no itemId provided. Item will be created without linked pricing. Consider setting itemId for auto-populated rates.` }] };
+          }
+        }
+      } catch {
+        // Config not available — skip validation, let API handle it
+      }
+
+      // ── Validation: Labour items must have hours ──
+      if ((cat.toLowerCase() === "labour" || cat.toLowerCase() === "labor") && !rest.laborHourReg && !rest.laborHourOver && !rest.laborHourDouble) {
+        return { content: [{ type: "text" as const, text: `ERROR: Labour items must have labor hours set. Set laborHourReg (regular hours) at minimum. Without hours, this item will calculate to $0.` }], isError: true };
+      }
+
       const price = (rest.cost || 0) * (1 + (rest.markup || 0) / 100);
       const body = { ...rest, category: cat, entityType: cat, price };
-      const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
-      return { content: [{ type: "text" as const, text: `Created item: ${rest.entityName} (${cat})` }] };
+      try {
+        const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
+        const itemId = (data as any)?.id || (data as any)?.item?.id || "";
+        return { content: [{ type: "text" as const, text: `Created item: ${rest.entityName} (${cat})${itemId ? ` [id: ${itemId}]` : ""}` }] };
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        return { content: [{ type: "text" as const, text: `ERROR creating item "${rest.entityName}": ${msg}. Check field values and try again.` }], isError: true };
+      }
     }
   );
 
