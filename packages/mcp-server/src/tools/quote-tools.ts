@@ -205,28 +205,30 @@ export function registerQuoteTools(server: McpServer) {
       const { worksheetId, ...rest } = input;
       const cat = rest.category || "Material";
 
-      // ── Validation: check category requirements ──
-      // Fetch item config to check if this category requires a rate schedule or catalog item
+      // ── Dynamic validation from user-configured category settings ──
       try {
         const config = await apiGet(projectPath("/item-config"));
         const categories = config.categories || [];
         const catConfig = categories.find((c: any) => c.name === cat || c.entityType === cat);
         if (catConfig) {
           const src = catConfig.itemSource || "freeform";
+          const calcType = catConfig.calculationType || "manual";
+
+          // Validate itemSource requirements
           if (src === "rate_schedule" && !rest.rateScheduleItemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" requires a rateScheduleItemId. You must:\n1. Call listRateSchedules to find available schedules\n2. Call importRateSchedule to import one into the quote\n3. Call listRateScheduleItems to get item IDs\n4. Set rateScheduleItemId on this item\nWithout this, the item will have $0 rates.` }], isError: true };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call listRateSchedules to find available schedules\n2. Call importRateSchedule to import one into the quote\n3. Call listRateScheduleItems to get item IDs\n4. Set rateScheduleItemId on this item\nWithout this, the item will have no linked rate.` }], isError: true };
           }
           if (src === "catalog" && !rest.itemId) {
-            return { content: [{ type: "text" as const, text: `WARNING: Category "${cat}" is catalog-backed but no itemId provided. Item will be created without linked pricing. Consider setting itemId for auto-populated rates.` }] };
+            return { content: [{ type: "text" as const, text: `WARNING: Category "${cat}" is configured with itemSource=catalog but no itemId was provided. Item will be created without linked catalog pricing.` }] };
+          }
+
+          // Validate calculationType requirements
+          if (calcType === "auto_labour" && !rest.laborHourReg && !rest.laborHourOver && !rest.laborHourDouble) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — labor hours are required. Set laborHourReg (regular hours) at minimum. Without hours, this item will calculate to $0.` }], isError: true };
           }
         }
       } catch {
         // Config not available — skip validation, let API handle it
-      }
-
-      // ── Validation: Labour items must have hours ──
-      if ((cat.toLowerCase() === "labour" || cat.toLowerCase() === "labor") && !rest.laborHourReg && !rest.laborHourOver && !rest.laborHourDouble) {
-        return { content: [{ type: "text" as const, text: `ERROR: Labour items must have labor hours set. Set laborHourReg (regular hours) at minimum. Without hours, this item will calculate to $0.` }], isError: true };
       }
 
       const price = (rest.cost || 0) * (1 + (rest.markup || 0) / 100);
