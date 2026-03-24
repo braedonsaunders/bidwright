@@ -901,6 +901,78 @@ function CreateBookModal({
 }
 
 // ────────────────────────────────────────────────────────────────────
+// Paginated dataset list
+// ────────────────────────────────────────────────────────────────────
+function DatasetListPaginated({
+  datasets,
+  onSelect,
+  onDelete,
+}: {
+  datasets: DatasetRecord[];
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+  const totalPages = Math.ceil(datasets.length / pageSize);
+  const visible = datasets.slice(page * pageSize, (page + 1) * pageSize);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs text-fg/40">
+        <span>{datasets.length} datasets</span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              className="hover:text-fg disabled:opacity-30"
+              disabled={page === 0}
+              onClick={() => setPage((p) => p - 1)}
+            >
+              ← Prev
+            </button>
+            <span>
+              {page + 1} / {totalPages}
+            </span>
+            <button
+              className="hover:text-fg disabled:opacity-30"
+              disabled={page >= totalPages - 1}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next →
+            </button>
+          </div>
+        )}
+      </div>
+      {visible.map((dataset) => (
+        <DatasetListItem
+          key={dataset.id}
+          dataset={dataset}
+          onClick={() => onSelect(dataset.id)}
+          onDelete={async () => onDelete(dataset.id)}
+        />
+      ))}
+      {totalPages > 1 && (
+        <div className="flex justify-center pt-2">
+          <div className="flex items-center gap-1">
+            {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => (
+              <button
+                key={i}
+                className={`h-6 w-6 rounded text-[10px] ${
+                  i === page ? "bg-accent text-white" : "text-fg/40 hover:bg-panel2"
+                }`}
+                onClick={() => setPage(i)}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
 // Datasets tab
 // ────────────────────────────────────────────────────────────────────
 
@@ -968,19 +1040,14 @@ function DatasetsTab({
           </p>
         </EmptyState>
       ) : (
-        <div className="space-y-2">
-          {filtered.map((dataset) => (
-            <DatasetListItem
-              key={dataset.id}
-              dataset={dataset}
-              onClick={() => setSelectedDatasetId(dataset.id)}
-              onDelete={async () => {
-                await deleteDataset(dataset.id);
-                onRefresh();
-              }}
-            />
-          ))}
-        </div>
+        <DatasetListPaginated
+          datasets={filtered}
+          onSelect={(id) => setSelectedDatasetId(id)}
+          onDelete={async (id) => {
+            await deleteDataset(id);
+            onRefresh();
+          }}
+        />
       )}
 
       {showCreateModal && (
@@ -1259,7 +1326,7 @@ function DatasetDetail({
             key={col.key}
             className="inline-flex items-center gap-1 rounded-md border border-line bg-panel2/50 px-2 py-0.5 text-[10px] text-fg/60"
           >
-            <span className="font-medium">{col.name}</span>
+            <span className="font-medium">{col.name || (col as any).label || col.key}</span>
             <span className="text-fg/30">{col.type}</span>
             {col.unit && <span className="text-fg/30">({col.unit})</span>}
             {col.required && <span className="text-accent">*</span>}
@@ -1310,7 +1377,7 @@ function DatasetDetail({
                   key={col.key}
                   className="px-3 py-2 text-left font-medium text-fg/50 whitespace-nowrap"
                 >
-                  {col.name}
+                  {col.name || (col as any).label || col.key}
                   {col.unit && (
                     <span className="text-fg/25 ml-1">({col.unit})</span>
                   )}

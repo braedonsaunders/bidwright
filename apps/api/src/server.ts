@@ -68,6 +68,9 @@ import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { intakeRoutes } from "./routes/intake-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
+import { labourCostRoutes } from "./routes/labour-cost-routes.js";
+import { burdenRoutes } from "./routes/burden-routes.js";
+import { travelPolicyRoutes } from "./routes/travel-policy-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
@@ -2350,7 +2353,8 @@ export function buildServer() {
     }
 
     const reportSections = await request.store!.listReportSections(projectId);
-    const pdfData = buildPdfDataPackage(workspace, reportSections);
+    const orgSettings = await request.store!.getSettings();
+    const pdfData = buildPdfDataPackage(workspace, reportSections, orgSettings.termsAndConditions || "");
 
     // Parse layout options from query param if present
     let layoutOptions: Partial<PdfLayoutOptions> | undefined;
@@ -2363,6 +2367,31 @@ export function buildServer() {
     const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
     return reply.type(contentType).send(buffer);
   });
+
+  // -------------------------------------------------------------------------
+  // PDF preferences per quote revision
+  // -------------------------------------------------------------------------
+
+  app.get("/projects/:projectId/pdf-preferences", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) return reply.code(404).send({ message: "Project not found" });
+    const rev = workspace.currentRevision;
+    return { pdfPreferences: (rev as any)?.pdfPreferences ?? {} };
+  });
+
+  const handleSavePdfPreferences = async (request: any, reply: any) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = request.body as Record<string, unknown>;
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) return reply.code(404).send({ message: "Project not found" });
+    const rev = workspace.currentRevision;
+    if (!rev) return reply.code(404).send({ message: "No current revision" });
+    await request.store!.updateRevision(projectId, rev.id, { pdfPreferences: body } as any);
+    return { ok: true };
+  };
+  app.put("/projects/:projectId/pdf-preferences", handleSavePdfPreferences);
+  app.patch("/projects/:projectId/pdf-preferences", handleSavePdfPreferences);
 
   // -------------------------------------------------------------------------
   // Send quote email
@@ -3123,6 +3152,54 @@ export function buildServer() {
     }
   });
 
+  // Global dataset search — searches across ALL datasets by name, tags, description, and row content
+  app.get("/datasets/search/global", async (request, reply) => {
+    const { q, limit: limitStr } = (request.query ?? {}) as { q?: string; limit?: string };
+    if (!q) return { results: [] };
+    const limit = parseInt(limitStr || "20");
+    const query = q.toLowerCase();
+    const words = query.split(/\s+/).filter(Boolean);
+
+    // Get all datasets
+    const allDatasets = await request.store!.listDatasets();
+
+    // Score each dataset by name/tags/description match
+    const scored = allDatasets.map((d: any) => {
+      let score = 0;
+      const nameL = (d.name || "").toLowerCase();
+      const descL = (d.description || "").toLowerCase();
+      const tagsL = (d.tags || []).map((t: string) => t.toLowerCase());
+
+      for (const w of words) {
+        if (nameL.includes(w)) score += 3;
+        if (descL.includes(w)) score += 1;
+        if (tagsL.some((t: string) => t.includes(w))) score += 2;
+      }
+      return { dataset: d, score };
+    });
+
+    // Filter to those with score > 0, sort by score
+    const matched = scored.filter((s: any) => s.score > 0).sort((a: any, b: any) => b.score - a.score);
+
+    // For top matches, fetch sample rows
+    const results: any[] = [];
+    for (const m of matched.slice(0, Math.min(limit, 10))) {
+      const rows = await request.store!.listDatasetRows(m.dataset.id, undefined, undefined, 5, 0);
+      results.push({
+        datasetId: m.dataset.id,
+        datasetName: m.dataset.name,
+        description: m.dataset.description,
+        tags: m.dataset.tags,
+        columns: m.dataset.columns,
+        rowCount: m.dataset.rowCount,
+        score: m.score,
+        sampleRows: rows.rows?.map((r: any) => r.data) || [],
+      });
+    }
+
+    return { results, total: matched.length };
+  });
+
   app.get("/datasets/:datasetId/search", async (request, reply) => {
     const { datasetId } = request.params as { datasetId: string };
     const { q } = (request.query ?? {}) as { q?: string };
@@ -3325,6 +3402,9 @@ export function buildServer() {
   app.register(takeoffRoutes);
   app.register(visionRoutes);
   app.register(rateScheduleRoutes);
+  app.register(labourCostRoutes);
+  app.register(burdenRoutes);
+  app.register(travelPolicyRoutes);
   app.register(intakeRoutes);
   app.register(catalogRoutes);
   registerCliRoutes(app);

@@ -526,30 +526,15 @@ ${sectionsInfo}
 
     await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
 
-    // Generate MCP config for dataset tools
+    // Spawn CLI session — spawnSession handles MCP config + auth token internally
     const token = request.headers.authorization?.replace("Bearer ", "") || (request.query as any)?.token || "";
-    const mcpConfig = {
-      mcpServers: {
-        bidwright: {
-          command: "npx",
-          args: ["tsx", join(process.cwd(), "..", "mcp-server", "src", "index.ts")],
-          env: {
-            BIDWRIGHT_API_URL: `http://localhost:4001`,
-            BIDWRIGHT_PROJECT_ID: bookId, // Use bookId as project context
-            BIDWRIGHT_AUTH_TOKEN: token,
-          },
-        },
-      },
-    };
-
-    // Spawn CLI session
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,
-      prompt: "Read the table-manifest.json and analyze the extracted tables. Group related tables, propose datasets with rich tags, and create them. Start by reading the manifest.",
+      prompt: "Read the book-manifest.json to understand sections, then read actual PDF pages from book/ to identify and extract tables. For each table, call createDataset with proper columns, rows, and tags. Start now.",
       runtime,
       model,
-      mcpConfig,
+      authToken: token,
       anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY,
       openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY,
     });

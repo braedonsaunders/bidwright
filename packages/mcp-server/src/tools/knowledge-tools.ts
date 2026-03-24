@@ -93,13 +93,21 @@ export function registerKnowledgeTools(server: McpServer) {
       rows: z.array(z.record(z.string(), z.any())).describe("Array of row objects with column keys as keys"),
     },
     async ({ name, description, category, tags, sourceBookId, sourcePages, columns, rows }) => {
+      // Normalize columns: domain model uses 'name', agent sends 'label'
+      const normalizedColumns = columns.map((col: any) => ({
+        key: col.key,
+        name: col.label || col.name || col.key,
+        type: col.type === "string" ? "text" : col.type === "number" ? "number" : col.type || "text",
+        required: false,
+      }));
+
       // Create the dataset
       const dataset = await apiPost(`/datasets`, {
         name,
         description,
         category,
         scope: "global",
-        columns,
+        columns: normalizedColumns,
         source: "book-extraction",
         sourceDescription: sourceBookId ? `Extracted from knowledge book ${sourceBookId}` : "AI extraction",
         sourceBookId,
