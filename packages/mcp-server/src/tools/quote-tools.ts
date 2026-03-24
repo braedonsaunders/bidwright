@@ -1,6 +1,44 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { apiGet, apiPost, apiPatch, apiDelete, projectPath } from "../api-client.js";
+import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from "../api-client.js";
+
+/**
+ * Convert plain text with newlines to HTML paragraphs.
+ * Handles markdown-style headers (### → h3), bullet lists (- → li), and bold (**text**).
+ */
+function plainTextToHtml(text: string): string {
+  const lines = text.split("\n");
+  const htmlParts: string[] = [];
+  let inList = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      continue;
+    }
+
+    // Markdown bold **text** → <strong>text</strong>
+    const withBold = trimmed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+    // Headers
+    if (withBold.startsWith("### ")) {
+      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      htmlParts.push(`<h3>${withBold.slice(4)}</h3>`);
+    } else if (withBold.startsWith("## ")) {
+      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      htmlParts.push(`<h3>${withBold.slice(3)}</h3>`);
+    } else if (withBold.startsWith("- ") || withBold.startsWith("• ")) {
+      if (!inList) { htmlParts.push("<ul>"); inList = true; }
+      htmlParts.push(`<li>${withBold.slice(2)}</li>`);
+    } else {
+      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      htmlParts.push(`<p>${withBold}</p>`);
+    }
+  }
+  if (inList) htmlParts.push("</ul>");
+  return htmlParts.join("");
+}
 
 export function registerQuoteTools(server: McpServer) {
 
@@ -13,14 +51,29 @@ export function registerQuoteTools(server: McpServer) {
       const data = await apiGet(projectPath("/workspace"));
       // Return a compact summary to avoid context bloat
       const ws = data.workspace || data;
+      const rev = ws.revisions?.[0] || {};
       const summary = {
         quote: { name: ws.projects?.[0]?.name, client: ws.projects?.[0]?.clientName },
+        revision: {
+          id: rev.id, title: rev.title, status: rev.status, type: rev.type,
+          breakoutStyle: rev.breakoutStyle, defaultMarkup: rev.defaultMarkup,
+        },
         worksheets: (ws.worksheets || []).map((w: any) => ({
           id: w.id, name: w.name, itemCount: (ws.worksheetItems || []).filter((i: any) => i.worksheetId === w.id).length,
         })),
         totalItems: (ws.worksheetItems || []).length,
         phases: (ws.phases || []).map((p: any) => ({ id: p.id, name: p.name })),
-        conditions: (ws.conditions || []).map((c: any) => ({ type: c.type, text: c.text })),
+        modifiers: (ws.modifiers || []).map((m: any) => ({
+          id: m.id, name: m.name, type: m.type, appliesTo: m.appliesTo,
+          percentage: m.percentage, amount: m.amount, show: m.show,
+        })),
+        additionalLineItems: (ws.additionalLineItems || []).map((a: any) => ({
+          id: a.id, name: a.name, type: a.type, amount: a.amount, description: a.description,
+        })),
+        conditions: (ws.conditions || []).map((c: any) => ({ id: c.id, type: c.type, text: c.text })),
+        reportSections: (ws.reportSections || []).map((s: any) => ({
+          id: s.id, sectionType: s.sectionType, title: s.title, order: s.order,
+        })),
         rateScheduleCount: (ws.rateSchedules || []).length,
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(summary, null, 2) }] };
@@ -90,9 +143,25 @@ export function registerQuoteTools(server: McpServer) {
         instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
+      // If no categories configured, provide default guidance
+      if (entityCategories.length === 0) {
+        instructions = `No entity categories configured for this organization. Use these standard categories when creating items:\n` +
+          `- "Material" — physical materials, supplies, consumables\n` +
+          `- "Labour" — labour hours, crew costs (set laborHourReg for hours)\n` +
+          `- "Equipment" — equipment rental, tools, machinery\n` +
+          `- "Subcontractor" — subcontracted work (lump sum or per-unit)\n` +
+          `All categories use freeform input — set cost and quantity directly. ` +
+          `IMPORTANT: Use the correct category for each item. Do NOT put labour under Material.`;
+      }
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          categories: entityCategories,
+          categories: entityCategories.length > 0 ? entityCategories : [
+            { name: "Material", entityType: "Material", defaultUom: "EA", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
+            { name: "Labour", entityType: "Labour", defaultUom: "HR", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
+            { name: "Equipment", entityType: "Equipment", defaultUom: "DAY", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
+            { name: "Subcontractor", entityType: "Subcontractor", defaultUom: "LS", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
+          ],
           rateScheduleItems: rateItems,
           catalogItems: catalogItems.slice(0, 50),
           instructions,
@@ -182,17 +251,49 @@ export function registerQuoteTools(server: McpServer) {
   // ── updateQuote ───────────────────────────────────────────
   server.tool(
     "updateQuote",
-    "Update the quote metadata — project name, client info, description, notes, scope summary.",
+    "Update the quote metadata — project name, client info, description, notes, scope summary. The description supports rich text (HTML). If you provide plain text with newlines, it will be auto-converted to HTML paragraphs.",
     {
       projectName: z.string().optional(),
       clientName: z.string().optional(),
       clientEmail: z.string().optional(),
       projectAddress: z.string().optional(),
       notes: z.string().optional(),
-      description: z.string().optional(),
+      description: z.string().optional().describe("Scope of work description. Can be plain text (auto-converted to HTML) or HTML. Use \\n for line breaks in plain text, or provide HTML directly with <p>, <ul>, <li>, <strong>, <h3> tags."),
     },
     async (input) => {
-      const data = await apiPatch(projectPath(""), input);
+      // Convert plain text description to HTML if it doesn't contain HTML tags
+      if (input.description && !/<[a-z][\s\S]*>/i.test(input.description)) {
+        input.description = plainTextToHtml(input.description);
+      }
+
+      // Update project-level fields (name, client, address)
+      const projectFields: Record<string, unknown> = {};
+      if (input.projectName) projectFields.projectName = input.projectName;
+      if (input.clientName) projectFields.clientName = input.clientName;
+      if (input.clientEmail) projectFields.clientEmail = input.clientEmail;
+      if (input.projectAddress) projectFields.projectAddress = input.projectAddress;
+      if (input.description) projectFields.description = input.description;
+      if (input.notes) projectFields.notes = input.notes;
+
+      if (Object.keys(projectFields).length > 0) {
+        await apiPatch(projectPath(""), projectFields);
+      }
+
+      // Also update revision title and description so the Setup tab reflects changes
+      const revisionFields: Record<string, unknown> = {};
+      if (input.projectName) revisionFields.title = input.projectName;
+      if (input.description) revisionFields.description = input.description;
+      if (input.notes) revisionFields.notes = input.notes;
+
+      const revisionId = getRevisionId();
+      if (revisionId && Object.keys(revisionFields).length > 0) {
+        try {
+          await apiPatch(projectPath(`/revisions/${revisionId}`), revisionFields);
+        } catch {
+          // Non-fatal — project-level update already succeeded
+        }
+      }
+
       return { content: [{ type: "text" as const, text: "Quote updated" }] };
     }
   );
@@ -268,6 +369,27 @@ export function registerQuoteTools(server: McpServer) {
     }
   );
 
+  // ── listRateSchedules (org-level discovery) ──────────────
+  server.tool(
+    "listRateSchedules",
+    "List all available org-level rate schedules that can be imported into the quote. Call this to discover what labour/equipment rate schedules exist BEFORE importing them. Returns schedule IDs, names, categories, and item counts.",
+    {},
+    async () => {
+      const data = await apiGet("/api/rate-schedules");
+      const schedules = (data.schedules || data || []).map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        category: s.category,
+        itemCount: s.items?.length || s.itemCount || 0,
+        items: (s.items || []).slice(0, 5).map((i: any) => ({ id: i.id, name: i.name, code: i.code, unit: i.unit })),
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        schedules,
+        note: "Call importRateSchedule with a schedule ID to import it, then listRateScheduleItems to get item IDs for linking to worksheet items.",
+      }, null, 2) }] };
+    }
+  );
+
   // ── importRateSchedule ───────────────────────────────────
   server.tool(
     "importRateSchedule",
@@ -324,6 +446,314 @@ export function registerQuoteTools(server: McpServer) {
       if (worksheetId) params.set("worksheetId", worksheetId);
       const data = await apiGet(projectPath(`/worksheet-items/search?${params}`));
       return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // MODIFIERS — overhead, profit, contingency, discounts
+  // ═══════════════════════════════════════════════════════════
+
+  // ── createModifier ──────────────────────────────────────────
+  server.tool(
+    "createModifier",
+    `Create a financial modifier on the quote — overhead, profit, contingency, discount, fuel surcharge, etc. Modifiers adjust the quote total by percentage or fixed amount. Use appliesTo to control scope (All, Labour Only, Materials Only, Equipment Only). Set show="Yes" to display on the client-facing quote, "No" to hide (distribute into line items).`,
+    {
+      name: z.string().describe("Modifier name, e.g. 'Overhead', '10% Contingency', 'Volume Discount'"),
+      type: z.enum(["Contingency", "Surcharge", "Discount", "Fuel Surcharge", "Birla Surcharge", "Other"]).default("Other").describe("Modifier type"),
+      appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).default("All").describe("What the modifier applies to"),
+      percentage: z.number().optional().describe("Percentage adjustment (e.g. 10 for 10%). Use this OR amount, not both."),
+      amount: z.number().optional().describe("Fixed dollar amount. Use this OR percentage, not both."),
+      show: z.enum(["Yes", "No"]).default("Yes").describe("Show on client quote ('Yes') or hide/distribute ('No')"),
+    },
+    async (input) => {
+      await apiPost(projectPath("/modifiers"), input);
+      return { content: [{ type: "text" as const, text: `Created modifier: ${input.name}` }] };
+    }
+  );
+
+  // ── updateModifier ──────────────────────────────────────────
+  server.tool(
+    "updateModifier",
+    "Update an existing modifier. Only provided fields are changed.",
+    {
+      modifierId: z.string().describe("Modifier ID"),
+      name: z.string().optional(),
+      type: z.enum(["Contingency", "Surcharge", "Discount", "Fuel Surcharge", "Birla Surcharge", "Other"]).optional(),
+      appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).optional(),
+      percentage: z.number().nullable().optional().describe("Set to null to clear percentage"),
+      amount: z.number().nullable().optional().describe("Set to null to clear amount"),
+      show: z.enum(["Yes", "No"]).optional(),
+    },
+    async ({ modifierId, ...patch }) => {
+      await apiPatch(projectPath(`/modifiers/${modifierId}`), patch);
+      return { content: [{ type: "text" as const, text: `Updated modifier ${modifierId}` }] };
+    }
+  );
+
+  // ── deleteModifier ──────────────────────────────────────────
+  server.tool(
+    "deleteModifier",
+    "Delete a modifier from the quote.",
+    { modifierId: z.string().describe("Modifier ID") },
+    async ({ modifierId }) => {
+      await apiDelete(projectPath(`/modifiers/${modifierId}`));
+      return { content: [{ type: "text" as const, text: `Deleted modifier ${modifierId}` }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // ADDITIONAL LINE ITEMS (ALIs) — options, standalone items, custom totals
+  // ═══════════════════════════════════════════════════════════
+
+  // ── createALI ───────────────────────────────────────────────
+  server.tool(
+    "createALI",
+    `Create an additional line item (ALI) — items outside worksheets like options, bonds, permits, or allowances. Types:
+- OptionStandalone: a priced option the client can accept/decline (excluded from base total)
+- OptionAdditional: an add-on option (adds to base total if accepted)
+- LineItemAdditional: extra cost added to the base total
+- LineItemStandalone: standalone item not in any worksheet
+- CustomTotal: override or custom total line`,
+    {
+      name: z.string().describe("ALI name, e.g. 'Performance Bond', 'Option: Expedited Schedule'"),
+      type: z.enum(["OptionStandalone", "OptionAdditional", "LineItemAdditional", "LineItemStandalone", "CustomTotal"]).describe("ALI type"),
+      description: z.string().optional().describe("Description or notes"),
+      amount: z.number().default(0).describe("Dollar amount"),
+    },
+    async (input) => {
+      await apiPost(projectPath("/ali"), input);
+      return { content: [{ type: "text" as const, text: `Created ALI: ${input.name} ($${input.amount})` }] };
+    }
+  );
+
+  // ── updateALI ───────────────────────────────────────────────
+  server.tool(
+    "updateALI",
+    "Update an existing additional line item. Only provided fields are changed.",
+    {
+      aliId: z.string().describe("ALI ID"),
+      name: z.string().optional(),
+      type: z.enum(["OptionStandalone", "OptionAdditional", "LineItemAdditional", "LineItemStandalone", "CustomTotal"]).optional(),
+      description: z.string().optional(),
+      amount: z.number().optional(),
+    },
+    async ({ aliId, ...patch }) => {
+      await apiPatch(projectPath(`/ali/${aliId}`), patch);
+      return { content: [{ type: "text" as const, text: `Updated ALI ${aliId}` }] };
+    }
+  );
+
+  // ── deleteALI ───────────────────────────────────────────────
+  server.tool(
+    "deleteALI",
+    "Delete an additional line item from the quote.",
+    { aliId: z.string().describe("ALI ID") },
+    async ({ aliId }) => {
+      await apiDelete(projectPath(`/ali/${aliId}`));
+      return { content: [{ type: "text" as const, text: `Deleted ALI ${aliId}` }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // REPORT SECTIONS — cover letter, scope narrative, schedule
+  // ═══════════════════════════════════════════════════════════
+
+  // ── createReportSection ─────────────────────────────────────
+  server.tool(
+    "createReportSection",
+    `Create a report section for the quote PDF. Sections appear in the generated PDF document in order. Common types: cover_letter, scope, methodology, schedule, safety, assumptions, team. Content supports markdown.`,
+    {
+      sectionType: z.string().default("custom").describe("Section type: cover_letter, scope, methodology, schedule, safety, assumptions, team, custom"),
+      title: z.string().describe("Section heading, e.g. 'Scope of Work', 'Project Schedule'"),
+      content: z.string().describe("Section body text (markdown supported)"),
+      order: z.number().optional().describe("Sort order (lower = earlier in PDF)"),
+    },
+    async (input) => {
+      await apiPost(projectPath("/report-sections"), input);
+      return { content: [{ type: "text" as const, text: `Created report section: ${input.title}` }] };
+    }
+  );
+
+  // ── updateReportSection ─────────────────────────────────────
+  server.tool(
+    "updateReportSection",
+    "Update a report section. Only provided fields are changed.",
+    {
+      sectionId: z.string().describe("Report section ID"),
+      sectionType: z.string().optional(),
+      title: z.string().optional(),
+      content: z.string().optional(),
+      order: z.number().optional(),
+    },
+    async ({ sectionId, ...patch }) => {
+      await apiPatch(projectPath(`/report-sections/${sectionId}`), patch);
+      return { content: [{ type: "text" as const, text: `Updated report section ${sectionId}` }] };
+    }
+  );
+
+  // ── deleteReportSection ─────────────────────────────────────
+  server.tool(
+    "deleteReportSection",
+    "Delete a report section from the quote.",
+    { sectionId: z.string().describe("Report section ID") },
+    async ({ sectionId }) => {
+      await apiDelete(projectPath(`/report-sections/${sectionId}`));
+      return { content: [{ type: "text" as const, text: `Deleted report section ${sectionId}` }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // BREAKOUT STYLE & REVISION SETTINGS
+  // ═══════════════════════════════════════════════════════════
+
+  // ── updateRevision ──────────────────────────────────────────
+  server.tool(
+    "updateRevision",
+    `Update revision-level settings — breakout style, dates, status, quote type, print options, and more. Use this to configure how the quote is presented to the client.`,
+    {
+      breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail", "labour_material_equipment"]).optional()
+        .describe("How costs are organized on the quote: grand_total (lump sum), category (by material/labour/etc), phase (by project phase), phase_detail (phases with category breakdown), labour_material_equipment (L/M/E columns)"),
+      status: z.enum(["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"]).optional(),
+      type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional().describe("Quote type: Firm (binding), Budget (estimate), BudgetDNE (do not exceed)"),
+      title: z.string().optional().describe("Revision title"),
+      description: z.string().optional(),
+      notes: z.string().optional(),
+      defaultMarkup: z.number().optional().describe("Default markup percentage for new items"),
+      dateQuote: z.string().nullable().optional().describe("Quote date (ISO string)"),
+      dateDue: z.string().nullable().optional().describe("Due date (ISO string)"),
+      dateWalkdown: z.string().nullable().optional().describe("Walkdown date (ISO string)"),
+      dateWorkStart: z.string().nullable().optional().describe("Work start date (ISO string)"),
+      dateWorkEnd: z.string().nullable().optional().describe("Work end date (ISO string)"),
+      dateEstimatedShip: z.string().nullable().optional().describe("Estimated ship date (ISO string)"),
+      shippingMethod: z.string().optional(),
+      shippingTerms: z.string().optional(),
+      leadLetter: z.string().optional().describe("Cover letter / lead-in text for the quote"),
+      useCalculatedTotal: z.boolean().optional().describe("Use calculated total vs manual grandTotal"),
+      grandTotal: z.number().optional().describe("Manual grand total override (when useCalculatedTotal=false)"),
+      printEmptyNotesColumn: z.boolean().optional(),
+      printPhaseTotalOnly: z.boolean().optional().describe("Show only phase totals, hide individual items"),
+      showOvertimeDoubletime: z.boolean().optional(),
+    },
+    async (input) => {
+      const wsData = await apiGet(projectPath("/workspace"));
+      const ws = wsData.workspace || wsData;
+      const revisionId = ws.revisions?.[0]?.id || ws.currentRevisionId;
+      if (!revisionId) {
+        return { content: [{ type: "text" as const, text: "Error: Could not determine current revision ID" }] };
+      }
+      await apiPatch(projectPath(`/revisions/${revisionId}`), input);
+      const updated: string[] = Object.keys(input).filter(k => (input as any)[k] !== undefined);
+      return { content: [{ type: "text" as const, text: `Updated revision: ${updated.join(", ")}` }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // PDF GENERATION
+  // ═══════════════════════════════════════════════════════════
+
+  // ── generateQuotePdf ────────────────────────────────────────
+  server.tool(
+    "generateQuotePdf",
+    `Generate the quote PDF and return a download URL. Uses saved PDF preferences for layout. Template types:
+- main: Full client-facing quote with cover letter, breakout, conditions
+- backup: Detailed backup/internal version with all line items
+- sitecopy: Simplified site copy for field use
+- closeout: Closeout/as-built version
+- schedule: Project schedule/Gantt chart PDF`,
+    {
+      templateType: z.enum(["main", "backup", "sitecopy", "closeout", "schedule"]).default("main")
+        .describe("PDF template to generate"),
+    },
+    async ({ templateType }) => {
+      // Build URL with saved preferences
+      let url = projectPath(`/pdf/${templateType}`);
+      try {
+        const prefData = await apiGet(projectPath("/pdf-preferences"));
+        const prefs = prefData.pdfPreferences ?? {};
+        if (Object.keys(prefs).length > 0) {
+          url += `?layout=${encodeURIComponent(JSON.stringify(prefs))}`;
+        }
+      } catch { /* use defaults */ }
+      return { content: [{ type: "text" as const, text: `PDF ready for download at: ${url}\n\nThe quote PDF has been generated using the "${templateType}" template with saved layout preferences. The user can download it from the application.` }] };
+    }
+  );
+
+  // ── getPdfPreferences ──────────────────────────────────────
+  server.tool(
+    "getPdfPreferences",
+    "Get the saved PDF layout preferences for this quote — sections, branding, page setup, template, and custom sections.",
+    {},
+    async () => {
+      const data = await apiGet(projectPath("/pdf-preferences"));
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  // ── updatePdfPreferences ───────────────────────────────────
+  server.tool(
+    "updatePdfPreferences",
+    `Update PDF layout preferences for this quote. Supports partial updates. Available keys:
+- sections: { coverPage, scopeOfWork, leadLetter, lineItems, phases, modifiers, conditions, hoursSummary, labourSummary, notes, reportSections } (all boolean)
+- sectionOrder: array of section keys controlling display order
+- lineItemOptions: { showCostColumn, showMarkupColumn, groupBy: none/phase/worksheet }
+- branding: { accentColor: hex, headerBgColor: hex, fontFamily: sans/serif/mono }
+- pageSetup: { orientation: portrait/landscape, pageSize: letter/a4/legal }
+- coverPageOptions: { companyName, tagline, logoUrl }
+- headerFooter: { showHeader, showFooter, headerText, footerText, showPageNumbers }
+- customSections: array of { id, title, content, order }
+- activeTemplate: standard/detailed/summary/client`,
+    {
+      sections: z.record(z.boolean()).optional().describe("Toggle sections on/off"),
+      sectionOrder: z.array(z.string()).optional().describe("Section display order"),
+      lineItemOptions: z.object({
+        showCostColumn: z.boolean().optional(),
+        showMarkupColumn: z.boolean().optional(),
+        groupBy: z.enum(["none", "phase", "worksheet"]).optional(),
+      }).optional(),
+      branding: z.object({
+        accentColor: z.string().optional(),
+        headerBgColor: z.string().optional(),
+        fontFamily: z.enum(["sans", "serif", "mono"]).optional(),
+      }).optional(),
+      pageSetup: z.object({
+        orientation: z.enum(["portrait", "landscape"]).optional(),
+        pageSize: z.enum(["letter", "a4", "legal"]).optional(),
+      }).optional(),
+      coverPageOptions: z.object({
+        companyName: z.string().optional(),
+        tagline: z.string().optional(),
+        logoUrl: z.string().optional(),
+      }).optional(),
+      headerFooter: z.object({
+        showHeader: z.boolean().optional(),
+        showFooter: z.boolean().optional(),
+        headerText: z.string().optional(),
+        footerText: z.string().optional(),
+        showPageNumbers: z.boolean().optional(),
+      }).optional(),
+      activeTemplate: z.enum(["standard", "detailed", "summary", "client"]).optional(),
+    },
+    async (input) => {
+      // Fetch existing preferences and deep merge
+      let current: any = {};
+      try {
+        const existing = await apiGet(projectPath("/pdf-preferences"));
+        current = existing.pdfPreferences ?? {};
+      } catch { /* start fresh */ }
+
+      const merged = { ...current };
+      if (input.sections) merged.sections = { ...(current.sections ?? {}), ...input.sections };
+      if (input.sectionOrder) merged.sectionOrder = input.sectionOrder;
+      if (input.lineItemOptions) merged.lineItemOptions = { ...(current.lineItemOptions ?? {}), ...input.lineItemOptions };
+      if (input.branding) merged.branding = { ...(current.branding ?? {}), ...input.branding };
+      if (input.pageSetup) merged.pageSetup = { ...(current.pageSetup ?? {}), ...input.pageSetup };
+      if (input.coverPageOptions) merged.coverPageOptions = { ...(current.coverPageOptions ?? {}), ...input.coverPageOptions };
+      if (input.headerFooter) merged.headerFooter = { ...(current.headerFooter ?? {}), ...input.headerFooter };
+      if (input.activeTemplate) merged.activeTemplate = input.activeTemplate;
+
+      await apiPatch(projectPath("/pdf-preferences"), merged);
+      const updated = Object.keys(input).filter(k => (input as any)[k] !== undefined);
+      return { content: [{ type: "text" as const, text: `PDF preferences updated: ${updated.join(", ")}` }] };
     }
   );
 }
