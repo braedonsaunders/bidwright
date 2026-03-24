@@ -1153,7 +1153,19 @@ function DatasetListItem({
             <Badge tone={scopeTone(dataset.scope)}>{dataset.scope}</Badge>
             <Badge tone="default">{dataset.source}</Badge>
           </div>
-          <p className="text-xs text-fg/50 mt-0.5">{dataset.description}</p>
+          <p className="text-xs text-fg/50 mt-0.5 line-clamp-1">{dataset.description}</p>
+          {(dataset as any).tags?.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {((dataset as any).tags as string[]).slice(0, 5).map((tag: string) => (
+                <span key={tag} className="inline-flex rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent/80">
+                  {tag}
+                </span>
+              ))}
+              {((dataset as any).tags as string[]).length > 5 && (
+                <span className="text-[9px] text-fg/30">+{((dataset as any).tags as string[]).length - 5}</span>
+              )}
+            </div>
+          )}
         </div>
         <div className="text-right shrink-0 flex items-center gap-3">
           <div>
@@ -1315,6 +1327,15 @@ function DatasetDetail({
             <Badge tone={scopeTone(dataset.scope)}>{dataset.scope}</Badge>
           </div>
           <p className="text-xs text-fg/50 mt-0.5">{dataset.description}</p>
+          {(dataset as any).tags?.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {((dataset as any).tags as string[]).map((tag: string) => (
+                <span key={tag} className="inline-flex rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium text-accent">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <span className="text-xs text-fg/40">{total} rows</span>
       </div>
