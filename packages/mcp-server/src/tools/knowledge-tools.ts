@@ -61,16 +61,49 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── queryDatasets ─────────────────────────────────────────
   server.tool(
     "queryDatasets",
-    "Search structured datasets — material lists, labour rate tables, equipment catalogs, historical project data. Returns matching rows with all columns.",
+    "Search structured datasets for precise values — man hours, material weights, labour rates, equipment specs. Returns matching datasets with context (description, tags, notes) and sample rows. Use for concrete numbers when estimating.",
     {
-      query: z.string().describe("Search query"),
-      datasetId: z.string().optional().describe("Specific dataset ID to search within"),
+      query: z.string().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
+      datasetId: z.string().optional().describe("Search within a specific dataset ID (if known from previous query)"),
+      limit: z.number().optional().default(5).describe("Max datasets to return"),
     },
-    async ({ query, datasetId }) => {
-      const params = new URLSearchParams({ q: query });
-      if (datasetId) params.set("datasetId", datasetId);
-      const data = await apiGet(`/datasets/search?${params}`);
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    async ({ query, datasetId, limit }) => {
+      if (datasetId) {
+        // Search within specific dataset — returns rows
+        const params = new URLSearchParams({ q: query });
+        const data = await apiGet(`/datasets/${datasetId}/search?${params}`);
+        const dataset = await apiGet(`/datasets/${datasetId}`);
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          dataset: {
+            id: dataset.id,
+            name: dataset.name,
+            description: dataset.description,
+            tags: dataset.tags,
+            columns: dataset.columns,
+          },
+          rows: data.rows || data,
+          note: "Use the description and tags to understand context. Column names show units and conditions.",
+        }, null, 2) }] };
+      }
+
+      // Global search — returns matching datasets with sample rows
+      const params = new URLSearchParams({ q: query, limit: String(limit || 5) });
+      const data = await apiGet(`/datasets/search/global?${params}`);
+      const results = (data.results || []).map((r: any) => ({
+        datasetId: r.datasetId,
+        name: r.datasetName,
+        description: r.description,
+        tags: r.tags,
+        columns: r.columns?.map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
+        rowCount: r.rowCount,
+        sampleRows: r.sampleRows,
+        note: "Call queryDatasets again with datasetId to get all rows, or use these sample rows if sufficient.",
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        query,
+        matchedDatasets: results.length,
+        datasets: results,
+      }, null, 2) }] };
     }
   );
 

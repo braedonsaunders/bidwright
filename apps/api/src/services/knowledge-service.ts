@@ -324,7 +324,27 @@ async function extractText(
     }
 
     const text = parts.join("\n\n--- Page Break ---\n\n");
-    return { text: text || doc.content, pageCount: doc.metadata.pageCount || 1 };
+
+    // Store raw Azure table data for dataset extraction
+    const extractedTables = (doc.tables || []).map((t: any, i: number) => ({
+      index: i,
+      rows: t.rows,
+      columns: t.columns,
+      cells: t.cells?.map((c: any) => ({
+        rowIndex: c.rowIndex,
+        columnIndex: c.columnIndex,
+        content: c.content,
+        kind: c.kind, // "columnHeader" | "rowHeader" | "content"
+      })),
+      pageNumber: t.boundingRegions?.[0]?.pageNumber,
+      markdown: t.markdown,
+    }));
+
+    return {
+      text: text || doc.content,
+      pageCount: doc.metadata.pageCount || 1,
+      tables: extractedTables.length > 0 ? extractedTables : undefined,
+    };
   }
 
   // Excel/CSV: convert to text table
@@ -415,6 +435,8 @@ export class KnowledgeService {
       } catch { /* ignore — env vars will be used as fallback */ }
     }
 
+    let extractedTableData: any[] | undefined;
+
     if (request.file) {
       sourceFileName = request.file.filename;
       sourceFileSize = request.file.buffer.length;
@@ -422,6 +444,10 @@ export class KnowledgeService {
         const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename, azureConfig);
         text = extracted.text;
         pageCount = extracted.pageCount;
+        // Store Azure-extracted table data in book metadata for later dataset extraction
+        if ((extracted as any).tables?.length > 0) {
+          extractedTableData = (extracted as any).tables;
+        }
       } catch (err) {
         errors.push(`Text extraction failed: ${err instanceof Error ? err.message : String(err)}`);
         return {
@@ -562,10 +588,27 @@ export class KnowledgeService {
     }
 
     // Step 6: Update book status
+    const finalMetadata: Record<string, unknown> = {
+      ...((book.metadata as Record<string, unknown>) ?? {}),
+    };
+    if (extractedTableData && extractedTableData.length > 0) {
+      finalMetadata.tableCount = extractedTableData.length;
+      // Save table data as JSON file to avoid bloating the DB row
+      try {
+        const tablesPath = book.storagePath
+          ? resolveApiPath(path.join(path.dirname(book.storagePath), "tables.json"))
+          : resolveApiPath(path.join("knowledge", book.id, "tables.json"));
+        await mkdir(path.dirname(tablesPath), { recursive: true });
+        await writeFile(tablesPath, JSON.stringify(extractedTableData, null, 2));
+        finalMetadata.tablesFilePath = path.relative(resolveApiPath(""), tablesPath);
+      } catch { /* store inline if file write fails */ }
+    }
+
     await store!.updateKnowledgeBook(book.id, {
       status: errors.length > 0 && chunkCount === 0 ? "failed" : "indexed",
       pageCount,
       chunkCount,
+      metadata: finalMetadata,
     });
 
     return {
