@@ -49,6 +49,11 @@ import type {
   SourceDocument,
   User,
   WorksheetItem,
+  LabourCostTable,
+  LabourCostTableWithEntries,
+  LabourCostEntry,
+  BurdenPeriod,
+  TravelPolicy,
 } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
@@ -778,6 +783,7 @@ function mapRateSchedule(s: any): RateSchedule {
     category: s.category, scope: s.scope as RateSchedule["scope"],
     projectId: s.projectId ?? null, revisionId: s.revisionId ?? null,
     sourceScheduleId: s.sourceScheduleId ?? null,
+    travelPolicyId: s.travelPolicyId ?? null,
     effectiveDate: s.effectiveDate ?? null, expiryDate: s.expiryDate ?? null,
     defaultMarkup: s.defaultMarkup, autoCalculate: s.autoCalculate,
     metadata: (s.metadata as Record<string, unknown>) ?? {},
@@ -790,6 +796,56 @@ function mapRateScheduleWithChildren(s: any): RateScheduleWithChildren {
     ...mapRateSchedule(s),
     tiers: (s.tiers ?? []).map(mapRateScheduleTier),
     items: (s.items ?? []).map(mapRateScheduleItem),
+  };
+}
+
+function mapLabourCostEntry(e: any): LabourCostEntry {
+  return {
+    id: e.id, tableId: e.tableId, code: e.code, name: e.name,
+    group: e.group, costRates: (e.costRates as Record<string, number>) ?? {},
+    metadata: (e.metadata as Record<string, unknown>) ?? {}, sortOrder: e.sortOrder,
+  };
+}
+
+function mapLabourCostTable(t: any): LabourCostTable {
+  return {
+    id: t.id, organizationId: t.organizationId, name: t.name,
+    description: t.description, effectiveDate: t.effectiveDate ?? null,
+    expiryDate: t.expiryDate ?? null,
+    metadata: (t.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
+  };
+}
+
+function mapLabourCostTableWithEntries(t: any): LabourCostTableWithEntries {
+  return {
+    ...mapLabourCostTable(t),
+    entries: (t.entries ?? []).map(mapLabourCostEntry),
+  };
+}
+
+function mapBurdenPeriod(b: any): BurdenPeriod {
+  return {
+    id: b.id, organizationId: b.organizationId, name: b.name,
+    group: b.group, percentage: b.percentage,
+    startDate: b.startDate, endDate: b.endDate,
+    createdAt: toISO(b.createdAt), updatedAt: toISO(b.updatedAt),
+  };
+}
+
+function mapTravelPolicy(t: any): TravelPolicy {
+  return {
+    id: t.id, organizationId: t.organizationId, name: t.name,
+    description: t.description, perDiemRate: t.perDiemRate,
+    perDiemEmbedMode: t.perDiemEmbedMode, hoursPerDay: t.hoursPerDay,
+    travelTimeHours: t.travelTimeHours, travelTimeTrips: t.travelTimeTrips,
+    kmToDestination: t.kmToDestination, mileageRate: t.mileageRate,
+    fuelSurchargePercent: t.fuelSurchargePercent,
+    fuelSurchargeAppliesTo: t.fuelSurchargeAppliesTo,
+    accommodationRate: t.accommodationRate, accommodationNights: t.accommodationNights,
+    showAsSeparateLine: t.showAsSeparateLine, breakoutLabel: t.breakoutLabel,
+    metadata: (t.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
   };
 }
 
@@ -949,7 +1005,7 @@ function mapKnowledgeChunk(c: any): KnowledgeChunk {
   };
 }
 
-function mapDataset(d: any): Dataset {
+function mapDataset(d: any): Dataset & { tags?: string[]; sourceBookId?: string; sourcePages?: string } {
   return {
     id: d.id,
     name: d.name,
@@ -963,6 +1019,9 @@ function mapDataset(d: any): Dataset {
     sourceDescription: d.sourceDescription,
     isTemplate: d.isTemplate ?? false,
     sourceTemplateId: d.sourceTemplateId ?? null,
+    tags: d.tags ?? [],
+    sourceBookId: d.sourceBookId ?? null,
+    sourcePages: d.sourcePages ?? null,
     createdAt: toISO(d.createdAt),
     updatedAt: toISO(d.updatedAt),
   };
@@ -2122,12 +2181,14 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const rateScheduleCtx = revisionSchedules.map((s) => ({
+      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
+    const labourCostCtx = await this.getLabourCostContext();
     const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
     const catDef = entityCats.find((c) => c.name === item.category);
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-    const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx);
+    const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
     Object.assign(item, calculated);
 
     const created = await this.db.worksheetItem.create({
@@ -2250,12 +2311,14 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const rateScheduleCtx = revisionSchedules.map((s) => ({
+      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
+    const updateLabourCostCtx = await this.getLabourCostContext();
     const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
     const updateCatDef = updateEntityCats.find((c) => c.name === domainItem.category);
     const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-    const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx);
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx, { labourCost: updateLabourCostCtx });
     Object.assign(domainItem, calculated);
 
     const updated = await this.db.worksheetItem.update({
@@ -2330,8 +2393,10 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const rateScheduleCtx = revisionSchedules.map((s) => ({
+      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
+    const importLabourCostCtx = await this.getLabourCostContext();
     const mappedRev = mapRevision(revision);
     const importEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
@@ -2361,7 +2426,7 @@ export class PrismaApiStore {
 
       const importCatDef = importEntityCats.find((c) => c.name === item.category);
       const importCalcType = (importCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-      const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx);
+      const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx, { labourCost: importLabourCostCtx });
       Object.assign(item, calculated);
 
       await this.db.worksheetItem.create({
@@ -5411,6 +5476,269 @@ export class PrismaApiStore {
           }
         });
       });
+  }
+
+  // ── Labour Cost Tables ─────────────────────────────────────────────────────
+
+  async listLabourCostTables(): Promise<LabourCostTableWithEntries[]> {
+    const tables = await this.db.labourCostTable.findMany({
+      where: { organizationId: this.organizationId },
+      include: { entries: { orderBy: { sortOrder: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+    return tables.map(mapLabourCostTableWithEntries);
+  }
+
+  async getLabourCostTable(id: string): Promise<LabourCostTableWithEntries> {
+    const table = await this.db.labourCostTable.findFirst({
+      where: { id, organizationId: this.organizationId },
+      include: { entries: { orderBy: { sortOrder: "asc" } } },
+    });
+    if (!table) throw new Error(`Labour cost table ${id} not found`);
+    return mapLabourCostTableWithEntries(table);
+  }
+
+  async createLabourCostTable(input: {
+    name: string; description?: string; effectiveDate?: string; expiryDate?: string;
+  }): Promise<LabourCostTableWithEntries> {
+    const created = await this.db.labourCostTable.create({
+      data: {
+        id: createId("lct"),
+        organizationId: this.organizationId,
+        name: input.name,
+        description: input.description ?? "",
+        effectiveDate: input.effectiveDate ?? null,
+        expiryDate: input.expiryDate ?? null,
+      },
+      include: { entries: true },
+    });
+    return mapLabourCostTableWithEntries(created);
+  }
+
+  async updateLabourCostTable(id: string, patch: {
+    name?: string; description?: string; effectiveDate?: string | null; expiryDate?: string | null;
+  }): Promise<LabourCostTableWithEntries> {
+    const existing = await this.db.labourCostTable.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Labour cost table ${id} not found`);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
+    if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate;
+    const updated = await this.db.labourCostTable.update({
+      where: { id },
+      data,
+      include: { entries: { orderBy: { sortOrder: "asc" } } },
+    });
+    return mapLabourCostTableWithEntries(updated);
+  }
+
+  async deleteLabourCostTable(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.labourCostTable.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Labour cost table ${id} not found`);
+    await this.db.labourCostTable.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async createLabourCostEntry(tableId: string, input: {
+    code: string; name: string; group?: string;
+    costRates?: Record<string, number>; sortOrder?: number;
+  }): Promise<LabourCostTableWithEntries> {
+    const table = await this.db.labourCostTable.findFirst({ where: { id: tableId, organizationId: this.organizationId } });
+    if (!table) throw new Error(`Labour cost table ${tableId} not found`);
+    await this.db.labourCostEntry.create({
+      data: {
+        id: createId("lce"),
+        tableId,
+        code: input.code,
+        name: input.name,
+        group: input.group ?? "",
+        costRates: input.costRates ?? {},
+        sortOrder: input.sortOrder ?? 0,
+      },
+    });
+    return this.getLabourCostTable(tableId);
+  }
+
+  async updateLabourCostEntry(entryId: string, patch: {
+    code?: string; name?: string; group?: string;
+    costRates?: Record<string, number>; sortOrder?: number;
+  }): Promise<LabourCostTableWithEntries> {
+    const entry = await this.db.labourCostEntry.findUnique({ where: { id: entryId } });
+    if (!entry) throw new Error(`Labour cost entry ${entryId} not found`);
+    const data: any = {};
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.group !== undefined) data.group = patch.group;
+    if (patch.costRates !== undefined) data.costRates = patch.costRates;
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+    await this.db.labourCostEntry.update({ where: { id: entryId }, data });
+    return this.getLabourCostTable(entry.tableId);
+  }
+
+  async deleteLabourCostEntry(entryId: string): Promise<LabourCostTableWithEntries> {
+    const entry = await this.db.labourCostEntry.findUnique({ where: { id: entryId } });
+    if (!entry) throw new Error(`Labour cost entry ${entryId} not found`);
+    const tableId = entry.tableId;
+    await this.db.labourCostEntry.delete({ where: { id: entryId } });
+    return this.getLabourCostTable(tableId);
+  }
+
+  // ── Burden Periods ─────────────────────────────────────────────────────────
+
+  async listBurdenPeriods(group?: string): Promise<BurdenPeriod[]> {
+    const where: any = { organizationId: this.organizationId };
+    if (group) where.group = group;
+    const periods = await this.db.burdenPeriod.findMany({
+      where,
+      orderBy: { startDate: "desc" },
+    });
+    return periods.map(mapBurdenPeriod);
+  }
+
+  async createBurdenPeriod(input: {
+    name?: string; group?: string; percentage: number;
+    startDate: string; endDate: string;
+  }): Promise<BurdenPeriod> {
+    const created = await this.db.burdenPeriod.create({
+      data: {
+        id: createId("bp"),
+        organizationId: this.organizationId,
+        name: input.name ?? "",
+        group: input.group ?? "",
+        percentage: input.percentage,
+        startDate: input.startDate,
+        endDate: input.endDate,
+      },
+    });
+    return mapBurdenPeriod(created);
+  }
+
+  async updateBurdenPeriod(id: string, patch: {
+    name?: string; group?: string; percentage?: number;
+    startDate?: string; endDate?: string;
+  }): Promise<BurdenPeriod> {
+    const existing = await this.db.burdenPeriod.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Burden period ${id} not found`);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.group !== undefined) data.group = patch.group;
+    if (patch.percentage !== undefined) data.percentage = patch.percentage;
+    if (patch.startDate !== undefined) data.startDate = patch.startDate;
+    if (patch.endDate !== undefined) data.endDate = patch.endDate;
+    const updated = await this.db.burdenPeriod.update({ where: { id }, data });
+    return mapBurdenPeriod(updated);
+  }
+
+  async deleteBurdenPeriod(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.burdenPeriod.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Burden period ${id} not found`);
+    await this.db.burdenPeriod.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // ── Travel Policies ────────────────────────────────────────────────────────
+
+  async listTravelPolicies(): Promise<TravelPolicy[]> {
+    const policies = await this.db.travelPolicy.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { name: "asc" },
+    });
+    return policies.map(mapTravelPolicy);
+  }
+
+  async getTravelPolicy(id: string): Promise<TravelPolicy> {
+    const policy = await this.db.travelPolicy.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!policy) throw new Error(`Travel policy ${id} not found`);
+    return mapTravelPolicy(policy);
+  }
+
+  async createTravelPolicy(input: {
+    name: string; description?: string;
+    perDiemRate?: number; perDiemEmbedMode?: string; hoursPerDay?: number;
+    travelTimeHours?: number; travelTimeTrips?: number;
+    kmToDestination?: number; mileageRate?: number;
+    fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: string;
+    accommodationRate?: number; accommodationNights?: number;
+    showAsSeparateLine?: boolean; breakoutLabel?: string;
+  }): Promise<TravelPolicy> {
+    const created = await this.db.travelPolicy.create({
+      data: {
+        id: createId("tp"),
+        organizationId: this.organizationId,
+        name: input.name,
+        description: input.description ?? "",
+        perDiemRate: input.perDiemRate ?? 0,
+        perDiemEmbedMode: input.perDiemEmbedMode ?? "separate",
+        hoursPerDay: input.hoursPerDay ?? 8,
+        travelTimeHours: input.travelTimeHours ?? 0,
+        travelTimeTrips: input.travelTimeTrips ?? 1,
+        kmToDestination: input.kmToDestination ?? 0,
+        mileageRate: input.mileageRate ?? 0,
+        fuelSurchargePercent: input.fuelSurchargePercent ?? 0,
+        fuelSurchargeAppliesTo: input.fuelSurchargeAppliesTo ?? "labour",
+        accommodationRate: input.accommodationRate ?? 0,
+        accommodationNights: input.accommodationNights ?? 0,
+        showAsSeparateLine: input.showAsSeparateLine ?? true,
+        breakoutLabel: input.breakoutLabel ?? "Travel & Per Diem",
+      },
+    });
+    return mapTravelPolicy(created);
+  }
+
+  async updateTravelPolicy(id: string, patch: {
+    name?: string; description?: string;
+    perDiemRate?: number; perDiemEmbedMode?: string; hoursPerDay?: number;
+    travelTimeHours?: number; travelTimeTrips?: number;
+    kmToDestination?: number; mileageRate?: number;
+    fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: string;
+    accommodationRate?: number; accommodationNights?: number;
+    showAsSeparateLine?: boolean; breakoutLabel?: string;
+  }): Promise<TravelPolicy> {
+    const existing = await this.db.travelPolicy.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Travel policy ${id} not found`);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.perDiemRate !== undefined) data.perDiemRate = patch.perDiemRate;
+    if (patch.perDiemEmbedMode !== undefined) data.perDiemEmbedMode = patch.perDiemEmbedMode;
+    if (patch.hoursPerDay !== undefined) data.hoursPerDay = patch.hoursPerDay;
+    if (patch.travelTimeHours !== undefined) data.travelTimeHours = patch.travelTimeHours;
+    if (patch.travelTimeTrips !== undefined) data.travelTimeTrips = patch.travelTimeTrips;
+    if (patch.kmToDestination !== undefined) data.kmToDestination = patch.kmToDestination;
+    if (patch.mileageRate !== undefined) data.mileageRate = patch.mileageRate;
+    if (patch.fuelSurchargePercent !== undefined) data.fuelSurchargePercent = patch.fuelSurchargePercent;
+    if (patch.fuelSurchargeAppliesTo !== undefined) data.fuelSurchargeAppliesTo = patch.fuelSurchargeAppliesTo;
+    if (patch.accommodationRate !== undefined) data.accommodationRate = patch.accommodationRate;
+    if (patch.accommodationNights !== undefined) data.accommodationNights = patch.accommodationNights;
+    if (patch.showAsSeparateLine !== undefined) data.showAsSeparateLine = patch.showAsSeparateLine;
+    if (patch.breakoutLabel !== undefined) data.breakoutLabel = patch.breakoutLabel;
+    const updated = await this.db.travelPolicy.update({ where: { id }, data });
+    return mapTravelPolicy(updated);
+  }
+
+  async deleteTravelPolicy(id: string): Promise<{ deleted: boolean }> {
+    const existing = await this.db.travelPolicy.findFirst({ where: { id, organizationId: this.organizationId } });
+    if (!existing) throw new Error(`Travel policy ${id} not found`);
+    await this.db.travelPolicy.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  // ── Labour Cost Context (for calc engine) ──────────────────────────────────
+
+  async getLabourCostContext(): Promise<{ entries: LabourCostEntry[]; burdenPeriods: BurdenPeriod[] }> {
+    const tables = await this.db.labourCostTable.findMany({
+      where: { organizationId: this.organizationId },
+      include: { entries: { orderBy: { sortOrder: "asc" } } },
+    });
+    const entries = tables.flatMap((t) => (t.entries ?? []).map(mapLabourCostEntry));
+    const periods = await this.db.burdenPeriod.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { startDate: "desc" },
+    });
+    return { entries, burdenPeriods: periods.map(mapBurdenPeriod) };
   }
 }
 
