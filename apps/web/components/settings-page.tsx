@@ -16,6 +16,8 @@ import {
   Plus,
   Search,
   Trash2,
+  Upload,
+  Download,
   Users,
   X,
   Zap,
@@ -87,6 +89,13 @@ import { LabourCostManager } from "@/components/labour-cost-manager";
 import { BurdenManager } from "@/components/burden-manager";
 import { TravelPolicyManager } from "@/components/travel-policy-manager";
 import { detectCli, listRateSchedules } from "@/lib/api";
+import {
+  exportAllDataManagement,
+  parseExportFile,
+  importAllDataManagement,
+  type ImportSummary,
+  type ImportProgress,
+} from "@/lib/data-export-import";
 
 const STORAGE_KEY = "bidwright-settings";
 
@@ -548,9 +557,61 @@ export function SettingsPage({
   const [newExclusion, setNewExclusion] = useState("");
   const [conditionSaving, setConditionSaving] = useState(false);
 
+  // Data Management import/export
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importConfirm, setImportConfirm] = useState<{ data: any; summary: ImportSummary; fileName: string } | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
   // Rate schedules (for embedding)
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>(initialSchedules);
   const [ratesLoading, setRatesLoading] = useState(false);
+
+  // Data export handler
+  const handleExportAll = useCallback(async () => {
+    setExporting(true);
+    try {
+      await exportAllDataManagement();
+    } catch (err) {
+      console.error("Export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  }, []);
+
+  // Data import handler
+  const handleImportFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // reset so same file can be selected again
+    try {
+      const { data, summary } = await parseExportFile(file);
+      setImportConfirm({ data, summary, fileName: file.name });
+    } catch (err: any) {
+      alert(err.message || "Failed to parse import file");
+    }
+  }, []);
+
+  const handleImportConfirm = useCallback(async () => {
+    if (!importConfirm) return;
+    setImportConfirm(null);
+    setImporting(true);
+    setImportProgress(null);
+    try {
+      const result = await importAllDataManagement(importConfirm.data, (p) => setImportProgress({ ...p }));
+      const total = Object.values(result.created).reduce((a, b) => a + b, 0);
+      const msg = `Import complete: ${total} items created.${result.errors.length > 0 ? ` ${result.errors.length} errors.` : ""}`;
+      alert(msg);
+      // Refresh all data by reloading the page
+      window.location.reload();
+    } catch (err: any) {
+      alert("Import failed: " + (err.message || "Unknown error"));
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
+  }, [importConfirm]);
 
   // Fetch rate schedules if initial prop is empty (e.g., auth timing issue)
   useEffect(() => {
@@ -1562,6 +1623,16 @@ export function SettingsPage({
                   <button key={t.id} onClick={() => setDataSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
                 );
               })}
+              <div className="flex-1" />
+              <Button variant="ghost" size="xs" onClick={handleExportAll} disabled={exporting || importing}>
+                {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                {exporting ? "Exporting..." : "Export All"}
+              </Button>
+              <Button variant="ghost" size="xs" onClick={() => importFileRef.current?.click()} disabled={importing || exporting}>
+                {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                {importing ? (importProgress ? `Importing (${importProgress.sectionsComplete}/${importProgress.totalSections})...` : "Importing...") : "Import"}
+              </Button>
+              <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
             </div>
           )}
           {activeGroup === "data" && dataSubTab === "categories" && (
@@ -2296,6 +2367,44 @@ export function SettingsPage({
           )}
 
         </FadeIn>
+
+      {/* ── Import Confirmation Dialog ─── */}
+      {importConfirm && typeof document !== "undefined" && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-panel border border-line rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto">
+            <div className="px-5 py-4 border-b border-line">
+              <h3 className="text-sm font-semibold">Import Data</h3>
+              <p className="text-xs text-fg/40 mt-1">{importConfirm.fileName}</p>
+            </div>
+            <div className="px-5 py-4 space-y-2 text-xs">
+              <p className="text-fg/60 mb-3">The following items will be added to your existing data:</p>
+              {([
+                ["Entity Categories", importConfirm.summary.entityCategories],
+                ["Catalogs", importConfirm.summary.catalogs],
+                ["Catalog Items", importConfirm.summary.catalogItems],
+                ["Rate Schedules", importConfirm.summary.rateSchedules],
+                ["Labour Cost Tables", importConfirm.summary.labourCostTables],
+                ["Burden Periods", importConfirm.summary.burdenPeriods],
+                ["Travel Policies", importConfirm.summary.travelPolicies],
+                ["Customers", importConfirm.summary.customers],
+                ["Inclusions & Exclusions", importConfirm.summary.conditionLibrary],
+              ] as [string, number][]).filter(([, n]) => n > 0).map(([label, count]) => (
+                <div key={label} className="flex items-center justify-between py-1">
+                  <span className="text-fg/60">{label}</span>
+                  <Badge tone="default">{count}</Badge>
+                </div>
+              ))}
+              <p className="text-fg/30 mt-3 pt-3 border-t border-line">Existing data will not be deleted or modified.</p>
+            </div>
+            <div className="px-5 py-3 border-t border-line flex items-center justify-end gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setImportConfirm(null)}>Cancel</Button>
+              <Button variant="accent" size="sm" onClick={handleImportConfirm}>Import</Button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
     </div>
   );
 }

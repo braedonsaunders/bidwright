@@ -15,7 +15,6 @@ import {
   Plus,
   Search,
   Trash2,
-  Upload,
   X,
 } from "lucide-react";
 import * as RadixSelect from "@radix-ui/react-select";
@@ -586,10 +585,6 @@ export function ItemsManager({
             <Button variant="secondary" size="sm" onClick={openLibrary}>
               <Library className="h-3.5 w-3.5" />
               Browse Library
-            </Button>
-            <Button variant="secondary" size="sm" disabled>
-              <Upload className="h-3.5 w-3.5" />
-              Import
             </Button>
           </div>
         </div>
