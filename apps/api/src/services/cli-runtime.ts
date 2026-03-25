@@ -10,6 +10,7 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
 
@@ -37,6 +38,23 @@ export interface SSEEventData {
 
 // Active sessions: one per project
 const sessions = new Map<string, CliSession>();
+
+/** Cross-platform process kill — on Windows, child.kill() doesn't kill the process tree */
+function killProcess(child: ChildProcess, signal: "SIGINT" | "SIGKILL" = "SIGINT"): void {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    try {
+      // taskkill /T /F kills the entire process tree forcefully
+      execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: "pipe" });
+    } catch (err: any) {
+      console.error(`[cli:kill] taskkill failed for PID ${child.pid}:`, err.stderr?.toString().trim() || err.message);
+      // Fallback: try Node's built-in kill
+      try { child.kill(); } catch {}
+    }
+  } else {
+    child.kill(signal);
+  }
+}
 
 /**
  * Check if a CLI is authenticated (has valid credentials)
@@ -81,8 +99,9 @@ export function checkCliAuth(runtime: AgentRuntime, apiKey?: string): { authenti
  */
 export function detectCli(runtime: AgentRuntime): { available: boolean; path: string; version?: string } {
   const cmd = runtime === "claude-code" ? "claude" : "codex";
+  const whichCmd = process.platform === "win32" ? "where" : "which";
   try {
-    const path = execSync(`which ${cmd}`, { encoding: "utf-8" }).trim();
+    const path = execSync(`${whichCmd} ${cmd}`, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
     let version: string | undefined;
     try {
       version = execSync(`${cmd} --version`, { encoding: "utf-8" }).trim();
@@ -98,7 +117,8 @@ export function detectCli(runtime: AgentRuntime): { available: boolean; path: st
  */
 function getMcpServerPath(): string {
   // Resolve from this file's location (apps/api/src/services/ → 4 levels up to repo root)
-  const thisDir = new URL(".", import.meta.url).pathname;
+  const thisUrl = new URL(".", import.meta.url);
+  const thisDir = process.platform === "win32" ? fileURLToPath(thisUrl) : thisUrl.pathname;
   const repoRoot = join(thisDir, "../../../..");
 
   // In dev: use tsx to run the TypeScript source directly
@@ -188,8 +208,8 @@ export async function spawnSession(opts: {
   if (runtime === "claude-code") {
     cliCmd = customCliPath || "claude";
 
-    // Build MCP config JSON to pass directly via CLI flag
-    const mcpConfig = JSON.stringify({
+    // Build MCP config — write to a temp file to avoid shell escaping issues on Windows
+    const mcpConfigObj = {
       mcpServers: {
         bidwright: {
           command: mcpRunner,
@@ -197,7 +217,9 @@ export async function spawnSession(opts: {
           env: mcpEnv,
         },
       },
-    });
+    };
+    const mcpConfigPath = join(projectDir, ".bidwright-mcp-config.json");
+    await writeFile(mcpConfigPath, JSON.stringify(mcpConfigObj, null, 2));
 
     cliArgs = [
       "-p", prompt,
@@ -205,7 +227,7 @@ export async function spawnSession(opts: {
       "--dangerously-skip-permissions", // Non-interactive, no permission prompts
       "--verbose",
       "--max-turns", "200", // Prevent infinite loops
-      "--mcp-config", mcpConfig, // Pass MCP server config directly
+      "--mcp-config", mcpConfigPath, // Pass MCP config file path
     ];
     if (model) cliArgs.push("--model", model);
     // Auth: pass API key if provided. On bare metal (dev), the CLI uses
@@ -229,10 +251,13 @@ export async function spawnSession(opts: {
   }
 
   // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
+  // On Windows, shell:true is required to execute .cmd wrappers (e.g. claude.cmd)
+  // MCP config is passed as a file path (not inline JSON) so shell escaping is safe
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
     stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32",
   });
 
   const events = new EventEmitter();
@@ -267,7 +292,7 @@ export async function spawnSession(opts: {
         // Give up after max retries
         console.warn(`[cli] Inactivity timeout for project ${projectId} — max recoveries (${MAX_RECOVERIES}) reached, terminating`);
         events.emit("event", { type: "error", data: { message: `Session terminated: no activity for 5 minutes (${MAX_RECOVERIES} recovery attempts exhausted)` } });
-        child.kill("SIGINT");
+        killProcess(child, "SIGINT");
         return;
       }
 
@@ -276,7 +301,7 @@ export async function spawnSession(opts: {
       if (!savedSessionId) {
         console.warn(`[cli] Inactivity timeout for project ${projectId} — no session ID for recovery, terminating`);
         events.emit("event", { type: "error", data: { message: "Session terminated: no activity for 5 minutes (no session ID for recovery)" } });
-        child.kill("SIGINT");
+        killProcess(child, "SIGINT");
         return;
       }
 
@@ -285,7 +310,7 @@ export async function spawnSession(opts: {
 
       // Kill the stuck process and mark it so spawnSession doesn't reject
       session.status = "stopped";
-      child.kill("SIGKILL");
+      killProcess(child, "SIGKILL");
 
       // Small delay for process cleanup
       await new Promise(r => setTimeout(r, 2000));
@@ -377,12 +402,14 @@ function wireChildProcess(
     const rl = createInterface({ input: child.stderr });
     rl.on("line", (line) => {
       if (line.trim()) {
+        console.error(`[cli:stderr:${projectId}]`, line.trim());
         events.emit("event", { type: "error", data: { message: line.trim() } });
       }
     });
   }
 
   child.on("exit", (code, signal) => {
+    console.log(`[cli:exit:${session.projectId}] code=${code} signal=${signal}`);
     session.status = signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
     // Emit a final summary message so the user sees closure in the chat
     const completionMsg = session.status === "completed"
@@ -397,6 +424,7 @@ function wireChildProcess(
   });
 
   child.on("error", (err) => {
+    console.error(`[cli:error:${session.projectId}]`, err.message);
     session.status = "failed";
     events.emit("event", { type: "error", data: { message: err.message } });
     events.emit("done", "failed");
@@ -502,8 +530,20 @@ export function stopSession(projectId: string): boolean {
   const session = sessions.get(projectId);
   if (!session || session.status !== "running") return false;
 
-  session.process.kill("SIGINT"); // Graceful shutdown
-  session.status = "stopped";
+  console.log(`[cli:stop:${projectId}] Killing process pid=${session.process.pid}`);
+  killProcess(session.process, "SIGINT");
+
+  // If the process doesn't exit within 3s, force kill and emit done
+  setTimeout(() => {
+    if (session.status === "running") {
+      console.log(`[cli:stop:${projectId}] Force killing after timeout`);
+      killProcess(session.process, "SIGKILL");
+      session.status = "stopped";
+      session.events.emit("event", { type: "status", data: { status: "stopped", exitCode: null, signal: "SIGINT" } });
+      session.events.emit("done", "stopped");
+    }
+  }, 3000);
+
   return true;
 }
 

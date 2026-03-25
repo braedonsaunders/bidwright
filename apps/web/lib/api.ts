@@ -2314,7 +2314,7 @@ export interface AppSettingsRecord {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string };
   brand: BrandProfile;
   termsAndConditions?: string;
 }
@@ -3217,7 +3217,7 @@ export interface IntakeStatusResult {
   sessionId: string;
   projectId: string;
   scope: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "stopped";
   toolCallCount: number;
   messageCount: number;
   summary: string | null;

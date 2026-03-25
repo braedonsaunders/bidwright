@@ -58,9 +58,9 @@ export function registerCliRoutes(app: FastifyInstance) {
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
 
-    const project = workspace.projects?.[0] || {};
-    const quote = workspace.quotes?.[0] || {};
-    const revision = workspace.revisions?.[0] || {};
+    const project = workspace.project || {} as any;
+    const quote = workspace.quote || {} as any;
+    const revision = workspace.currentRevision || {} as any;
     const documents = (workspace.sourceDocuments || []).map((d: any) => ({
       id: d.id,
       fileName: d.fileName,
@@ -77,7 +77,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       projectDir,
       projectName: project.name || "Untitled Project",
       clientName: project.clientName || "",
-      location: project.projectAddress || "",
+      location: project.location || "",
       scope: scope || "",
       quoteNumber: quote.quoteNumber || "",
       dataRoot: apiDataRoot,
@@ -91,7 +91,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     }
 
     // Symlink global knowledge books
-    const knowledgeBooks = workspace.knowledgeBooks || [];
+    const knowledgeBooks = await store.listKnowledgeBooks() || [];
     const globalBooks = knowledgeBooks.filter((b: any) => b.scope === "global" && b.storagePath);
     if (globalBooks.length > 0) {
       await symlinkKnowledgeBooks(
@@ -481,47 +481,21 @@ export function registerCliRoutes(app: FastifyInstance) {
       .slice(0, 50)
       .join("\n");
 
-    const claudeMd = `# Dataset Extraction Agent
+    const pdfFile = book.sourceFileName || "book.pdf";
+    const claudeMd = `# Dataset Extraction
 
-You are extracting structured datasets from the knowledge book "${book.name}".
-The book PDF is at \`book/${book.sourceFileName || "book.pdf"}\`.
+Extract structured data tables from \`book/${pdfFile}\` (${book.pageCount} pages).
 
-## Your Task
+For each table, call \`createDataset\` with:
+- Descriptive name
+- Rich tags array for search (material type, operation, pipe sizes, units, section name)
+- Columns as [{name, type}] — use snake_case names, type "number" for numeric values
+- Rows as arrays of values matching column order — use actual numbers not strings
+- sourceBookId: "${bookId}"
+- sourcePages: array of page numbers
 
-Read the PDF directly to find and extract structured tables into Bidwright datasets.
-Use the \`createDataset\` MCP tool to create each dataset with proper columns, rows, and rich tags.
-
-## How to Work
-
-1. **Read the PDF** — use the Read tool with \`pages\` parameter to view specific pages as images
-2. **Identify tables** — look for man-hour tables, material tables, weight tables, etc.
-3. **Extract data** — read the table values from the PDF page images
-4. **Create datasets** — call \`createDataset\` for each table with:
-   - Descriptive name (e.g. "Attaching Flanges - Screwed Type - Net Man Hours Each")
-   - Rich tags for search (e.g. ["pipe", "flange", "screwed", "man-hours", "carbon-steel", "field-fabrication"])
-   - Clean column definitions with types
-   - All rows of data
-   - Source page numbers and book ID
-5. **Group related tables** — merge tables that span multiple pages into one dataset
-6. **Skip non-data pages** — title pages, text-only pages, diagrams without tables
-
-## Section Index (from text extraction)
-${sectionsInfo}
-
-## Guidelines
-
-- **Rich tags are critical**: Include material type, operation type, pipe sizes, unit type (hours/lbs/feet), section of manual
-- **Clean column names**: Use snake_case like "pipe_size_inches", "man_hours_each", "pressure_rating_lb"
-- **Numeric columns**: Set type to "number" for all man-hour and measurement values
-- **Merge multi-page tables**: Same table spanning pages should be one dataset
-- **Preserve notes**: Include footnotes and conditions in the dataset description
-- **Source tracking**: Always set sourceBookId="${bookId}" and sourcePages
-
-## Book Info
-- Name: ${book.name}
-- Book ID: ${bookId}
-- Pages: ${book.pageCount}
-- Sections found: ${sectionMap.size}
+Read the PDF in batches of 20 pages (it has ${book.pageCount} total). Scan every page.
+Merge tables that span multiple pages. Skip non-data pages.
 `;
 
     await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
@@ -531,7 +505,7 @@ ${sectionsInfo}
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,
-      prompt: "Read the book-manifest.json to understand sections, then read actual PDF pages from book/ to identify and extract tables. For each table, call createDataset with proper columns, rows, and tags. Start now.",
+      prompt: `Read CLAUDE.md then extract all data tables from the PDF in book/. Call createDataset for each table.`,
       runtime,
       model,
       authToken: token,
