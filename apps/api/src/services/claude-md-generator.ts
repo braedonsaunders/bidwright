@@ -201,7 +201,10 @@ You decide your own workflow. Here's the MANDATORY sequence:
    a. Call \`listRateSchedules\` to see all available org schedules
    b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed.
    c. Call \`importRateSchedule\` for each selected schedule
-   d. Every item in a rate_schedule category MUST have a \`rateScheduleItemId\` from the imported schedule
+   d. Every item in a rate_schedule category MUST have:
+      - \`rateScheduleItemId\` — the rate item ID
+      - \`tierUnits\` — hours mapped to tier IDs, e.g. \`{"tier-abc": 40, "tier-def": 8}\` for 40 regular + 8 OT hours. Get tier IDs from getItemConfig (each rate item has a \`tiers\` array with id/name/multiplier). This is how cost/price is calculated.
+      - \`entityName\` — just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
    e. If no suitable schedule exists, note "NO RATE SCHEDULE — needs setup" and set estimated costs
 6. **Check memory** — see if there's progress from a prior session
 7. **Create phases** — create project phases if the spec defines a sequence of work. After creating phases, call \`getWorkspace\` to retrieve the phase IDs — you need these to assign line items to phases via phaseId.
@@ -245,13 +248,15 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Each category's \`calculationType\` tells you what fields matter (auto_labour needs hours, auto_equipment needs day rates, manual needs cost+qty, direct_price needs lump sum)
 - Categorize items according to their nature — match the category's \`entityType\` description. Do not mix item types across categories.
 - Each category has an \`itemSource\` field that tells you where items come from:
-  - **rate_schedule**: Items MUST link to imported rate schedule items. The server VALIDATES this and will REJECT items without a valid rateScheduleItemId. Steps:
+  - **rate_schedule**: Items MUST link to imported rate schedule items. The server VALIDATES and REJECTS items without a valid rateScheduleItemId. Steps:
     1. Call \`listRateSchedules\` to see available org schedules
     2. Call \`importRateSchedule\` to import relevant schedules to this quote
-    3. Call \`listRateScheduleItems\` on the imported schedule to get item IDs
-    4. Set \`rateScheduleItemId\` on every item in this category — pick from the available list only
-    5. Do NOT invent labour classes, equipment types, or consumables. If no exact match exists, use the CLOSEST available item and note the discrepancy in the description.
-    6. If the server rejects the item, read the error — it includes the list of valid items.
+    3. Use getItemConfig to see the imported rate items with their tier IDs
+    4. When creating items, set:
+       - \`rateScheduleItemId\` — the rate item ID
+       - \`tierUnits\` — a JSON object mapping tier IDs to hours, e.g. \`{"tier-id-regular": 40, "tier-id-ot": 8}\`. Get the tier IDs from the \`tiers\` array on each rate item. Without tierUnits, cost/price will be $0.
+       - \`entityName\` — the rate item name only (e.g. "Trade Labour"). Task details go in \`description\`.
+    5. Do NOT invent items. If no exact match, use the CLOSEST and note it.
   - **catalog**: Items MUST come from the item catalog. Set \`itemId\` to link to a catalog item. Do NOT fabricate catalog items.
   - **freeform**: No backing data source — set cost and quantity directly.
 - For items with unknown cost: set cost=0 and note "NEEDS PRICING" in description
