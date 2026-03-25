@@ -624,9 +624,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       cols.delete("unit3");
     }
 
-    // If no active categories allow unit1 editing, hide it too
-    const hasLaborRegEditable = activeCatDefs.some((c) => c.editableFields.unit1);
-    if (!hasLaborRegEditable && allItems.length > 0) {
+    // Show unit1 if any category uses auto_labour (hours column) or has unit1 editable
+    const hasLabourOrUnit1 = activeCatDefs.some((c) => c.calculationType === "auto_labour" || c.editableFields.unit1);
+    if (!hasLabourOrUnit1 && allItems.length > 0) {
       cols.delete("unit1");
     }
 
