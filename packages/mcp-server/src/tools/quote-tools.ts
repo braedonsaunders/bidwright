@@ -299,10 +299,10 @@ export function registerQuoteTools(server: McpServer) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. Use Equipment for equipment, Labour for labour, Material for materials, etc. For rate_schedule categories, set rateScheduleItemId. For freeform categories, set cost and quantity directly. Always include a description citing the source document.`,
+    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. For rate_schedule categories (Labour, Equipment), set rateScheduleItemId and use the rate item name as entityName (e.g. "Trade Labour", "Foreman"). Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly.`,
     {
       worksheetId: z.string().describe("ID of the worksheet"),
-      entityName: z.string().describe("Item name"),
+      entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
       category: z.string().describe("Category name — MUST match exactly from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use the correct category for each item type."),
       description: z.string().default("").describe("Description with document reference and assumptions"),
       quantity: z.number().default(1).describe("Quantity"),

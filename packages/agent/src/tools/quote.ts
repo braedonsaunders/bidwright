@@ -340,10 +340,10 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
 export const createWorksheetItemTool = createQuoteTool({
   id: "quote.createWorksheetItem",
   name: "Create Line Item",
-  description: `Create a new line item in a worksheet. Requires worksheetId and entityName.
+  description: `Create a new line item in a worksheet. Requires worksheetId, entityName, and category.
 
 STRICT RULES — the server will REJECT items that violate these:
-- For LABOUR and EQUIPMENT categories (itemSource=rate_schedule): you MUST provide a valid rateScheduleItemId from the getItemConfig results. Do NOT invent labour classes or equipment — pick from the available rate schedule items.
+- For LABOUR and EQUIPMENT categories (itemSource=rate_schedule): you MUST provide a valid rateScheduleItemId. Use the rate item name as entityName (e.g. "Trade Labour", "Foreman") — do NOT combine item name with task description. Put task details in the description field.
 - For CATALOG categories: you MUST use an existing catalogItemId from getItemConfig results.
 - For FREEFORM categories (Material, Subcontractors, etc.): provide cost and quantity directly.
 
