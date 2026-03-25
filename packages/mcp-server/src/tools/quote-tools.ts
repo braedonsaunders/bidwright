@@ -287,8 +287,12 @@ export function registerQuoteTools(server: McpServer) {
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
       const data = await apiPost(projectPath("/worksheets"), { name, description });
+      // Extract the worksheet ID from the response
+      const worksheets = (data as any)?.workspace?.worksheets ?? [];
+      const created = worksheets.find((w: any) => w.name === name);
+      const wsId = created?.id ?? "unknown";
       invalidateWs();
-      return { content: [{ type: "text" as const, text: `Created worksheet: ${name}` }] };
+      return { content: [{ type: "text" as const, text: `Created worksheet: ${name} (worksheetId: ${wsId})` }] };
     }
   );
 
@@ -493,11 +497,16 @@ export function registerQuoteTools(server: McpServer) {
   // ── createPhase ───────────────────────────────────────────
   server.tool(
     "createPhase",
-    "Create a project phase for organizing line items.",
+    "Create a project phase for organizing line items. Returns the phase ID — use it as phaseId when creating worksheet items.",
     { name: z.string(), description: z.string().optional() },
     async ({ name, description }) => {
-      await apiPost(projectPath("/phases"), { name, description });
-      return { content: [{ type: "text" as const, text: `Created phase: ${name}` }] };
+      const data = await apiPost(projectPath("/phases"), { name, description });
+      // Extract the newly created phase ID from the workspace response
+      const phases = (data as any)?.workspace?.phases ?? [];
+      const created = phases.find((p: any) => p.name === name);
+      const phaseId = created?.id ?? "unknown";
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Created phase: ${name} (phaseId: ${phaseId})` }] };
     }
   );
 
