@@ -1,20 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import {
-  ChevronDown,
-  ChevronUp,
   GripVertical,
   Plus,
   Save,
   Trash2,
   FileText,
-  Heading,
   BarChart3,
   Lightbulb,
-  Image,
-  CornerDownRight,
+  Image as ImageIcon,
+  Copy,
+  Upload,
 } from "lucide-react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type {
   ProjectWorkspaceData,
   ReportSection,
@@ -26,6 +25,8 @@ import {
   reorderReportSections,
   updateReportSection,
   updateRevision,
+  uploadFile,
+  getFileDownloadUrl,
 } from "@/lib/api";
 import {
   Button,
@@ -33,11 +34,7 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
-  EmptyState,
-  Input,
   Label,
-  Select,
-  Textarea,
 } from "@/components/ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { FileBrowser, type FileBrowserProps } from "@/components/workspace/file-browser";
@@ -127,24 +124,33 @@ export function DocumentationTab({ workspace, apply, packages, highlightDocument
   );
 }
 
-/* ─── Section type helpers ─── */
+/* ─── Section type config ─── */
 
-const SECTION_TYPE_CONFIG: Record<string, { icon: typeof FileText; badgeClass: string }> = {
-  content:         { icon: FileText,  badgeClass: "text-fg/40 bg-panel2 border-line" },
-  heading:         { icon: Heading,   badgeClass: "text-blue-600 bg-blue-50 border-blue-200" },
-  summary:         { icon: BarChart3, badgeClass: "text-emerald-600 bg-emerald-50 border-emerald-200" },
-  recommendations: { icon: Lightbulb, badgeClass: "text-amber-600 bg-amber-50 border-amber-200" },
-  image:           { icon: Image,     badgeClass: "text-purple-600 bg-purple-50 border-purple-200" },
-};
+const SECTION_TYPES = [
+  { type: "content",         label: "Content",         icon: FileText,   badgeClass: "text-blue-600 bg-blue-50 border-blue-200",    btnClass: "border-blue-300 text-blue-600 hover:bg-blue-50",    defaultTitle: "New Section" },
+  { type: "image",           label: "Image",           icon: ImageIcon,  badgeClass: "text-purple-600 bg-purple-50 border-purple-200", btnClass: "border-purple-300 text-purple-600 hover:bg-purple-50", defaultTitle: "Image Section" },
+  { type: "summary",         label: "Summary",         icon: BarChart3,  badgeClass: "text-emerald-600 bg-emerald-50 border-emerald-200", btnClass: "border-emerald-300 text-emerald-600 hover:bg-emerald-50", defaultTitle: "Inspection Summary" },
+  { type: "recommendations", label: "Recommendations", icon: Lightbulb,  badgeClass: "text-amber-600 bg-amber-50 border-amber-200", btnClass: "border-amber-300 text-amber-600 hover:bg-amber-50", defaultTitle: "Recommendations" },
+] as const;
 
-function SectionTypeIcon({ type }: { type: string }) {
-  const config = SECTION_TYPE_CONFIG[type] ?? SECTION_TYPE_CONFIG.content;
-  const Icon = config.icon;
-  return <Icon className="h-3.5 w-3.5 text-fg/40 shrink-0" />;
+function getSectionConfig(type: string) {
+  return SECTION_TYPES.find((t) => t.type === type) ?? SECTION_TYPES[0];
 }
 
-function sectionTypeBadgeClass(type: string) {
-  return (SECTION_TYPE_CONFIG[type] ?? SECTION_TYPE_CONFIG.content).badgeClass;
+/* ─── Image content helpers ─── */
+
+interface ImageContent {
+  documentId?: string;
+  fileNodeId?: string;
+  caption?: string;
+}
+
+function parseImageContent(content: string): ImageContent {
+  try { return JSON.parse(content); } catch { return { caption: content }; }
+}
+
+function serializeImageContent(data: ImageContent): string {
+  return JSON.stringify(data);
 }
 
 /* ─── Report Tab ─── */
@@ -160,295 +166,496 @@ function ReportTab({
 }) {
   const [pending, startTransition] = useTransition();
   const projectId = workspace.project.id;
-
-  // Gather report sections sorted by order
   const sections = useSortedSections(workspace);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<{
-    title: string;
-    content: string;
-    sectionType: string;
-    parentSectionId: string | null;
-  }>({ title: "", content: "", sectionType: "content", parentSectionId: null });
+  // Track which section was just created so we can auto-focus its title
+  const [focusSectionId, setFocusSectionId] = useState<string | null>(null);
 
-  const [newSection, setNewSection] = useState(false);
-  const [newDraft, setNewDraft] = useState({
-    title: "",
-    content: "",
-    sectionType: "content",
-    parentSectionId: null as string | null,
-  });
+  // Drag-and-drop state
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
-  function startEdit(s: ReportSection) {
-    setEditingId(s.id);
-    setEditDraft({ title: s.title, content: s.content, sectionType: s.sectionType, parentSectionId: s.parentSectionId });
-  }
+  /* ── Auto-save helper ── */
+  const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  function cancelEdit() {
-    setEditingId(null);
-  }
+  const debouncedUpdate = useCallback(
+    (sectionId: string, patch: Partial<ReportSection>) => {
+      const key = sectionId;
+      const existing = saveTimers.current.get(key);
+      if (existing) clearTimeout(existing);
+      saveTimers.current.set(
+        key,
+        setTimeout(() => {
+          saveTimers.current.delete(key);
+          startTransition(async () => {
+            try {
+              apply(await updateReportSection(projectId, sectionId, patch));
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Failed to save.");
+            }
+          });
+        }, 1200)
+      );
+    },
+    [projectId, apply, setError]
+  );
 
-  function saveEdit(sectionId: string) {
-    startTransition(async () => {
-      try {
-        const next = await updateReportSection(projectId, sectionId, editDraft);
-        apply(next);
-        setEditingId(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to update section.");
-      }
-    });
-  }
+  // Flush pending saves on blur (immediate save)
+  const flushUpdate = useCallback(
+    (sectionId: string, patch: Partial<ReportSection>) => {
+      const existing = saveTimers.current.get(sectionId);
+      if (existing) clearTimeout(existing);
+      saveTimers.current.delete(sectionId);
+      startTransition(async () => {
+        try {
+          apply(await updateReportSection(projectId, sectionId, patch));
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "Failed to save.");
+        }
+      });
+    },
+    [projectId, apply, setError]
+  );
 
-  function addSection() {
+  /* ── Add section ── */
+  function addSection(type: string, parentSectionId?: string | null) {
+    const config = getSectionConfig(type);
     startTransition(async () => {
       try {
         const next = await createReportSection(projectId, {
-          ...newDraft,
+          sectionType: type,
+          title: config.defaultTitle,
+          content: "",
           order: sections.length + 1,
+          parentSectionId: parentSectionId ?? null,
         });
         apply(next);
-        setNewSection(false);
-        setNewDraft({ title: "", content: "", sectionType: "content", parentSectionId: null });
+        // Find the newly created section to focus it
+        // The new section will be in next.reportSections or we re-fetch
+        setFocusSectionId("__latest__");
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to create section.");
       }
     });
   }
 
+  /* ── Duplicate section ── */
+  function duplicateSection(section: ReportSection) {
+    startTransition(async () => {
+      try {
+        const next = await createReportSection(projectId, {
+          sectionType: section.sectionType,
+          title: (section.title || "Section") + " (Copy)",
+          content: section.content,
+          order: section.order + 1,
+          parentSectionId: section.parentSectionId,
+        });
+        apply(next);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to duplicate section.");
+      }
+    });
+  }
+
+  /* ── Delete section ── */
   function removeSection(sectionId: string) {
+    if (!confirm("Delete this section?")) return;
     startTransition(async () => {
       try {
         apply(await deleteReportSection(projectId, sectionId));
-        if (editingId === sectionId) setEditingId(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to delete section.");
       }
     });
   }
 
-  function moveSection(index: number, direction: "up" | "down") {
-    const newOrder = [...sections];
-    const swapIndex = direction === "up" ? index - 1 : index + 1;
-    if (swapIndex < 0 || swapIndex >= newOrder.length) return;
-    [newOrder[index], newOrder[swapIndex]] = [newOrder[swapIndex], newOrder[index]];
-    const orderedIds = newOrder.map((s) => s.id);
+  /* ── Image upload ── */
+  function handleImageUpload(sectionId: string, file: File) {
     startTransition(async () => {
       try {
-        apply(await reorderReportSections(projectId, orderedIds));
+        const fileNode = await uploadFile(projectId, file);
+        const existing = sections.find((s) => s.id === sectionId);
+        const prev = existing ? parseImageContent(existing.content) : {};
+        const content = serializeImageContent({ ...prev, fileNodeId: fileNode.id });
+        apply(await updateReportSection(projectId, sectionId, { content }));
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to reorder sections.");
+        setError(e instanceof Error ? e.message : "Failed to upload image.");
       }
     });
   }
 
+  /* ── Drag-and-drop ── */
+  function handleDragStart(e: React.DragEvent, sectionId: string) {
+    setDragId(sectionId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", sectionId);
+  }
+
+  function handleDragOver(e: React.DragEvent, sectionId: string) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (sectionId !== dragId) setDragOverId(sectionId);
+  }
+
+  function handleDragLeave() {
+    setDragOverId(null);
+  }
+
+  function handleDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault();
+    setDragOverId(null);
+    setDragId(null);
+    const sourceId = e.dataTransfer.getData("text/plain");
+    if (!sourceId || sourceId === targetId) return;
+
+    const ids = sections.map((s) => s.id);
+    const fromIdx = ids.indexOf(sourceId);
+    const toIdx = ids.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const reordered = [...ids];
+    reordered.splice(fromIdx, 1);
+    reordered.splice(toIdx, 0, sourceId);
+
+    startTransition(async () => {
+      try {
+        apply(await reorderReportSections(projectId, reordered));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to reorder.");
+      }
+    });
+  }
+
+  function handleDragEnd() {
+    setDragId(null);
+    setDragOverId(null);
+  }
+
+  /* ── Add-section buttons ── */
+  const addButtons = (
+    <div className="flex flex-wrap gap-2">
+      {SECTION_TYPES.map(({ type, label, icon: Icon, btnClass }) => (
+        <button
+          key={type}
+          onClick={() => addSection(type)}
+          disabled={pending}
+          className={cn(
+            "flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40",
+            btnClass
+          )}
+        >
+          <Icon className="h-3.5 w-3.5" />
+          Add {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  /* ── Render ── */
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Report Sections</CardTitle>
-        <Button size="sm" onClick={() => setNewSection(true)} disabled={newSection || pending}>
-          <Plus className="h-3.5 w-3.5" /> Add Section
-        </Button>
-      </CardHeader>
-      <CardBody className="space-y-3">
-        {newSection && (
-          <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Title</Label>
-                <Input
-                  value={newDraft.title}
-                  onChange={(e) => setNewDraft({ ...newDraft, title: e.target.value })}
-                  placeholder="Section title"
-                />
-              </div>
-              <div>
-                <Label>Section Type</Label>
-                <Select
-                  value={newDraft.sectionType}
-                  onChange={(e) => setNewDraft({ ...newDraft, sectionType: e.target.value })}
-                >
-                  <option value="content">Content</option>
-                  <option value="heading">Heading</option>
-                  <option value="summary">Summary</option>
-                  <option value="recommendations">Recommendations</option>
-                  <option value="image">Image</option>
-                </Select>
-              </div>
-            </div>
-            {sections.length > 0 && (
-              <div>
-                <Label>Parent Section (optional)</Label>
-                <Select
-                  value={newDraft.parentSectionId ?? ""}
-                  onChange={(e) => setNewDraft({ ...newDraft, parentSectionId: e.target.value || null })}
-                >
-                  <option value="">None (top level)</option>
-                  {sections.filter((s) => !s.parentSectionId).map((s) => (
-                    <option key={s.id} value={s.id}>{s.title || "(Untitled)"}</option>
-                  ))}
-                </Select>
-              </div>
-            )}
-            <div>
-              <Label>Content</Label>
-              <RichTextEditor
-                value={newDraft.content}
-                onChange={(html) => setNewDraft({ ...newDraft, content: html })}
-                placeholder="Section content..."
-                minHeight="160px"
-              />
-            </div>
-            <div className="flex gap-2 justify-end">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setNewSection(false);
-                  setNewDraft({ title: "", content: "", sectionType: "content", parentSectionId: null });
-                }}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" onClick={addSection} disabled={pending || !newDraft.title.trim()}>
-                <Save className="h-3.5 w-3.5" /> Save
-              </Button>
-            </div>
+    <div className="flex flex-col flex-1 min-h-0 gap-3 overflow-y-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-fg">Report Sections</h3>
+      </div>
+
+      {/* Empty state */}
+      {sections.length === 0 && (
+        <div className="rounded-xl border-2 border-dashed border-line bg-panel2/30 py-12 flex flex-col items-center gap-3">
+          <FileText className="h-10 w-10 text-fg/20" />
+          <div className="text-center">
+            <p className="text-sm font-medium text-fg/60">Start Building Your Report</p>
+            <p className="text-xs text-fg/40 mt-0.5">Add sections below to create a comprehensive report</p>
           </div>
-        )}
+          <div className="mt-2">{addButtons}</div>
+        </div>
+      )}
 
-        {sections.length === 0 && !newSection && (
-          <EmptyState>No report sections yet. Add one to get started.</EmptyState>
-        )}
+      {/* Sections */}
+      {sections.map((section) => (
+        <ReportSectionItem
+          key={section.id}
+          section={section}
+          projectId={projectId}
+          pending={pending}
+          focusSectionId={focusSectionId}
+          setFocusSectionId={setFocusSectionId}
+          debouncedUpdate={debouncedUpdate}
+          flushUpdate={flushUpdate}
+          onAddSubSection={(type) => addSection(type, section.id)}
+          onDuplicate={() => duplicateSection(section)}
+          onDelete={() => removeSection(section.id)}
+          onImageUpload={(file) => handleImageUpload(section.id, file)}
+          isDragging={dragId === section.id}
+          isDragOver={dragOverId === section.id}
+          onDragStart={(e) => handleDragStart(e, section.id)}
+          onDragOver={(e) => handleDragOver(e, section.id)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, section.id)}
+          onDragEnd={handleDragEnd}
+        />
+      ))}
 
-        {sections.map((section, idx) => (
-          <div
-            key={section.id}
-            className={cn(
-              "rounded-lg border border-line bg-panel2/50 p-4",
-              section.parentSectionId && "ml-8 border-l-2 border-l-accent/30"
-            )}
+      {/* Add section buttons at bottom */}
+      {sections.length > 0 && addButtons}
+    </div>
+  );
+}
+
+/* ─── Section Item ─── */
+
+interface ReportSectionItemProps {
+  section: ReportSection;
+  projectId: string;
+  pending: boolean;
+  focusSectionId: string | null;
+  setFocusSectionId: (id: string | null) => void;
+  debouncedUpdate: (id: string, patch: Partial<ReportSection>) => void;
+  flushUpdate: (id: string, patch: Partial<ReportSection>) => void;
+  onAddSubSection: (type: string) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onImageUpload: (file: File) => void;
+  isDragging: boolean;
+  isDragOver: boolean;
+  onDragStart: (e: React.DragEvent) => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
+}
+
+function ReportSectionItem({
+  section,
+  projectId,
+  pending,
+  focusSectionId,
+  setFocusSectionId,
+  debouncedUpdate,
+  flushUpdate,
+  onAddSubSection,
+  onDuplicate,
+  onDelete,
+  onImageUpload,
+  isDragging,
+  isDragOver,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd,
+}: ReportSectionItemProps) {
+  const config = getSectionConfig(section.sectionType);
+  const Icon = config.icon;
+  const titleRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Local state for title & content so edits feel instant
+  const [title, setTitle] = useState(section.title);
+  const [content, setContent] = useState(section.content);
+
+  // Sync from server when section data changes externally
+  useEffect(() => { setTitle(section.title); }, [section.title]);
+  useEffect(() => { setContent(section.content); }, [section.content]);
+
+  // Auto-focus newly created section title
+  useEffect(() => {
+    if (focusSectionId === "__latest__" && titleRef.current) {
+      // Focus the last section created - rely on parent rendering order
+      // A small delay ensures DOM is ready
+      const timer = setTimeout(() => {
+        titleRef.current?.focus();
+        titleRef.current?.select();
+        setFocusSectionId(null);
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [focusSectionId, setFocusSectionId]);
+
+  const isImage = section.sectionType === "image";
+  const imageData = isImage ? parseImageContent(content) : null;
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={cn(
+        "group rounded-lg border bg-panel2/50 transition-all",
+        section.parentSectionId && "ml-8 border-l-2 border-l-accent/30",
+        isDragging && "opacity-50 rotate-[0.5deg] shadow-lg",
+        isDragOver && "border-accent ring-2 ring-accent/20",
+        !isDragging && !isDragOver && "border-line hover:border-fg/20 hover:shadow-sm"
+      )}
+    >
+      {/* Section header */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-panel2/60 rounded-t-lg cursor-move border-b border-line/50">
+        <GripVertical className="h-3.5 w-3.5 text-fg/20 shrink-0" />
+        <span className={cn(
+          "flex items-center justify-center h-5 w-5 rounded shrink-0",
+          config.badgeClass, "border"
+        )}>
+          <Icon className="h-3 w-3" />
+        </span>
+        <span className={cn(
+          "text-[10px] font-medium rounded px-1.5 py-0.5 border uppercase tracking-wider",
+          config.badgeClass
+        )}>
+          {config.label}
+        </span>
+        <div className="flex-1" />
+
+        {/* Hover-reveal controls */}
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* Add sub-section dropdown */}
+          {!section.parentSectionId && (
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger asChild>
+                <button
+                  className="h-6 w-6 flex items-center justify-center rounded text-fg/30 hover:text-fg/60 hover:bg-panel2 transition-colors"
+                  title="Add sub-section"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  className="z-[100] min-w-[160px] rounded-lg border border-line bg-panel p-1 shadow-xl"
+                  sideOffset={4}
+                  align="end"
+                >
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                    onSelect={() => onAddSubSection("content")}
+                  >
+                    <FileText className="h-3.5 w-3.5 text-blue-500" />
+                    Content
+                  </DropdownMenu.Item>
+                  <DropdownMenu.Item
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                    onSelect={() => onAddSubSection("image")}
+                  >
+                    <ImageIcon className="h-3.5 w-3.5 text-purple-500" />
+                    Image
+                  </DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          )}
+          {/* Duplicate */}
+          <button
+            onClick={onDuplicate}
+            disabled={pending}
+            className="h-6 w-6 flex items-center justify-center rounded text-fg/30 hover:text-fg/60 hover:bg-panel2 transition-colors disabled:opacity-30"
+            title="Duplicate"
           >
-            {editingId === section.id ? (
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>Title</Label>
-                    <Input
-                      value={editDraft.title}
-                      onChange={(e) => setEditDraft({ ...editDraft, title: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label>Section Type</Label>
-                    <Select
-                      value={editDraft.sectionType}
-                      onChange={(e) => setEditDraft({ ...editDraft, sectionType: e.target.value })}
-                    >
-                      <option value="content">Content</option>
-                      <option value="heading">Heading</option>
-                      <option value="summary">Summary</option>
-                      <option value="recommendations">Recommendations</option>
-                      <option value="image">Image</option>
-                    </Select>
-                  </div>
-                </div>
-                <div>
-                  <Label>Parent Section</Label>
-                  <Select
-                    value={editDraft.parentSectionId ?? ""}
-                    onChange={(e) => setEditDraft({ ...editDraft, parentSectionId: e.target.value || null })}
-                  >
-                    <option value="">None (top level)</option>
-                    {sections.filter((s) => !s.parentSectionId && s.id !== section.id).map((s) => (
-                      <option key={s.id} value={s.id}>{s.title || "(Untitled)"}</option>
-                    ))}
-                  </Select>
-                </div>
-                <div>
-                  <Label>Content</Label>
-                  <RichTextEditor
-                    value={editDraft.content}
-                    onChange={(html) => setEditDraft({ ...editDraft, content: html })}
-                    placeholder="Section content..."
-                    minHeight="160px"
-                  />
-                </div>
-                <div className="flex gap-2 justify-end">
-                  <Button size="sm" variant="ghost" onClick={cancelEdit}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => saveEdit(section.id)}
-                    disabled={pending}
-                  >
-                    <Save className="h-3.5 w-3.5" /> Save
-                  </Button>
+            <Copy className="h-3.5 w-3.5" />
+          </button>
+          {/* Delete */}
+          <button
+            onClick={onDelete}
+            disabled={pending}
+            className="h-6 w-6 flex items-center justify-center rounded text-fg/30 hover:text-danger hover:bg-danger/10 transition-colors disabled:opacity-30"
+            title="Delete"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Section body */}
+      <div className="px-4 py-3 space-y-2">
+        {/* Inline title */}
+        <input
+          ref={titleRef}
+          value={title}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            debouncedUpdate(section.id, { title: e.target.value });
+          }}
+          onBlur={() => {
+            if (title !== section.title) flushUpdate(section.id, { title });
+          }}
+          placeholder="Section title..."
+          className="w-full bg-transparent border-none outline-none text-sm font-semibold text-fg placeholder:text-fg/30 px-0 py-1 focus:bg-panel focus:border focus:border-line focus:rounded-md focus:px-2 transition-all"
+        />
+
+        {/* Content area — varies by type */}
+        {isImage ? (
+          <div className="space-y-2">
+            {/* Image upload area */}
+            {imageData?.fileNodeId ? (
+              <div
+                className="relative rounded-lg border-2 border-emerald-300 bg-emerald-50/30 overflow-hidden cursor-pointer group/img"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <img
+                  src={getFileDownloadUrl(projectId, imageData.fileNodeId, true)}
+                  alt={title}
+                  className="max-h-[200px] w-auto object-contain mx-auto"
+                />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center">
+                  <span className="text-white text-xs font-medium">Click to replace</span>
                 </div>
               </div>
             ) : (
-              <div className="flex items-start gap-3">
-                <div className="flex flex-col gap-1 pt-0.5">
-                  <button
-                    className="text-fg/30 hover:text-fg/60 disabled:opacity-30"
-                    onClick={() => moveSection(idx, "up")}
-                    disabled={idx === 0 || pending}
-                  >
-                    <ChevronUp className="h-4 w-4" />
-                  </button>
-                  <GripVertical className="h-4 w-4 text-fg/20" />
-                  <button
-                    className="text-fg/30 hover:text-fg/60 disabled:opacity-30"
-                    onClick={() => moveSection(idx, "down")}
-                    disabled={idx === sections.length - 1 || pending}
-                  >
-                    <ChevronDown className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <SectionTypeIcon type={section.sectionType} />
-                    <span className="text-sm font-medium text-fg">{section.title || "(Untitled)"}</span>
-                    <span className={cn(
-                      "text-[11px] rounded px-1.5 py-0.5 border",
-                      sectionTypeBadgeClass(section.sectionType)
-                    )}>
-                      {section.sectionType}
-                    </span>
-                    {section.parentSectionId && (
-                      <CornerDownRight className="h-3 w-3 text-fg/30" />
-                    )}
-                  </div>
-                  {section.content && (
-                    <div className="text-xs text-fg/60 line-clamp-3 prose prose-xs max-w-none" dangerouslySetInnerHTML={{ __html: section.content }} />
-                  )}
-                </div>
-                <div className="flex gap-1">
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => startEdit(section)}
-                    disabled={pending}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="danger"
-                    onClick={() => removeSection(section.id)}
-                    disabled={pending}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full h-[150px] rounded-lg border-2 border-dashed border-line hover:border-purple-400 hover:bg-purple-50/30 transition-colors flex flex-col items-center justify-center gap-2 cursor-pointer"
+              >
+                <Upload className="h-6 w-6 text-fg/30" />
+                <span className="text-xs text-fg/40">Click to upload image</span>
+              </button>
             )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onImageUpload(file);
+                e.target.value = "";
+              }}
+            />
+            {/* Caption */}
+            <textarea
+              value={imageData?.caption ?? ""}
+              onChange={(e) => {
+                const newContent = serializeImageContent({ ...imageData, caption: e.target.value });
+                setContent(newContent);
+                debouncedUpdate(section.id, { content: newContent });
+              }}
+              onBlur={(e) => {
+                const newContent = serializeImageContent({ ...imageData, caption: e.target.value });
+                if (newContent !== section.content) flushUpdate(section.id, { content: newContent });
+              }}
+              onInput={(e) => {
+                const t = e.target as HTMLTextAreaElement;
+                t.style.height = "auto";
+                t.style.height = t.scrollHeight + "px";
+              }}
+              placeholder="Image caption (optional)..."
+              className="w-full bg-transparent border-none outline-none text-xs text-fg/60 placeholder:text-fg/30 px-0 py-1 resize-none overflow-hidden min-h-[28px] focus:bg-panel focus:border focus:border-line focus:rounded-md focus:px-2 transition-all"
+              rows={1}
+            />
           </div>
-        ))}
-      </CardBody>
-    </Card>
+        ) : (
+          <RichTextEditor
+            value={content}
+            onChange={(html) => {
+              setContent(html);
+              debouncedUpdate(section.id, { content: html });
+            }}
+            placeholder="Section content..."
+            minHeight="80px"
+          />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -484,20 +691,23 @@ function LeadLetterTab({
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+    <Card className="flex flex-col flex-1 min-h-0">
+      <CardHeader className="flex flex-row items-center justify-between shrink-0">
         <CardTitle>Lead Letter</CardTitle>
         <Button size="sm" onClick={save} disabled={pending}>
           <Save className="h-3.5 w-3.5" /> Save
         </Button>
       </CardHeader>
-      <CardBody>
-        <RichTextEditor
-          value={value}
-          onChange={(html) => setValue(html)}
-          placeholder="Enter lead letter content..."
-          minHeight="280px"
-        />
+      <CardBody className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 flex flex-col min-h-[200px]">
+          <RichTextEditor
+            value={value}
+            onChange={(html) => setValue(html)}
+            placeholder="Enter lead letter content..."
+            className="flex-1 flex flex-col"
+            minHeight="100%"
+          />
+        </div>
       </CardBody>
     </Card>
   );
@@ -534,20 +744,23 @@ function ScratchpadTab({
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+    <Card className="flex flex-col flex-1 min-h-0">
+      <CardHeader className="flex flex-row items-center justify-between shrink-0">
         <CardTitle>Scratchpad</CardTitle>
         <Button size="sm" onClick={save} disabled={pending}>
           <Save className="h-3.5 w-3.5" /> Save
         </Button>
       </CardHeader>
-      <CardBody>
-        <RichTextEditor
-          value={value}
-          onChange={(html) => setValue(html)}
-          placeholder="Estimator notes and scratch work..."
-          minHeight="280px"
-        />
+      <CardBody className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 flex flex-col min-h-[200px]">
+          <RichTextEditor
+            value={value}
+            onChange={(html) => setValue(html)}
+            placeholder="Estimator notes and scratch work..."
+            className="flex-1 flex flex-col"
+            minHeight="100%"
+          />
+        </div>
       </CardBody>
     </Card>
   );

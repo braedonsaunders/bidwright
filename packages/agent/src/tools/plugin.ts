@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Tool, ToolExecutionContext, ToolResult, ToolParameter } from "../types.js";
+import { apiFetch } from "./api-fetch.js";
 
 // ── Local type shapes ─────────────────────────────────────────────────
 // Minimal structural types matching the domain types.
@@ -132,6 +133,108 @@ function sysTool(
     },
   };
 }
+
+// ── Plugin Management Tools (static, use apiFetch) ───────────────────
+
+type PluginMgmtResult = { success: boolean; data?: unknown; error?: string; sideEffects?: string[] };
+
+function pluginMgmtTool(def: {
+  id: string; name: string; description: string; inputSchema: z.ZodType;
+  requiresConfirmation?: boolean; mutates?: boolean; tags: string[];
+}, op: (ctx: ToolExecutionContext, input: Record<string, unknown>) => Promise<PluginMgmtResult>): Tool {
+  return {
+    definition: { id: def.id, name: def.name, category: "system", description: def.description, parameters: [], inputSchema: def.inputSchema, requiresConfirmation: def.requiresConfirmation ?? false, mutates: def.mutates ?? false, tags: def.tags },
+    async execute(input: Record<string, unknown>, context: ToolExecutionContext) {
+      const start = Date.now();
+      try { const r = await op(context, input); return { ...r, duration_ms: Date.now() - start }; }
+      catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error), duration_ms: Date.now() - start }; }
+    },
+  };
+}
+
+const pluginToolDefSchema = z.object({
+  id: z.string().describe("Unique tool ID within the plugin"),
+  name: z.string().describe("Tool display name"),
+  description: z.string().describe("What this tool does"),
+  llmDescription: z.string().optional().describe("Richer description for LLM discovery"),
+  parameters: z.array(z.object({
+    name: z.string(), type: z.string(), description: z.string(), required: z.boolean(),
+    enum: z.array(z.string()).optional(), default: z.unknown().optional(),
+  })).default([]).describe("Tool input parameters"),
+  outputType: z.enum(["line_items", "worksheet", "text_content", "revision_patch", "score", "modifier", "summary", "composite"]).describe("Output type"),
+  requiresConfirmation: z.boolean().optional().default(false),
+  mutates: z.boolean().optional().default(true),
+  tags: z.array(z.string()).optional(),
+  ui: z.record(z.unknown()).optional().describe("Declarative UI schema (sections, fields, tables, scoring)"),
+});
+
+export const pluginManagementTools: Tool[] = [
+  pluginMgmtTool({
+    id: "plugins.create", name: "Create Plugin",
+    description: "Create a new plugin with tool definitions, UI schemas, and configuration. Plugins extend the estimation system with custom calculators, lookups, and scoring tools. Each plugin contains one or more tool definitions with optional declarative UI schemas (fields, tables, scoring sections). Use plugins.list first to check if a similar plugin already exists.",
+    inputSchema: z.object({
+      name: z.string().describe("Plugin name"),
+      slug: z.string().describe("URL-safe slug (e.g. 'neca-labour')"),
+      category: z.enum(["labour", "equipment", "material", "travel", "general", "dynamic"]).describe("Plugin category"),
+      description: z.string().describe("Short description"),
+      llmDescription: z.string().optional().describe("Richer LLM context for tool discovery"),
+      icon: z.string().optional().describe("Icon name (e.g. 'HardHat', 'Droplets')"),
+      version: z.string().optional().default("1.0.0"),
+      tags: z.array(z.string()).optional(),
+      supportedCategories: z.array(z.string()).optional().describe("Quote item categories this plugin supports (e.g. ['Labour'])"),
+      config: z.record(z.unknown()).optional().default({}).describe("Plugin-level config (API keys, defaults)"),
+      configSchema: z.array(z.record(z.unknown())).optional().describe("Config field definitions"),
+      toolDefinitions: z.array(pluginToolDefSchema).min(1).describe("Tool definitions (at least one)"),
+      documentation: z.string().optional().describe("Markdown documentation"),
+    }),
+    requiresConfirmation: true, mutates: true,
+    tags: ["plugin", "create", "write"],
+  }, async (ctx, input) => {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/plugins`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, enabled: true }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      return { success: false, error: `Create failed (${res.status}): ${err}` };
+    }
+    const plugin = await res.json();
+    return { success: true, data: plugin, sideEffects: [`Created plugin "${input.name}" with ${(input.toolDefinitions as any[]).length} tool(s)`] };
+  }),
+
+  pluginMgmtTool({
+    id: "plugins.update", name: "Update Plugin",
+    description: "Update an existing plugin. Supports partial updates — only include fields you want to change. Can update name, description, tools, config, enabled status, etc.",
+    inputSchema: z.object({
+      pluginId: z.string().describe("Plugin ID to update"),
+      name: z.string().optional(),
+      description: z.string().optional(),
+      llmDescription: z.string().optional(),
+      icon: z.string().optional(),
+      enabled: z.boolean().optional(),
+      tags: z.array(z.string()).optional(),
+      config: z.record(z.unknown()).optional(),
+      toolDefinitions: z.array(pluginToolDefSchema).optional(),
+      documentation: z.string().optional(),
+    }),
+    requiresConfirmation: true, mutates: true,
+    tags: ["plugin", "update", "write"],
+  }, async (ctx, input) => {
+    const { pluginId, ...patch } = input as any;
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/plugins/${pluginId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      return { success: false, error: `Update failed (${res.status}): ${err}` };
+    }
+    const plugin = await res.json();
+    return { success: true, data: plugin, sideEffects: [`Updated plugin "${(plugin as any).name}"`] };
+  }),
+];
 
 /** Create system-level tools for plugin discovery. */
 export function createPluginSystemTools(getAll: () => Promise<PInfo[]>): Tool[] {

@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { seedAllForOrganization } from "../src/seed-data.js";
 import { seedDatasetTemplates } from "../src/seed-datasets.js";
 import { seedCatalogTemplates } from "../src/seed-items.js";
+import { seedPluginTemplates } from "../src/seed-plugins.js";
 
 async function main() {
   const prisma = new PrismaClient();
@@ -24,6 +25,7 @@ async function main() {
   await seedAllForOrganization(prisma, org.id);
   await seedDatasetTemplates(prisma);
   await seedCatalogTemplates(prisma);
+  await seedPluginTemplates(prisma, org.id);
 
   await prisma.$disconnect();
   console.log("Done.");

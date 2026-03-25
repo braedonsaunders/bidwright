@@ -4,7 +4,8 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { buildProjectWorkspace, summarizeProjectTotals } from "@bidwright/domain";
+import { buildProjectWorkspace, summarizeProjectTotals, computeSummaryRows, generateSummaryPreset } from "@bidwright/domain";
+import type { SummaryPreset } from "@bidwright/domain";
 import type {
   Activity,
   AdditionalLineItem,
@@ -47,6 +48,7 @@ import type {
   ScheduleDependency,
   ScheduleTask,
   SourceDocument,
+  SummaryRow,
   User,
   WorksheetItem,
   LabourCostTable,
@@ -253,9 +255,9 @@ export interface WorksheetItemPatchInput {
   cost?: number;
   markup?: number;
   price?: number;
-  laborHourReg?: number;
-  laborHourOver?: number;
-  laborHourDouble?: number;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -274,9 +276,9 @@ export interface CreateWorksheetItemInput {
   cost: number;
   markup: number;
   price: number;
-  laborHourReg: number;
-  laborHourOver: number;
-  laborHourDouble: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -720,9 +722,9 @@ function mapWorksheetItem(i: any): WorksheetItem {
     cost: i.cost,
     markup: i.markup,
     price: i.price,
-    laborHourReg: i.laborHourReg,
-    laborHourOver: i.laborHourOver,
-    laborHourDouble: i.laborHourDouble,
+    unit1: i.unit1,
+    unit2: i.unit2,
+    unit3: i.unit3,
     lineOrder: i.lineOrder,
     rateScheduleItemId: i.rateScheduleItemId ?? null,
     itemId: i.itemId ?? null,
@@ -755,6 +757,30 @@ function mapModifier(m: any): Modifier {
 
 function mapAdditionalLineItem(a: any): AdditionalLineItem {
   return { id: a.id, revisionId: a.revisionId, name: a.name, description: a.description ?? undefined, type: a.type as AdditionalLineItem["type"], amount: a.amount };
+}
+
+function mapSummaryRow(r: any): SummaryRow {
+  return {
+    id: r.id,
+    revisionId: r.revisionId,
+    type: r.type as SummaryRow["type"],
+    label: r.label,
+    order: r.order,
+    visible: r.visible,
+    style: (r.style ?? "normal") as SummaryRow["style"],
+    sourceCategory: r.sourceCategory ?? null,
+    sourcePhase: r.sourcePhase ?? null,
+    manualValue: r.manualValue ?? null,
+    manualCost: r.manualCost ?? null,
+    overrideValue: r.overrideValue ?? null,
+    overrideCost: r.overrideCost ?? null,
+    modifierPercent: r.modifierPercent ?? null,
+    modifierAmount: r.modifierAmount ?? null,
+    appliesTo: r.appliesTo ?? [],
+    computedValue: r.computedValue ?? 0,
+    computedCost: r.computedCost ?? 0,
+    computedMargin: r.computedMargin ?? 0,
+  };
 }
 
 function mapCondition(c: any): Condition {
@@ -1048,7 +1074,7 @@ function mapEntityCategory(e: any): EntityCategory {
     defaultUom: e.defaultUom,
     validUoms: e.validUoms ?? [],
     editableFields: (e.editableFields as any) ?? {},
-    laborHourLabels: (e.laborHourLabels as any) ?? {},
+    unitLabels: (e.unitLabels as any) ?? {},
     calculationType: e.calculationType as EntityCategory["calculationType"],
     calcFormula: e.calcFormula ?? "",
     itemSource: (e.itemSource as EntityCategory["itemSource"]) ?? "freeform",
@@ -1200,6 +1226,7 @@ export class PrismaApiStore {
     const phases = await this.db.phase.findMany({ where: { revisionId: { in: revisionIds } } });
     const modifiers = await this.db.modifier.findMany({ where: { revisionId: { in: revisionIds } } });
     const additionalLineItems = await this.db.additionalLineItem.findMany({ where: { revisionId: { in: revisionIds } } });
+    const summaryRows = await this.db.summaryRow.findMany({ where: { revisionId: { in: revisionIds } }, orderBy: { order: "asc" } });
     const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } } });
     const reportSections = await this.db.reportSection.findMany({ where: { revisionId: { in: revisionIds } } });
     const sourceDocuments = await this.db.sourceDocument.findMany({ where: { projectId } });
@@ -1246,6 +1273,7 @@ export class PrismaApiStore {
       phases: phases.map(mapPhase),
       modifiers: modifiers.map(mapModifier),
       additionalLineItems: additionalLineItems.map(mapAdditionalLineItem),
+      summaryRows: summaryRows.map(mapSummaryRow),
       conditions: conditions.map(mapCondition),
       catalogs: catalogs.map(mapCatalog),
       catalogItems: catalogItems.map(mapCatalogItem),
@@ -1735,7 +1763,7 @@ export class PrismaApiStore {
     defaultUom?: string;
     validUoms?: string[];
     editableFields?: Record<string, boolean>;
-    laborHourLabels?: Record<string, string>;
+    unitLabels?: Record<string, string>;
     calculationType?: string;
     calcFormula?: string;
     color?: string;
@@ -1753,8 +1781,8 @@ export class PrismaApiStore {
         shortform: input.shortform ?? input.name.charAt(0).toUpperCase(),
         defaultUom: input.defaultUom ?? "EA",
         validUoms: input.validUoms ?? ["EA"],
-        editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, laborHourReg: false, laborHourOver: false, laborHourDouble: false }) as any,
-        laborHourLabels: (input.laborHourLabels ?? { reg: "Reg Hrs", over: "OT Hrs", double: "DT Hrs" }) as any,
+        editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false }) as any,
+        unitLabels: (input.unitLabels ?? { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" }) as any,
         calculationType: input.calculationType ?? "manual",
         calcFormula: input.calcFormula ?? "",
         color: input.color ?? "#6b7280",
@@ -1779,7 +1807,7 @@ export class PrismaApiStore {
     if (patch.defaultUom !== undefined) data.defaultUom = patch.defaultUom;
     if (patch.validUoms !== undefined) data.validUoms = patch.validUoms;
     if (patch.editableFields !== undefined) data.editableFields = patch.editableFields as any;
-    if (patch.laborHourLabels !== undefined) data.laborHourLabels = patch.laborHourLabels as any;
+    if (patch.unitLabels !== undefined) data.unitLabels = patch.unitLabels as any;
     if (patch.calculationType !== undefined) data.calculationType = patch.calculationType;
     if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
     if (patch.itemSource !== undefined) data.itemSource = patch.itemSource;
@@ -2167,9 +2195,9 @@ export class PrismaApiStore {
       cost: input.cost,
       markup: input.markup,
       price: input.price,
-      laborHourReg: input.laborHourReg,
-      laborHourOver: input.laborHourOver,
-      laborHourDouble: input.laborHourDouble,
+      unit1: input.unit1,
+      unit2: input.unit2,
+      unit3: input.unit3,
       lineOrder,
       rateScheduleItemId: input.rateScheduleItemId ?? null,
       itemId: input.itemId ?? null,
@@ -2184,9 +2212,39 @@ export class PrismaApiStore {
       tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
-    const labourCostCtx = await this.getLabourCostContext();
+
+    // ── Validate rateScheduleItemId / itemId references ──────────────
     const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
     const catDef = entityCats.find((c) => c.name === item.category);
+    const itemSource = catDef?.itemSource ?? "freeform";
+
+    if (item.rateScheduleItemId) {
+      const allRsItems = revisionSchedules.flatMap((s) => s.items ?? []);
+      const match = allRsItems.find((ri) => ri.id === item.rateScheduleItemId);
+      if (!match) {
+        const available = allRsItems.map((ri) => `${ri.name} (${ri.id})`).slice(0, 20);
+        throw new Error(
+          `Invalid rateScheduleItemId "${item.rateScheduleItemId}" — no matching rate schedule item found in this revision.` +
+          (available.length > 0
+            ? ` Available items: ${available.join(", ")}`
+            : ` No rate schedule items exist. Import a rate schedule first via importRateSchedule.`)
+        );
+      }
+    } else if (itemSource === "rate_schedule") {
+      throw new Error(
+        `Category "${item.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
+        `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
+      );
+    }
+
+    if (item.itemId) {
+      const catalogItem = await this.db.catalogItem.findFirst({ where: { id: item.itemId } });
+      if (!catalogItem) {
+        throw new Error(`Invalid itemId "${item.itemId}" — no matching catalog item found.`);
+      }
+    }
+
+    const labourCostCtx = await this.getLabourCostContext();
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
     Object.assign(item, calculated);
@@ -2206,9 +2264,9 @@ export class PrismaApiStore {
         cost: item.cost,
         markup: item.markup,
         price: item.price,
-        laborHourReg: item.laborHourReg,
-        laborHourOver: item.laborHourOver,
-        laborHourDouble: item.laborHourDouble,
+        unit1: item.unit1,
+        unit2: item.unit2,
+        unit3: item.unit3,
         lineOrder: item.lineOrder,
         rateScheduleItemId: item.rateScheduleItemId ?? null,
         itemId: item.itemId ?? null,
@@ -2314,9 +2372,40 @@ export class PrismaApiStore {
       tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
-    const updateLabourCostCtx = await this.getLabourCostContext();
+
+    // ── Validate rateScheduleItemId / itemId references ──────────────
     const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
     const updateCatDef = updateEntityCats.find((c) => c.name === domainItem.category);
+    const updateItemSource = updateCatDef?.itemSource ?? "freeform";
+
+    if (domainItem.rateScheduleItemId) {
+      const allRsItems = revisionSchedules.flatMap((s) => s.items ?? []);
+      const match = allRsItems.find((ri) => ri.id === domainItem.rateScheduleItemId);
+      if (!match) {
+        const available = allRsItems.map((ri) => `${ri.name} (${ri.id})`).slice(0, 20);
+        throw new Error(
+          `Invalid rateScheduleItemId "${domainItem.rateScheduleItemId}" — no matching rate schedule item found in this revision.` +
+          (available.length > 0
+            ? ` Available items: ${available.join(", ")}`
+            : ` No rate schedule items exist. Import a rate schedule first via importRateSchedule.`)
+        );
+      }
+    } else if (updateItemSource === "rate_schedule" && patch.rateScheduleItemId === null) {
+      // Only reject if explicitly clearing the ID on a rate_schedule category
+      throw new Error(
+        `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
+        `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
+      );
+    }
+
+    if (domainItem.itemId && patch.itemId !== undefined) {
+      const catalogItem = await this.db.catalogItem.findFirst({ where: { id: domainItem.itemId } });
+      if (!catalogItem) {
+        throw new Error(`Invalid itemId "${domainItem.itemId}" — no matching catalog item found.`);
+      }
+    }
+
+    const updateLabourCostCtx = await this.getLabourCostContext();
     const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx, { labourCost: updateLabourCostCtx });
     Object.assign(domainItem, calculated);
@@ -2335,9 +2424,9 @@ export class PrismaApiStore {
         cost: domainItem.cost,
         markup: domainItem.markup,
         price: domainItem.price,
-        laborHourReg: domainItem.laborHourReg,
-        laborHourOver: domainItem.laborHourOver,
-        laborHourDouble: domainItem.laborHourDouble,
+        unit1: domainItem.unit1,
+        unit2: domainItem.unit2,
+        unit3: domainItem.unit3,
         lineOrder: domainItem.lineOrder,
         rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
         itemId: domainItem.itemId ?? null,
@@ -2418,9 +2507,9 @@ export class PrismaApiStore {
         cost: Number(raw.cost) || 0,
         markup: Number(raw.markup) || 0.2,
         price: Number(raw.price) || 0,
-        laborHourReg: Number(raw.laborHourReg ?? raw.LabourHourReg) || 0,
-        laborHourOver: Number(raw.laborHourOver ?? raw.LabourHourOver) || 0,
-        laborHourDouble: Number(raw.laborHourDouble ?? raw.LabourHourDouble) || 0,
+        unit1: Number(raw.unit1 ?? raw.LabourHourReg) || 0,
+        unit2: Number(raw.unit2 ?? raw.LabourHourOver) || 0,
+        unit3: Number(raw.unit3 ?? raw.LabourHourDouble) || 0,
         lineOrder: baseOrder + idx + 1,
       };
 
@@ -2444,9 +2533,9 @@ export class PrismaApiStore {
           cost: item.cost,
           markup: item.markup,
           price: item.price,
-          laborHourReg: item.laborHourReg,
-          laborHourOver: item.laborHourOver,
-          laborHourDouble: item.laborHourDouble,
+          unit1: item.unit1,
+          unit2: item.unit2,
+          unit3: item.unit3,
           lineOrder: item.lineOrder,
         },
       });
@@ -3380,6 +3469,184 @@ export class PrismaApiStore {
     return mapAdditionalLineItem(ali);
   }
 
+  // ── Summary Row CRUD ────────────────────────────────────────────────────
+
+  async listSummaryRows(projectId: string): Promise<SummaryRow[]> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const rows = await this.db.summaryRow.findMany({
+      where: { revisionId: revision.id },
+      orderBy: { order: "asc" },
+    });
+    return rows.map(mapSummaryRow);
+  }
+
+  async createSummaryRow(projectId: string, revisionId: string, input: {
+    type?: string;
+    label?: string;
+    order?: number;
+    visible?: boolean;
+    style?: string;
+    sourceCategory?: string | null;
+    sourcePhase?: string | null;
+    manualValue?: number | null;
+    manualCost?: number | null;
+    overrideValue?: number | null;
+    overrideCost?: number | null;
+    modifierPercent?: number | null;
+    modifierAmount?: number | null;
+    appliesTo?: string[];
+  }): Promise<SummaryRow> {
+    // Auto-assign order if not provided
+    let order = input.order;
+    if (order === undefined) {
+      const maxRow = await this.db.summaryRow.findFirst({
+        where: { revisionId },
+        orderBy: { order: "desc" },
+      });
+      order = (maxRow?.order ?? -1) + 1;
+    }
+
+    const row = await this.db.summaryRow.create({
+      data: {
+        id: createId("sr"),
+        revisionId,
+        type: input.type ?? "manual",
+        label: input.label ?? "",
+        order,
+        visible: input.visible ?? true,
+        style: input.style ?? "normal",
+        sourceCategory: input.sourceCategory ?? null,
+        sourcePhase: input.sourcePhase ?? null,
+        manualValue: input.manualValue ?? null,
+        manualCost: input.manualCost ?? null,
+        overrideValue: input.overrideValue ?? null,
+        overrideCost: input.overrideCost ?? null,
+        modifierPercent: input.modifierPercent ?? null,
+        modifierAmount: input.modifierAmount ?? null,
+        appliesTo: input.appliesTo ?? [],
+      },
+    });
+
+    await this.syncProjectEstimate(projectId);
+    return mapSummaryRow(row);
+  }
+
+  async updateSummaryRow(projectId: string, rowId: string, patch: Partial<{
+    type: string;
+    label: string;
+    order: number;
+    visible: boolean;
+    style: string;
+    sourceCategory: string | null;
+    sourcePhase: string | null;
+    manualValue: number | null;
+    manualCost: number | null;
+    overrideValue: number | null;
+    overrideCost: number | null;
+    modifierPercent: number | null;
+    modifierAmount: number | null;
+    appliesTo: string[];
+  }>): Promise<SummaryRow> {
+    await this.requireProject(projectId);
+    const existing = await this.db.summaryRow.findFirst({ where: { id: rowId } });
+    if (!existing) throw new Error(`Summary row ${rowId} not found`);
+
+    const data: any = {};
+    if (patch.type !== undefined) data.type = patch.type;
+    if (patch.label !== undefined) data.label = patch.label;
+    if (patch.order !== undefined) data.order = patch.order;
+    if (patch.visible !== undefined) data.visible = patch.visible;
+    if (patch.style !== undefined) data.style = patch.style;
+    if (patch.sourceCategory !== undefined) data.sourceCategory = patch.sourceCategory;
+    if (patch.sourcePhase !== undefined) data.sourcePhase = patch.sourcePhase;
+    if (patch.manualValue !== undefined) data.manualValue = patch.manualValue;
+    if (patch.manualCost !== undefined) data.manualCost = patch.manualCost;
+    if (patch.overrideValue !== undefined) data.overrideValue = patch.overrideValue;
+    if (patch.overrideCost !== undefined) data.overrideCost = patch.overrideCost;
+    if (patch.modifierPercent !== undefined) data.modifierPercent = patch.modifierPercent;
+    if (patch.modifierAmount !== undefined) data.modifierAmount = patch.modifierAmount;
+    if (patch.appliesTo !== undefined) data.appliesTo = patch.appliesTo;
+
+    const updated = await this.db.summaryRow.update({ where: { id: rowId }, data });
+    await this.syncProjectEstimate(projectId);
+    return mapSummaryRow(updated);
+  }
+
+  async deleteSummaryRow(projectId: string, rowId: string): Promise<SummaryRow> {
+    await this.requireProject(projectId);
+    const row = await this.db.summaryRow.findFirst({ where: { id: rowId } });
+    if (!row) throw new Error(`Summary row ${rowId} not found`);
+
+    await this.db.summaryRow.delete({ where: { id: rowId } });
+    await this.syncProjectEstimate(projectId);
+    return mapSummaryRow(row);
+  }
+
+  async reorderSummaryRows(projectId: string, orderedIds: string[]): Promise<{ reordered: number }> {
+    await this.requireProject(projectId);
+    await Promise.all(
+      orderedIds.map((id, index) =>
+        this.db.summaryRow.update({ where: { id }, data: { order: index } })
+      )
+    );
+    await this.syncProjectEstimate(projectId);
+    return { reordered: orderedIds.length };
+  }
+
+  async applySummaryPreset(projectId: string, preset: SummaryPreset): Promise<SummaryRow[]> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) throw new Error("No current revision found");
+
+    // Gather category names from org entity categories
+    const entityCategories = await this.db.entityCategory.findMany({
+      where: { organizationId: this.organizationId, enabled: true },
+      orderBy: { order: "asc" },
+    });
+    const categoryNames = entityCategories.map((c) => c.name);
+
+    // Gather phase names from current revision
+    const phases = await this.db.phase.findMany({
+      where: { revisionId: revision.id },
+      orderBy: { order: "asc" },
+    });
+    const phaseNames = phases.map((p) => p.name);
+
+    // Delete existing summary rows
+    await this.db.summaryRow.deleteMany({ where: { revisionId: revision.id } });
+
+    // Generate new rows from preset
+    const templates = generateSummaryPreset(preset, categoryNames, phaseNames);
+    const created: SummaryRow[] = [];
+
+    for (const template of templates) {
+      const row = await this.db.summaryRow.create({
+        data: {
+          id: createId("sr"),
+          revisionId: revision.id,
+          type: template.type,
+          label: template.label,
+          order: template.order,
+          visible: template.visible,
+          style: template.style,
+          sourceCategory: template.sourceCategory ?? null,
+          sourcePhase: template.sourcePhase ?? null,
+          manualValue: template.manualValue ?? null,
+          manualCost: template.manualCost ?? null,
+          modifierPercent: template.modifierPercent ?? null,
+          modifierAmount: template.modifierAmount ?? null,
+          appliesTo: template.appliesTo ?? [],
+        },
+      });
+      created.push(mapSummaryRow(row));
+    }
+
+    await this.syncProjectEstimate(projectId);
+    return created;
+  }
+
   // ── Rate Schedule CRUD ─────────────────────────────────────────────────
 
   async listRateSchedules(scope?: string): Promise<RateScheduleWithChildren[]> {
@@ -3560,6 +3827,15 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     if (!source) throw new Error(`Rate schedule ${scheduleId} not found`);
+
+    // Prevent duplicate imports — if this schedule was already imported for this revision, return the existing copy
+    const existing = await this.db.rateSchedule.findFirst({
+      where: { revisionId: revision.id, sourceScheduleId: scheduleId },
+      include: { tiers: true, items: true },
+    });
+    if (existing) {
+      return mapRateScheduleWithChildren(existing);
+    }
 
     return await this.db.$transaction(async (tx) => {
       const newSchedId = createId("rs");
@@ -3749,7 +4025,7 @@ export class PrismaApiStore {
               category: oldItem.category, entityType: oldItem.entityType, entityName: oldItem.entityName,
               vendor: oldItem.vendor, description: oldItem.description, quantity: oldItem.quantity,
               uom: oldItem.uom, cost: oldItem.cost, markup: oldItem.markup, price: oldItem.price,
-              laborHourReg: oldItem.laborHourReg, laborHourOver: oldItem.laborHourOver, laborHourDouble: oldItem.laborHourDouble,
+              unit1: oldItem.unit1, unit2: oldItem.unit2, unit3: oldItem.unit3,
               lineOrder: oldItem.lineOrder,
             },
           });
@@ -4026,7 +4302,7 @@ export class PrismaApiStore {
               category: it.category, entityType: it.entityType, entityName: it.entityName,
               vendor: it.vendor, description: it.description, quantity: it.quantity,
               uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
-              laborHourReg: it.laborHourReg, laborHourOver: it.laborHourOver, laborHourDouble: it.laborHourDouble,
+              unit1: it.unit1, unit2: it.unit2, unit3: it.unit3,
               lineOrder: it.lineOrder,
             },
           });
@@ -4669,9 +4945,9 @@ export class PrismaApiStore {
         cost: costIdx >= 0 ? parseFloat(row[costIdx]) || 0 : 0,
         markup: 0.2,
         price: priceIdx >= 0 ? parseFloat(row[priceIdx]) || 0 : 0,
-        laborHourReg: 0,
-        laborHourOver: 0,
-        laborHourDouble: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
       };
 
       await this.createWorksheetItem(projectId, worksheetId, input);
@@ -4855,8 +5131,8 @@ export class PrismaApiStore {
           vendor: item.vendor ?? null, description: item.description,
           quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
           markup: item.markup ?? 0, price: item.price ?? 0,
-          laborHourReg: item.laborHourReg ?? 0, laborHourOver: item.laborHourOver ?? 0,
-          laborHourDouble: item.laborHourDouble ?? 0, phaseId: item.phaseId,
+          unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
+          unit3: item.unit3 ?? 0, phaseId: item.phaseId,
         });
         appliedItemIds.push(created.id);
       }
@@ -4871,8 +5147,8 @@ export class PrismaApiStore {
           vendor: item.vendor ?? null, description: item.description,
           quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
           markup: item.markup ?? 0, price: item.price ?? 0,
-          laborHourReg: item.laborHourReg ?? 0, laborHourOver: item.laborHourOver ?? 0,
-          laborHourDouble: item.laborHourDouble ?? 0, phaseId: item.phaseId,
+          unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
+          unit3: item.unit3 ?? 0, phaseId: item.phaseId,
         });
         appliedItemIds.push(created.id);
       }
@@ -5198,6 +5474,19 @@ export class PrismaApiStore {
       orderBy: { order: "asc" },
     });
     return chunks.map(mapKnowledgeChunk);
+  }
+
+  async listKnowledgeChunksPaginated(bookId: string, limit: number, offset: number): Promise<{ chunks: KnowledgeChunk[]; total: number }> {
+    const [chunks, total] = await Promise.all([
+      this.db.knowledgeChunk.findMany({
+        where: { bookId },
+        orderBy: { order: "asc" },
+        take: limit,
+        skip: offset,
+      }),
+      this.db.knowledgeChunk.count({ where: { bookId } }),
+    ]);
+    return { chunks: chunks.map(mapKnowledgeChunk), total };
   }
 
   async createKnowledgeChunk(bookId: string, input: {

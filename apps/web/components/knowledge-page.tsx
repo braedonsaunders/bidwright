@@ -13,11 +13,13 @@ import {
   FileText,
   Library,
   Loader2,
+  Maximize2,
   Minus,
   Plus,
   Search,
   Sparkles,
   Table2,
+  Check,
   Trash2,
   Upload,
   X,
@@ -54,7 +56,7 @@ import {
   createKnowledgeBook,
   deleteKnowledgeBook,
   updateKnowledgeBook,
-  listKnowledgeChunks,
+  listKnowledgeChunksPaginated,
   createKnowledgeChunk,
   searchKnowledge,
   listDatasets,
@@ -68,6 +70,9 @@ import {
   searchDatasetRows,
   listDatasetLibrary,
   adoptDatasetTemplate,
+  extractDatasetsFromBook,
+  connectCliStream,
+  stopCliSession,
   getBookFileUrl,
   getBookThumbnailUrl,
   searchBookChunks,
@@ -217,10 +222,10 @@ export function KnowledgePage({
 
       <FadeIn delay={0.1}>
       {tab === "books" && (
-        <BooksTab books={books} onRefresh={refreshBooks} />
+        <BooksTab books={books} datasets={datasets} onRefresh={refreshBooks} onDatasetsRefresh={refreshDatasets} />
       )}
       {tab === "datasets" && (
-        <DatasetsTab datasets={datasets} onRefresh={refreshDatasets} />
+        <DatasetsTab datasets={datasets} books={books} onRefresh={refreshDatasets} />
       )}
       </FadeIn>
     </div>
@@ -231,10 +236,18 @@ export function KnowledgePage({
 // Books tab
 // ────────────────────────────────────────────────────────────────────
 
-function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefresh: () => void }) {
+function BooksTab({ books, datasets, onRefresh, onDatasetsRefresh }: { books: KnowledgeBookRecord[]; datasets: DatasetRecord[]; onRefresh: () => void; onDatasetsRefresh: () => void }) {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Poll for status updates when any book is still processing
+  const hasProcessing = books.some((b) => b.status === "uploading" || b.status === "processing");
+  useEffect(() => {
+    if (!hasProcessing) return;
+    const id = setInterval(onRefresh, 3000);
+    return () => clearInterval(id);
+  }, [hasProcessing, onRefresh]);
 
   const filtered = searchQuery
     ? books.filter(
@@ -309,8 +322,10 @@ function BooksTab({ books, onRefresh }: { books: KnowledgeBookRecord[]; onRefres
           <BookDetailPanel
             key={selectedBook.id}
             book={selectedBook}
+            datasets={datasets.filter((d) => d.sourceBookId === selectedBook.id)}
             onClose={() => setSelectedBookId(null)}
             onRefresh={onRefresh}
+            onDatasetsRefresh={onDatasetsRefresh}
           />
         )}
       </AnimatePresence>,
@@ -358,7 +373,16 @@ function BookCard({
           tone={statusTone(book.status)}
           className="absolute top-2 right-2 text-[10px]"
         >
-          {book.status}
+          {(book.status === "uploading" || book.status === "processing") && (
+            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+          )}
+          {book.status === "uploading"
+            ? "Extracting text..."
+            : book.status === "processing"
+              ? book.chunkCount > 0
+                ? `Embedding ${book.chunkCount} chunks...`
+                : "Processing..."
+              : book.status}
         </Badge>
       </div>
 
@@ -392,21 +416,29 @@ function BookCard({
   );
 }
 
-type DetailTab = "view" | "chunks" | "search";
+type DetailTab = "view" | "chunks" | "search" | "datasets";
 
 function BookDetailPanel({
   book,
+  datasets,
   onClose,
   onRefresh,
+  onDatasetsRefresh,
 }: {
   book: KnowledgeBookRecord;
+  datasets: DatasetRecord[];
   onClose: () => void;
   onRefresh: () => void;
+  onDatasetsRefresh: () => void;
 }) {
   const [detailTab, setDetailTab] = useState<DetailTab>("view");
   const [chunks, setChunks] = useState<KnowledgeChunkRecord[]>([]);
+  const [totalChunks, setTotalChunks] = useState(0);
+  const [loadingChunks, setLoadingChunks] = useState(false);
   const [chunkSearch, setChunkSearch] = useState("");
   const [showAddChunk, setShowAddChunk] = useState(false);
+
+  const CHUNK_PAGE_SIZE = 50;
 
   // PDF viewer state
   const [pageNumber, setPageNumber] = useState(1);
@@ -418,10 +450,30 @@ function BookDetailPanel({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<Array<{ id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number }>>([]);
   const [searching, setSearching] = useState(false);
+  const [showGenerateDataset, setShowGenerateDataset] = useState(false);
+  const [confirmRerun, setConfirmRerun] = useState(false);
+  const [pdfFullscreen, setPdfFullscreen] = useState(false);
+  const [pageInput, setPageInput] = useState("");
 
   useEffect(() => {
-    listKnowledgeChunks(book.id).then(setChunks).catch(() => {});
+    setChunks([]);
+    setTotalChunks(0);
+    setLoadingChunks(true);
+    listKnowledgeChunksPaginated(book.id, CHUNK_PAGE_SIZE, 0)
+      .then(({ chunks: c, total }) => { setChunks(c); setTotalChunks(total); })
+      .catch(() => {})
+      .finally(() => setLoadingChunks(false));
   }, [book.id]);
+
+  const loadMoreChunks = async () => {
+    setLoadingChunks(true);
+    try {
+      const { chunks: more, total } = await listKnowledgeChunksPaginated(book.id, CHUNK_PAGE_SIZE, chunks.length);
+      setChunks((prev) => [...prev, ...more]);
+      setTotalChunks(total);
+    } catch { /* noop */ }
+    setLoadingChunks(false);
+  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -444,10 +496,11 @@ function BookDetailPanel({
   const hasPdf = book.sourceFileName.toLowerCase().endsWith(".pdf") && book.storagePath;
   const fileUrl = getBookFileUrl(book.id);
 
-  const detailTabs: Array<{ key: DetailTab; label: string; icon: typeof Eye }> = [
+  const detailTabs: Array<{ key: DetailTab; label: string; icon: typeof Eye; count?: number }> = [
     ...(hasPdf ? [{ key: "view" as const, label: "View", icon: Eye }] : []),
     { key: "chunks", label: "Chunks", icon: FileText },
     { key: "search", label: "Search", icon: Search },
+    { key: "datasets", label: "Datasets", icon: Database, count: datasets.length },
   ];
 
   // If no PDF, default to chunks tab
@@ -470,6 +523,29 @@ function BookDetailPanel({
           <h3 className="text-sm font-medium text-fg truncate">{book.name}</h3>
           <p className="text-[11px] text-fg/40 truncate">{book.sourceFileName} · {book.pageCount} pages · {formatBytes(book.sourceFileSize)}</p>
         </div>
+        {confirmRerun ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-fg/50">{datasets.length} datasets exist. Re-run?</span>
+            <Button size="xs" variant="accent" onClick={() => { setConfirmRerun(false); setShowGenerateDataset(true); }}>
+              Yes
+            </Button>
+            <Button size="xs" variant="ghost" onClick={() => setConfirmRerun(false)}>
+              No
+            </Button>
+          </div>
+        ) : (
+          <Button
+            size="xs"
+            variant={datasets.length > 0 ? "secondary" : "accent"}
+            onClick={() => {
+              if (datasets.length > 0) setConfirmRerun(true);
+              else setShowGenerateDataset(true);
+            }}
+          >
+            <Sparkles className="h-3 w-3" />
+            {datasets.length > 0 ? "Re-extract Datasets" : "Extract Datasets"}
+          </Button>
+        )}
         <Button size="xs" variant="secondary" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
         </Button>
@@ -490,6 +566,9 @@ function BookDetailPanel({
           >
             <t.icon className="h-3 w-3" />
             {t.label}
+            {t.count != null && t.count > 0 && (
+              <span className="ml-0.5 rounded-full bg-accent/15 px-1.5 text-[9px] font-semibold text-accent">{t.count}</span>
+            )}
           </button>
         ))}
       </div>
@@ -504,9 +583,30 @@ function BookDetailPanel({
               <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
                 <ChevronLeft className="h-3 w-3" />
               </Button>
-              <span className="text-xs text-fg/60 min-w-[80px] text-center">
-                Page {pageNumber} / {pageCount || "..."}
-              </span>
+              <div className="flex items-center gap-1 min-w-[100px] justify-center">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  className="w-10 h-6 text-center text-xs rounded border border-line bg-bg/50 text-fg outline-none focus:border-accent/50"
+                  value={pageInput || String(pageNumber)}
+                  onChange={(e) => setPageInput(e.target.value)}
+                  onFocus={() => setPageInput(String(pageNumber))}
+                  onBlur={() => {
+                    const n = parseInt(pageInput, 10);
+                    if (n >= 1 && n <= pageCount) setPageNumber(n);
+                    setPageInput("");
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      const n = parseInt(pageInput, 10);
+                      if (n >= 1 && n <= pageCount) setPageNumber(n);
+                      setPageInput("");
+                      (e.target as HTMLInputElement).blur();
+                    }
+                  }}
+                />
+                <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
+              </div>
               <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
@@ -517,6 +617,10 @@ function BookDetailPanel({
               <span className="text-xs text-fg/60 min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
               <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
                 <ZoomIn className="h-3 w-3" />
+              </Button>
+              <Separator className="h-4 mx-1" />
+              <Button size="xs" variant="secondary" onClick={() => setPdfFullscreen(true)} title="Fullscreen reader">
+                <Maximize2 className="h-3 w-3" />
               </Button>
             </div>
             {/* PDF canvas */}
@@ -550,15 +654,31 @@ function BookDetailPanel({
               </Button>
             </div>
 
+            <p className="text-[10px] text-fg/30">
+              Showing {filteredChunks.length}{chunkSearch ? " filtered" : ""} of {totalChunks} chunks
+            </p>
+
             {filteredChunks.length === 0 ? (
               <p className="text-xs text-fg/40 py-4 text-center">
-                No chunks{chunkSearch ? " matching filter" : " yet"}.
+                {loadingChunks ? "Loading..." : `No chunks${chunkSearch ? " matching filter" : " yet"}.`}
               </p>
             ) : (
               <div className="space-y-1.5">
                 {filteredChunks.map((chunk) => (
                   <ChunkItem key={chunk.id} chunk={chunk} />
                 ))}
+                {!chunkSearch && chunks.length < totalChunks && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="w-full"
+                    onClick={loadMoreChunks}
+                    disabled={loadingChunks}
+                  >
+                    {loadingChunks ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                    Load more ({totalChunks - chunks.length} remaining)
+                  </Button>
+                )}
               </div>
             )}
 
@@ -568,8 +688,9 @@ function BookDetailPanel({
                 onClose={() => setShowAddChunk(false)}
                 onCreated={async () => {
                   setShowAddChunk(false);
-                  const updatedChunks = await listKnowledgeChunks(book.id);
-                  setChunks(updatedChunks);
+                  const { chunks: c, total } = await listKnowledgeChunksPaginated(book.id, CHUNK_PAGE_SIZE, 0);
+                  setChunks(c);
+                  setTotalChunks(total);
                   onRefresh();
                 }}
               />
@@ -622,9 +743,589 @@ function BookDetailPanel({
             )}
           </motion.div>
         )}
+
+        {detailTab === "datasets" && (
+          <motion.div key="datasets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="p-4 space-y-3">
+            {datasets.length === 0 ? (
+              <div className="py-8 text-center">
+                <Database className="h-8 w-8 text-fg/15 mx-auto mb-2" />
+                <p className="text-sm text-fg/50">No datasets extracted yet.</p>
+                <p className="text-xs text-fg/30 mt-1">
+                  Click &quot;Extract Datasets&quot; to have the AI read this book and create structured datasets.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {datasets.map((ds) => (
+                  <div key={ds.id} className="rounded-lg border border-line bg-panel2/50 px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Table2 className="h-3.5 w-3.5 text-fg/30 shrink-0" />
+                      <span className="text-xs font-medium text-fg/70 truncate flex-1">{ds.name}</span>
+                      <Badge tone="default" className="text-[9px]">{categoryLabel(ds.category)}</Badge>
+                      <span className="text-[10px] text-fg/30">{ds.rowCount} rows</span>
+                    </div>
+                    {ds.description && (
+                      <p className="text-[11px] text-fg/40 mt-1 ml-5 line-clamp-1">{ds.description}</p>
+                    )}
+                    {ds.tags && ds.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1 ml-5">
+                        {ds.tags.slice(0, 5).map((tag) => (
+                          <span key={tag} className="inline-flex rounded bg-accent/10 px-1 py-0.5 text-[8px] text-accent/70">
+                            {tag}
+                          </span>
+                        ))}
+                        {ds.tags.length > 5 && (
+                          <span className="text-[8px] text-fg/25">+{ds.tags.length - 5}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        )}
         </AnimatePresence>
       </div>
+
+      {/* Fullscreen PDF reader */}
+      {typeof document !== "undefined" && pdfFullscreen && hasPdf && createPortal(
+        <div className="fixed inset-0 z-[200] bg-bg flex flex-col">
+          {/* Fullscreen header */}
+          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-line bg-panel shrink-0">
+            <BookOpen className="h-4 w-4 text-accent" />
+            <span className="text-sm font-medium text-fg flex-1 truncate">{book.name}</span>
+            <div className="flex items-center gap-2">
+              <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
+                <ChevronLeft className="h-3 w-3" />
+              </Button>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="w-12 h-6 text-center text-xs rounded border border-line bg-bg/50 text-fg outline-none focus:border-accent/50"
+                value={pageInput || String(pageNumber)}
+                onChange={(e) => setPageInput(e.target.value)}
+                onFocus={() => setPageInput(String(pageNumber))}
+                onBlur={() => {
+                  const n = parseInt(pageInput, 10);
+                  if (n >= 1 && n <= pageCount) setPageNumber(n);
+                  setPageInput("");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    const n = parseInt(pageInput, 10);
+                    if (n >= 1 && n <= pageCount) setPageNumber(n);
+                    setPageInput("");
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+              />
+              <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
+              <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+                <ChevronRight className="h-3 w-3" />
+              </Button>
+              <Separator className="h-4 mx-1" />
+              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
+                <ZoomOut className="h-3 w-3" />
+              </Button>
+              <span className="text-xs text-fg/60 min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
+              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+                <ZoomIn className="h-3 w-3" />
+              </Button>
+              <Separator className="h-4 mx-1" />
+              <Button size="xs" variant="secondary" onClick={() => setPdfFullscreen(false)}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+          {/* Fullscreen canvas */}
+          <div className="flex-1 overflow-auto flex items-start justify-center p-6 bg-panel2/20">
+            <PdfCanvasViewer
+              documentUrl={fileUrl}
+              pageNumber={pageNumber}
+              zoom={zoom}
+              onPageCount={setPageCount}
+              canvasRef={canvasRef}
+            />
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {typeof document !== "undefined" && showGenerateDataset && createPortal(
+        <GenerateDatasetFromBookModal
+          book={book}
+          onClose={() => setShowGenerateDataset(false)}
+          onGenerated={() => {
+            setShowGenerateDataset(false);
+            onRefresh();
+            onDatasetsRefresh();
+          }}
+        />,
+        document.body,
+      )}
     </motion.div>
+  );
+}
+
+interface PendingDataset {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  columns: Array<{ key: string; label: string }>;
+  previewRows: Record<string, unknown>[];
+  totalRows: number;
+  status: "pending" | "approved" | "rejected";
+}
+
+function GenerateDatasetFromBookModal({
+  book,
+  onClose,
+  onGenerated,
+}: {
+  book: KnowledgeBookRecord;
+  onClose: () => void;
+  onGenerated: () => void;
+}) {
+  const [status, setStatus] = useState<"starting" | "running" | "done" | "error">("starting");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [events, setEvents] = useState<Array<{ type: string; text: string }>>([]);
+  const [pendingDatasets, setPendingDatasets] = useState<PendingDataset[]>([]);
+  const [error, setError] = useState("");
+  const [showLog, setShowLog] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const knownDatasetIdsRef = useRef<Set<string>>(new Set());
+
+  // Auto-scroll events
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [events]);
+
+  // After a createDataset tool_call, fetch latest datasets to get the real ID
+  const resolveNewDataset = useCallback(async (input: Record<string, unknown>) => {
+    // Small delay for server to finish creating
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      const all = await listDatasets();
+      const newOne = all.find(
+        (d) => d.name === input.name && !knownDatasetIdsRef.current.has(d.id)
+      );
+      if (newOne) {
+        knownDatasetIdsRef.current.add(newOne.id);
+        const columns = (Array.isArray(input.columns) ? input.columns : []).map((c: any) => ({
+          key: c.key || "",
+          label: c.label || c.name || c.key || "",
+        }));
+        const rows = Array.isArray(input.rows) ? input.rows : [];
+        setPendingDatasets((prev) => [
+          ...prev,
+          {
+            id: newOne.id,
+            name: newOne.name,
+            description: newOne.description || (input.description as string) || "",
+            category: newOne.category || "",
+            tags: newOne.tags || (input.tags as string[]) || [],
+            columns,
+            previewRows: rows.slice(0, 3),
+            totalRows: rows.length,
+            status: "pending",
+          },
+        ]);
+      }
+    } catch { /* noop */ }
+  }, []);
+
+  // Start extraction on mount
+  useEffect(() => {
+    let es: EventSource | null = null;
+    let cancelled = false;
+
+    // Pre-load known dataset IDs so we can diff later
+    listDatasets().then((all) => {
+      for (const d of all) knownDatasetIdsRef.current.add(d.id);
+    }).catch(() => {});
+
+    (async () => {
+      try {
+        const result = await extractDatasetsFromBook(book.id);
+        if (cancelled) return;
+        setSessionId(result.sessionId);
+        setStatus("running");
+
+        es = connectCliStream(book.id);
+
+        es.addEventListener("tool_call", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.toolId?.includes("createDataset")) {
+              const input = data.input || {};
+              setEvents((prev) => [
+                ...prev,
+                { type: "dataset", text: `Creating dataset: ${input.name || "Dataset"} (${Array.isArray(input.rows) ? input.rows.length : "?"} rows)` },
+              ]);
+              // Resolve the real dataset ID asynchronously
+              resolveNewDataset(input);
+            } else {
+              setEvents((prev) => [
+                ...prev,
+                { type: "tool", text: `${data.toolId?.replace("mcp__bidwright__", "") || "tool"}` },
+              ]);
+            }
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("message", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.content) {
+              setEvents((prev) => [...prev, { type: "message", text: data.content.substring(0, 200) }]);
+            }
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("thinking", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.content) {
+              setEvents((prev) => [...prev, { type: "thinking", text: data.content.substring(0, 150) }]);
+            }
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("progress", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            setEvents((prev) => [...prev, { type: "progress", text: `${data.phase}: ${data.detail}` }]);
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("file_read", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            setEvents((prev) => [...prev, { type: "file", text: `Reading: ${data.fileName || "file"}` }]);
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("status", (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.status === "completed" || data.status === "stopped" || data.status === "failed") {
+              setStatus("done");
+              es?.close();
+            }
+          } catch { /* ignore */ }
+        });
+
+        es.addEventListener("error", (e) => {
+          try {
+            const data = JSON.parse((e as any).data);
+            if (data.message) {
+              setEvents((prev) => [...prev, { type: "error", text: data.message }]);
+            }
+          } catch { /* SSE connection error — ignore */ }
+        });
+
+        es.onerror = () => {};
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Failed to start extraction");
+          setStatus("error");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
+  }, [book.id, resolveNewDataset]);
+
+  const handleStop = async () => {
+    if (sessionId) {
+      try { await stopCliSession(book.id); } catch { /* noop */ }
+    }
+    setStatus("done");
+  };
+
+  const handleApprove = (id: string) => {
+    setPendingDatasets((prev) => prev.map((d) => d.id === id ? { ...d, status: "approved" as const } : d));
+  };
+
+  const handleReject = async (id: string) => {
+    setPendingDatasets((prev) => prev.map((d) => d.id === id ? { ...d, status: "rejected" as const } : d));
+    try { await deleteDataset(id); } catch { /* noop */ }
+  };
+
+  const handleApproveAll = () => {
+    setPendingDatasets((prev) => prev.map((d) => d.status === "pending" ? { ...d, status: "approved" as const } : d));
+  };
+
+  const handleApproveAllAndClose = () => {
+    handleApproveAll();
+    onGenerated();
+  };
+
+  const isActive = status === "starting" || status === "running";
+  const pendingCount = pendingDatasets.filter((d) => d.status === "pending").length;
+  const approvedCount = pendingDatasets.filter((d) => d.status === "approved").length;
+  const rejectedCount = pendingDatasets.filter((d) => d.status === "rejected").length;
+
+  return (
+    <ModalBackdrop open={true} onClose={isActive ? () => {} : onClose}>
+      <div
+        className="bg-panel border border-line rounded-xl shadow-xl w-full max-w-2xl p-5 space-y-4 max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Sparkles className="h-4 w-4 text-accent" />
+          <h2 className="text-sm font-semibold text-fg flex-1">Extract Datasets from Book</h2>
+          {pendingDatasets.length > 0 && (
+            <div className="flex items-center gap-2 text-[10px] text-fg/40">
+              {approvedCount > 0 && <span className="text-success">{approvedCount} approved</span>}
+              {pendingCount > 0 && <span className="text-warning">{pendingCount} pending</span>}
+              {rejectedCount > 0 && <span className="text-fg/30">{rejectedCount} rejected</span>}
+            </div>
+          )}
+          {!isActive && (
+            <button onClick={onClose} className="rounded p-1 hover:bg-panel2 text-fg/40">
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Book info */}
+        <div className="rounded-lg bg-panel2/50 border border-line px-3 py-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <BookOpen className="h-3.5 w-3.5 text-fg/40" />
+            <span className="text-xs font-medium text-fg/70">{book.name}</span>
+          </div>
+          <p className="text-[11px] text-fg/40 mt-0.5">{book.sourceFileName} · {book.pageCount} pages</p>
+        </div>
+
+        {/* Error */}
+        {status === "error" && (
+          <div className="rounded-lg bg-danger/10 border border-danger/20 px-4 py-3 shrink-0">
+            <p className="text-xs text-danger">{error}</p>
+          </div>
+        )}
+
+        {/* Dataset review cards */}
+        {pendingDatasets.length > 0 && (
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-2">
+            {pendingDatasets.map((d) => (
+              <DatasetReviewCard
+                key={d.id}
+                dataset={d}
+                onApprove={() => handleApprove(d.id)}
+                onReject={() => handleReject(d.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Live event log — collapsible */}
+        {isActive && (
+          <div className="shrink-0">
+            <button
+              onClick={() => setShowLog(!showLog)}
+              className="flex items-center gap-1 text-[10px] text-fg/40 hover:text-fg/60 mb-1"
+            >
+              {showLog ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              Agent activity log
+            </button>
+            {showLog && (
+              <div
+                ref={scrollRef}
+                className="max-h-[120px] overflow-y-auto rounded-lg bg-panel2/30 border border-line p-2 space-y-0.5"
+              >
+                {events.length === 0 ? (
+                  <div className="flex items-center gap-2 text-[10px] text-fg/40">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {status === "starting" ? "Starting extraction session..." : "Agent is reading the book..."}
+                  </div>
+                ) : (
+                  events.slice(-20).map((ev, i) => (
+                    <div key={i} className={cn(
+                      "text-[10px] leading-relaxed",
+                      ev.type === "dataset" ? "text-success font-medium" : "text-fg/30"
+                    )}>
+                      {ev.text}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Status bar */}
+        {isActive && (
+          <div className="flex items-center gap-2 shrink-0">
+            <Loader2 className="h-3.5 w-3.5 text-accent animate-spin" />
+            <span className="text-xs text-fg/50 flex-1">
+              Extracting datasets... {pendingDatasets.length > 0 ? `(${pendingDatasets.length} found)` : ""}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {pendingCount > 0 && (
+                <Button size="xs" variant="accent" onClick={handleApproveAllAndClose}>
+                  <Check className="h-3 w-3" />
+                  Approve All & Close
+                </Button>
+              )}
+              <Button size="xs" variant="danger" onClick={handleStop}>
+                Stop
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Done */}
+        {status === "done" && (
+          <div className="space-y-3 shrink-0">
+            {pendingDatasets.length > 0 ? (
+              <div className="rounded-lg bg-success/10 border border-success/20 px-4 py-3 text-center">
+                <Database className="h-5 w-5 text-success mx-auto mb-1" />
+                <p className="text-sm font-medium text-fg">
+                  {approvedCount + pendingCount} dataset{approvedCount + pendingCount !== 1 ? "s" : ""} kept
+                  {rejectedCount > 0 ? `, ${rejectedCount} rejected` : ""}
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-panel2/50 border border-line px-4 py-3 text-center">
+                <p className="text-sm text-fg/50">Session finished — no datasets found.</p>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              {pendingCount > 0 && (
+                <Button size="sm" variant="secondary" onClick={handleApproveAll}>
+                  <Check className="h-3.5 w-3.5" />
+                  Approve All Remaining
+                </Button>
+              )}
+              <Button size="sm" onClick={onGenerated}>
+                Done
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Error footer */}
+        {status === "error" && (
+          <div className="flex justify-end gap-2 shrink-0">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        )}
+      </div>
+    </ModalBackdrop>
+  );
+}
+
+function DatasetReviewCard({
+  dataset,
+  onApprove,
+  onReject,
+}: {
+  dataset: PendingDataset;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isResolved = dataset.status !== "pending";
+
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-3 py-2.5 transition-all",
+        dataset.status === "approved" && "border-success/30 bg-success/5",
+        dataset.status === "rejected" && "border-line/50 bg-panel2/30 opacity-50",
+        dataset.status === "pending" && "border-accent/30 bg-accent/5",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <Database className={cn(
+          "h-3.5 w-3.5 mt-0.5 shrink-0",
+          dataset.status === "approved" ? "text-success" : dataset.status === "rejected" ? "text-fg/30" : "text-accent",
+        )} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-fg truncate">{dataset.name}</span>
+            <span className="text-[10px] text-fg/30 shrink-0">{dataset.totalRows} rows · {dataset.columns.length} cols</span>
+          </div>
+          {dataset.description && (
+            <p className="text-[10px] text-fg/40 mt-0.5 line-clamp-1">{dataset.description}</p>
+          )}
+          {dataset.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1">
+              {dataset.tags.slice(0, 5).map((tag) => (
+                <span key={tag} className="rounded px-1.5 py-0.5 text-[9px] bg-panel2 text-fg/40">{tag}</span>
+              ))}
+              {dataset.tags.length > 5 && (
+                <span className="text-[9px] text-fg/30">+{dataset.tags.length - 5}</span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1 shrink-0">
+          {dataset.status === "approved" && (
+            <span className="text-[10px] text-success font-medium">Approved</span>
+          )}
+          {dataset.status === "rejected" && (
+            <span className="text-[10px] text-fg/30 font-medium">Rejected</span>
+          )}
+          {dataset.status === "pending" && (
+            <>
+              <Button size="xs" variant="ghost" onClick={() => setExpanded(!expanded)} title="Preview">
+                {expanded ? <ChevronDown className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </Button>
+              <Button size="xs" variant="accent" onClick={onApprove} title="Keep this dataset">
+                <Check className="h-3 w-3" />
+              </Button>
+              <Button size="xs" variant="danger" onClick={onReject} title="Delete this dataset">
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Row preview */}
+      {expanded && dataset.previewRows.length > 0 && (
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="border-b border-line">
+                {dataset.columns.map((col) => (
+                  <th key={col.key} className="px-2 py-1 text-left font-medium text-fg/50">{col.label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {dataset.previewRows.map((row, ri) => (
+                <tr key={ri} className="border-b border-line/50">
+                  {dataset.columns.map((col) => (
+                    <td key={col.key} className="px-2 py-1 text-fg/60 truncate max-w-[150px]">
+                      {String(row[col.key] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {dataset.totalRows > 3 && (
+            <p className="text-[9px] text-fg/30 mt-1 px-2">...and {dataset.totalRows - 3} more rows</p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -729,7 +1430,6 @@ function CreateBookModal({
 }) {
   const [name, setName] = useState("");
   const [category, setCategory] = useState<KnowledgeBookRecord["category"]>("general");
-  const [scope, setScope] = useState<KnowledgeBookRecord["scope"]>("global");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -764,8 +1464,10 @@ function CreateBookModal({
         file,
         title: name.trim(),
         category,
-        scope,
+        scope: "global",
       });
+      // Close modal immediately — processing continues in the background.
+      // The BooksTab polling will pick up status changes automatically.
       onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
@@ -841,38 +1543,23 @@ function CreateBookModal({
               onChange={(e) => setName(e.target.value)}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs">Category</Label>
-              <Select
-                className="mt-1 text-xs"
-                value={category}
-                onChange={(e) =>
-                  setCategory(
-                    e.target.value as KnowledgeBookRecord["category"]
-                  )
-                }
-              >
-                {BOOK_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {categoryLabel(c)}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs">Scope</Label>
-              <Select
-                className="mt-1 text-xs"
-                value={scope}
-                onChange={(e) =>
-                  setScope(e.target.value as KnowledgeBookRecord["scope"])
-                }
-              >
-                <option value="global">Global</option>
-                <option value="project">Project</option>
-              </Select>
-            </div>
+          <div>
+            <Label className="text-xs">Category</Label>
+            <Select
+              className="mt-1 text-xs"
+              value={category}
+              onChange={(e) =>
+                setCategory(
+                  e.target.value as KnowledgeBookRecord["category"]
+                )
+              }
+            >
+              {BOOK_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {categoryLabel(c)}
+                </option>
+              ))}
+            </Select>
           </div>
 
           {error && <p className="text-xs text-red-500">{error}</p>}
@@ -978,9 +1665,11 @@ function DatasetListPaginated({
 
 function DatasetsTab({
   datasets,
+  books,
   onRefresh,
 }: {
   datasets: DatasetRecord[];
+  books: KnowledgeBookRecord[];
   onRefresh: () => void;
 }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
@@ -1028,6 +1717,7 @@ function DatasetsTab({
       {selectedDataset ? (
         <DatasetDetail
           dataset={selectedDataset}
+          books={books}
           onBack={() => setSelectedDatasetId(null)}
           onRefresh={onRefresh}
         />
@@ -1050,19 +1740,20 @@ function DatasetsTab({
         />
       )}
 
-      {showCreateModal && (
+      {typeof document !== "undefined" && showCreateModal && createPortal(
         <CreateDatasetModal
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
             onRefresh();
           }}
-        />
+        />,
+        document.body,
       )}
 
-      {showLibrary && (
+      {typeof document !== "undefined" && showLibrary && createPortal(
         <ModalBackdrop open={showLibrary} onClose={() => setShowLibrary(false)} size="lg">
-          <div className="p-5">
+          <div className="bg-panel border border-line rounded-xl shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-sm font-bold text-fg">Dataset Library</h3>
@@ -1127,7 +1818,8 @@ function DatasetsTab({
               </div>
             )}
           </div>
-        </ModalBackdrop>
+        </ModalBackdrop>,
+        document.body,
       )}
     </div>
   );
@@ -1154,15 +1846,15 @@ function DatasetListItem({
             <Badge tone="default">{dataset.source}</Badge>
           </div>
           <p className="text-xs text-fg/50 mt-0.5 line-clamp-1">{dataset.description}</p>
-          {(dataset as any).tags?.length > 0 && (
+          {dataset.tags && dataset.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
-              {((dataset as any).tags as string[]).slice(0, 5).map((tag: string) => (
+              {dataset.tags.slice(0, 5).map((tag) => (
                 <span key={tag} className="inline-flex rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent/80">
                   {tag}
                 </span>
               ))}
-              {((dataset as any).tags as string[]).length > 5 && (
-                <span className="text-[9px] text-fg/30">+{((dataset as any).tags as string[]).length - 5}</span>
+              {dataset.tags.length > 5 && (
+                <span className="text-[9px] text-fg/30">+{dataset.tags.length - 5}</span>
               )}
             </div>
           )}
@@ -1193,10 +1885,12 @@ function DatasetListItem({
 
 function DatasetDetail({
   dataset,
+  books,
   onBack,
   onRefresh,
 }: {
   dataset: DatasetRecord;
+  books: KnowledgeBookRecord[];
   onBack: () => void;
   onRefresh: () => void;
 }) {
@@ -1325,11 +2019,24 @@ function DatasetDetail({
             <h2 className="text-sm font-semibold text-fg">{dataset.name}</h2>
             <Badge tone="default">{categoryLabel(dataset.category)}</Badge>
             <Badge tone={scopeTone(dataset.scope)}>{dataset.scope}</Badge>
+            {dataset.sourceBookId && (() => {
+              const book = books.find((b) => b.id === dataset.sourceBookId);
+              return book ? (
+                <a
+                  href={`/knowledge?tab=books&book=${book.id}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-accent/10 border border-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20 transition-colors"
+                >
+                  <BookOpen className="h-3 w-3" />
+                  {book.name}
+                  {dataset.sourcePages && <span className="text-accent/50">p.{dataset.sourcePages}</span>}
+                </a>
+              ) : null;
+            })()}
           </div>
           <p className="text-xs text-fg/50 mt-0.5">{dataset.description}</p>
-          {(dataset as any).tags?.length > 0 && (
+          {dataset.tags && dataset.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
-              {((dataset as any).tags as string[]).map((tag: string) => (
+              {dataset.tags.map((tag) => (
                 <span key={tag} className="inline-flex rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium text-accent">
                   {tag}
                 </span>
@@ -1609,7 +2316,6 @@ function CreateDatasetModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState<DatasetRecord["category"]>("custom");
-  const [scope, setScope] = useState<DatasetRecord["scope"]>("global");
   const [columns, setColumns] = useState<DatasetColumnRecord[]>([
     { key: "name", name: "Name", type: "text", required: true },
   ]);
@@ -1653,7 +2359,7 @@ function CreateDatasetModal({
         name: name.trim(),
         description: description.trim(),
         category,
-        scope,
+        scope: "global",
         columns: columns.filter((c) => c.name.trim()),
       });
       onCreated();
@@ -1689,36 +2395,21 @@ function CreateDatasetModal({
               onChange={(e) => setDescription(e.target.value)}
             />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs">Category</Label>
-              <Select
-                className="mt-1 text-xs"
-                value={category}
-                onChange={(e) =>
-                  setCategory(e.target.value as DatasetRecord["category"])
-                }
-              >
-                {DATASET_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {categoryLabel(c)}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div>
-              <Label className="text-xs">Scope</Label>
-              <Select
-                className="mt-1 text-xs"
-                value={scope}
-                onChange={(e) =>
-                  setScope(e.target.value as DatasetRecord["scope"])
-                }
-              >
-                <option value="global">Global</option>
-                <option value="project">Project</option>
-              </Select>
-            </div>
+          <div>
+            <Label className="text-xs">Category</Label>
+            <Select
+              className="mt-1 text-xs"
+              value={category}
+              onChange={(e) =>
+                setCategory(e.target.value as DatasetRecord["category"])
+              }
+            >
+              {DATASET_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {categoryLabel(c)}
+                </option>
+              ))}
+            </Select>
           </div>
         </div>
 

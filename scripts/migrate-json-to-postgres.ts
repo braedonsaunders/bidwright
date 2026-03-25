@@ -259,9 +259,9 @@ async function main() {
           cost: item.cost ?? 0,
           markup: item.markup ?? 0,
           price: item.price ?? 0,
-          laborHourReg: item.laborHourReg ?? 0,
-          laborHourOver: item.laborHourOver ?? 0,
-          laborHourDouble: item.laborHourDouble ?? 0,
+          unit1: item.unit1 ?? 0,
+          unit2: item.unit2 ?? 0,
+          unit3: item.unit3 ?? 0,
           lineOrder: item.lineOrder ?? 0,
         },
       });
@@ -614,7 +614,7 @@ async function main() {
           defaultUom: ec.defaultUom ?? 'EA',
           validUoms: ec.validUoms ?? [],
           editableFields: ec.editableFields ?? {},
-          laborHourLabels: ec.laborHourLabels ?? {},
+          unitLabels: ec.unitLabels ?? {},
           calculationType: ec.calculationType ?? 'manual',
         },
       });

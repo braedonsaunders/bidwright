@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Eye, EyeOff, Pencil, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import { Eye, EyeOff, Pencil, Trash2, ChevronDown, ChevronRight, Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Button,
@@ -10,17 +10,22 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  Input,
   Separator,
 } from "@/components/ui";
 import type { TakeoffAnnotation } from "./annotation-canvas";
+
+const EDIT_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
 interface AnnotationSidebarProps {
   annotations: TakeoffAnnotation[];
   onToggleVisibility: (id: string) => void;
   onDelete: (id: string) => void;
   onEdit: (id: string) => void;
+  onSaveEdit?: (id: string, updates: { label?: string; color?: string; groupName?: string }) => void;
   onSelectAnnotation: (id: string) => void;
   selectedAnnotationId: string | null;
+  editingAnnotationId?: string | null;
 }
 
 /* Group annotations by groupName or type */
@@ -47,26 +52,82 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
 
 /* Pretty label for annotation type */
 const TYPE_LABELS: Record<string, string> = {
+  calibrate: "Calibration",
   linear: "Linear",
   "linear-polyline": "Polyline",
   "linear-drop": "Linear Drop",
-  count: "Count",
-  "count-by-distance": "Count by Distance",
   "area-rectangle": "Rectangle",
   "area-polygon": "Polygon",
   "area-triangle": "Triangle",
   "area-ellipse": "Ellipse",
   "area-vertical-wall": "Vertical Wall",
-  calibrate: "Calibration",
+  count: "Count",
+  "count-by-distance": "Count by Distance",
+  "auto-count": "Auto Count",
+  "markup-note": "Note",
+  "markup-cloud": "Cloud",
+  "markup-arrow": "Arrow",
+  "markup-highlight": "Highlight",
+  "ask-ai": "Ask AI",
 };
+
+/* Inline edit row */
+function EditRow({ ann, onSave, onCancel }: { ann: TakeoffAnnotation; onSave: (updates: { label?: string; color?: string; groupName?: string }) => void; onCancel: () => void }) {
+  const [label, setLabel] = useState(ann.label);
+  const [color, setColor] = useState(ann.color);
+  const [group, setGroup] = useState(ann.groupName ?? "");
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-accent/30 bg-accent/5 p-2">
+      <Input
+        className="h-6 text-xs"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="Label..."
+        autoFocus
+        onKeyDown={(e) => { if (e.key === "Enter") onSave({ label, color, groupName: group || undefined }); if (e.key === "Escape") onCancel(); }}
+      />
+      <Input
+        className="h-6 text-xs"
+        value={group}
+        onChange={(e) => setGroup(e.target.value)}
+        placeholder="Group name..."
+      />
+      <div className="flex items-center gap-1">
+        {EDIT_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setColor(c)}
+            className={cn(
+              "h-5 w-5 rounded-full border-2 transition-all",
+              color === c ? "border-fg scale-110" : "border-transparent hover:border-fg/20"
+            )}
+            style={{ backgroundColor: c }}
+          />
+        ))}
+      </div>
+      <div className="flex items-center justify-end gap-1 pt-0.5">
+        <button onClick={onCancel} className="rounded p-1 text-fg/40 hover:text-fg/60">
+          <X className="h-3 w-3" />
+        </button>
+        <button onClick={() => onSave({ label, color, groupName: group || undefined })} className="rounded p-1 text-accent hover:text-accent/80">
+          <Check className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function AnnotationSidebar({
   annotations,
   onToggleVisibility,
   onDelete,
   onEdit,
+  onSaveEdit,
   onSelectAnnotation,
   selectedAnnotationId,
+  editingAnnotationId,
 }: AnnotationSidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const groups = groupAnnotations(annotations);
@@ -124,72 +185,81 @@ export function AnnotationSidebar({
                 {/* Group items */}
                 {!collapsed && (
                   <div className="ml-2 space-y-0.5">
-                    {items.map((ann) => (
-                      <div
-                        key={ann.id}
-                        onClick={() => onSelectAnnotation(ann.id)}
-                        className={cn(
-                          "group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-colors",
-                          selectedAnnotationId === ann.id
-                            ? "bg-accent/10 border border-accent/20"
-                            : "hover:bg-panel2/40 border border-transparent"
-                        )}
-                      >
-                        {/* Color indicator */}
-                        <div
-                          className="h-2.5 w-2.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: ann.color }}
+                    {items.map((ann) =>
+                      editingAnnotationId === ann.id && onSaveEdit ? (
+                        <EditRow
+                          key={ann.id}
+                          ann={ann}
+                          onSave={(updates) => onSaveEdit(ann.id, updates)}
+                          onCancel={() => onEdit(ann.id)} /* toggle off */
                         />
+                      ) : (
+                        <div
+                          key={ann.id}
+                          onClick={() => onSelectAnnotation(ann.id)}
+                          className={cn(
+                            "group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-colors",
+                            selectedAnnotationId === ann.id
+                              ? "bg-accent/10 border border-accent/20"
+                              : "hover:bg-panel2/40 border border-transparent"
+                          )}
+                        >
+                          {/* Color indicator */}
+                          <div
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: ann.color }}
+                          />
 
-                        {/* Label and measurement */}
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-medium text-fg/80">
-                            {ann.label || `${TYPE_LABELS[ann.type] ?? ann.type}`}
-                          </p>
-                          <p className="text-[11px] text-fg/40">
-                            {formatMeasurement(ann)}
-                          </p>
-                        </div>
+                          {/* Label and measurement */}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-medium text-fg/80">
+                              {ann.label || `${TYPE_LABELS[ann.type] ?? ann.type}`}
+                            </p>
+                            <p className="text-[11px] text-fg/40">
+                              {formatMeasurement(ann)}
+                            </p>
+                          </div>
 
-                        {/* Action buttons (show on hover) */}
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onToggleVisibility(ann.id);
-                            }}
-                            className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
-                            title={ann.visible ? "Hide" : "Show"}
-                          >
-                            {ann.visible ? (
-                              <Eye className="h-3 w-3" />
-                            ) : (
-                              <EyeOff className="h-3 w-3" />
-                            )}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onEdit(ann.id);
-                            }}
-                            className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
-                            title="Edit"
-                          >
-                            <Pencil className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDelete(ann.id);
-                            }}
-                            className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger"
-                            title="Delete"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                          {/* Action buttons (show on hover) */}
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleVisibility(ann.id);
+                              }}
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
+                              title={ann.visible ? "Hide" : "Show"}
+                            >
+                              {ann.visible ? (
+                                <Eye className="h-3 w-3" />
+                              ) : (
+                                <EyeOff className="h-3 w-3" />
+                              )}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEdit(ann.id);
+                              }}
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
+                              title="Edit"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDelete(ann.id);
+                              }}
+                              className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      )
+                    )}
                   </div>
                 )}
               </div>

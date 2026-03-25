@@ -115,6 +115,11 @@ export function computeMeasurement(
       const v = opts.height ? volume(a, opts.height) : undefined;
       return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v };
     }
+    case "markup-note":
+    case "markup-cloud":
+    case "markup-arrow":
+    case "markup-highlight":
+      return { value: 0, unit: "" };
     default:
       return { value: 0, unit: "" };
   }

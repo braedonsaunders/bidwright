@@ -114,9 +114,9 @@ const projectWorkspace: ProjectWorkspace = {
             cost: 98,
             markup: 0.22,
             price: 7651,
-            labourHoursReg: 1,
-            labourHoursOver: 0,
-            labourHoursDouble: 0,
+            unit1: 1,
+            unit2: 0,
+            unit3: 0,
             citations: [
               {
                 id: "cit-1",
@@ -141,9 +141,9 @@ const projectWorkspace: ProjectWorkspace = {
             cost: 28500,
             markup: 0.18,
             price: 33630,
-            labourHoursReg: 0,
-            labourHoursOver: 0,
-            labourHoursDouble: 0,
+            unit1: 0,
+            unit2: 0,
+            unit3: 0,
             citations: [
               {
                 id: "cit-2",
@@ -168,9 +168,9 @@ const projectWorkspace: ProjectWorkspace = {
             cost: 0,
             markup: 0.12,
             price: 4800,
-            labourHoursReg: 2,
-            labourHoursOver: 0,
-            labourHoursDouble: 0,
+            unit1: 2,
+            unit2: 0,
+            unit3: 0,
             citations: [
               {
                 id: "cit-3",
@@ -202,9 +202,9 @@ const projectWorkspace: ProjectWorkspace = {
             cost: 12800,
             markup: 0.2,
             price: 15360,
-            labourHoursReg: 0,
-            labourHoursOver: 0,
-            labourHoursDouble: 0,
+            unit1: 0,
+            unit2: 0,
+            unit3: 0,
             citations: [
               {
                 id: "cit-4",

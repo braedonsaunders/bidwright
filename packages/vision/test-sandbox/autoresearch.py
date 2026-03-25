@@ -34,6 +34,7 @@ os.makedirs(OUT, exist_ok=True)
 SOPREMA = os.path.join(SANDBOX, "Soprema Tillsonburg_RFQ Package")
 KEMIRA = os.path.join(SANDBOX, "kemira", "Kemira Brantford")
 HH = os.path.join(SANDBOX, "homehardware", "Home Hardware", "HH RFP Installation Package")
+BIRLA = os.path.join(SANDBOX, "birla", "Birla Unit 4 Breeching")
 
 TEST_CASES = [
     # ── Soprema: P&ID instruments ──
@@ -115,6 +116,22 @@ TEST_CASES = [
         "min_expected": 10, "max_expected": 30,
         "desc": "P&ID connection junction diamonds",
     },
+    # ── Birla: structural grid markers ──
+    {
+        "name": "birla_grid_markers",
+        "pdf": os.path.join(BIRLA, "Exist Plant Struct Drawings Combined.pdf"),
+        "page": 2, "bbox": {"x": 1965, "y": 1761, "w": 78, "h": 78},  # circled G section marker
+        "min_expected": 3, "max_expected": 10,
+        "desc": "Structural section/grid markers (circled letters)",
+    },
+    # ── Birla: civil north arrows ──
+    {
+        "name": "birla_north_arrows",
+        "pdf": os.path.join(BIRLA, "Unit 4 Outlet Breeching Civil Drawings.pdf"),
+        "page": 2, "bbox": "auto:north_arrow",
+        "min_expected": 2, "max_expected": 4,
+        "desc": "North arrow symbols on civil drawings",
+    },
 ]
 
 
@@ -139,6 +156,10 @@ def auto_discover_template(img, iw, ih, template_type):
         # Small circles/squares with numbers, 20-60px
         matches = [c for c in valid if 0.6 < c["aspect"] < 1.6 and 15 < c["w"] < 60
                    and 15 < c["h"] < 60 and c["y"] < ih * 0.85]
+    elif template_type == "north_arrow":
+        # Large circular symbol, 80-200px, roughly square
+        matches = [c for c in valid if 0.7 < c["aspect"] < 1.4 and 80 < c["w"] < 200
+                   and 80 < c["h"] < 200]
     else:
         matches = valid
 

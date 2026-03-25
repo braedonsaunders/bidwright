@@ -9,38 +9,123 @@ import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from
 function plainTextToHtml(text: string): string {
   const lines = text.split("\n");
   const htmlParts: string[] = [];
-  let inList = false;
+  let inUl = false;
+  let inOl = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
-      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
       continue;
     }
 
-    // Markdown bold **text** → <strong>text</strong>
-    const withBold = trimmed.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    // Inline formatting: bold and italic
+    const formatted = trimmed
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/__(.+?)__/g, "<strong>$1</strong>")
+      .replace(/\*(.+?)\*/g, "<em>$1</em>")
+      .replace(/_(.+?)_/g, "<em>$1</em>");
 
-    // Headers
-    if (withBold.startsWith("### ")) {
-      if (inList) { htmlParts.push("</ul>"); inList = false; }
-      htmlParts.push(`<h3>${withBold.slice(4)}</h3>`);
-    } else if (withBold.startsWith("## ")) {
-      if (inList) { htmlParts.push("</ul>"); inList = false; }
-      htmlParts.push(`<h3>${withBold.slice(3)}</h3>`);
-    } else if (withBold.startsWith("- ") || withBold.startsWith("• ")) {
-      if (!inList) { htmlParts.push("<ul>"); inList = true; }
-      htmlParts.push(`<li>${withBold.slice(2)}</li>`);
+    // Unordered list: "- item", "* item", "• item"
+    const ulMatch = formatted.match(/^[-*•]\s+(.*)/);
+    // Ordered list: "1. item"
+    const olMatch = formatted.match(/^\d+\.\s+(.*)/);
+
+    if (ulMatch) {
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
+      if (!inUl) { htmlParts.push("<ul>"); inUl = true; }
+      htmlParts.push(`<li>${ulMatch[1]}</li>`);
+    } else if (olMatch) {
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (!inOl) { htmlParts.push("<ol>"); inOl = true; }
+      htmlParts.push(`<li>${olMatch[1]}</li>`);
+    } else if (formatted.startsWith("### ")) {
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
+      htmlParts.push(`<h3>${formatted.slice(4)}</h3>`);
+    } else if (formatted.startsWith("## ")) {
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
+      htmlParts.push(`<h2>${formatted.slice(3)}</h2>`);
+    } else if (formatted.startsWith("# ")) {
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
+      htmlParts.push(`<h1>${formatted.slice(2)}</h1>`);
     } else {
-      if (inList) { htmlParts.push("</ul>"); inList = false; }
-      htmlParts.push(`<p>${withBold}</p>`);
+      if (inUl) { htmlParts.push("</ul>"); inUl = false; }
+      if (inOl) { htmlParts.push("</ol>"); inOl = false; }
+      htmlParts.push(`<p>${formatted}</p>`);
     }
   }
-  if (inList) htmlParts.push("</ul>");
+  if (inUl) htmlParts.push("</ul>");
+  if (inOl) htmlParts.push("</ol>");
   return htmlParts.join("");
 }
 
 export function registerQuoteTools(server: McpServer) {
+
+  // ── Cached workspace fetcher (shared across tool handlers) ──────────
+  let cachedWs: { data: any; at: number } | null = null;
+
+  async function getWs(): Promise<any> {
+    if (cachedWs && Date.now() - cachedWs.at < 5000) return cachedWs.data;
+    const raw = await apiGet(projectPath("/workspace"));
+    const ws = raw.workspace || raw;
+    cachedWs = { data: ws, at: Date.now() };
+    return ws;
+  }
+
+  function invalidateWs() { cachedWs = null; }
+
+  // ── Tool gating — state-based prerequisite checks ───────────────────
+  // Gates check actual workspace state, not session history.
+  // Resumed sessions / existing quotes pass automatically if data exists.
+  //
+  // Chain: updateQuote → importRateSchedule → createWorksheet → createWorksheetItem
+
+  type GateTarget = "importRateSchedule" | "createWorksheet" | "createWorksheetItem";
+
+  async function checkGate(gate: GateTarget): Promise<string | null> {
+    const ws = await getWs();
+    const project = ws.project || {};
+    const revision = ws.currentRevision || {};
+    const worksheets = ws.worksheets || [];
+    const rateSchedules = ws.rateSchedules || [];
+    const entityCategories = ws.entityCategories || [];
+
+    // Has the agent (or user) filled in quote basics?
+    const hasQuoteInfo = !!(
+      (project.name && project.name !== "Untitled Project" && project.name !== "New Project")
+      || revision.description
+    );
+
+    // Do any categories require rate schedules?
+    const rsCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
+    const needsRateSchedules = rsCats.length > 0;
+    const hasRateSchedules = rateSchedules.length > 0;
+    const hasWorksheets = worksheets.length > 0;
+
+    // Gate 3: quote info required for all gated tools
+    if (!hasQuoteInfo) {
+      const action = gate === "importRateSchedule" ? "importing rate schedules"
+        : gate === "createWorksheet" ? "creating worksheets" : "creating items";
+      return `Quote setup required first. Call updateQuote with projectName and description before ${action}.`;
+    }
+
+    // Gate 2: rate schedules required for createWorksheet and createWorksheetItem
+    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && needsRateSchedules && !hasRateSchedules) {
+      const names = rsCats.map((c: any) => c.name).join(", ");
+      return `Rate schedules must be imported first. Categories [${names}] require rate schedules. Call listRateSchedules to see available schedules, then importRateSchedule to import them.`;
+    }
+
+    // Gate 1: worksheets required for createWorksheetItem
+    if (gate === "createWorksheetItem" && !hasWorksheets) {
+      return `No worksheets exist yet. Call createWorksheet to create at least one worksheet before adding items.`;
+    }
+
+    return null; // all gates passed
+  }
 
   // ── getWorkspace ──────────────────────────────────────────
   server.tool(
@@ -51,17 +136,17 @@ export function registerQuoteTools(server: McpServer) {
       const data = await apiGet(projectPath("/workspace"));
       // Return a compact summary to avoid context bloat
       const ws = data.workspace || data;
-      const rev = ws.revisions?.[0] || {};
+      const rev = ws.currentRevision || ws.revisions?.[0] || {};
       const summary = {
-        quote: { name: ws.projects?.[0]?.name, client: ws.projects?.[0]?.clientName },
+        quote: { name: (ws.project || ws.projects?.[0])?.name, client: (ws.project || ws.projects?.[0])?.clientName },
         revision: {
           id: rev.id, title: rev.title, status: rev.status, type: rev.type,
           breakoutStyle: rev.breakoutStyle, defaultMarkup: rev.defaultMarkup,
         },
         worksheets: (ws.worksheets || []).map((w: any) => ({
-          id: w.id, name: w.name, itemCount: (ws.worksheetItems || []).filter((i: any) => i.worksheetId === w.id).length,
+          id: w.id, name: w.name, itemCount: (w.items || []).length,
         })),
-        totalItems: (ws.worksheetItems || []).length,
+        totalItems: (ws.worksheets || []).reduce((sum: number, w: any) => sum + (w.items || []).length, 0),
         phases: (ws.phases || []).map((p: any) => ({ id: p.id, name: p.name })),
         modifiers: (ws.modifiers || []).map((m: any) => ({
           id: m.id, name: m.name, type: m.type, appliesTo: m.appliesTo,
@@ -125,15 +210,36 @@ export function registerQuoteTools(server: McpServer) {
         }
       }
 
+      // Fetch org-level rate schedules available for import
+      let orgSchedules: any[] = [];
+      try {
+        const orgData = await apiGet("/api/rate-schedules");
+        orgSchedules = (orgData.schedules || orgData || []).map((s: any) => ({
+          id: s.id, name: s.name, category: s.category,
+          itemCount: s.items?.length || s.itemCount || 0,
+          sampleItems: (s.items || []).slice(0, 3).map((i: any) => i.name),
+        }));
+      } catch {}
+
       const rateScheduleCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
       const catalogCats = entityCategories.filter((c: any) => c.itemSource === "catalog");
       const freeformCats = entityCategories.filter((c: any) => c.itemSource === "freeform");
       let instructions = "";
       if (rateScheduleCats.length > 0) {
         const names = rateScheduleCats.map((c: any) => c.name).join(", ");
-        instructions += rateItems.length > 0
-          ? `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. `
-          : `Categories [${names}] use rate schedules but NONE are imported. Use estimated costs and note "NEEDS RATE SCHEDULE". `;
+        if (rateItems.length > 0) {
+          instructions += `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. `;
+        } else if (orgSchedules.length > 0) {
+          instructions += `Categories [${names}] use rate schedules but NONE are imported into this quote yet. ` +
+            `You MUST import a rate schedule before creating items in these categories. Steps:\n` +
+            `1. Review the available org schedules listed below\n` +
+            `2. Call importRateSchedule with the appropriate schedule ID\n` +
+            `3. Call listRateScheduleItems to get the item IDs\n` +
+            `4. Set rateScheduleItemId on each item you create\n` +
+            `DO NOT create items with made-up rates — import the schedule first.\n`;
+        } else {
+          instructions += `Categories [${names}] use rate schedules but no org schedules exist. Create items with estimated costs and note "NEEDS RATE SCHEDULE" in description. `;
+        }
       }
       if (catalogCats.length > 0) {
         const names = catalogCats.map((c: any) => c.name).join(", ");
@@ -147,7 +253,7 @@ export function registerQuoteTools(server: McpServer) {
       if (entityCategories.length === 0) {
         instructions = `No entity categories configured for this organization. Use these standard categories when creating items:\n` +
           `- "Material" — physical materials, supplies, consumables\n` +
-          `- "Labour" — labour hours, crew costs (set laborHourReg for hours)\n` +
+          `- "Labour" — labour hours, crew costs (set unit1 for hours)\n` +
           `- "Equipment" — equipment rental, tools, machinery\n` +
           `- "Subcontractor" — subcontracted work (lump sum or per-unit)\n` +
           `All categories use freeform input — set cost and quantity directly. ` +
@@ -163,6 +269,7 @@ export function registerQuoteTools(server: McpServer) {
             { name: "Subcontractor", entityType: "Subcontractor", defaultUom: "LS", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
           ],
           rateScheduleItems: rateItems,
+          availableOrgSchedules: orgSchedules.length > 0 && rateItems.length === 0 ? orgSchedules : undefined,
           catalogItems: catalogItems.slice(0, 50),
           instructions,
         }, null, 2) }],
@@ -176,7 +283,11 @@ export function registerQuoteTools(server: McpServer) {
     "Create a new worksheet (cost breakdown section) in the quote. Use clear names like '01 - General Requirements', '02 - Process Piping', etc.",
     { name: z.string().describe("Worksheet name"), description: z.string().optional().describe("Optional description") },
     async ({ name, description }) => {
+      const gateError = await checkGate("createWorksheet");
+      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+
       const data = await apiPost(projectPath("/worksheets"), { name, description });
+      invalidateWs();
       return { content: [{ type: "text" as const, text: `Created worksheet: ${name}` }] };
     }
   );
@@ -184,57 +295,89 @@ export function registerQuoteTools(server: McpServer) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. For Labour items with rate schedules, set rateScheduleItemId and laborHourReg. For Material/Subcontractor, set cost and quantity directly. Always include a description citing the source document.`,
+    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. Use Equipment for equipment, Labour for labour, Material for materials, etc. For rate_schedule categories, set rateScheduleItemId. For freeform categories, set cost and quantity directly. Always include a description citing the source document.`,
     {
       worksheetId: z.string().describe("ID of the worksheet"),
       entityName: z.string().describe("Item name"),
-      category: z.string().default("Material").describe("Category name — must match exactly from getItemConfig"),
+      category: z.string().describe("Category name — MUST match exactly from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use the correct category for each item type."),
       description: z.string().default("").describe("Description with document reference and assumptions"),
       quantity: z.number().default(1).describe("Quantity"),
       uom: z.string().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
       cost: z.number().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
       markup: z.number().default(0).describe("Markup percentage"),
-      laborHourReg: z.number().default(0).describe("Regular labor hours (for Labour items)"),
-      laborHourOver: z.number().default(0).describe("Overtime hours"),
-      laborHourDouble: z.number().default(0).describe("Double-time hours"),
+      unit1: z.number().default(0).describe("Unit 1 value (e.g. regular hours for Labour)"),
+      unit2: z.number().default(0).describe("Unit 2 value (e.g. overtime hours for Labour)"),
+      unit3: z.number().default(0).describe("Unit 3 value (e.g. double-time hours for Labour)"),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       phaseId: z.string().optional().describe("Phase ID"),
     },
     async (input) => {
-      const { worksheetId, ...rest } = input;
-      const cat = rest.category || "Material";
+      const gateError = await checkGate("createWorksheetItem");
+      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
-      // ── Dynamic validation from user-configured category settings ──
+      const { worksheetId, ...rest } = input;
+      const cat = rest.category;
+      if (!cat) {
+        return { content: [{ type: "text" as const, text: "ERROR: category is required. Use the exact category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material')." }], isError: true };
+      }
+
+      // ── Dynamic validation from workspace (entity categories + rate schedules) ──
       try {
-        const config = await apiGet(projectPath("/item-config"));
-        const categories = config.categories || [];
-        const catConfig = categories.find((c: any) => c.name === cat || c.entityType === cat);
+        const ws = await getWs(); // reuses cached fetch from gate check
+        const entityCategories = ws.entityCategories || [];
+        const catConfig = entityCategories.find((c: any) => c.name === cat || c.entityType === cat);
+
         if (catConfig) {
           const src = catConfig.itemSource || "freeform";
           const calcType = catConfig.calculationType || "manual";
 
           // Validate itemSource requirements
           if (src === "rate_schedule" && !rest.rateScheduleItemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call listRateSchedules to find available schedules\n2. Call importRateSchedule to import one into the quote\n3. Call listRateScheduleItems to get item IDs\n4. Set rateScheduleItemId on this item\nWithout this, the item will have no linked rate.` }], isError: true };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call getItemConfig to see available rate schedule items\n2. Set rateScheduleItemId to a valid item ID\nWithout this, the item will have no linked rate.` }], isError: true };
           }
           if (src === "catalog" && !rest.itemId) {
             return { content: [{ type: "text" as const, text: `WARNING: Category "${cat}" is configured with itemSource=catalog but no itemId was provided. Item will be created without linked catalog pricing.` }] };
           }
 
+          // Validate rateScheduleItemId actually exists in revision rate schedules
+          if (rest.rateScheduleItemId) {
+            const rateSchedules = ws.rateSchedules || [];
+            const allRsItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({ id: i.id, name: i.name, code: i.code })));
+            const match = allRsItems.find((ri: any) => ri.id === rest.rateScheduleItemId);
+            if (!match) {
+              const available = allRsItems.slice(0, 15).map((ri: any) => `"${ri.name}" (${ri.id})`).join(", ");
+              return { content: [{ type: "text" as const, text: `ERROR: rateScheduleItemId "${rest.rateScheduleItemId}" does not match any rate schedule item in this revision.` +
+                (available ? `\nAvailable items: ${available}` : `\nNo rate schedule items found. Call getItemConfig to check available items.`) +
+                `\nFix the rateScheduleItemId and retry.` }], isError: true };
+            }
+          }
+
+          // Validate itemId actually exists in catalogs
+          if (rest.itemId) {
+            const catalogItems = (ws.catalogItems || []);
+            const catalogs = ws.catalogs || [];
+            const allCatItems = catalogs.flatMap((c: any) => catalogItems.filter((ci: any) => ci.catalogId === c.id).map((ci: any) => ({ id: ci.id, name: ci.name })));
+            const match = allCatItems.find((ci: any) => ci.id === rest.itemId);
+            if (!match) {
+              return { content: [{ type: "text" as const, text: `ERROR: itemId "${rest.itemId}" does not match any catalog item. Call getItemConfig to check available catalog items, then retry with a valid itemId.` }], isError: true };
+            }
+          }
+
           // Validate calculationType requirements
-          if (calcType === "auto_labour" && !rest.laborHourReg && !rest.laborHourOver && !rest.laborHourDouble) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — labor hours are required. Set laborHourReg (regular hours) at minimum. Without hours, this item will calculate to $0.` }], isError: true };
+          if (calcType === "auto_labour" && !rest.unit1 && !rest.unit2 && !rest.unit3) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — unit values are required. Set unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
           }
         }
       } catch {
-        // Config not available — skip validation, let API handle it
+        // Workspace not available — let API-level validation handle it
       }
 
       const price = (rest.cost || 0) * (1 + (rest.markup || 0) / 100);
       const body = { ...rest, category: cat, entityType: cat, price };
       try {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
+        invalidateWs();
         const itemId = (data as any)?.id || (data as any)?.item?.id || "";
         return { content: [{ type: "text" as const, text: `Created item: ${rest.entityName} (${cat})${itemId ? ` [id: ${itemId}]` : ""}` }] };
       } catch (err: any) {
@@ -257,9 +400,9 @@ export function registerQuoteTools(server: McpServer) {
       uom: z.string().optional(),
       cost: z.number().optional(),
       markup: z.number().optional(),
-      laborHourReg: z.number().optional(),
-      laborHourOver: z.number().optional(),
-      laborHourDouble: z.number().optional(),
+      unit1: z.number().optional(),
+      unit2: z.number().optional(),
+      unit3: z.number().optional(),
       rateScheduleItemId: z.string().optional(),
       catalogItemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
     },
@@ -277,6 +420,7 @@ export function registerQuoteTools(server: McpServer) {
     { itemId: z.string() },
     async ({ itemId }) => {
       await apiDelete(projectPath(`/worksheet-items/${itemId}`));
+      invalidateWs();
       return { content: [{ type: "text" as const, text: `Deleted item ${itemId}` }] };
     }
   );
@@ -327,6 +471,7 @@ export function registerQuoteTools(server: McpServer) {
         }
       }
 
+      invalidateWs();
       return { content: [{ type: "text" as const, text: "Quote updated" }] };
     }
   );
@@ -431,7 +576,11 @@ export function registerQuoteTools(server: McpServer) {
       globalScheduleId: z.string().describe("ID of the global rate schedule to import"),
     },
     async ({ globalScheduleId }) => {
+      const gateError = await checkGate("importRateSchedule");
+      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+
       const data = await apiPost(projectPath("/rate-schedules/import"), { sourceScheduleId: globalScheduleId });
+      invalidateWs();
       return { content: [{ type: "text" as const, text: `Imported rate schedule into current revision` }] };
     }
   );
@@ -492,7 +641,7 @@ export function registerQuoteTools(server: McpServer) {
     `Create a financial modifier on the quote — overhead, profit, contingency, discount, fuel surcharge, etc. Modifiers adjust the quote total by percentage or fixed amount. Use appliesTo to control scope (All, Labour Only, Materials Only, Equipment Only). Set show="Yes" to display on the client-facing quote, "No" to hide (distribute into line items).`,
     {
       name: z.string().describe("Modifier name, e.g. 'Overhead', '10% Contingency', 'Volume Discount'"),
-      type: z.enum(["Contingency", "Surcharge", "Discount", "Fuel Surcharge", "Birla Surcharge", "Other"]).default("Other").describe("Modifier type"),
+      type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).default("Other").describe("Modifier type"),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).default("All").describe("What the modifier applies to"),
       percentage: z.number().optional().describe("Percentage adjustment (e.g. 10 for 10%). Use this OR amount, not both."),
       amount: z.number().optional().describe("Fixed dollar amount. Use this OR percentage, not both."),
@@ -511,7 +660,7 @@ export function registerQuoteTools(server: McpServer) {
     {
       modifierId: z.string().describe("Modifier ID"),
       name: z.string().optional(),
-      type: z.enum(["Contingency", "Surcharge", "Discount", "Fuel Surcharge", "Birla Surcharge", "Other"]).optional(),
+      type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).optional(),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).optional(),
       percentage: z.number().nullable().optional().describe("Set to null to clear percentage"),
       amount: z.number().nullable().optional().describe("Set to null to clear amount"),
@@ -787,6 +936,82 @@ export function registerQuoteTools(server: McpServer) {
       await apiPatch(projectPath("/pdf-preferences"), merged);
       const updated = Object.keys(input).filter(k => (input as any)[k] !== undefined);
       return { content: [{ type: "text" as const, text: `PDF preferences updated: ${updated.join(", ")}` }] };
+    }
+  );
+
+  // ── applySummaryPreset ──────────────────────────────────────
+  server.tool(
+    "applySummaryPreset",
+    "Apply a summary preset to configure quote breakout. Presets: quick_total (single total), by_category (per category), by_phase (per phase), phase_x_category (phases with category detail), custom (empty). After applying, rows can be individually customized.",
+    {
+      preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]).describe("Preset name"),
+    },
+    async ({ preset }) => {
+      await apiPost(projectPath("/summary-rows/apply-preset"), { preset });
+      return { content: [{ type: "text" as const, text: `Applied summary preset: ${preset}` }] };
+    }
+  );
+
+  // ── createSummaryRow ────────────────────────────────────────
+  server.tool(
+    "createSummaryRow",
+    "Add a row to the quote summary. Types: auto_category, auto_phase, manual, modifier, subtotal, separator.",
+    {
+      type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).describe("Row type"),
+      label: z.string().describe("Display label"),
+      sourceCategory: z.string().optional().describe("For auto_category: EntityCategory name to aggregate"),
+      sourcePhase: z.string().optional().describe("For auto_phase: phase name to aggregate"),
+      manualValue: z.number().optional().describe("For manual: sell/price value"),
+      manualCost: z.number().optional().describe("For manual: cost value"),
+      modifierPercent: z.number().optional().describe("For modifier: percentage"),
+      modifierAmount: z.number().optional().describe("For modifier: fixed dollar amount"),
+      visible: z.boolean().optional().describe("Visible on PDF (default true)"),
+    },
+    async (input) => {
+      const body: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(input)) {
+        if (v !== undefined) body[k] = v;
+      }
+      await apiPost(projectPath("/summary-rows"), body);
+      return { content: [{ type: "text" as const, text: `Created summary row: ${input.label}` }] };
+    }
+  );
+
+  // ── updateSummaryRow ────────────────────────────────────────
+  server.tool(
+    "updateSummaryRow",
+    "Update an existing summary row.",
+    {
+      rowId: z.string().describe("Summary row ID"),
+      label: z.string().optional().describe("New label"),
+      manualValue: z.number().optional().describe("New value (manual rows)"),
+      manualCost: z.number().optional().describe("New cost (manual rows)"),
+      modifierPercent: z.number().optional().describe("New percentage (modifier rows)"),
+      modifierAmount: z.number().optional().describe("New amount (modifier rows)"),
+      visible: z.boolean().optional().describe("Visible on PDF"),
+      style: z.enum(["normal", "bold", "indent", "highlight"]).optional().describe("Display style"),
+    },
+    async (input) => {
+      const { rowId, ...patch } = input;
+      const body: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (v !== undefined) body[k] = v;
+      }
+      await apiPatch(projectPath(`/summary-rows/${rowId}`), body);
+      return { content: [{ type: "text" as const, text: `Updated summary row ${rowId}` }] };
+    }
+  );
+
+  // ── deleteSummaryRow ────────────────────────────────────────
+  server.tool(
+    "deleteSummaryRow",
+    "Delete a summary row from the quote.",
+    {
+      rowId: z.string().describe("Summary row ID to delete"),
+    },
+    async ({ rowId }) => {
+      await apiDelete(projectPath(`/summary-rows/${rowId}`));
+      return { content: [{ type: "text" as const, text: "Deleted summary row" }] };
     }
   );
 }

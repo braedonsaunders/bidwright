@@ -27,10 +27,40 @@ export interface RateScheduleContext {
   }>;
 }
 
+export interface LabourCostContextEntry {
+  code: string;
+  name: string;
+  group: string;
+  costRates: Record<string, number>; // { regular: 35.01, overtime: 52.52, doubletime: 70.02 }
+}
+
+export interface BurdenPeriodEntry {
+  group: string;
+  percentage: number; // 0.46 = 46%
+  startDate: string;
+  endDate: string;
+}
+
+export interface LabourCostContext {
+  entries: LabourCostContextEntry[];
+  burdenPeriods: BurdenPeriodEntry[];
+  referenceDate?: string; // date for burden period matching
+}
+
+export interface TravelPolicyContext {
+  perDiemRate: number;
+  perDiemEmbedMode: "separate" | "embed_hourly" | "embed_cost_only";
+  hoursPerDay: number;
+  fuelSurchargePercent: number;
+  fuelSurchargeAppliesTo: "labour" | "all" | "none";
+}
+
 export interface CalcContext {
   catalogItems?: Array<{ name: string; unitCost: number; unitPrice: number; metadata: Record<string, unknown> }>;
   burdenPercent?: number; // labour cost as % of price, default 0.7
   rateSchedules?: RateScheduleContext[];
+  labourCost?: LabourCostContext;
+  travelPolicy?: TravelPolicyContext;
 }
 
 export interface CalcResult {
@@ -75,16 +105,69 @@ function findRateScheduleItem(item: WorksheetItem, ctx: CalcContext) {
   return null;
 }
 
+/**
+ * Map canonical tier name ("regular", "overtime", "doubletime") to a schedule tier ID
+ * by matching the tier's multiplier (1.0 → regular, 1.5 → overtime, 2.0 → doubletime).
+ */
+function mapCanonicalTierToId(
+  canonicalName: string,
+  tiers: RateScheduleContext["tiers"],
+): string | null {
+  const multiplierMap: Record<string, number> = { regular: 1, overtime: 1.5, doubletime: 2 };
+  const targetMultiplier = multiplierMap[canonicalName];
+  if (targetMultiplier === undefined) return null;
+  const tier = tiers.find((t) => t.multiplier === targetMultiplier);
+  return tier?.id ?? null;
+}
+
+/**
+ * Find the active burden period for a group at a given date.
+ */
+function findActiveBurden(
+  group: string,
+  burdenPeriods: BurdenPeriodEntry[],
+  referenceDate?: string,
+): number {
+  const ref = referenceDate ?? new Date().toISOString().substring(0, 10);
+  // Match by group first, fallback to empty group (applies to all)
+  const candidates = burdenPeriods.filter(
+    (bp) => (bp.group === group || bp.group === "") && ref >= bp.startDate && ref <= bp.endDate,
+  );
+  // Prefer exact group match over wildcard
+  const exact = candidates.find((bp) => bp.group === group);
+  return exact?.percentage ?? candidates[0]?.percentage ?? 0;
+}
+
 function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | null {
   const match = findRateScheduleItem(item, ctx);
   if (!match) return null;
 
-  const { rsItem } = match;
+  const { schedule, rsItem } = match;
   const tierUnits = item.tierUnits ?? {};
 
   // If no tier hours set, check if legacy labor hours can be mapped
   const hasTierHours = Object.keys(tierUnits).length > 0;
   if (!hasTierHours) return null;
+
+  // Determine cost rates: prefer global LabourCostContext over per-item costRates
+  let effectiveCostRates = rsItem.costRates;
+  let costGroup = "";
+
+  if (ctx.labourCost?.entries.length) {
+    // Match by code or name
+    const costEntry = ctx.labourCost.entries.find(
+      (e) => e.code === rsItem.code || e.name === rsItem.name,
+    );
+    if (costEntry) {
+      // Map canonical rates to schedule tier IDs
+      effectiveCostRates = {};
+      for (const [canonicalName, rate] of Object.entries(costEntry.costRates)) {
+        const tierId = mapCanonicalTierToId(canonicalName, schedule.tiers);
+        if (tierId) effectiveCostRates[tierId] = Number(rate) || 0;
+      }
+      costGroup = costEntry.group;
+    }
+  }
 
   let totalPrice = 0;
   let totalCost = 0;
@@ -93,16 +176,53 @@ function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult
   for (const [tierId, hours] of Object.entries(tierUnits)) {
     const h = Number(hours) || 0;
     totalPrice += (rsItem.rates[tierId] ?? 0) * h;
-    totalCost += (rsItem.costRates[tierId] ?? 0) * h;
+    totalCost += (effectiveCostRates[tierId] ?? 0) * h;
     totalHours += h;
   }
 
   totalPrice *= item.quantity;
   totalCost *= item.quantity;
 
-  // Add burden per hour and per diem per day
-  totalCost += rsItem.burden * totalHours * item.quantity;
-  totalCost += rsItem.perDiem * Math.ceil(totalHours / 8) * item.quantity;
+  // Apply burden: prefer org-level burden periods over item-level burden field
+  if (ctx.labourCost?.burdenPeriods.length && costGroup) {
+    const burdenPct = findActiveBurden(
+      costGroup,
+      ctx.labourCost.burdenPeriods,
+      ctx.labourCost.referenceDate,
+    );
+    if (burdenPct > 0) {
+      totalCost += totalCost * burdenPct;
+    }
+  } else if (rsItem.burden > 0) {
+    // Fallback to per-item flat burden ($/hr)
+    totalCost += rsItem.burden * totalHours * item.quantity;
+  }
+
+  // Per diem: add to cost
+  const hoursPerDay = ctx.travelPolicy?.hoursPerDay ?? 8;
+  if (rsItem.perDiem > 0) {
+    totalCost += rsItem.perDiem * Math.ceil(totalHours / hoursPerDay) * item.quantity;
+  }
+
+  // Travel policy: fuel surcharge on sell price
+  if (ctx.travelPolicy && ctx.travelPolicy.fuelSurchargePercent > 0) {
+    if (ctx.travelPolicy.fuelSurchargeAppliesTo === "labour" || ctx.travelPolicy.fuelSurchargeAppliesTo === "all") {
+      totalPrice *= 1 + ctx.travelPolicy.fuelSurchargePercent / 100;
+    }
+  }
+
+  // Travel policy: per diem embed modes
+  if (ctx.travelPolicy && ctx.travelPolicy.perDiemRate > 0) {
+    const days = Math.ceil(totalHours / hoursPerDay);
+    if (ctx.travelPolicy.perDiemEmbedMode === "embed_cost_only") {
+      totalCost += ctx.travelPolicy.perDiemRate * days * item.quantity;
+    } else if (ctx.travelPolicy.perDiemEmbedMode === "embed_hourly") {
+      const hourlyPerDiem = ctx.travelPolicy.perDiemRate / hoursPerDay;
+      totalPrice += hourlyPerDiem * totalHours * item.quantity;
+      totalCost += hourlyPerDiem * totalHours * item.quantity;
+    }
+    // "separate" mode: travel shows as its own line item, handled outside calc engine
+  }
 
   return {
     price: round(totalPrice),
@@ -124,8 +244,8 @@ function calcAutoEquipment(item: WorksheetItem, ctx: CalcContext): CalcResult {
   const rsResult = calcAutoRateSchedule(item, ctx);
   if (rsResult) return rsResult;
 
-  // Duration is stored in laborHourReg (days)
-  const duration = item.laborHourReg || 1;
+  // Duration is stored in unit1 (days)
+  const duration = item.unit1 || 1;
   let dailyRate = item.cost;
 
   // Try to find catalog item with weekly/monthly rates in metadata
@@ -191,7 +311,7 @@ function calcDirectPrice(_item: WorksheetItem): CalcResult {
 /**
  * Evaluate a custom formula expression.
  *
- * Available variables: qty, cost, markup, price, regHrs, otHrs, dtHrs
+ * Available variables: qty, cost, markup, price, unit1, unit2, unit3 (aliases: regHrs, otHrs, dtHrs)
  *
  * Example formulas:
  *   "qty * cost * (1 + markup)"        → standard markup
@@ -210,9 +330,12 @@ function calcFormula(item: WorksheetItem, formula: string): CalcResult {
       cost: item.cost,
       markup: normalizeMarkup(item.markup),
       price: item.price,
-      regHrs: item.laborHourReg,
-      otHrs: item.laborHourOver,
-      dtHrs: item.laborHourDouble,
+      unit1: item.unit1,
+      unit2: item.unit2,
+      unit3: item.unit3,
+      regHrs: item.unit1,
+      otHrs: item.unit2,
+      dtHrs: item.unit3,
     };
 
     // Basic safety: only allow math operations, numbers, and variable names

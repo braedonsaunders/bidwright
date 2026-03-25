@@ -24,9 +24,9 @@ export interface PdfDataPackage {
     cost: number;
     markup: number;
     price: number;
-    laborHourReg: number;
-    laborHourOver: number;
-    laborHourDouble: number;
+    unit1: number;
+    unit2: number;
+    unit3: number;
     vendor: string;
     description: string;
     phaseName?: string;
@@ -41,6 +41,17 @@ export interface PdfDataPackage {
     amount: number | null;
     show: string;
   }>;
+  summaryRows: Array<{
+    id: string;
+    type: string;
+    label: string;
+    order: number;
+    visible: boolean;
+    style: string;
+    computedValue: number;
+    computedCost: number;
+    computedMargin: number;
+  }>;
   conditions: Array<{ type: string; value: string }>;
   notes: string;
   leadLetter: string;
@@ -52,6 +63,7 @@ export interface PdfDataPackage {
     order: number;
     parentSectionId: string | null;
   }>;
+  orgTermsAndConditions: string;
 }
 
 export interface PdfLayoutOptions {
@@ -173,7 +185,7 @@ function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>
   return result;
 }
 
-export function buildPdfDataPackage(workspace: any, reportSections: any[] = []): PdfDataPackage {
+export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], orgTermsAndConditions = ""): PdfDataPackage {
   const rev = workspace.currentRevision;
   const lineItems = (workspace.worksheets ?? []).flatMap((ws: any) =>
     (ws.items ?? []).map((item: any) => ({
@@ -208,6 +220,17 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = []):
       name: p.name,
       description: p.description,
     })),
+    summaryRows: (workspace.summaryRows ?? []).map((r: any) => ({
+      id: r.id,
+      type: r.type,
+      label: r.label,
+      order: r.order,
+      visible: r.visible,
+      style: r.style ?? "normal",
+      computedValue: r.computedValue ?? 0,
+      computedCost: r.computedCost ?? 0,
+      computedMargin: r.computedMargin ?? 0,
+    })),
     modifiers: workspace.modifiers ?? [],
     conditions: (workspace.conditions ?? []).map((c: any) => ({
       type: c.type,
@@ -223,6 +246,7 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = []):
       order: s.order ?? 0,
       parentSectionId: s.parentSectionId ?? null,
     })),
+    orgTermsAndConditions,
   };
 }
 
@@ -310,7 +334,7 @@ export function generatePdfHtml(
     const groupBy = opts.lineItemOptions.groupBy;
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
-      const hours = item.laborHourReg + item.laborHourOver + item.laborHourDouble;
+      const hours = item.unit1 + item.unit2 + item.unit3;
       let row = `<tr>
         <td>${item.lineOrder}</td>
         <td><strong>${escapeHtml(item.entityName)}</strong>${item.description ? `<br><span style="color:#888">${escapeHtml(item.description)}</span>` : ""}</td>
@@ -369,7 +393,7 @@ export function generatePdfHtml(
     const totalCost = data.lineItems.reduce((s, i) => s + i.cost, 0);
     const totalPrice = data.lineItems.reduce((s, i) => s + i.price, 0);
     const totalHrs = data.lineItems.reduce(
-      (s, i) => s + i.laborHourReg + i.laborHourOver + i.laborHourDouble,
+      (s, i) => s + i.unit1 + i.unit2 + i.unit3,
       0
     );
     const baseCols = backupCol ? 6 : 5;
@@ -404,15 +428,23 @@ export function generatePdfHtml(
   };
 
   const renderConditions = (): string => {
-    if (inclusions.length === 0 && exclusions.length === 0) return "";
-    let result = `<h2>Terms & Conditions</h2><div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
-    if (inclusions.length > 0) {
-      result += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+    const hasConditions = inclusions.length > 0 || exclusions.length > 0;
+    const hasOrgTerms = !!data.orgTermsAndConditions?.trim();
+    if (!hasConditions && !hasOrgTerms) return "";
+    let result = `<h2>Terms & Conditions</h2>`;
+    if (hasConditions) {
+      result += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
+      if (inclusions.length > 0) {
+        result += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+      }
+      if (exclusions.length > 0) {
+        result += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+      }
+      result += `</div>`;
     }
-    if (exclusions.length > 0) {
-      result += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
+    if (hasOrgTerms) {
+      result += `<div class="section-body" style="margin-top:16px;white-space:pre-wrap">${escapeHtml(data.orgTermsAndConditions)}</div>`;
     }
-    result += `</div>`;
     return result;
   };
 
@@ -421,9 +453,9 @@ export function generatePdfHtml(
     return `<h2>Hours Summary</h2>
       <table><thead><tr><th>Regular</th><th>Overtime (1.5x)</th><th>Double Time (2x)</th><th>Total</th></tr></thead>
       <tbody><tr>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.laborHourReg * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.laborHourOver * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.laborHourDouble * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit1 * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit2 * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit3 * i.quantity, 0).toLocaleString()}</td>
         <td class="num"><strong>${data.totalHours.toLocaleString()}</strong></td>
       </tr></tbody></table>`;
   };
@@ -434,9 +466,9 @@ export function generatePdfHtml(
     for (const item of data.lineItems) {
       const key = item.phaseName || "Unphased";
       const existing = phaseLabour.get(key) ?? { reg: 0, ot: 0, dt: 0, total: 0, cost: 0 };
-      const reg = item.laborHourReg * item.quantity;
-      const ot = item.laborHourOver * item.quantity;
-      const dt = item.laborHourDouble * item.quantity;
+      const reg = item.unit1 * item.quantity;
+      const ot = item.unit2 * item.quantity;
+      const dt = item.unit3 * item.quantity;
       existing.reg += reg;
       existing.ot += ot;
       existing.dt += dt;
@@ -501,9 +533,12 @@ export function generatePdfHtml(
 
     for (const section of topLevel) {
       result += renderReportSection(section);
-      for (const child of children(section.id)) {
-        result += `<div style="margin-left:24px;padding-left:16px;border-left:3px solid #e5e5e5">`;
-        result += renderReportSection(child);
+      const kids = children(section.id);
+      if (kids.length > 0) {
+        result += `<div class="report-nested">`;
+        for (const child of kids) {
+          result += renderReportSection(child);
+        }
         result += `</div>`;
       }
     }
@@ -572,6 +607,28 @@ export function generatePdfHtml(
   /* Header/footer bars */
   .html-header { background: ${headerBg}; color: #fff; padding: 8px 20px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; margin: -40px -40px 24px; }
   .html-footer { margin: 32px -40px -40px; padding: 12px 20px; background: #f5f5f5; border-top: 2px solid #e5e5e5; font-size: 10px; color: #666; display: flex; justify-content: space-between; align-items: center; }
+
+  /* Report sections */
+  .report-section { margin: 16px 0; border-radius: 8px; overflow: hidden; border: 1px solid #e5e5e5; page-break-inside: avoid; }
+  .report-section-header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #e5e5e5; }
+  .report-section-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px; flex-shrink: 0; }
+  .report-section-title { font-size: 15px; font-weight: 600; color: #111827; margin: 0; }
+  .report-section-body { padding: 18px; font-size: 12px; line-height: 1.7; color: #374151; }
+  .report-section-body img { max-width: 100%; height: auto; border-radius: 8px; margin-bottom: 12px; }
+  .report-image-caption { font-size: 11px; color: #6b7280; font-style: italic; margin-top: 8px; }
+  .report-section.content { background: #f9fafb; }
+  .report-section.image { background: #faf5ff; border-color: #e9d5ff; }
+  .report-section.summary { background: linear-gradient(135deg, #fef3c7, #fde68a); border-color: #f59e0b; }
+  .report-section.recommendations { background: linear-gradient(135deg, #fef2f2, #fee2e2); border-color: #ef4444; }
+  .report-icon-content { background: linear-gradient(135deg, #10b981, #059669); }
+  .report-icon-image { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+  .report-icon-summary { background: linear-gradient(135deg, #f59e0b, #d97706); }
+  .report-icon-recommendations { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  .report-nested { margin-left: 28px; margin-top: 12px; border-left: 3px solid #d1d5db; padding-left: 16px; }
+  .report-nested .report-section { border-radius: 6px; }
+  .report-nested .report-section-header { padding: 10px 14px; }
+  .report-nested .report-section-icon { width: 26px; height: 26px; font-size: 12px; }
+  .report-nested .report-section-title { font-size: 13px; }
 
   @media print { body { margin: 0; padding: 20px; } .html-header, .html-footer { margin: 0; } }
 </style></head><body>`;
@@ -673,26 +730,56 @@ export function generatePdfHtml(
 }
 
 function renderReportSection(section: PdfDataPackage["reportSections"][number]): string {
-  const typeStyles: Record<string, { bg: string; border: string; icon: string }> = {
-    content:         { bg: "#f9f9f9", border: "#e5e5e5", icon: "&#128221;" },
-    heading:         { bg: "#eff6ff", border: "#bfdbfe", icon: "&#128204;" },
-    summary:         { bg: "#ecfdf5", border: "#a7f3d0", icon: "&#128202;" },
-    recommendations: { bg: "#fffbeb", border: "#fde68a", icon: "&#128161;" },
-    image:           { bg: "#faf5ff", border: "#e9d5ff", icon: "&#128247;" },
+  const typeConfig: Record<string, { iconClass: string; emoji: string }> = {
+    content:         { iconClass: "report-icon-content", emoji: "&#128221;" },
+    heading:         { iconClass: "report-icon-content", emoji: "&#128204;" },
+    image:           { iconClass: "report-icon-image",   emoji: "&#128247;" },
+    summary:         { iconClass: "report-icon-summary", emoji: "&#128202;" },
+    recommendations: { iconClass: "report-icon-recommendations", emoji: "&#128161;" },
   };
-  const style = typeStyles[section.sectionType] ?? typeStyles.content;
+  const config = typeConfig[section.sectionType] ?? typeConfig.content;
+  const sectionClass = section.sectionType;
 
+  // Heading type renders as a plain styled heading
   if (section.sectionType === "heading") {
-    return `<h3 style="margin:20px 0 8px;font-size:15px;font-weight:600;color:#1a1a1a">${section.title}</h3>`;
+    return `<h3 style="margin:20px 0 8px;font-size:15px;font-weight:600;color:#1a1a1a">${escapeHtml(section.title)}</h3>`;
   }
 
-  let html = `<div style="background:${style.bg};border:1px solid ${style.border};border-radius:6px;padding:16px;margin:12px 0">`;
-  if (section.title) {
-    html += `<div style="font-weight:600;font-size:13px;margin-bottom:8px">${style.icon} ${section.title}</div>`;
+  // Image sections: parse JSON content to render actual image + caption
+  if (section.sectionType === "image") {
+    let imageHtml = "";
+    let caption = "";
+    try {
+      const parsed = JSON.parse(section.content);
+      if (parsed.resolvedImagePath) {
+        imageHtml = `<img src="file://${parsed.resolvedImagePath}" alt="${escapeHtml(section.title)}" style="max-width:100%;max-height:500px;object-fit:contain;border-radius:8px;" />`;
+      }
+      caption = parsed.caption || "";
+    } catch {
+      caption = section.content || "";
+    }
+
+    let html = `<div class="report-section ${sectionClass}">`;
+    html += `<div class="report-section-header">`;
+    html += `<div class="report-section-icon ${config.iconClass}">${config.emoji}</div>`;
+    html += `<div class="report-section-title">${escapeHtml(section.title)}</div>`;
+    html += `</div>`;
+    html += `<div class="report-section-body">`;
+    if (imageHtml) html += imageHtml;
+    if (caption) html += `<div class="report-image-caption">${escapeHtml(caption)}</div>`;
+    html += `</div></div>`;
+    return html;
   }
+
+  // Standard sections: content, summary, recommendations
+  let html = `<div class="report-section ${sectionClass}">`;
+  html += `<div class="report-section-header">`;
+  html += `<div class="report-section-icon ${config.iconClass}">${config.emoji}</div>`;
+  html += `<div class="report-section-title">${escapeHtml(section.title)}</div>`;
+  html += `</div>`;
   if (section.content) {
-    // Content may contain HTML from the rich text editor
-    html += `<div style="font-size:12px;line-height:1.6;color:#333">${section.content}</div>`;
+    // Content may contain HTML from the rich text editor — render as-is
+    html += `<div class="report-section-body">${section.content}</div>`;
   }
   html += `</div>`;
   return html;

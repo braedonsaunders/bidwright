@@ -1,8 +1,6 @@
 /**
- * @deprecated This agent loop is replaced by CLI-native runtimes (Claude Code / Codex).
- * The CLI manages its own agent loop, context, and tool execution.
- * This file is kept only for reference. See packages/mcp-server/ for the new tool layer
- * and apps/api/src/services/cli-runtime.ts for the new orchestration.
+ * AgentLoop — server-side agent loop used by agent-routes and intake-routes.
+ * The CLI runtime (cli-runtime.ts) is a separate path for Claude Code / Codex sessions.
  */
 import type {
   AgentConfig,

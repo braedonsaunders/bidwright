@@ -11,7 +11,11 @@ import {
   ChevronRight,
   Copy,
   GripVertical,
+  Check,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
+import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import {
   Badge,
@@ -30,6 +34,7 @@ import {
   Toggle,
 } from "@/components/ui";
 import { createPlugin, updatePlugin as apiUpdatePlugin } from "@/lib/api";
+import type { EntityCategory } from "@/lib/api";
 import type {
   PluginRecord,
   PluginToolDefinition,
@@ -309,23 +314,63 @@ function pluginToToolDrafts(plugin: PluginRecord): ToolDraft[] {
   }));
 }
 
+// ── Radix Select Helper ───────────────────────────────────────────────
+
+function StyledSelect({ value, onValueChange, placeholder, children }: {
+  value: string;
+  onValueChange: (val: string) => void;
+  placeholder?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <RadixSelect.Root value={value} onValueChange={onValueChange}>
+      <RadixSelect.Trigger className="inline-flex items-center justify-between gap-1.5 h-9 w-full px-3 text-sm rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors">
+        <RadixSelect.Value placeholder={placeholder ?? "Select..."} />
+        <RadixSelect.Icon className="shrink-0">
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </RadixSelect.Icon>
+      </RadixSelect.Trigger>
+      <RadixSelect.Portal>
+        <RadixSelect.Content className="z-[300] rounded-lg border border-line bg-panel shadow-xl min-w-[var(--radix-select-trigger-width)]" position="popper" sideOffset={4}>
+          <RadixSelect.Viewport className="p-1">
+            {children}
+          </RadixSelect.Viewport>
+        </RadixSelect.Content>
+      </RadixSelect.Portal>
+    </RadixSelect.Root>
+  );
+}
+
+function SelectItem({ value, children }: { value: string; children: React.ReactNode }) {
+  return (
+    <RadixSelect.Item value={value} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+      <RadixSelect.ItemIndicator className="shrink-0 w-3"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+      <RadixSelect.ItemText>{children}</RadixSelect.ItemText>
+    </RadixSelect.Item>
+  );
+}
+
 export function CreatePluginModal({
   open,
   onClose,
   onCreated,
   datasets,
   initialPlugin,
+  entityCategories,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: (plugin: PluginRecord) => void;
   datasets?: Array<{ id: string; name: string; columns: Array<{ key: string; name: string }> }>;
   initialPlugin?: PluginRecord;
+  entityCategories?: EntityCategory[];
 }) {
   const isEdit = !!initialPlugin;
   const [step, setStep] = useState<Step>("basics");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
 
   // Plugin basics
   const [name, setName] = useState(initialPlugin?.name ?? "");
@@ -353,6 +398,61 @@ export function CreatePluginModal({
       setSlug(n.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""));
     }
   }, [slug, name]);
+
+  const handleGenerate = useCallback(async () => {
+    if (!aiPrompt.trim()) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      const { apiBaseUrl } = await import("@/lib/api");
+      const cats = entityCategories?.filter((c) => c.enabled).map((c) => c.name);
+      const res = await fetch(`${apiBaseUrl}/plugins/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: aiPrompt.trim(), categories: cats }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Generation failed" }));
+        throw new Error(err.message ?? `HTTP ${res.status}`);
+      }
+      const gen = await res.json();
+
+      // Populate form fields from generated plugin
+      if (gen.name) { setName(gen.name); setSlug(gen.slug ?? gen.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")); }
+      if (gen.category) setCategory(gen.category);
+      if (gen.description) setDescription(gen.description);
+      if (gen.llmDescription) setLlmDescription(gen.llmDescription);
+      if (gen.tags) setTags(Array.isArray(gen.tags) ? gen.tags.join(", ") : gen.tags);
+      if (gen.documentation) setDocumentation(gen.documentation);
+      if (gen.defaultOutputType) setDefaultOutputType(gen.defaultOutputType);
+
+      // Config
+      if (gen.configSchema && Array.isArray(gen.configSchema)) {
+        setConfigFields(gen.configSchema.map((f: any) => ({
+          key: f.key ?? "", label: f.label ?? "", type: f.type ?? "text",
+          description: f.description ?? "", required: f.required ?? false, placeholder: f.placeholder ?? "",
+        })));
+      }
+
+      // Tools — convert full tool definitions to drafts
+      if (gen.toolDefinitions && Array.isArray(gen.toolDefinitions)) {
+        const draftPlugin = {
+          ...gen,
+          id: "temp",
+          enabled: true,
+          config: gen.config ?? {},
+          createdAt: "", updatedAt: "",
+        } as PluginRecord;
+        setTools(pluginToToolDrafts(draftPlugin));
+      }
+
+      setStep("basics"); // show the populated form
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Generation failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [aiPrompt, entityCategories]);
 
   const handleSave = useCallback(async () => {
     if (!name.trim()) { setError("Plugin name is required"); return; }
@@ -410,6 +510,32 @@ export function CreatePluginModal({
           <Button variant="ghost" size="xs" onClick={onClose}><X className="h-4 w-4" /></Button>
         </CardHeader>
 
+        {/* AI Generate bar */}
+        {!isEdit && (
+          <div className="px-5 py-3 border-b border-line bg-panel2/30 shrink-0">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-accent shrink-0" />
+              <Input
+                className="flex-1 h-8 text-xs bg-bg"
+                placeholder="Describe the plugin you want to create..."
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !generating) handleGenerate(); }}
+                disabled={generating}
+              />
+              <Button
+                variant="accent"
+                size="xs"
+                onClick={handleGenerate}
+                disabled={generating || !aiPrompt.trim()}
+              >
+                {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                {generating ? "Generating..." : "Generate"}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Step indicator */}
         <div className="flex border-b border-line shrink-0">
           {steps.map((s, i) => (
@@ -448,13 +574,20 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Category *</Label>
-                  <Select value={category} onChange={(e) => setCategory(e.target.value as typeof category)}>
-                    <option value="labour">Labour</option>
-                    <option value="equipment">Equipment</option>
-                    <option value="material">Material</option>
-                    <option value="travel">Travel</option>
-                    <option value="general">General</option>
-                  </Select>
+                  <StyledSelect value={category} onValueChange={setCategory} placeholder="Select category...">
+                    {(entityCategories && entityCategories.length > 0
+                      ? entityCategories.filter((c) => c.enabled).map((c) => (
+                          <SelectItem key={c.name} value={c.name.toLowerCase()}>{c.name}</SelectItem>
+                        ))
+                      : [
+                          <SelectItem key="labour" value="labour">Labour</SelectItem>,
+                          <SelectItem key="equipment" value="equipment">Equipment</SelectItem>,
+                          <SelectItem key="material" value="material">Material</SelectItem>,
+                          <SelectItem key="travel" value="travel">Travel</SelectItem>,
+                          <SelectItem key="general" value="general">General</SelectItem>,
+                        ]
+                    )}
+                  </StyledSelect>
                 </div>
                 <div className="col-span-2">
                   <Label>Description *</Label>
@@ -467,15 +600,15 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Default Output Type</Label>
-                  <Select value={defaultOutputType} onChange={(e) => setDefaultOutputType(e.target.value as typeof defaultOutputType)}>
-                    <option value="line_items">Line Items</option>
-                    <option value="worksheet">Worksheet</option>
-                    <option value="text_content">Text Content</option>
-                    <option value="revision_patch">Revision Patch</option>
-                    <option value="score">Score</option>
-                    <option value="summary">Summary</option>
-                    <option value="composite">Composite</option>
-                  </Select>
+                  <StyledSelect value={defaultOutputType} onValueChange={setDefaultOutputType} placeholder="Select output type...">
+                    <SelectItem value="line_items">Line Items</SelectItem>
+                    <SelectItem value="worksheet">Worksheet</SelectItem>
+                    <SelectItem value="text_content">Text Content</SelectItem>
+                    <SelectItem value="revision_patch">Revision Patch</SelectItem>
+                    <SelectItem value="score">Score</SelectItem>
+                    <SelectItem value="summary">Summary</SelectItem>
+                    <SelectItem value="composite">Composite</SelectItem>
+                  </StyledSelect>
                 </div>
                 <div>
                   <Label>Tags</Label>

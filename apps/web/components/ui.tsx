@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import * as React from "react";
+import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 
 /* ─────────────────────── Button ─────────────────────── */
@@ -60,7 +61,7 @@ export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("rounded-xl border border-line bg-panel/90 backdrop-blur-sm transition-shadow hover:shadow-sm", className)}
+      className={cn("rounded-xl border border-line bg-panel transition-shadow hover:shadow-sm", className)}
       {...props}
     />
   )
@@ -91,7 +92,7 @@ export function AnimatedCard({ className, delay = 0, children, ...rest }: { clas
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, delay, ease: "easeOut" }}
-      className={cn("rounded-xl border border-line bg-panel/90 backdrop-blur-sm transition-shadow hover:shadow-sm", className)}
+      className={cn("rounded-xl border border-line bg-panel transition-shadow hover:shadow-sm", className)}
     >
       {children}
     </motion.div>
@@ -260,31 +261,24 @@ export function ModalBackdrop({
   children: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
 }) {
-  const widths = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg", xl: "max-w-xl" };
+  const widths = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg", xl: "max-w-3xl" };
 
-  return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
-        >
-          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-          <motion.div
-            className={cn("relative z-10 w-full", widths[size])}
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 8 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-          >
+  if (!open) return null;
+
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0 z-[200]">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      {/* Scroll container */}
+      <div className="absolute inset-0 overflow-y-auto">
+        <div className="flex min-h-full items-center justify-center p-4">
+          <div className={cn("relative z-10 w-full", widths[size])}>
             {children}
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -300,14 +294,15 @@ export function FadeIn({
   className?: string;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay, ease: "easeOut" }}
+    <div
       className={className}
+      style={{
+        animation: `fadeInUp 0.3s ease-out ${delay}s both`,
+      }}
     >
+      <style>{`@keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }`}</style>
       {children}
-    </motion.div>
+    </div>
   );
 }
 

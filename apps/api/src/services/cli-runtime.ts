@@ -24,6 +24,10 @@ export interface CliSession {
   events: EventEmitter;
   startedAt: string;
   pid: number;
+  /** Stashed spawn options for watchdog recovery */
+  _spawnOpts?: Record<string, unknown>;
+  /** How many times the watchdog has restarted this session */
+  _recoveryCount?: number;
 }
 
 export interface SSEEventData {
@@ -155,9 +159,16 @@ export async function spawnSession(opts: {
     permissions: {
       "allow": [
         "mcp__bidwright__*",
+        "Bash(*)",
         "Read(*)",
+        "Write(*)",
+        "Edit(*)",
         "Glob(*)",
         "Grep(*)",
+        "Agent(*)",
+        "TodoWrite",
+        "WebSearch(*)",
+        "WebFetch(*)",
       ]
     },
     mcpServers: {
@@ -193,6 +204,7 @@ export async function spawnSession(opts: {
       "--output-format", "stream-json",
       "--dangerously-skip-permissions", // Non-interactive, no permission prompts
       "--verbose",
+      "--max-turns", "200", // Prevent infinite loops
       "--mcp-config", mcpConfig, // Pass MCP server config directly
     ];
     if (model) cliArgs.push("--model", model);
@@ -235,61 +247,84 @@ export async function spawnSession(opts: {
     pid: child.pid || 0,
   };
 
+  // Stash spawn opts for recovery
+  session._spawnOpts = { projectId, projectDir, prompt, runtime, model, authToken, apiBaseUrl, revisionId, quoteId, customCliPath, anthropicApiKey, openaiApiKey };
+  session._recoveryCount = 0;
+
   sessions.set(projectId, session);
 
-  // Parse stdout line by line
-  if (child.stdout) {
-    const rl = createInterface({ input: child.stdout });
-    rl.on("line", (line) => {
-      if (!line.trim()) return;
+  // Inactivity watchdog — recover session if no output for 5 minutes
+  const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+  const MAX_RECOVERIES = 2;
+  let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+  const resetInactivityTimer = () => {
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = setTimeout(async () => {
+      if (session.status !== "running") return;
+      const recoveries = session._recoveryCount || 0;
+
+      if (recoveries >= MAX_RECOVERIES) {
+        // Give up after max retries
+        console.warn(`[cli] Inactivity timeout for project ${projectId} — max recoveries (${MAX_RECOVERIES}) reached, terminating`);
+        events.emit("event", { type: "error", data: { message: `Session terminated: no activity for 5 minutes (${MAX_RECOVERIES} recovery attempts exhausted)` } });
+        child.kill("SIGINT");
+        return;
+      }
+
+      // Attempt recovery via --resume
+      const savedSessionId = session.sessionId;
+      if (!savedSessionId) {
+        console.warn(`[cli] Inactivity timeout for project ${projectId} — no session ID for recovery, terminating`);
+        events.emit("event", { type: "error", data: { message: "Session terminated: no activity for 5 minutes (no session ID for recovery)" } });
+        child.kill("SIGINT");
+        return;
+      }
+
+      console.warn(`[cli] Inactivity timeout for project ${projectId} — attempting recovery #${recoveries + 1} via --resume`);
+      events.emit("event", { type: "progress", data: { phase: "Recovery", detail: `No activity for 5 minutes — restarting session (attempt ${recoveries + 1}/${MAX_RECOVERIES})` } });
+
+      // Kill the stuck process and mark it so spawnSession doesn't reject
+      session.status = "stopped";
+      child.kill("SIGKILL");
+
+      // Small delay for process cleanup
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Resume session
       try {
-        const parsed = JSON.parse(line);
-        const sseEvents = parseCliOutput(parsed, runtime);
-        for (const evt of sseEvents) {
-          events.emit("event", evt);
-
-          // Capture session ID from Claude Code init message
-          if (parsed.type === "system" && parsed.subtype === "init" && parsed.session_id) {
-            session.sessionId = parsed.session_id;
-          }
-        }
-      } catch {
-        // Non-JSON line (e.g. progress indicator) — emit as message
-        if (line.trim()) {
-          events.emit("event", { type: "message", data: { role: "system", content: line.trim() } });
-        }
+        const newSession = await resumeSession({
+          projectId,
+          projectDir,
+          prompt: "You were interrupted due to inactivity. Check the current state with getWorkspace, then continue where you left off. Do NOT re-create items that already exist.",
+          model: model as string | undefined,
+          customCliPath: customCliPath as string | undefined,
+          authToken: authToken as string | undefined,
+          apiBaseUrl: apiBaseUrl as string | undefined,
+          anthropicApiKey: anthropicApiKey as string | undefined,
+        });
+        newSession._spawnOpts = session._spawnOpts;
+        newSession._recoveryCount = recoveries + 1;
+        // The new session replaces the old one in the sessions map (done by spawnSession)
+        // Forward events from the new session to existing listeners
+        newSession.events.on("event", (evt: any) => events.emit("event", evt));
+        newSession.events.on("done", (status: string) => events.emit("done", status));
+      } catch (err) {
+        console.error(`[cli] Recovery failed for project ${projectId}:`, err);
+        events.emit("event", { type: "error", data: { message: `Recovery failed: ${err instanceof Error ? err.message : "unknown error"}` } });
+        events.emit("done", "failed");
       }
-    });
-  }
+    }, INACTIVITY_TIMEOUT_MS);
+  };
+  resetInactivityTimer();
 
-  // Capture stderr for errors
-  if (child.stderr) {
-    const rl = createInterface({ input: child.stderr });
-    rl.on("line", (line) => {
-      if (line.trim()) {
-        events.emit("event", { type: "error", data: { message: line.trim() } });
-      }
-    });
-  }
-
-  // Handle process exit
-  child.on("exit", (code, signal) => {
-    session.status = signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
-    events.emit("event", {
-      type: "status",
-      data: { status: session.status, exitCode: code, signal },
-    });
-    events.emit("done", session.status);
-    // Clean up from Map after 5 minutes (events are persisted to DB)
-    setTimeout(() => { sessions.delete(projectId); }, 5 * 60 * 1000);
+  // Wire up stdout/stderr/exit handlers (shared helper)
+  wireChildProcess(child, session, runtime, events, {
+    onStdoutLine: resetInactivityTimer,
   });
 
-  child.on("error", (err) => {
-    session.status = "failed";
-    events.emit("event", { type: "error", data: { message: err.message } });
-    events.emit("done", "failed");
-    setTimeout(() => { sessions.delete(projectId); }, 5 * 60 * 1000);
-  });
+  // Clear inactivity timer on process exit/error
+  child.on("exit", () => { if (inactivityTimer) clearTimeout(inactivityTimer); });
+  child.on("error", () => { if (inactivityTimer) clearTimeout(inactivityTimer); });
 
   // Save session state to disk for recovery
   const sessionJsonDir = join(projectDir, ".bidwright");
@@ -306,6 +341,70 @@ export async function spawnSession(opts: {
 }
 
 /**
+ * Wire up stdout/stderr/exit handlers for a CLI child process.
+ * Shared between spawnSession and spawnResumedSession to avoid duplication.
+ */
+function wireChildProcess(
+  child: ChildProcess,
+  session: CliSession,
+  runtime: AgentRuntime,
+  events: EventEmitter,
+  opts?: { onStdoutLine?: () => void },
+) {
+  if (child.stdout) {
+    const rl = createInterface({ input: child.stdout });
+    rl.on("line", (line) => {
+      opts?.onStdoutLine?.();
+      if (!line.trim()) return;
+      try {
+        const parsed = JSON.parse(line);
+        const sseEvents = parseCliOutput(parsed, runtime);
+        for (const evt of sseEvents) {
+          events.emit("event", evt);
+          if (parsed.type === "system" && parsed.subtype === "init" && parsed.session_id) {
+            session.sessionId = parsed.session_id;
+          }
+        }
+      } catch {
+        if (line.trim()) {
+          events.emit("event", { type: "message", data: { role: "system", content: line.trim() } });
+        }
+      }
+    });
+  }
+
+  if (child.stderr) {
+    const rl = createInterface({ input: child.stderr });
+    rl.on("line", (line) => {
+      if (line.trim()) {
+        events.emit("event", { type: "error", data: { message: line.trim() } });
+      }
+    });
+  }
+
+  child.on("exit", (code, signal) => {
+    session.status = signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
+    // Emit a final summary message so the user sees closure in the chat
+    const completionMsg = session.status === "completed"
+      ? "Intake complete. Review the estimate worksheets and adjust pricing as needed."
+      : session.status === "stopped"
+        ? "Intake stopped."
+        : `Intake failed (exit code ${code}).`;
+    events.emit("event", { type: "message", data: { role: "assistant", content: completionMsg } });
+    events.emit("event", { type: "status", data: { status: session.status, exitCode: code, signal } });
+    events.emit("done", session.status);
+    setTimeout(() => { sessions.delete(session.projectId); }, 5 * 60 * 1000);
+  });
+
+  child.on("error", (err) => {
+    session.status = "failed";
+    events.emit("event", { type: "error", data: { message: err.message } });
+    events.emit("done", "failed");
+    setTimeout(() => { sessions.delete(session.projectId); }, 5 * 60 * 1000);
+  });
+}
+
+/**
  * Parse CLI output into normalized SSE events
  */
 function parseCliOutput(parsed: any, runtime: AgentRuntime): SSEEventData[] {
@@ -318,6 +417,9 @@ function parseCliOutput(parsed: any, runtime: AgentRuntime): SSEEventData[] {
   }
 }
 
+// Track tool_use start timestamps to compute duration on tool_result
+const toolStartTimes = new Map<string, number>();
+
 function parseClaudeCodeOutput(msg: any): SSEEventData[] {
   const events: SSEEventData[] = [];
 
@@ -328,6 +430,7 @@ function parseClaudeCodeOutput(msg: any): SSEEventData[] {
         if (block.type === "thinking" || block.type === "reasoning") {
           events.push({ type: "thinking", data: { content: block.thinking || block.text } });
         } else if (block.type === "tool_use") {
+          if (block.id) toolStartTimes.set(block.id, Date.now());
           events.push({
             type: "tool_call",
             data: { toolId: block.name, toolUseId: block.id, input: block.input },
@@ -339,18 +442,32 @@ function parseClaudeCodeOutput(msg: any): SSEEventData[] {
     } else if (typeof content === "string") {
       events.push({ type: "message", data: { role: "assistant", content } });
     }
-  } else if (msg.type === "tool") {
-    // Tool result
+  } else if (msg.type === "tool" || msg.type === "tool_result") {
+    // Tool result — compute duration from matched tool_use start time
     const content = msg.content || msg.message?.content;
+    const toolUseId = msg.tool_use_id || msg.message?.tool_use_id;
+    let duration_ms = 0;
+    if (toolUseId && toolStartTimes.has(toolUseId)) {
+      duration_ms = Date.now() - toolStartTimes.get(toolUseId)!;
+      toolStartTimes.delete(toolUseId);
+    } else if (toolStartTimes.size > 0) {
+      // Fallback: match against the most recent unresolved tool start
+      const lastKey = [...toolStartTimes.keys()].pop()!;
+      duration_ms = Date.now() - toolStartTimes.get(lastKey)!;
+      toolStartTimes.delete(lastKey);
+    }
     events.push({
       type: "tool_result",
       data: {
-        toolUseId: msg.tool_use_id || msg.message?.tool_use_id,
+        toolUseId,
         content: typeof content === "string" ? content : JSON.stringify(content),
+        duration_ms,
       },
     });
   } else if (msg.type === "result") {
-    events.push({ type: "status", data: { status: "completed", result: msg.result } });
+    // "result" fires at end of each conversation turn, NOT when the session exits.
+    // Don't emit "completed" here — the child "exit" handler does that.
+    events.push({ type: "progress", data: { phase: "Turn complete", detail: typeof msg.result === "string" ? msg.result.substring(0, 200) : "Processing..." } });
   } else if (msg.type === "system") {
     if (msg.subtype === "init") {
       events.push({ type: "status", data: { status: "running", sessionId: msg.session_id } });
@@ -401,6 +518,7 @@ export async function resumeSession(opts: {
   apiBaseUrl?: string;
   model?: string;
   customCliPath?: string;
+  anthropicApiKey?: string;
 }): Promise<CliSession> {
   const session = sessions.get(opts.projectId);
   const sessionId = session?.sessionId;
@@ -421,32 +539,60 @@ export async function resumeSession(opts: {
 }
 
 async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSession> {
-  const cliCmd = opts.customCliPath || "claude";
-  const args = [
+  const { projectId, projectDir, model, customCliPath, anthropicApiKey } = opts;
+  const runtime: AgentRuntime = "claude-code";
+  const cliCmd = customCliPath || "claude";
+
+  // Build args with --resume to continue the existing session
+  const cliArgs = [
     "--resume", sessionId,
     "--output-format", "stream-json",
+    "--dangerously-skip-permissions",
     "--verbose",
+    "--max-turns", "200",
   ];
-  if (opts.prompt) args.push("-p", opts.prompt);
+  if (opts.prompt) cliArgs.push("-p", opts.prompt);
+  if (model) cliArgs.push("--model", model);
 
-  return spawnSession({
-    ...opts,
-    prompt: opts.prompt || "Continue where you left off.",
-    runtime: "claude-code",
+  const cliEnv: Record<string, string> = {};
+  if (anthropicApiKey) cliEnv.ANTHROPIC_API_KEY = anthropicApiKey;
+
+  const child = spawn(cliCmd, cliArgs, {
+    cwd: projectDir,
+    env: { ...process.env, ...cliEnv },
+    stdio: ["ignore", "pipe", "pipe"],
   });
-}
 
-/**
- * Send a message to a running session
- */
-export function sendMessage(projectId: string, message: string): boolean {
-  const session = sessions.get(projectId);
-  if (!session || session.status !== "running") return false;
+  const events = new EventEmitter();
+  const session: CliSession = {
+    projectId,
+    runtime,
+    process: child,
+    sessionId,
+    status: "running",
+    events,
+    startedAt: new Date().toISOString(),
+    pid: child.pid || 0,
+  };
 
-  // stdin is "ignore" so we can't write to it directly.
-  // For follow-up messages, the session needs to be resumed with --resume
-  // For now, return false — use resumeSession instead
-  return false;
+  sessions.set(projectId, session);
+
+  // Wire up stdout/stderr/exit handlers (shared helper)
+  wireChildProcess(child, session, runtime, events);
+
+  // Update session.json on disk
+  const sessionJsonDir = join(projectDir, ".bidwright");
+  await mkdir(sessionJsonDir, { recursive: true });
+  await writeFile(join(sessionJsonDir, "session.json"), JSON.stringify({
+    pid: child.pid,
+    runtime,
+    sessionId,
+    startedAt: session.startedAt,
+    status: "running",
+    resumed: true,
+  }));
+
+  return session;
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   Minus,
   Palette,
   Plus,
+  Save,
   Send,
   Settings2,
   Type,
@@ -22,7 +23,7 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { Button, Input, Label, Select, Toggle } from "@/components/ui";
-import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl } from "@/lib/api";
+import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -138,10 +139,15 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const [previewLoading, setPreviewLoading] = useState(true);
   const [zoom, setZoom] = useState(100);
   const [downloading, setDownloading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingPrefs, setLoadingPrefs] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [expandedPanels, setExpandedPanels] = useState<Set<string>>(new Set(["template", "sections"]));
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
+  const saveDebounceRef = useRef<ReturnType<typeof setTimeout>>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const loadedRef = useRef(false);
 
   // Debounced preview refresh
   const refreshPreview = useCallback(() => {
@@ -158,16 +164,64 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [options, activeTemplate, refreshPreview]);
 
-  // Reset state when opened
+  // Load saved preferences when opened
   useEffect(() => {
-    if (open) {
-      setOptions(DEFAULT_OPTIONS);
-      setActiveTemplate("standard");
-      setZoom(100);
-      setPreviewLoading(true);
-      setPreviewKey((k) => k + 1);
+    if (!open) {
+      loadedRef.current = false;
+      return;
     }
-  }, [open]);
+    if (loadedRef.current) return;
+    loadedRef.current = true;
+
+    setLoadingPrefs(true);
+    getPdfPreferences(projectId)
+      .then((saved) => {
+        if (saved && Object.keys(saved).length > 0) {
+          const merged = deepMergeOptions(DEFAULT_OPTIONS, saved as Partial<PdfLayoutOptions>);
+          setOptions(merged);
+          if ((saved as any).activeTemplate) setActiveTemplate((saved as any).activeTemplate);
+        } else {
+          setOptions(DEFAULT_OPTIONS);
+          setActiveTemplate("standard");
+        }
+        setDirty(false);
+      })
+      .catch(() => {
+        setOptions(DEFAULT_OPTIONS);
+        setActiveTemplate("standard");
+      })
+      .finally(() => {
+        setLoadingPrefs(false);
+        setZoom(100);
+        setPreviewLoading(true);
+        setPreviewKey((k) => k + 1);
+      });
+  }, [open, projectId]);
+
+  // Auto-save preferences debounced (2s after last change)
+  useEffect(() => {
+    if (!open || !dirty || loadingPrefs) return;
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => {
+      const payload = { ...options, activeTemplate } as Record<string, unknown>;
+      savePdfPreferences(projectId, payload).catch(() => {});
+      setDirty(false);
+    }, 2000);
+    return () => { if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current); };
+  }, [open, dirty, options, activeTemplate, projectId, loadingPrefs]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const payload = { ...options, activeTemplate } as Record<string, unknown>;
+      await savePdfPreferences(projectId, payload);
+      setDirty(false);
+    } catch (e) {
+      console.error("Save PDF preferences failed:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const previewUrl = useMemo(() => {
     const templateType = activeTemplate === "client" ? "main" : activeTemplate === "standard" ? "main" : activeTemplate;
@@ -177,6 +231,10 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const handleDownload = async () => {
     setDownloading(true);
     try {
+      // Save preferences before downloading
+      const payload = { ...options, activeTemplate } as Record<string, unknown>;
+      savePdfPreferences(projectId, payload).catch(() => {});
+
       const templateType = activeTemplate === "client" ? "main" : activeTemplate === "standard" ? "main" : activeTemplate;
       const blobUrl = await fetchQuotePdfBlobUrl(projectId, templateType, options as unknown as Record<string, unknown>);
       const a = document.createElement("a");
@@ -191,29 +249,35 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     }
   };
 
-  // Option updaters
+  // Option updaters — all mark dirty
   const updateSections = (key: string, value: boolean) => {
     setOptions((prev) => ({ ...prev, sections: { ...prev.sections, [key]: value } }));
+    setDirty(true);
   };
 
   const updateLineItemOptions = <K extends keyof PdfLayoutOptions["lineItemOptions"]>(key: K, value: PdfLayoutOptions["lineItemOptions"][K]) => {
     setOptions((prev) => ({ ...prev, lineItemOptions: { ...prev.lineItemOptions, [key]: value } }));
+    setDirty(true);
   };
 
   const updateBranding = <K extends keyof PdfLayoutOptions["branding"]>(key: K, value: PdfLayoutOptions["branding"][K]) => {
     setOptions((prev) => ({ ...prev, branding: { ...prev.branding, [key]: value } }));
+    setDirty(true);
   };
 
   const updatePageSetup = <K extends keyof PdfLayoutOptions["pageSetup"]>(key: K, value: PdfLayoutOptions["pageSetup"][K]) => {
     setOptions((prev) => ({ ...prev, pageSetup: { ...prev.pageSetup, [key]: value } }));
+    setDirty(true);
   };
 
   const updateCoverPage = <K extends keyof PdfLayoutOptions["coverPageOptions"]>(key: K, value: PdfLayoutOptions["coverPageOptions"][K]) => {
     setOptions((prev) => ({ ...prev, coverPageOptions: { ...prev.coverPageOptions, [key]: value } }));
+    setDirty(true);
   };
 
   const updateHeaderFooter = <K extends keyof PdfLayoutOptions["headerFooter"]>(key: K, value: PdfLayoutOptions["headerFooter"][K]) => {
     setOptions((prev) => ({ ...prev, headerFooter: { ...prev.headerFooter, [key]: value } }));
+    setDirty(true);
   };
 
   // Section reordering
@@ -227,6 +291,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       [order[idx], order[target]] = [order[target], order[idx]];
       return { ...prev, sectionOrder: order };
     });
+    setDirty(true);
   };
 
   // Custom section management
@@ -238,6 +303,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
         { id: `custom-${Date.now()}`, title: "New Section", content: "", order: prev.customSections.length },
       ],
     }));
+    setDirty(true);
   };
 
   const updateCustomSection = (id: string, field: "title" | "content", value: string) => {
@@ -245,6 +311,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       ...prev,
       customSections: prev.customSections.map((s) => (s.id === id ? { ...s, [field]: value } : s)),
     }));
+    setDirty(true);
   };
 
   const removeCustomSection = (id: string) => {
@@ -252,6 +319,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       ...prev,
       customSections: prev.customSections.filter((s) => s.id !== id),
     }));
+    setDirty(true);
   };
 
   const togglePanel = (panel: string) => {
@@ -275,6 +343,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   // Template presets
   const applyTemplate = (templateId: string) => {
     setActiveTemplate(templateId);
+    setDirty(true);
     switch (templateId) {
       case "summary":
         setOptions((prev) => ({
@@ -375,358 +444,385 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                 </button>
               </div>
 
-              {/* Sidebar content (scrollable) */}
-              <div className="flex-1 overflow-y-auto">
-                {/* Template picker */}
-                <SidebarPanel
-                  title="Template"
-                  icon={<FileText className="h-3.5 w-3.5" />}
-                  expanded={expandedPanels.has("template")}
-                  onToggle={() => togglePanel("template")}
-                >
-                  <div className="grid grid-cols-2 gap-2">
-                    {TEMPLATES.map((t) => (
+              {loadingPrefs ? (
+                <div className="flex flex-1 items-center justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin text-fg/30" />
+                  <span className="ml-2 text-xs text-fg/40">Loading preferences...</span>
+                </div>
+              ) : (
+                <>
+                  {/* Sidebar content (scrollable) */}
+                  <div className="flex-1 overflow-y-auto">
+                    {/* Template picker */}
+                    <SidebarPanel
+                      title="Template"
+                      icon={<FileText className="h-3.5 w-3.5" />}
+                      expanded={expandedPanels.has("template")}
+                      onToggle={() => togglePanel("template")}
+                    >
+                      <div className="grid grid-cols-2 gap-2">
+                        {TEMPLATES.map((t) => (
+                          <button
+                            key={t.id}
+                            onClick={() => applyTemplate(t.id)}
+                            className={cn(
+                              "rounded-lg border p-2.5 text-left transition-all",
+                              activeTemplate === t.id
+                                ? "border-accent bg-accent/5 ring-1 ring-accent/20"
+                                : "border-line hover:border-fg/20 hover:bg-panel2/50"
+                            )}
+                          >
+                            <div className="text-xs font-medium">{t.label}</div>
+                            <div className="mt-0.5 text-[10px] text-fg/40 leading-tight">{t.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    </SidebarPanel>
+
+                    {/* Page Setup */}
+                    <SidebarPanel
+                      title="Page Setup"
+                      icon={<Settings2 className="h-3.5 w-3.5" />}
+                      expanded={expandedPanels.has("pageSetup")}
+                      onToggle={() => togglePanel("pageSetup")}
+                    >
+                      <div className="space-y-3">
+                        <div>
+                          <Label className="text-[10px] uppercase text-fg/40">Orientation</Label>
+                          <div className="mt-1 flex gap-2">
+                            {(["portrait", "landscape"] as const).map((o) => (
+                              <button
+                                key={o}
+                                onClick={() => updatePageSetup("orientation", o)}
+                                className={cn(
+                                  "flex-1 rounded-md border px-3 py-1.5 text-xs capitalize transition-all",
+                                  options.pageSetup.orientation === o
+                                    ? "border-accent bg-accent/5 text-accent"
+                                    : "border-line text-fg/60 hover:border-fg/20"
+                                )}
+                              >
+                                {o}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] uppercase text-fg/40">Page Size</Label>
+                          <Select
+                            className="mt-1"
+                            value={options.pageSetup.pageSize}
+                            onChange={(e) => updatePageSetup("pageSize", e.target.value as "letter" | "a4" | "legal")}
+                          >
+                            <option value="letter">Letter (8.5 x 11)</option>
+                            <option value="a4">A4 (210 x 297mm)</option>
+                            <option value="legal">Legal (8.5 x 14)</option>
+                          </Select>
+                        </div>
+                      </div>
+                    </SidebarPanel>
+
+                    {/* Sections */}
+                    <SidebarPanel
+                      title="Sections"
+                      icon={<ClipboardIcon className="h-3.5 w-3.5" />}
+                      expanded={expandedPanels.has("sections")}
+                      onToggle={() => togglePanel("sections")}
+                    >
+                      <div className="space-y-0.5">
+                        {options.sectionOrder.map((key, idx) => {
+                          const label = SECTION_LABELS[key];
+                          if (!label) return null;
+                          const enabled = options.sections[key as keyof typeof options.sections];
+                          const hasSubOptions = key === "lineItems" || key === "coverPage";
+                          const isExpanded = expandedSections.has(key);
+
+                          return (
+                            <div key={key} className="group">
+                              <div className={cn(
+                                "flex items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors",
+                                enabled ? "bg-transparent" : "opacity-50"
+                              )}>
+                                {/* Reorder buttons */}
+                                <div className="flex flex-col gap-0">
+                                  <button
+                                    onClick={() => moveSection(key, "up")}
+                                    disabled={idx === 0}
+                                    className="text-fg/20 hover:text-fg/60 disabled:opacity-0 p-0 leading-none"
+                                  >
+                                    <ArrowUp className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => moveSection(key, "down")}
+                                    disabled={idx === options.sectionOrder.length - 1}
+                                    className="text-fg/20 hover:text-fg/60 disabled:opacity-0 p-0 leading-none"
+                                  >
+                                    <ArrowDown className="h-2.5 w-2.5" />
+                                  </button>
+                                </div>
+
+                                {/* Expand arrow for sub-options */}
+                                {hasSubOptions ? (
+                                  <button onClick={() => toggleSectionExpand(key)} className="text-fg/30 hover:text-fg/60">
+                                    {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                  </button>
+                                ) : (
+                                  <div className="w-3" />
+                                )}
+
+                                <span className="flex-1 text-xs text-fg/70">{label}</span>
+                                <Toggle
+                                  checked={enabled}
+                                  onChange={(v) => updateSections(key, v)}
+                                />
+                              </div>
+
+                              {/* Sub-options */}
+                              {hasSubOptions && isExpanded && enabled && (
+                                <div className="ml-8 mb-2 space-y-2 border-l-2 border-line pl-3 pt-1">
+                                  {key === "lineItems" && (
+                                    <>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[11px] text-fg/50">Show Cost Column</span>
+                                        <Toggle
+                                          checked={options.lineItemOptions.showCostColumn}
+                                          onChange={(v) => updateLineItemOptions("showCostColumn", v)}
+                                        />
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[11px] text-fg/50">Show Markup Column</span>
+                                        <Toggle
+                                          checked={options.lineItemOptions.showMarkupColumn}
+                                          onChange={(v) => updateLineItemOptions("showMarkupColumn", v)}
+                                        />
+                                      </div>
+                                      <div>
+                                        <span className="text-[11px] text-fg/50">Group By</span>
+                                        <Select
+                                          className="mt-1 h-7 text-xs"
+                                          value={options.lineItemOptions.groupBy}
+                                          onChange={(e) => updateLineItemOptions("groupBy", e.target.value as "none" | "phase" | "worksheet")}
+                                        >
+                                          <option value="none">No Grouping</option>
+                                          <option value="phase">By Phase</option>
+                                          <option value="worksheet">By Worksheet</option>
+                                        </Select>
+                                      </div>
+                                    </>
+                                  )}
+                                  {key === "coverPage" && (
+                                    <>
+                                      <div>
+                                        <Label className="text-[10px] text-fg/40">Company Name</Label>
+                                        <Input
+                                          className="mt-0.5 h-7 text-xs"
+                                          value={options.coverPageOptions.companyName}
+                                          onChange={(e) => updateCoverPage("companyName", e.target.value)}
+                                          placeholder="Your Company"
+                                        />
+                                      </div>
+                                      <div>
+                                        <Label className="text-[10px] text-fg/40">Tagline</Label>
+                                        <Input
+                                          className="mt-0.5 h-7 text-xs"
+                                          value={options.coverPageOptions.tagline}
+                                          onChange={(e) => updateCoverPage("tagline", e.target.value)}
+                                          placeholder="Quality work, every time"
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Custom sections */}
+                      {options.customSections.length > 0 && (
+                        <div className="mt-3 border-t border-line pt-3">
+                          <div className="text-[10px] font-medium uppercase text-fg/30 mb-2">Custom Sections</div>
+                          {options.customSections.map((cs) => (
+                            <div key={cs.id} className="mb-2 rounded-md border border-line p-2">
+                              <div className="flex items-center gap-2 mb-1.5">
+                                <Input
+                                  className="h-6 flex-1 text-xs"
+                                  value={cs.title}
+                                  onChange={(e) => updateCustomSection(cs.id, "title", e.target.value)}
+                                  placeholder="Section title"
+                                />
+                                <button
+                                  onClick={() => removeCustomSection(cs.id)}
+                                  className="text-fg/30 hover:text-danger transition-colors"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                              <textarea
+                                className="w-full rounded-md border border-line bg-transparent px-2 py-1.5 text-xs text-fg/70 resize-none focus:border-accent focus:outline-none"
+                                rows={3}
+                                value={cs.content}
+                                onChange={(e) => updateCustomSection(cs.id, "content", e.target.value)}
+                                placeholder="Section content..."
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <button
-                        key={t.id}
-                        onClick={() => applyTemplate(t.id)}
-                        className={cn(
-                          "rounded-lg border p-2.5 text-left transition-all",
-                          activeTemplate === t.id
-                            ? "border-accent bg-accent/5 ring-1 ring-accent/20"
-                            : "border-line hover:border-fg/20 hover:bg-panel2/50"
-                        )}
+                        onClick={addCustomSection}
+                        className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-line px-3 py-2 text-xs text-fg/40 hover:border-fg/30 hover:text-fg/60 transition-colors"
                       >
-                        <div className="text-xs font-medium">{t.label}</div>
-                        <div className="mt-0.5 text-[10px] text-fg/40 leading-tight">{t.description}</div>
+                        <Plus className="h-3 w-3" /> Add Custom Section
                       </button>
-                    ))}
-                  </div>
-                </SidebarPanel>
+                    </SidebarPanel>
 
-                {/* Page Setup */}
-                <SidebarPanel
-                  title="Page Setup"
-                  icon={<Settings2 className="h-3.5 w-3.5" />}
-                  expanded={expandedPanels.has("pageSetup")}
-                  onToggle={() => togglePanel("pageSetup")}
-                >
-                  <div className="space-y-3">
-                    <div>
-                      <Label className="text-[10px] uppercase text-fg/40">Orientation</Label>
-                      <div className="mt-1 flex gap-2">
-                        {(["portrait", "landscape"] as const).map((o) => (
-                          <button
-                            key={o}
-                            onClick={() => updatePageSetup("orientation", o)}
-                            className={cn(
-                              "flex-1 rounded-md border px-3 py-1.5 text-xs capitalize transition-all",
-                              options.pageSetup.orientation === o
-                                ? "border-accent bg-accent/5 text-accent"
-                                : "border-line text-fg/60 hover:border-fg/20"
-                            )}
-                          >
-                            {o}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-fg/40">Page Size</Label>
-                      <Select
-                        className="mt-1"
-                        value={options.pageSetup.pageSize}
-                        onChange={(e) => updatePageSetup("pageSize", e.target.value as "letter" | "a4" | "legal")}
-                      >
-                        <option value="letter">Letter (8.5 x 11)</option>
-                        <option value="a4">A4 (210 x 297mm)</option>
-                        <option value="legal">Legal (8.5 x 14)</option>
-                      </Select>
-                    </div>
-                  </div>
-                </SidebarPanel>
-
-                {/* Sections */}
-                <SidebarPanel
-                  title="Sections"
-                  icon={<ClipboardIcon className="h-3.5 w-3.5" />}
-                  expanded={expandedPanels.has("sections")}
-                  onToggle={() => togglePanel("sections")}
-                >
-                  <div className="space-y-0.5">
-                    {options.sectionOrder.map((key, idx) => {
-                      const label = SECTION_LABELS[key];
-                      if (!label) return null;
-                      const enabled = options.sections[key as keyof typeof options.sections];
-                      const hasSubOptions = key === "lineItems" || key === "coverPage";
-                      const isExpanded = expandedSections.has(key);
-
-                      return (
-                        <div key={key} className="group">
-                          <div className={cn(
-                            "flex items-center gap-1.5 rounded-md px-2 py-1.5 transition-colors",
-                            enabled ? "bg-transparent" : "opacity-50"
-                          )}>
-                            {/* Reorder buttons */}
-                            <div className="flex flex-col gap-0">
-                              <button
-                                onClick={() => moveSection(key, "up")}
-                                disabled={idx === 0}
-                                className="text-fg/20 hover:text-fg/60 disabled:opacity-0 p-0 leading-none"
-                              >
-                                <ArrowUp className="h-2.5 w-2.5" />
-                              </button>
-                              <button
-                                onClick={() => moveSection(key, "down")}
-                                disabled={idx === options.sectionOrder.length - 1}
-                                className="text-fg/20 hover:text-fg/60 disabled:opacity-0 p-0 leading-none"
-                              >
-                                <ArrowDown className="h-2.5 w-2.5" />
-                              </button>
-                            </div>
-
-                            {/* Expand arrow for sub-options */}
-                            {hasSubOptions ? (
-                              <button onClick={() => toggleSectionExpand(key)} className="text-fg/30 hover:text-fg/60">
-                                {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              </button>
-                            ) : (
-                              <div className="w-3" />
-                            )}
-
-                            <span className="flex-1 text-xs text-fg/70">{label}</span>
-                            <Toggle
-                              checked={enabled}
-                              onChange={(v) => updateSections(key, v)}
+                    {/* Branding */}
+                    <SidebarPanel
+                      title="Branding"
+                      icon={<Palette className="h-3.5 w-3.5" />}
+                      expanded={expandedPanels.has("branding")}
+                      onToggle={() => togglePanel("branding")}
+                    >
+                      <div className="space-y-3">
+                        <div>
+                          <Label className="text-[10px] uppercase text-fg/40">Accent Color</Label>
+                          <div className="mt-1 flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={options.branding.accentColor}
+                              onChange={(e) => updateBranding("accentColor", e.target.value)}
+                              className="h-8 w-8 cursor-pointer rounded border border-line"
                             />
-                          </div>
-
-                          {/* Sub-options */}
-                          {hasSubOptions && isExpanded && enabled && (
-                            <div className="ml-8 mb-2 space-y-2 border-l-2 border-line pl-3 pt-1">
-                              {key === "lineItems" && (
-                                <>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[11px] text-fg/50">Show Cost Column</span>
-                                    <Toggle
-                                      checked={options.lineItemOptions.showCostColumn}
-                                      onChange={(v) => updateLineItemOptions("showCostColumn", v)}
-                                    />
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <span className="text-[11px] text-fg/50">Show Markup Column</span>
-                                    <Toggle
-                                      checked={options.lineItemOptions.showMarkupColumn}
-                                      onChange={(v) => updateLineItemOptions("showMarkupColumn", v)}
-                                    />
-                                  </div>
-                                  <div>
-                                    <span className="text-[11px] text-fg/50">Group By</span>
-                                    <Select
-                                      className="mt-1 h-7 text-xs"
-                                      value={options.lineItemOptions.groupBy}
-                                      onChange={(e) => updateLineItemOptions("groupBy", e.target.value as "none" | "phase" | "worksheet")}
-                                    >
-                                      <option value="none">No Grouping</option>
-                                      <option value="phase">By Phase</option>
-                                      <option value="worksheet">By Worksheet</option>
-                                    </Select>
-                                  </div>
-                                </>
-                              )}
-                              {key === "coverPage" && (
-                                <>
-                                  <div>
-                                    <Label className="text-[10px] text-fg/40">Company Name</Label>
-                                    <Input
-                                      className="mt-0.5 h-7 text-xs"
-                                      value={options.coverPageOptions.companyName}
-                                      onChange={(e) => updateCoverPage("companyName", e.target.value)}
-                                      placeholder="Your Company"
-                                    />
-                                  </div>
-                                  <div>
-                                    <Label className="text-[10px] text-fg/40">Tagline</Label>
-                                    <Input
-                                      className="mt-0.5 h-7 text-xs"
-                                      value={options.coverPageOptions.tagline}
-                                      onChange={(e) => updateCoverPage("tagline", e.target.value)}
-                                      placeholder="Quality work, every time"
-                                    />
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Custom sections */}
-                  {options.customSections.length > 0 && (
-                    <div className="mt-3 border-t border-line pt-3">
-                      <div className="text-[10px] font-medium uppercase text-fg/30 mb-2">Custom Sections</div>
-                      {options.customSections.map((cs) => (
-                        <div key={cs.id} className="mb-2 rounded-md border border-line p-2">
-                          <div className="flex items-center gap-2 mb-1.5">
                             <Input
-                              className="h-6 flex-1 text-xs"
-                              value={cs.title}
-                              onChange={(e) => updateCustomSection(cs.id, "title", e.target.value)}
-                              placeholder="Section title"
+                              className="h-7 flex-1 text-xs font-mono"
+                              value={options.branding.accentColor}
+                              onChange={(e) => updateBranding("accentColor", e.target.value)}
                             />
-                            <button
-                              onClick={() => removeCustomSection(cs.id)}
-                              className="text-fg/30 hover:text-danger transition-colors"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
                           </div>
-                          <textarea
-                            className="w-full rounded-md border border-line bg-transparent px-2 py-1.5 text-xs text-fg/70 resize-none focus:border-accent focus:outline-none"
-                            rows={3}
-                            value={cs.content}
-                            onChange={(e) => updateCustomSection(cs.id, "content", e.target.value)}
-                            placeholder="Section content..."
-                          />
                         </div>
-                      ))}
-                    </div>
-                  )}
-                  <button
-                    onClick={addCustomSection}
-                    className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-line px-3 py-2 text-xs text-fg/40 hover:border-fg/30 hover:text-fg/60 transition-colors"
-                  >
-                    <Plus className="h-3 w-3" /> Add Custom Section
-                  </button>
-                </SidebarPanel>
+                        <div>
+                          <Label className="text-[10px] uppercase text-fg/40">Header Background</Label>
+                          <div className="mt-1 flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={options.branding.headerBgColor}
+                              onChange={(e) => updateBranding("headerBgColor", e.target.value)}
+                              className="h-8 w-8 cursor-pointer rounded border border-line"
+                            />
+                            <Input
+                              className="h-7 flex-1 text-xs font-mono"
+                              value={options.branding.headerBgColor}
+                              onChange={(e) => updateBranding("headerBgColor", e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] uppercase text-fg/40">Font</Label>
+                          <div className="mt-1 flex gap-2">
+                            {(["sans", "serif", "mono"] as const).map((f) => (
+                              <button
+                                key={f}
+                                onClick={() => updateBranding("fontFamily", f)}
+                                className={cn(
+                                  "flex-1 rounded-md border px-2 py-1.5 text-xs capitalize transition-all",
+                                  f === "serif" && "font-serif",
+                                  f === "mono" && "font-mono",
+                                  options.branding.fontFamily === f
+                                    ? "border-accent bg-accent/5 text-accent"
+                                    : "border-line text-fg/60 hover:border-fg/20"
+                                )}
+                              >
+                                {f === "sans" ? "Sans Serif" : f === "serif" ? "Serif" : "Monospace"}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </SidebarPanel>
 
-                {/* Branding */}
-                <SidebarPanel
-                  title="Branding"
-                  icon={<Palette className="h-3.5 w-3.5" />}
-                  expanded={expandedPanels.has("branding")}
-                  onToggle={() => togglePanel("branding")}
-                >
-                  <div className="space-y-3">
-                    <div>
-                      <Label className="text-[10px] uppercase text-fg/40">Accent Color</Label>
-                      <div className="mt-1 flex items-center gap-2">
-                        <input
-                          type="color"
-                          value={options.branding.accentColor}
-                          onChange={(e) => updateBranding("accentColor", e.target.value)}
-                          className="h-8 w-8 cursor-pointer rounded border border-line"
-                        />
-                        <Input
-                          className="h-7 flex-1 text-xs font-mono"
-                          value={options.branding.accentColor}
-                          onChange={(e) => updateBranding("accentColor", e.target.value)}
-                        />
+                    {/* Header & Footer */}
+                    <SidebarPanel
+                      title="Header & Footer"
+                      icon={<Type className="h-3.5 w-3.5" />}
+                      expanded={expandedPanels.has("headerFooter")}
+                      onToggle={() => togglePanel("headerFooter")}
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-fg/60">Show Header</span>
+                          <Toggle checked={options.headerFooter.showHeader} onChange={(v) => updateHeaderFooter("showHeader", v)} />
+                        </div>
+                        {options.headerFooter.showHeader && (
+                          <div>
+                            <Label className="text-[10px] text-fg/40">Header Text</Label>
+                            <Input
+                              className="mt-0.5 h-7 text-xs"
+                              value={options.headerFooter.headerText}
+                              onChange={(e) => updateHeaderFooter("headerText", e.target.value)}
+                              placeholder="Company name or quote ref"
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-fg/60">Show Footer</span>
+                          <Toggle checked={options.headerFooter.showFooter} onChange={(v) => updateHeaderFooter("showFooter", v)} />
+                        </div>
+                        {options.headerFooter.showFooter && (
+                          <div>
+                            <Label className="text-[10px] text-fg/40">Footer Text</Label>
+                            <Input
+                              className="mt-0.5 h-7 text-xs"
+                              value={options.headerFooter.footerText}
+                              onChange={(e) => updateHeaderFooter("footerText", e.target.value)}
+                              placeholder="Confidential / proprietary"
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-fg/60">Page Numbers</span>
+                          <Toggle checked={options.headerFooter.showPageNumbers} onChange={(v) => updateHeaderFooter("showPageNumbers", v)} />
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-fg/40">Header Background</Label>
-                      <div className="mt-1 flex items-center gap-2">
-                        <input
-                          type="color"
-                          value={options.branding.headerBgColor}
-                          onChange={(e) => updateBranding("headerBgColor", e.target.value)}
-                          className="h-8 w-8 cursor-pointer rounded border border-line"
-                        />
-                        <Input
-                          className="h-7 flex-1 text-xs font-mono"
-                          value={options.branding.headerBgColor}
-                          onChange={(e) => updateBranding("headerBgColor", e.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-fg/40">Font</Label>
-                      <div className="mt-1 flex gap-2">
-                        {(["sans", "serif", "mono"] as const).map((f) => (
-                          <button
-                            key={f}
-                            onClick={() => updateBranding("fontFamily", f)}
-                            className={cn(
-                              "flex-1 rounded-md border px-2 py-1.5 text-xs capitalize transition-all",
-                              f === "serif" && "font-serif",
-                              f === "mono" && "font-mono",
-                              options.branding.fontFamily === f
-                                ? "border-accent bg-accent/5 text-accent"
-                                : "border-line text-fg/60 hover:border-fg/20"
-                            )}
-                          >
-                            {f === "sans" ? "Sans Serif" : f === "serif" ? "Serif" : "Monospace"}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    </SidebarPanel>
                   </div>
-                </SidebarPanel>
 
-                {/* Header & Footer */}
-                <SidebarPanel
-                  title="Header & Footer"
-                  icon={<Type className="h-3.5 w-3.5" />}
-                  expanded={expandedPanels.has("headerFooter")}
-                  onToggle={() => togglePanel("headerFooter")}
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-fg/60">Show Header</span>
-                      <Toggle checked={options.headerFooter.showHeader} onChange={(v) => updateHeaderFooter("showHeader", v)} />
+                  {/* Sidebar footer */}
+                  <div className="border-t border-line p-3 space-y-2">
+                    <div className="flex gap-2">
+                      <Button
+                        variant="accent"
+                        size="sm"
+                        className="flex-1"
+                        onClick={handleDownload}
+                        disabled={downloading}
+                      >
+                        {downloading ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating...</>
+                        ) : (
+                          <><Download className="h-3.5 w-3.5" /> Download PDF</>
+                        )}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleSave}
+                        disabled={saving || !dirty}
+                        title="Save PDF preferences for this quote"
+                      >
+                        {saving ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
                     </div>
-                    {options.headerFooter.showHeader && (
-                      <div>
-                        <Label className="text-[10px] text-fg/40">Header Text</Label>
-                        <Input
-                          className="mt-0.5 h-7 text-xs"
-                          value={options.headerFooter.headerText}
-                          onChange={(e) => updateHeaderFooter("headerText", e.target.value)}
-                          placeholder="Company name or quote ref"
-                        />
-                      </div>
+                    {dirty && (
+                      <div className="text-[10px] text-fg/30 text-center">Unsaved changes (auto-saves in 2s)</div>
                     )}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-fg/60">Show Footer</span>
-                      <Toggle checked={options.headerFooter.showFooter} onChange={(v) => updateHeaderFooter("showFooter", v)} />
-                    </div>
-                    {options.headerFooter.showFooter && (
-                      <div>
-                        <Label className="text-[10px] text-fg/40">Footer Text</Label>
-                        <Input
-                          className="mt-0.5 h-7 text-xs"
-                          value={options.headerFooter.footerText}
-                          onChange={(e) => updateHeaderFooter("footerText", e.target.value)}
-                          placeholder="Confidential / proprietary"
-                        />
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-fg/60">Page Numbers</span>
-                      <Toggle checked={options.headerFooter.showPageNumbers} onChange={(v) => updateHeaderFooter("showPageNumbers", v)} />
-                    </div>
                   </div>
-                </SidebarPanel>
-              </div>
-
-              {/* Sidebar footer */}
-              <div className="border-t border-line p-3 space-y-2">
-                <Button
-                  variant="accent"
-                  size="sm"
-                  className="w-full"
-                  onClick={handleDownload}
-                  disabled={downloading}
-                >
-                  {downloading ? (
-                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating...</>
-                  ) : (
-                    <><Download className="h-3.5 w-3.5" /> Download PDF</>
-                  )}
-                </Button>
-              </div>
+                </>
+              )}
             </div>
 
             {/* ─── Right Preview Panel ─── */}
@@ -791,6 +887,22 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       )}
     </AnimatePresence>
   );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────
+
+function deepMergeOptions(base: PdfLayoutOptions, overrides: Partial<PdfLayoutOptions>): PdfLayoutOptions {
+  const result = { ...base };
+  for (const key of Object.keys(overrides) as (keyof PdfLayoutOptions)[]) {
+    const val = overrides[key];
+    if (val === undefined) continue;
+    if (typeof val === "object" && !Array.isArray(val) && val !== null) {
+      (result as any)[key] = { ...(base[key] as any), ...(val as any) };
+    } else {
+      (result as any)[key] = val;
+    }
+  }
+  return result;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────

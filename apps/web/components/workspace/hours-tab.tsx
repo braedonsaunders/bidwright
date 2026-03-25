@@ -54,22 +54,22 @@ export function HoursTab({ workspace }: HoursTabProps) {
 
     const existing = keyedRows.get(key);
     if (existing) {
-      existing.regHours += item.laborHourReg;
-      existing.overHours += item.laborHourOver;
-      existing.doubleHours += item.laborHourDouble;
+      existing.regHours += item.unit1;
+      existing.overHours += item.unit2;
+      existing.doubleHours += item.unit3;
       existing.totalHours +=
-        item.laborHourReg + item.laborHourOver + item.laborHourDouble;
+        item.unit1 + item.unit2 + item.unit3;
     } else {
       const phase = phaseId ? phaseMap.get(phaseId) : null;
       keyedRows.set(key, {
         phaseId,
         phaseName: phase ? `${phase.number} - ${phase.name}` : "",
         entityName: item.entityName,
-        regHours: item.laborHourReg,
-        overHours: item.laborHourOver,
-        doubleHours: item.laborHourDouble,
+        regHours: item.unit1,
+        overHours: item.unit2,
+        doubleHours: item.unit3,
         totalHours:
-          item.laborHourReg + item.laborHourOver + item.laborHourDouble,
+          item.unit1 + item.unit2 + item.unit3,
       });
     }
   }
@@ -105,7 +105,7 @@ export function HoursTab({ workspace }: HoursTabProps) {
       <CardBody className="p-0">
         {allRows.length === 0 ? (
           <div className="px-5 py-8 text-center text-sm text-fg/40">
-            No labour hours recorded.
+            No unit quantities recorded.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -113,11 +113,11 @@ export function HoursTab({ workspace }: HoursTabProps) {
               <thead>
                 <tr className="border-b border-line text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">
                   {hasPhases && <th className="px-5 py-2.5">Phase</th>}
-                  <th className="px-5 py-2.5">Labour Type</th>
-                  <th className="px-5 py-2.5 text-right">Regular Hours</th>
-                  <th className="px-5 py-2.5 text-right">Overtime Hours</th>
-                  <th className="px-5 py-2.5 text-right">Double-Time Hours</th>
-                  <th className="px-5 py-2.5 text-right">Total Hours</th>
+                  <th className="px-5 py-2.5">Entity</th>
+                  <th className="px-5 py-2.5 text-right">Unit 1</th>
+                  <th className="px-5 py-2.5 text-right">Unit 2</th>
+                  <th className="px-5 py-2.5 text-right">Unit 3</th>
+                  <th className="px-5 py-2.5 text-right">Total</th>
                 </tr>
               </thead>
               <tbody>

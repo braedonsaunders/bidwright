@@ -161,9 +161,9 @@ export interface WorkspaceWorksheetItem {
   cost: number;
   markup: number;
   price: number;
-  laborHourReg: number;
-  laborHourOver: number;
-  laborHourDouble: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -251,6 +251,49 @@ export interface AdditionalLineItem {
   description: string;
   type: "OptionStandalone" | "OptionAdditional" | "LineItemAdditional" | "LineItemStandalone" | "CustomTotal";
   amount: number;
+}
+
+export type SummaryRowType = "auto_category" | "auto_phase" | "manual" | "modifier" | "subtotal" | "separator";
+export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
+export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
+
+export interface SummaryRowData {
+  id: string;
+  revisionId: string;
+  type: SummaryRowType;
+  label: string;
+  order: number;
+  visible: boolean;
+  style: SummaryRowStyle;
+  sourceCategory?: string | null;
+  sourcePhase?: string | null;
+  manualValue?: number | null;
+  manualCost?: number | null;
+  overrideValue?: number | null;
+  overrideCost?: number | null;
+  modifierPercent?: number | null;
+  modifierAmount?: number | null;
+  appliesTo: string[];
+  computedValue: number;
+  computedCost: number;
+  computedMargin: number;
+}
+
+export interface SummaryRowInput {
+  type?: SummaryRowType;
+  label?: string;
+  order?: number;
+  visible?: boolean;
+  style?: SummaryRowStyle;
+  sourceCategory?: string | null;
+  sourcePhase?: string | null;
+  manualValue?: number | null;
+  manualCost?: number | null;
+  overrideValue?: number | null;
+  overrideCost?: number | null;
+  modifierPercent?: number | null;
+  modifierAmount?: number | null;
+  appliesTo?: string[];
 }
 
 export interface Activity {
@@ -413,6 +456,7 @@ export interface ProjectWorkspaceData {
   modifiers: ProjectModifier[];
   conditions: ProjectCondition[];
   additionalLineItems: AdditionalLineItem[];
+  summaryRows: SummaryRowData[];
   rateSchedules: RateSchedule[];
   catalogs: CatalogSummary[];
   aiRuns: AiRun[];
@@ -506,14 +550,14 @@ export interface EntityCategory {
     cost: boolean;
     markup: boolean;
     price: boolean;
-    laborHourReg: boolean;
-    laborHourOver: boolean;
-    laborHourDouble: boolean;
+    unit1: boolean;
+    unit2: boolean;
+    unit3: boolean;
   };
-  laborHourLabels: {
-    reg: string;
-    over: string;
-    double: string;
+  unitLabels: {
+    unit1: string;
+    unit2: string;
+    unit3: string;
   };
   calculationType: CalculationType;
   calcFormula: string;
@@ -863,9 +907,9 @@ export interface WorksheetItemPatchInput {
   cost?: number;
   markup?: number;
   price?: number;
-  laborHourReg?: number;
-  laborHourOver?: number;
-  laborHourDouble?: number;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -884,9 +928,9 @@ export interface CreateWorksheetItemInput {
   cost: number;
   markup: number;
   price: number;
-  laborHourReg: number;
-  laborHourOver: number;
-  laborHourDouble: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1210,6 +1254,7 @@ export async function getConditionLibrary() {
 export async function createConditionLibraryEntry(input: { type: string; value: string }) {
   return apiRequest<ConditionLibraryEntry>("/conditions/library", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
 }
@@ -1305,6 +1350,52 @@ export async function updateAdditionalLineItem(projectId: string, aliId: string,
 export async function deleteAdditionalLineItem(projectId: string, aliId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/ali/${aliId}`, {
     method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Summary Rows
+// ---------------------------------------------------------------------------
+
+export async function listSummaryRows(projectId: string) {
+  return apiRequest<SummaryRowData[]>(`/projects/${projectId}/summary-rows`);
+}
+
+export async function createSummaryRow(projectId: string, input: SummaryRowInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-rows`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateSummaryRow(projectId: string, rowId: string, patch: SummaryRowInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-rows/${rowId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteSummaryRow(projectId: string, rowId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-rows/${rowId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function reorderSummaryRows(projectId: string, orderedIds: string[]) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-rows/reorder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderedIds }),
+  });
+}
+
+export async function applySummaryPreset(projectId: string, preset: SummaryPreset) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-rows/apply-preset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ preset }),
   });
 }
 
@@ -1579,6 +1670,7 @@ export interface PackageIngestInput {
   projectId?: string;
   packageName?: string;
   clientName?: string;
+  customerId?: string;
   location?: string;
   dueDate?: string;
   scope?: string;
@@ -1612,6 +1704,23 @@ export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "ma
   if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+// ---------------------------------------------------------------------------
+// PDF Preferences (per-quote persistence)
+// ---------------------------------------------------------------------------
+
+export async function getPdfPreferences(projectId: string): Promise<Record<string, unknown>> {
+  const data = await apiRequest<{ pdfPreferences: Record<string, unknown> }>(`/projects/${projectId}/pdf-preferences`);
+  return data.pdfPreferences ?? {};
+}
+
+export async function savePdfPreferences(projectId: string, preferences: Record<string, unknown>): Promise<void> {
+  await apiRequest(`/projects/${projectId}/pdf-preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preferences),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1726,6 +1835,7 @@ export async function submitPackageIngest(input: PackageIngestInput) {
     formData.append("projectName", input.packageName); // Also set project name from package name
   }
   if (input.clientName) formData.append("clientName", input.clientName);
+  if (input.customerId) formData.append("customerId", input.customerId);
   if (input.location) formData.append("location", input.location);
   if (input.dueDate) formData.append("dueDate", input.dueDate);
   if (input.scope) formData.append("scope", input.scope);
@@ -2206,6 +2316,7 @@ export interface AppSettingsRecord {
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string };
   brand: BrandProfile;
+  termsAndConditions?: string;
 }
 
 export async function getSettings() {
@@ -2685,6 +2796,12 @@ export async function listKnowledgeChunks(bookId: string) {
   return apiRequest<KnowledgeChunkRecord[]>(`/knowledge/books/${bookId}/chunks`);
 }
 
+export async function listKnowledgeChunksPaginated(bookId: string, limit: number, offset: number) {
+  return apiRequest<{ chunks: KnowledgeChunkRecord[]; total: number }>(
+    `/knowledge/books/${bookId}/chunks?limit=${limit}&offset=${offset}`
+  );
+}
+
 export async function createKnowledgeChunk(bookId: string, input: {
   pageNumber?: number | null; sectionTitle: string; text: string; tokenCount?: number; order?: number;
 }) {
@@ -2738,6 +2855,9 @@ export interface DatasetRecord {
   sourceDescription: string;
   isTemplate?: boolean;
   sourceTemplateId?: string | null;
+  sourceBookId?: string | null;
+  sourcePages?: string;
+  tags?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -2897,6 +3017,21 @@ export async function adoptDatasetTemplate(templateId: string) {
   return apiRequest<DatasetRecord>(`/datasets/library/${templateId}/adopt`, { method: "POST" });
 }
 
+export async function extractDatasetsFromBook(bookId: string) {
+  return apiRequest<{
+    sessionId: string;
+    bookId: string;
+    bookName: string;
+    sections: number;
+    chunks: number;
+    status: string;
+  }>("/api/cli/extract-datasets", {
+    method: "POST",
+    body: JSON.stringify({ bookId }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 // ── Takeoff Annotations ──────────────────────────────────────────────────
 
 export async function listTakeoffAnnotations(projectId: string, documentId?: string, page?: number) {
@@ -2955,6 +3090,8 @@ export interface VisionCountResult {
   totalCount: number;
   matches: VisionMatch[];
   snippetImage?: string;
+  imageWidth?: number;
+  imageHeight?: number;
   duration_ms: number;
   errors: string[];
 }
@@ -2987,6 +3124,18 @@ export async function runVisionCropRegion(input: {
   boundingBox: VisionBoundingBox;
 }) {
   return apiRequest<VisionCropResult>("/api/vision/crop-region", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function saveVisionCrop(input: {
+  projectId: string;
+  image: string;
+  filename?: string;
+}) {
+  return apiRequest<{ success: boolean; filePath: string; filename: string }>("/api/vision/save-crop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -3155,4 +3304,200 @@ export async function getCliStatus(projectId: string) {
     source?: "live" | "db";
     events?: any[];
   }>(`/api/cli/${projectId}/status`);
+}
+
+// ── Labour Cost Tables ──────────────────────────────────────────────────
+
+export interface LabourCostEntry {
+  id: string;
+  tableId: string;
+  code: string;
+  name: string;
+  group: string;
+  costRates: Record<string, number>;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
+}
+
+export interface LabourCostTable {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LabourCostTableWithEntries extends LabourCostTable {
+  entries: LabourCostEntry[];
+}
+
+export async function listLabourCostTables(): Promise<LabourCostTableWithEntries[]> {
+  return apiRequest<LabourCostTableWithEntries[]>("/api/labour-cost-tables");
+}
+
+export async function getLabourCostTable(id: string): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${id}`);
+}
+
+export async function createLabourCostTable(input: {
+  name: string; description?: string; effectiveDate?: string; expiryDate?: string; metadata?: Record<string, unknown>;
+}): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>("/api/labour-cost-tables", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateLabourCostTable(id: string, patch: {
+  name?: string; description?: string; effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
+}): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteLabourCostTable(id: string): Promise<void> {
+  await apiRequest<{ deleted: boolean }>(`/api/labour-cost-tables/${id}`, { method: "DELETE" });
+}
+
+export async function createLabourCostEntry(tableId: string, input: {
+  code: string; name: string; group?: string; costRates?: Record<string, number>; metadata?: Record<string, unknown>; sortOrder?: number;
+}): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateLabourCostEntry(tableId: string, entryId: string, patch: {
+  code?: string; name?: string; group?: string; costRates?: Record<string, number>; metadata?: Record<string, unknown>; sortOrder?: number;
+}): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries/${entryId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteLabourCostEntry(tableId: string, entryId: string): Promise<LabourCostTableWithEntries> {
+  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries/${entryId}`, { method: "DELETE" });
+}
+
+// ── Burden Periods ──────────────────────────────────────────────────────
+
+export interface BurdenPeriod {
+  id: string;
+  organizationId: string;
+  name: string;
+  group: string;
+  percentage: number;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listBurdenPeriods(group?: string): Promise<BurdenPeriod[]> {
+  const qs = group ? `?group=${encodeURIComponent(group)}` : "";
+  return apiRequest<BurdenPeriod[]>(`/api/burden-periods${qs}`);
+}
+
+export async function createBurdenPeriod(input: {
+  name: string; group: string; percentage: number; startDate: string; endDate: string;
+}): Promise<BurdenPeriod> {
+  return apiRequest<BurdenPeriod>("/api/burden-periods", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateBurdenPeriod(id: string, patch: {
+  name?: string; group?: string; percentage?: number; startDate?: string; endDate?: string;
+}): Promise<BurdenPeriod> {
+  return apiRequest<BurdenPeriod>(`/api/burden-periods/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteBurdenPeriod(id: string): Promise<void> {
+  await apiRequest<{ deleted: boolean }>(`/api/burden-periods/${id}`, { method: "DELETE" });
+}
+
+// ── Travel Policies ─────────────────────────────────────────────────────
+
+export type PerDiemEmbedMode = "separate" | "embed_hourly" | "embed_cost_only";
+export type FuelSurchargeAppliesTo = "labour" | "all" | "none";
+
+export interface TravelPolicy {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  perDiemRate: number;
+  perDiemEmbedMode: PerDiemEmbedMode;
+  hoursPerDay: number;
+  travelTimeHours: number;
+  travelTimeTrips: number;
+  kmToDestination: number;
+  mileageRate: number;
+  fuelSurchargePercent: number;
+  fuelSurchargeAppliesTo: FuelSurchargeAppliesTo;
+  accommodationRate: number;
+  accommodationNights: number;
+  showAsSeparateLine: boolean;
+  breakoutLabel: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listTravelPolicies(): Promise<TravelPolicy[]> {
+  return apiRequest<TravelPolicy[]>("/api/travel-policies");
+}
+
+export async function getTravelPolicy(id: string): Promise<TravelPolicy> {
+  return apiRequest<TravelPolicy>(`/api/travel-policies/${id}`);
+}
+
+export async function createTravelPolicy(input: {
+  name: string; description?: string; perDiemRate?: number; perDiemEmbedMode?: PerDiemEmbedMode;
+  hoursPerDay?: number; travelTimeHours?: number; travelTimeTrips?: number; kmToDestination?: number;
+  mileageRate?: number; fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: FuelSurchargeAppliesTo;
+  accommodationRate?: number; accommodationNights?: number; showAsSeparateLine?: boolean;
+  breakoutLabel?: string; metadata?: Record<string, unknown>;
+}): Promise<TravelPolicy> {
+  return apiRequest<TravelPolicy>("/api/travel-policies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTravelPolicy(id: string, patch: {
+  name?: string; description?: string; perDiemRate?: number; perDiemEmbedMode?: PerDiemEmbedMode;
+  hoursPerDay?: number; travelTimeHours?: number; travelTimeTrips?: number; kmToDestination?: number;
+  mileageRate?: number; fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: FuelSurchargeAppliesTo;
+  accommodationRate?: number; accommodationNights?: number; showAsSeparateLine?: boolean;
+  breakoutLabel?: string; metadata?: Record<string, unknown>;
+}): Promise<TravelPolicy> {
+  return apiRequest<TravelPolicy>(`/api/travel-policies/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteTravelPolicy(id: string): Promise<void> {
+  await apiRequest<{ deleted: boolean }>(`/api/travel-policies/${id}`, { method: "DELETE" });
 }

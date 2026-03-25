@@ -29,6 +29,9 @@ model Organization {
   rateSchedules    RateSchedule[]
   customers        Customer[]
   departments      Department[]
+  labourCostTables LabourCostTable[]
+  burdenPeriods    BurdenPeriod[]
+  travelPolicies   TravelPolicy[]
 }
 
 model OrganizationSettings {
@@ -237,6 +240,7 @@ model QuoteRevision {
   phases          Phase[]
   modifiers       Modifier[]
   additionalLineItems AdditionalLineItem[]
+  summaryRows     SummaryRow[]
   conditions      Condition[]
   reportSections  ReportSection[]
   scheduleTasks   ScheduleTask[]
@@ -274,9 +278,9 @@ model WorksheetItem {
   cost           Float     @default(0)
   markup         Float     @default(0)
   price          Float     @default(0)
-  laborHourReg   Float     @default(0)
-  laborHourOver  Float     @default(0)
-  laborHourDouble     Float    @default(0)
+  unit1   Float     @default(0)  @map("laborHourReg")
+  unit2   Float     @default(0)  @map("laborHourOver")
+  unit3   Float     @default(0)  @map("laborHourDouble")
   lineOrder           Int      @default(0)
   rateScheduleItemId  String?
   itemId              String?  // FK to CatalogItem (for catalog-backed categories)
@@ -379,6 +383,48 @@ model AdditionalLineItem {
   @@index([revisionId])
 }
 
+// ── Summary Rows ──────────────────────────────────────────────────────────
+
+model SummaryRow {
+  id              String        @id @default(cuid())
+  revisionId      String
+  revision        QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+
+  type            String        @default("manual")    // auto_category | auto_phase | manual | modifier | subtotal | separator
+  label           String        @default("")
+  order           Int           @default(0)
+  visible         Boolean       @default(true)
+  style           String        @default("normal")    // normal | bold | indent | highlight
+
+  // Auto source
+  sourceCategory  String?
+  sourcePhase     String?
+
+  // Manual rows: direct value entry
+  manualValue     Float?
+  manualCost      Float?
+
+  // Auto row override: pin a value on auto rows instead of aggregating
+  overrideValue   Float?
+  overrideCost    Float?
+
+  // Modifier fields
+  modifierPercent Float?
+  modifierAmount  Float?
+  appliesTo       String[]      @default([])           // row IDs or ["all"]
+
+  // Computed (filled by recalculate)
+  computedValue   Float         @default(0)
+  computedCost    Float         @default(0)
+  computedMargin  Float         @default(0)
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([revisionId])
+  @@map("summary_rows")
+}
+
 // ── Conditions ────────────────────────────────────────────────────────────
 
 model Condition {
@@ -414,6 +460,9 @@ model RateSchedule {
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
+  travelPolicyId   String?
+  travelPolicy     TravelPolicy? @relation(fields: [travelPolicyId], references: [id])
+
   tiers RateScheduleTier[]
   items RateScheduleItem[]
 
@@ -448,6 +497,95 @@ model RateScheduleItem {
   sortOrder     Int          @default(0)
 
   @@index([scheduleId])
+}
+
+// ── Labour Cost & Burden ─────────────────────────────────────────────────
+
+model LabourCostTable {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String       @default("")
+  effectiveDate  String?
+  expiryDate     String?
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  entries LabourCostEntry[]
+
+  @@index([organizationId])
+}
+
+model LabourCostEntry {
+  id        String          @id @default(cuid())
+  tableId   String
+  table     LabourCostTable @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  code      String          @default("")
+  name      String          @default("")
+  group     String          @default("")
+  costRates Json            @default("{}")
+  metadata  Json            @default("{}")
+  sortOrder Int             @default(0)
+
+  @@index([tableId])
+}
+
+model BurdenPeriod {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String       @default("")
+  group          String       @default("")
+  percentage     Float        @default(0)
+  startDate      String
+  endDate        String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+// ── Travel Policy ────────────────────────────────────────────────────────
+
+model TravelPolicy {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  description    String       @default("")
+
+  // Per diem
+  perDiemRate      Float   @default(0)
+  perDiemEmbedMode String  @default("separate")
+  hoursPerDay      Float   @default(8)
+
+  // Travel time
+  travelTimeHours Float @default(0)
+  travelTimeTrips Int   @default(1)
+
+  // Distance & fuel
+  kmToDestination        Float @default(0)
+  mileageRate            Float @default(0)
+  fuelSurchargePercent   Float @default(0)
+  fuelSurchargeAppliesTo String @default("labour")
+
+  // Accommodation
+  accommodationRate   Float @default(0)
+  accommodationNights Int   @default(0)
+
+  // Display
+  showAsSeparateLine Boolean @default(true)
+  breakoutLabel      String  @default("Travel & Per Diem")
+
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rateSchedules RateSchedule[]
+
+  @@index([organizationId])
 }
 
 // ── Report Sections ───────────────────────────────────────────────────────
@@ -790,7 +928,7 @@ model EntityCategory {
   defaultUom      String       @default("EA")
   validUoms       String[]     @default([])
   editableFields  Json         @default("{}")
-  laborHourLabels Json         @default("{}")
+  unitLabels      Json         @default("{}")  @map("laborHourLabels")
   calculationType String       @default("manual")
   calcFormula     String       @default("") // custom formula expression for "formula" calc type
   itemSource      String       @default("freeform") // "rate_schedule" | "catalog" | "freeform"

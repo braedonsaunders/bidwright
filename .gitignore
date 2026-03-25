@@ -13,6 +13,23 @@ coverage
 data/
 packages/db/seed-datasets/
 packages/db/seed-items/
+packages/db/seed-plugins/
 venv/
 __pycache__/
 *.pyc
+packages/vision/test-sandbox/eval_output/
+packages/vision/test-sandbox/test_output/
+packages/vision/test-sandbox/autoresearch_output/
+packages/vision/test-sandbox/kemira_harness_output/
+packages/vision/test-sandbox/kemira_mcp_output/
+packages/vision/test-sandbox/kemira_agent_output/
+packages/vision/test-sandbox/scan_autoresearch_output/
+packages/vision/test-sandbox/gyptec/
+packages/vision/test-sandbox/*_output/
+# Client RFQ packages and test data — never commit
+packages/vision/test-sandbox/Soprema*/
+packages/vision/test-sandbox/kemira/
+packages/vision/test-sandbox/birla/
+packages/vision/test-sandbox/homehardware/
+packages/vision/test-sandbox/*.png
+packages/vision/test-sandbox/*.pdf

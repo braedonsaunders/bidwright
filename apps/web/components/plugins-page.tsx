@@ -6,6 +6,11 @@ import {
   Puzzle,
   Search,
   X,
+  Pencil,
+  Play,
+  Wrench,
+  ChevronRight,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,6 +32,7 @@ import type {
   PluginToolDefinition,
   PluginOutput,
   DatasetRecord,
+  EntityCategory,
 } from "@/lib/api";
 import {
   updatePlugin as apiUpdatePlugin,
@@ -39,7 +45,12 @@ const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "dange
   material: "default",
   travel: "danger",
   general: "info",
+  dynamic: "info",
 };
+
+function getCategoryTone(cat: string): "default" | "success" | "warning" | "danger" | "info" {
+  return CATEGORY_COLORS[cat.toLowerCase()] ?? "default";
+}
 
 interface ToolExecutionModalState {
   plugin: PluginRecord;
@@ -51,11 +62,13 @@ export function PluginsPage({
   initialDatasets,
   projectId,
   revisionId,
+  entityCategories,
 }: {
   initialPlugins: PluginRecord[];
   initialDatasets?: DatasetRecord[];
   projectId?: string;
   revisionId?: string;
+  entityCategories?: EntityCategory[];
 }) {
   const [plugins, setPlugins] = useState<PluginRecord[]>(initialPlugins);
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -65,6 +78,8 @@ export function PluginsPage({
   const [executing, setExecuting] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingPlugin, setEditingPlugin] = useState<PluginRecord | null>(null);
+  const [detailPlugin, setDetailPlugin] = useState<PluginRecord | null>(null);
+  const [detailActiveTool, setDetailActiveTool] = useState<string>("");
 
   const datasetOptions = useMemo(
     () => (initialDatasets ?? []).map((ds) => ({ id: ds.id, name: ds.name, columns: ds.columns.map((c) => ({ key: c.key, name: c.name })) })),
@@ -198,13 +213,21 @@ export function PluginsPage({
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filtered.map((plugin, i) => {
           const tone = CATEGORY_COLORS[plugin.category] ?? "default";
+          const toolCount = plugin.toolDefinitions.length;
+          const hasUI = plugin.toolDefinitions.some((t) => t.ui);
 
           return (
             <FadeIn key={plugin.id} delay={0.05 + i * 0.02}>
-              <Card className="transition-shadow hover:ring-1 hover:ring-accent/20">
+              <Card className={cn(
+                "transition-all hover:ring-1 hover:ring-accent/20 cursor-pointer",
+                !plugin.enabled && "opacity-50"
+              )}>
                 <CardHeader
-                  className="flex flex-row items-start justify-between gap-3 cursor-pointer"
-                  onClick={() => setEditingPlugin(plugin)}
+                  className="flex flex-row items-start justify-between gap-3"
+                  onClick={() => {
+                    setDetailPlugin(plugin);
+                    setDetailActiveTool(plugin.toolDefinitions[0]?.id ?? "");
+                  }}
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
@@ -237,6 +260,41 @@ export function PluginsPage({
                     />
                   </div>
                 </CardHeader>
+                <CardBody className="pt-0 pb-3 px-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 text-[10px] text-fg/40">
+                      <span className="flex items-center gap-1">
+                        <Wrench className="h-3 w-3" />
+                        {toolCount} tool{toolCount !== 1 ? "s" : ""}
+                      </span>
+                      {hasUI && (
+                        <span className="flex items-center gap-1">
+                          <Layers className="h-3 w-3" />
+                          UI
+                        </span>
+                      )}
+                      {plugin.version && (
+                        <span>v{plugin.version}</span>
+                      )}
+                    </div>
+                    <ChevronRight className="h-3.5 w-3.5 text-fg/20" />
+                  </div>
+                  {/* Mini tool list */}
+                  {toolCount > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {plugin.toolDefinitions.slice(0, 3).map((tool) => (
+                        <div key={tool.id} className="flex items-center gap-2 text-[10px] text-fg/50">
+                          <span className="w-1 h-1 rounded-full bg-fg/20 shrink-0" />
+                          <span className="truncate">{tool.name}</span>
+                          <Badge tone="info" className="text-[8px] ml-auto shrink-0">{tool.outputType}</Badge>
+                        </div>
+                      ))}
+                      {toolCount > 3 && (
+                        <p className="text-[9px] text-fg/30 pl-3">+{toolCount - 3} more</p>
+                      )}
+                    </div>
+                  )}
+                </CardBody>
               </Card>
             </FadeIn>
           );
@@ -255,6 +313,157 @@ export function PluginsPage({
           </Card>
         </FadeIn>
       )}
+
+      {/* Plugin Detail / Preview Modal */}
+      <ModalBackdrop
+        open={!!detailPlugin}
+        onClose={() => { setDetailPlugin(null); setDetailActiveTool(""); }}
+        size="xl"
+      >
+        {detailPlugin && (() => {
+          const activeTool = detailPlugin.toolDefinitions.find((t) => t.id === detailActiveTool) ?? detailPlugin.toolDefinitions[0];
+          const tone = CATEGORY_COLORS[detailPlugin.category] ?? "default";
+          return (
+            <Card className="max-h-[85vh] overflow-y-auto">
+              <CardHeader className="sticky top-0 bg-panel z-10 border-b border-line">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Puzzle className="h-5 w-5 text-fg/40 shrink-0" />
+                      <CardTitle className="text-base">{detailPlugin.name}</CardTitle>
+                      <Badge tone={tone} className="capitalize text-[10px]">{detailPlugin.category}</Badge>
+                      {detailPlugin.version && (
+                        <span className="text-[10px] text-fg/30">v{detailPlugin.version}</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-fg/50">{detailPlugin.description}</p>
+                    {detailPlugin.author && (
+                      <p className="text-[10px] text-fg/30 mt-1">by {detailPlugin.author}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => {
+                        setDetailPlugin(null);
+                        setEditingPlugin(detailPlugin);
+                      }}
+                    >
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                    <Button variant="ghost" size="xs" onClick={() => { setDetailPlugin(null); setDetailActiveTool(""); }}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Tool tabs */}
+                {detailPlugin.toolDefinitions.length > 1 && (
+                  <div className="flex gap-1 mt-3 -mb-1 overflow-x-auto">
+                    {detailPlugin.toolDefinitions.map((tool) => (
+                      <button
+                        key={tool.id}
+                        onClick={() => setDetailActiveTool(tool.id)}
+                        className={cn(
+                          "rounded-t-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap",
+                          (activeTool?.id === tool.id)
+                            ? "bg-panel2 text-fg border border-line border-b-transparent"
+                            : "text-fg/40 hover:text-fg/60"
+                        )}
+                      >
+                        {tool.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </CardHeader>
+              <CardBody>
+                {activeTool && (
+                  <div className="space-y-4">
+                    {/* Tool header */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-fg/80">{activeTool.name}</h3>
+                        <p className="text-[11px] text-fg/50 mt-0.5">{activeTool.description}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge tone="info" className="text-[9px]">{activeTool.outputType}</Badge>
+                        {activeTool.mutates && <Badge tone="warning" className="text-[9px]">mutates</Badge>}
+                      </div>
+                    </div>
+
+                    {/* Parameters */}
+                    {activeTool.parameters.length > 0 && (
+                      <div>
+                        <p className="text-[10px] text-fg/40 font-medium uppercase tracking-wide mb-2">Parameters</p>
+                        <div className="rounded-lg border border-line overflow-hidden">
+                          <table className="w-full text-[11px]">
+                            <thead>
+                              <tr className="bg-panel2/50 border-b border-line">
+                                <th className="text-left px-3 py-1.5 text-fg/50 font-medium">Name</th>
+                                <th className="text-left px-3 py-1.5 text-fg/50 font-medium">Type</th>
+                                <th className="text-left px-3 py-1.5 text-fg/50 font-medium">Description</th>
+                                <th className="text-center px-3 py-1.5 text-fg/50 font-medium">Required</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activeTool.parameters.map((param) => (
+                                <tr key={param.name} className="border-b border-line/30">
+                                  <td className="px-3 py-1.5 font-mono text-accent">{param.name}</td>
+                                  <td className="px-3 py-1.5 text-fg/50">{param.type}</td>
+                                  <td className="px-3 py-1.5 text-fg/60">{param.description}</td>
+                                  <td className="px-3 py-1.5 text-center">
+                                    {param.required ? <span className="text-danger">*</span> : <span className="text-fg/20">—</span>}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* UI Preview */}
+                    {activeTool.ui ? (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-[10px] text-fg/40 font-medium uppercase tracking-wide">UI Preview</p>
+                          {projectId && revisionId && (
+                            <Button
+                              variant="accent"
+                              size="xs"
+                              onClick={() => {
+                                setDetailPlugin(null);
+                                setExecutionModal({ plugin: detailPlugin, tool: activeTool });
+                                setExecutionOutput(null);
+                              }}
+                            >
+                              <Play className="h-3 w-3" /> Run Tool
+                            </Button>
+                          )}
+                        </div>
+                        <div className="rounded-lg border border-line bg-panel2/20 p-4">
+                          <PluginRuntime
+                            schema={activeTool.ui}
+                            onSubmit={() => {}}
+                            submitting={false}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-line bg-panel2/10 p-8 text-center">
+                        <Puzzle className="mx-auto h-6 w-6 text-fg/15 mb-2" />
+                        <p className="text-xs text-fg/40">No interactive UI — agent-only tool</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </CardBody>
+            </Card>
+          );
+        })()}
+      </ModalBackdrop>
 
       {/* Tool Execution Modal */}
       <ModalBackdrop
@@ -308,6 +517,7 @@ export function PluginsPage({
         onClose={() => { setShowCreateModal(false); setEditingPlugin(null); }}
         datasets={datasetOptions}
         initialPlugin={editingPlugin ?? undefined}
+        entityCategories={entityCategories}
         onCreated={(plugin) => {
           setPlugins((prev) => {
             const idx = prev.findIndex((p) => p.id === plugin.id);

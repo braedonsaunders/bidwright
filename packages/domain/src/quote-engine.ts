@@ -6,6 +6,9 @@ import type {
   ProjectWorkspace,
   QuoteRevision,
   RevisionTotals,
+  SummaryRow,
+  SummaryPreset,
+  SummaryRowType,
   Worksheet,
   WorksheetItem
 } from "./models.js";
@@ -69,9 +72,9 @@ function computeItemHours(item: WorksheetItem) {
 
   if (category !== "Labour") {
     return {
-      reg: 0,
-      over: 0,
-      double: 0,
+      unit1: 0,
+      unit2: 0,
+      unit3: 0,
       tierUnits: {} as Record<string, number>,
     };
   }
@@ -85,9 +88,9 @@ function computeItemHours(item: WorksheetItem) {
   }
 
   return {
-    reg: item.laborHourReg * item.quantity,
-    over: item.laborHourOver * item.quantity,
-    double: item.laborHourDouble * item.quantity,
+    unit1: item.unit1 * item.quantity,
+    unit2: item.unit2 * item.quantity,
+    unit3: item.unit3 * item.quantity,
     tierUnits,
   };
 }
@@ -477,9 +480,9 @@ export function calculateTotals(
   }
 
   const allItemHours = lineItems.map((item) => computeItemHours(item));
-  const regHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.reg, 0));
-  const overHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.over, 0));
-  const doubleHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.double, 0));
+  const regHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.unit1, 0));
+  const overHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.unit2, 0));
+  const doubleHours = roundMoney(allItemHours.reduce((sum, h) => sum + h.unit3, 0));
   const totalHours = roundMoney(regHours + overHours + doubleHours);
 
   // Aggregate tier hours across all items
@@ -590,8 +593,16 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
   const phases = store.phases.filter((phase) => phase.revisionId === revision.id);
   const modifiers = store.modifiers.filter((modifier) => modifier.revisionId === revision.id);
   const additionalLineItems = store.additionalLineItems.filter((item) => item.revisionId === revision.id);
+  const summaryRows = (store.summaryRows ?? [])
+    .filter((row) => row.revisionId === revision.id)
+    .sort((a, b) => a.order - b.order);
   const totals = calculateTotals(revision, worksheets, phases, modifiers, additionalLineItems);
   const lineItems = worksheets.flatMap((worksheet) => worksheet.items);
+
+  // Compute summary row values
+  const computedSummaryRows = summaryRows.length > 0
+    ? computeSummaryRows(summaryRows, worksheets, phases)
+    : summaryRows;
 
   return {
     project,
@@ -610,6 +621,7 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     phases,
     modifiers,
     additionalLineItems,
+    summaryRows: computedSummaryRows,
     conditions: store.conditions.filter((condition) => condition.revisionId === revision.id),
     catalogs: getCatalogs(store, projectId),
     aiRuns,
@@ -632,6 +644,203 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
       }
     }
   };
+}
+
+// ── Summary Row System ────────────────────────────────────────────────────
+
+/**
+ * Compute values for all summary rows based on line item aggregations.
+ * Mutates computedValue/computedCost/computedMargin on each row (in-place).
+ */
+export function computeSummaryRows(
+  rows: SummaryRow[],
+  worksheets: Array<Worksheet & { items: WorksheetItem[] }>,
+  phases: Array<{ id: string; name: string }>,
+): SummaryRow[] {
+  const lineItems = worksheets.flatMap((w) => w.items);
+
+  // Build per-category aggregation
+  const categoryAgg = new Map<string, { value: number; cost: number }>();
+  for (const item of lineItems) {
+    const cat = normalizeCategoryName(item.category);
+    const existing = categoryAgg.get(cat) ?? { value: 0, cost: 0 };
+    existing.value += item.price;
+    existing.cost += computeItemCost(item);
+    categoryAgg.set(cat, existing);
+  }
+
+  // Build per-phase aggregation
+  const phaseAgg = new Map<string, { value: number; cost: number }>();
+  for (const item of lineItems) {
+    const key = item.phaseId ?? "__unphased__";
+    const existing = phaseAgg.get(key) ?? { value: 0, cost: 0 };
+    existing.value += item.price;
+    existing.cost += computeItemCost(item);
+    phaseAgg.set(key, existing);
+  }
+
+  // Map phase name → phase ID for lookup
+  const phaseNameToId = new Map(phases.map((p) => [p.name, p.id]));
+
+  // First pass: compute non-modifier rows
+  const computed = rows.map((row) => ({ ...row }));
+  const rowById = new Map(computed.map((r) => [r.id, r]));
+
+  for (const row of computed) {
+    switch (row.type) {
+      case "auto_category": {
+        const agg = categoryAgg.get(row.sourceCategory ?? "") ?? { value: 0, cost: 0 };
+        // Override takes precedence over aggregation when set
+        row.computedValue = roundMoney(row.overrideValue ?? agg.value);
+        row.computedCost = roundMoney(row.overrideCost ?? agg.cost);
+        row.computedMargin = row.computedValue === 0 ? 0 : roundMoney((row.computedValue - row.computedCost) / row.computedValue);
+        break;
+      }
+      case "auto_phase": {
+        const phaseId = phaseNameToId.get(row.sourcePhase ?? "");
+        const agg = phaseAgg.get(phaseId ?? "") ?? { value: 0, cost: 0 };
+        row.computedValue = roundMoney(row.overrideValue ?? agg.value);
+        row.computedCost = roundMoney(row.overrideCost ?? agg.cost);
+        row.computedMargin = row.computedValue === 0 ? 0 : roundMoney((row.computedValue - row.computedCost) / row.computedValue);
+        break;
+      }
+      case "manual": {
+        row.computedValue = roundMoney(row.manualValue ?? 0);
+        row.computedCost = roundMoney(row.manualCost ?? 0);
+        row.computedMargin = row.computedValue === 0 ? 0 : roundMoney((row.computedValue - row.computedCost) / row.computedValue);
+        break;
+      }
+      case "subtotal": {
+        // Sum all preceding visible non-modifier, non-subtotal, non-separator rows
+        let sumValue = 0;
+        let sumCost = 0;
+        for (const prev of computed) {
+          if (prev.id === row.id) break;
+          if (!prev.visible) continue;
+          if (prev.type === "subtotal" || prev.type === "separator") continue;
+          sumValue += prev.computedValue;
+          sumCost += prev.computedCost;
+        }
+        row.computedValue = roundMoney(sumValue);
+        row.computedCost = roundMoney(sumCost);
+        row.computedMargin = row.computedValue === 0 ? 0 : roundMoney((row.computedValue - row.computedCost) / row.computedValue);
+        break;
+      }
+      case "separator": {
+        row.computedValue = 0;
+        row.computedCost = 0;
+        row.computedMargin = 0;
+        break;
+      }
+      // modifier handled in second pass
+    }
+  }
+
+  // Second pass: compute modifier rows (they reference other rows)
+  for (const row of computed) {
+    if (row.type !== "modifier") continue;
+
+    const targets = row.appliesTo;
+    let baseValue = 0;
+
+    if (targets.length === 0 || (targets.length === 1 && targets[0] === "all")) {
+      // Apply to all non-modifier visible rows
+      for (const other of computed) {
+        if (other.id === row.id) continue;
+        if (other.type === "modifier" || other.type === "separator" || other.type === "subtotal") continue;
+        if (!other.visible) continue;
+        baseValue += other.computedValue;
+      }
+    } else {
+      // Apply to specific rows by ID
+      for (const targetId of targets) {
+        const target = rowById.get(targetId);
+        if (target && target.id !== row.id) {
+          baseValue += target.computedValue;
+        }
+      }
+    }
+
+    row.computedValue = roundMoney((row.modifierAmount ?? 0) + baseValue * ((row.modifierPercent ?? 0) / 100));
+    row.computedCost = 0;
+    row.computedMargin = row.computedValue === 0 ? 0 : 1;
+  }
+
+  return computed;
+}
+
+/**
+ * Generate a default set of SummaryRow records for a given preset.
+ * Returns unsaved row objects (no IDs) — caller should persist them.
+ */
+export function generateSummaryPreset(
+  preset: SummaryPreset,
+  categoryNames: string[],
+  phaseNames: string[],
+): Array<Omit<SummaryRow, "id" | "revisionId" | "computedValue" | "computedCost" | "computedMargin">> {
+  switch (preset) {
+    case "quick_total":
+      return [
+        { type: "subtotal", label: "Grand Total", order: 0, visible: true, style: "bold", appliesTo: [] },
+      ];
+
+    case "by_category":
+      return [
+        ...categoryNames.map((name, i) => ({
+          type: "auto_category" as SummaryRowType,
+          label: name,
+          order: i,
+          visible: true,
+          style: "normal" as const,
+          sourceCategory: name,
+          appliesTo: [] as string[],
+        })),
+        { type: "subtotal" as SummaryRowType, label: "Subtotal", order: categoryNames.length, visible: true, style: "bold" as const, appliesTo: [] },
+      ];
+
+    case "by_phase":
+      return [
+        ...phaseNames.map((name, i) => ({
+          type: "auto_phase" as SummaryRowType,
+          label: name,
+          order: i,
+          visible: true,
+          style: "normal" as const,
+          sourcePhase: name,
+          appliesTo: [] as string[],
+        })),
+        { type: "subtotal" as SummaryRowType, label: "Subtotal", order: phaseNames.length, visible: true, style: "bold" as const, appliesTo: [] },
+      ];
+
+    case "phase_x_category":
+      // Each phase with category detail — flat list
+      const rows: Array<Omit<SummaryRow, "id" | "revisionId" | "computedValue" | "computedCost" | "computedMargin">> = [];
+      let order = 0;
+      for (const phase of phaseNames) {
+        rows.push({
+          type: "auto_phase",
+          label: phase,
+          order: order++,
+          visible: true,
+          style: "bold",
+          sourcePhase: phase,
+          appliesTo: [],
+        });
+      }
+      rows.push({
+        type: "subtotal",
+        label: "Subtotal",
+        order: order,
+        visible: true,
+        style: "bold",
+        appliesTo: [],
+      });
+      return rows;
+
+    case "custom":
+    default:
+      return [];
+  }
 }
 
 export function summarizeProjectTotals(store: BidwrightStore, projectId: string) {

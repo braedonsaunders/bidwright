@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import {
   Building2,
@@ -14,7 +15,6 @@ import {
   Mail,
   Plus,
   Search,
-  SlidersHorizontal,
   Trash2,
   Users,
   X,
@@ -83,28 +83,31 @@ import {
 import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
 import { PluginsPage } from "@/components/plugins-page";
-import { detectCli } from "@/lib/api";
+import { LabourCostManager } from "@/components/labour-cost-manager";
+import { BurdenManager } from "@/components/burden-manager";
+import { TravelPolicyManager } from "@/components/travel-policy-manager";
+import { detectCli, listRateSchedules } from "@/lib/api";
 
 const STORAGE_KEY = "bidwright-settings";
 
-type SettingsGroup = "organization" | "estimating" | "data" | "integrations" | "users";
-type OrgSubTab = "general" | "brand" | "departments";
-type EstimatingSubTab = "defaults" | "catalogs" | "rates";
-type DataSubTab = "categories" | "clients" | "conditions";
+type SettingsGroup = "organization" | "data" | "integrations" | "users";
+type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms";
+type DataSubTab = "categories" | "clients" | "conditions" | "catalogs" | "rates" | "costs" | "travel";
 type IntegrationsSubTab = "email" | "apikeys" | "agent" | "plugins";
 
 const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "brand", label: "Brand" },
   { id: "departments", label: "Departments" },
-];
-const ESTIMATING_SUBTABS: { id: EstimatingSubTab; label: string }[] = [
   { id: "defaults", label: "Defaults" },
-  { id: "catalogs", label: "Items & Catalogs" },
-  { id: "rates", label: "Rate Schedules" },
+  { id: "terms", label: "Terms & Conditions" },
 ];
 const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "categories", label: "Categories" },
+  { id: "catalogs", label: "Items & Catalogs" },
+  { id: "rates", label: "Rate Schedules" },
+  { id: "costs", label: "Labour Costs" },
+  { id: "travel", label: "Travel Policies" },
   { id: "clients", label: "Clients" },
   { id: "conditions", label: "Inclusions & Exclusions" },
 ];
@@ -163,6 +166,7 @@ interface AllSettings {
   defaults: DefaultSettings;
   users: UserRecord[];
   integrations: IntegrationSettings;
+  termsAndConditions: string;
 }
 
 const DEFAULT_BRAND: BrandProfile = {
@@ -220,11 +224,11 @@ const DEFAULT_SETTINGS: AllSettings = {
     azureDiEndpoint: "",
     azureDiKey: "",
   },
+  termsAndConditions: "",
 };
 
 const GROUPS: { key: SettingsGroup; label: string; icon: typeof Building2 }[] = [
   { key: "organization", label: "Organization", icon: Building2 },
-  { key: "estimating", label: "Estimating", icon: SlidersHorizontal },
   { key: "data", label: "Data Management", icon: Layers },
   { key: "integrations", label: "Integrations", icon: Zap },
   { key: "users", label: "Users & Access", icon: Users },
@@ -391,9 +395,9 @@ const EDITABLE_FIELD_KEYS: { key: keyof EntityCategory["editableFields"]; label:
   { key: "cost", label: "Cost" },
   { key: "markup", label: "Markup" },
   { key: "price", label: "Price" },
-  { key: "laborHourReg", label: "Labor Hr (Reg)" },
-  { key: "laborHourOver", label: "Labor Hr (OT)" },
-  { key: "laborHourDouble", label: "Labor Hr (DT)" },
+  { key: "unit1", label: "Unit 1" },
+  { key: "unit2", label: "Unit 2" },
+  { key: "unit3", label: "Unit 3" },
 ];
 
 const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
@@ -402,8 +406,8 @@ const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
   shortform: "",
   defaultUom: "EA",
   validUoms: ["EA"],
-  editableFields: { quantity: true, cost: true, markup: true, price: true, laborHourReg: false, laborHourOver: false, laborHourDouble: false },
-  laborHourLabels: { reg: "Regular", over: "Overtime", double: "Double Time" },
+  editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false },
+  unitLabels: { unit1: "Unit 1", unit2: "Unit 2", unit3: "Unit 3" },
   calculationType: "manual",
   calcFormula: "",
   itemSource: "freeform",
@@ -492,11 +496,10 @@ export function SettingsPage({
 } = {}) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const validGroups: SettingsGroup[] = ["organization", "estimating", "data", "integrations", "users"];
+  const validGroups: SettingsGroup[] = ["organization", "data", "integrations", "users"];
   const initialGroup = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : "organization";
   const [activeGroup, setActiveGroup] = useState<SettingsGroup>(initialGroup);
   const [orgSubTab, setOrgSubTab] = useState<OrgSubTab>("general");
-  const [estimatingSubTab, setEstimatingSubTab] = useState<EstimatingSubTab>("defaults");
   const [dataSubTab, setDataSubTab] = useState<DataSubTab>("categories");
   const [integrationsSubTab, setIntegrationsSubTab] = useState<IntegrationsSubTab>("email");
   const [settings, setSettings] = useState<AllSettings>(DEFAULT_SETTINGS);
@@ -549,6 +552,19 @@ export function SettingsPage({
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>(initialSchedules);
   const [ratesLoading, setRatesLoading] = useState(false);
 
+  // Fetch rate schedules if initial prop is empty (e.g., auth timing issue)
+  useEffect(() => {
+    if (initialSchedules.length === 0) {
+      setRatesLoading(true);
+      listRateSchedules()
+        .then((data) => { if (Array.isArray(data)) setRateSchedules(data); })
+        .catch(() => {})
+        .finally(() => setRatesLoading(false));
+    } else {
+      setRateSchedules(initialSchedules);
+    }
+  }, [initialSchedules]);
+
   useEffect(() => {
     // Load settings from API
     apiGetSettings()
@@ -589,6 +605,7 @@ export function SettingsPage({
             azureDiEndpoint: (apiSettings.integrations as any).azureDiEndpoint || prev.integrations.azureDiEndpoint,
             azureDiKey: (apiSettings.integrations as any).azureDiKey || prev.integrations.azureDiKey,
           },
+          termsAndConditions: (apiSettings as any).termsAndConditions ?? prev.termsAndConditions,
         }));
 
         // Load brand separately
@@ -610,6 +627,7 @@ export function SettingsPage({
               defaults: { ...prev.defaults, ...parsed.defaults },
               users: parsed.users ?? prev.users,
               integrations: { ...prev.integrations, ...parsed.integrations },
+              termsAndConditions: parsed.termsAndConditions ?? prev.termsAndConditions,
             }));
           }
         } catch {
@@ -662,14 +680,14 @@ export function SettingsPage({
     ...cat,
     ...(catEdits[cat.id] || {}),
     editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) },
-    laborHourLabels: { ...cat.laborHourLabels, ...(catEdits[cat.id]?.laborHourLabels || {}) },
+    unitLabels: { ...cat.unitLabels, ...(catEdits[cat.id]?.unitLabels || {}) },
   });
 
   const updateCatEdit = (id: string, patch: Partial<EntityCategory>) =>
     setCatEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
   const saveCat = useCallback(async (cat: EntityCategory) => {
-    const merged = { ...cat, ...(catEdits[cat.id] || {}), editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) }, laborHourLabels: { ...cat.laborHourLabels, ...(catEdits[cat.id]?.laborHourLabels || {}) } };
+    const merged = { ...cat, ...(catEdits[cat.id] || {}), editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) }, unitLabels: { ...cat.unitLabels, ...(catEdits[cat.id]?.unitLabels || {}) } };
     setCatSaving(cat.id);
     try {
       if (cat.id.startsWith("new-")) {
@@ -907,6 +925,7 @@ export function SettingsPage({
         azureDiEndpoint: settings.integrations.azureDiEndpoint,
         azureDiKey: settings.integrations.azureDiKey,
       },
+      termsAndConditions: settings.termsAndConditions,
     };
 
     apiUpdateSettings(apiPayload).catch(() => {});
@@ -1318,17 +1337,7 @@ export function SettingsPage({
             </Card>
           )}
 
-          {activeGroup === "estimating" && (
-            <div className="flex items-center gap-1 shrink-0">
-              {ESTIMATING_SUBTABS.map((t) => {
-                const active = estimatingSubTab === t.id;
-                return (
-                  <button key={t.id} onClick={() => setEstimatingSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
-                );
-              })}
-            </div>
-          )}
-          {activeGroup === "estimating" && estimatingSubTab === "defaults" && (
+          {activeGroup === "organization" && orgSubTab === "defaults" && (
             <Card>
               <CardHeader>
                 <CardTitle>Default Values</CardTitle>
@@ -1359,18 +1368,6 @@ export function SettingsPage({
                     <option value="Budget">Budget</option>
                     <option value="BudgetDNE">Budget DNE</option>
                   </Select>
-                </div>
-                <div>
-                  <Label>Max Agent Iterations</Label>
-                  <Input
-                    type="number"
-                    value={(settings.defaults as any).maxAgentIterations ?? 200}
-                    onChange={(e) => updateDefaults({ maxAgentIterations: parseInt(e.target.value) || 200 } as any)}
-                    placeholder="200"
-                    min={10}
-                    max={1000}
-                  />
-                  <p className="mt-1 text-[11px] text-fg/40">Maximum tool call iterations for AI estimating runs</p>
                 </div>
               </CardBody>
             </Card>
@@ -1570,7 +1567,7 @@ export function SettingsPage({
           {activeGroup === "data" && dataSubTab === "categories" && (
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Entity Categories</CardTitle>
+                <CardTitle>Categories</CardTitle>
                 <Button variant="accent" size="xs" onClick={addCategory}>
                   <Plus className="h-3 w-3" />
                   Add Category
@@ -1606,7 +1603,8 @@ export function SettingsPage({
                   </div>
                 ))}
 
-                {/* Category Drawer */}
+                {/* Category Drawer (portalled to body to escape FadeIn transform) */}
+                {typeof document !== "undefined" && createPortal(
                 <AnimatePresence>
                   {expandedCatId && (() => {
                     const cat = categories.find((c) => c.id === expandedCatId);
@@ -1615,9 +1613,9 @@ export function SettingsPage({
                     return (
                       <motion.div
                         key="category-drawer"
-                        initial={{ x: "100%" }}
+                        initial={{ x: 420 }}
                         animate={{ x: 0 }}
-                        exit={{ x: "100%" }}
+                        exit={{ x: 420 }}
                         transition={{ type: "spring", damping: 30, stiffness: 300 }}
                         className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
                       >
@@ -1759,21 +1757,22 @@ export function SettingsPage({
 
                           <Separator />
 
-                          {/* Labor Hour Labels */}
+                          {/* Unit Column Labels */}
                           <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Labor Hour Labels</p>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Unit Column Labels</p>
+                            <p className="text-[11px] text-fg/40 mb-3">Custom labels for the unit columns shown in the estimator grid. These map to rate schedule tiers when using rate schedule item source.</p>
                             <div className="grid grid-cols-3 gap-3">
                               <div>
-                                <Label>Regular</Label>
-                                <Input value={edited.laborHourLabels.reg} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, reg: e.target.value } })} placeholder="Regular" />
+                                <Label>Unit 1</Label>
+                                <Input value={edited.unitLabels.unit1} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit1: e.target.value } })} placeholder="Unit 1" />
                               </div>
                               <div>
-                                <Label>Overtime</Label>
-                                <Input value={edited.laborHourLabels.over} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, over: e.target.value } })} placeholder="Overtime" />
+                                <Label>Unit 2</Label>
+                                <Input value={edited.unitLabels.unit2} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit2: e.target.value } })} placeholder="Unit 2" />
                               </div>
                               <div>
-                                <Label>Double Time</Label>
-                                <Input value={edited.laborHourLabels.double} onChange={(e) => updateCatEdit(cat.id, { laborHourLabels: { ...edited.laborHourLabels, double: e.target.value } })} placeholder="Double Time" />
+                                <Label>Unit 3</Label>
+                                <Input value={edited.unitLabels.unit3} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit3: e.target.value } })} placeholder="Unit 3" />
                               </div>
                             </div>
                           </div>
@@ -1812,7 +1811,9 @@ export function SettingsPage({
                       </motion.div>
                     );
                   })()}
-                </AnimatePresence>
+                </AnimatePresence>,
+                document.body
+                )}
               </div>
             </Card>
           )}
@@ -1833,179 +1834,229 @@ export function SettingsPage({
                     No clients yet. Click &quot;Add Client&quot; to get started.
                   </div>
                 )}
-                {customers.map((cust) => {
-                  const edited = getCustEdit(cust);
-                  const isExpanded = expandedCustId === cust.id;
-                  const contacts = custContacts[cust.id] || [];
-                  return (
-                    <div key={cust.id}>
-                      <div
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => setExpandedCustId(isExpanded ? null : cust.id)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCustId(isExpanded ? null : cust.id); } }}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
+                {customers.map((cust) => (
+                  <div
+                    key={cust.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setExpandedCustId(expandedCustId === cust.id ? null : cust.id)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCustId(expandedCustId === cust.id ? null : cust.id); } }}
+                    className={cn("flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer", expandedCustId === cust.id && "bg-accent/5")}
+                  >
+                    <Building2 className="h-3.5 w-3.5 text-fg/30 shrink-0" />
+                    <span className="font-medium text-fg truncate">{cust.name || "Untitled"}</span>
+                    {cust.email && <span className="text-xs text-fg/40 truncate">{cust.email}</span>}
+                    {cust.phone && <span className="text-xs text-fg/40 truncate">{cust.phone}</span>}
+                    <span className="flex-1" />
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <Toggle checked={cust.active} onChange={(val) => toggleCustActive(cust, val)} />
+                    </span>
+                  </div>
+                ))}
+
+                {/* Client Drawer (portalled to body to escape FadeIn transform) */}
+                {typeof document !== "undefined" && createPortal(
+                <AnimatePresence>
+                  {expandedCustId && (() => {
+                    const cust = customers.find((c) => c.id === expandedCustId);
+                    if (!cust) return null;
+                    const edited = getCustEdit(cust);
+                    const contacts = custContacts[cust.id] || [];
+                    return (
+                      <motion.div
+                        key="client-drawer"
+                        initial={{ x: 420 }}
+                        animate={{ x: 0 }}
+                        exit={{ x: 420 }}
+                        transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                        className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
                       >
-                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
-                        <span className="font-medium text-fg truncate">{cust.name || "Untitled"}</span>
-                        {cust.email && <span className="text-xs text-fg/40 truncate">{cust.email}</span>}
-                        {cust.phone && <span className="text-xs text-fg/40 truncate">{cust.phone}</span>}
-                        <span className="flex-1" />
-                        <span onClick={(e) => e.stopPropagation()}>
-                          <Toggle checked={cust.active} onChange={(val) => toggleCustActive(cust, val)} />
-                        </span>
-                      </div>
-                      {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveCustomer(cust); }}>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label>Name</Label>
-                              <Input value={edited.name} onChange={(e) => updateCustEdit(cust.id, { name: e.target.value })} placeholder="Client name" />
-                            </div>
-                            <div>
-                              <Label>Short Name</Label>
-                              <Input value={edited.shortName} onChange={(e) => updateCustEdit(cust.id, { shortName: e.target.value })} placeholder="Abbreviation" />
-                            </div>
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Building2 className="h-3.5 w-3.5 text-fg/40 shrink-0" />
+                            <span className="text-sm font-semibold truncate">{edited.name || "New Client"}</span>
                           </div>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label>Phone</Label>
-                              <Input value={edited.phone} onChange={(e) => updateCustEdit(cust.id, { phone: e.target.value })} placeholder="Phone number" />
-                            </div>
-                            <div>
-                              <Label>Email</Label>
-                              <Input value={edited.email} onChange={(e) => updateCustEdit(cust.id, { email: e.target.value })} placeholder="Email address" />
-                            </div>
+                          <div className="flex items-center gap-1">
+                            {!cust.id.startsWith("new-") && (
+                              <button
+                                className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
+                                onClick={() => {
+                                  if (custDeleteConfirm === cust.id) { deleteCustomer(cust.id); }
+                                  else { setCustDeleteConfirm(cust.id); }
+                                }}
+                                title={custDeleteConfirm === cust.id ? "Confirm delete" : "Delete client"}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                            <button
+                              className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
+                              onClick={() => { saveCustomer(cust); setExpandedCustId(null); }}
+                              title="Close"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
+                        </div>
+
+                        {/* Body */}
+                        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                          {/* Basic Info */}
                           <div>
-                            <Label>Website</Label>
-                            <Input value={edited.website} onChange={(e) => updateCustEdit(cust.id, { website: e.target.value })} placeholder="https://" />
-                          </div>
-                          <Separator />
-                          <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Address</p>
-                          <div className="grid grid-cols-1 gap-4">
-                            <div>
-                              <Label>Street</Label>
-                              <Input value={edited.addressStreet} onChange={(e) => updateCustEdit(cust.id, { addressStreet: e.target.value })} />
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Basic Info</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label>Name</Label>
+                                <Input value={edited.name} onChange={(e) => updateCustEdit(cust.id, { name: e.target.value })} placeholder="Client name" />
+                              </div>
+                              <div>
+                                <Label>Short Name</Label>
+                                <Input value={edited.shortName} onChange={(e) => updateCustEdit(cust.id, { shortName: e.target.value })} placeholder="Abbreviation" />
+                              </div>
                             </div>
                           </div>
-                          <div className="grid grid-cols-3 gap-4">
-                            <div>
-                              <Label>City</Label>
-                              <Input value={edited.addressCity} onChange={(e) => updateCustEdit(cust.id, { addressCity: e.target.value })} />
-                            </div>
-                            <div>
-                              <Label>Province / State</Label>
-                              <Input value={edited.addressProvince} onChange={(e) => updateCustEdit(cust.id, { addressProvince: e.target.value })} />
-                            </div>
-                            <div>
-                              <Label>Postal / Zip</Label>
-                              <Input value={edited.addressPostalCode} onChange={(e) => updateCustEdit(cust.id, { addressPostalCode: e.target.value })} />
-                            </div>
-                          </div>
+
+                          {/* Contact Info */}
                           <div>
-                            <Label>Country</Label>
-                            <Input value={edited.addressCountry} onChange={(e) => updateCustEdit(cust.id, { addressCountry: e.target.value })} />
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Contact Info</p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label>Phone</Label>
+                                <Input value={edited.phone} onChange={(e) => updateCustEdit(cust.id, { phone: e.target.value })} placeholder="Phone number" />
+                              </div>
+                              <div>
+                                <Label>Email</Label>
+                                <Input value={edited.email} onChange={(e) => updateCustEdit(cust.id, { email: e.target.value })} placeholder="Email address" />
+                              </div>
+                            </div>
+                            <div className="mt-3">
+                              <Label>Website</Label>
+                              <Input value={edited.website} onChange={(e) => updateCustEdit(cust.id, { website: e.target.value })} placeholder="https://" />
+                            </div>
                           </div>
+
+                          {/* Address */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Address</p>
+                            <div className="space-y-3">
+                              <div>
+                                <Label>Street</Label>
+                                <Input value={edited.addressStreet} onChange={(e) => updateCustEdit(cust.id, { addressStreet: e.target.value })} />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <Label>City</Label>
+                                  <Input value={edited.addressCity} onChange={(e) => updateCustEdit(cust.id, { addressCity: e.target.value })} />
+                                </div>
+                                <div>
+                                  <Label>Province / State</Label>
+                                  <Input value={edited.addressProvince} onChange={(e) => updateCustEdit(cust.id, { addressProvince: e.target.value })} />
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <Label>Postal / Zip</Label>
+                                  <Input value={edited.addressPostalCode} onChange={(e) => updateCustEdit(cust.id, { addressPostalCode: e.target.value })} />
+                                </div>
+                                <div>
+                                  <Label>Country</Label>
+                                  <Input value={edited.addressCountry} onChange={(e) => updateCustEdit(cust.id, { addressCountry: e.target.value })} />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Notes */}
                           <div>
                             <Label>Notes</Label>
                             <Input value={edited.notes} onChange={(e) => updateCustEdit(cust.id, { notes: e.target.value })} placeholder="Internal notes" />
                           </div>
 
                           {/* Contacts sub-section */}
-                          <Separator />
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Contacts</p>
-                            {!cust.id.startsWith("new-") && (
-                              <Button variant="secondary" size="xs" onClick={() => addContact(cust.id)}>
-                                <Plus className="h-3 w-3" />
-                                Add Contact
-                              </Button>
-                            )}
-                          </div>
-                          {cust.id.startsWith("new-") && (
-                            <p className="text-xs text-fg/40">Fill in client details and click away to save, then add contacts.</p>
-                          )}
-                          {contacts.length > 0 && (
-                            <div className="space-y-2">
-                              {contacts.map((contact) => {
-                                const ce = getContactEdit(contact);
-                                return (
-                                  <div key={contact.id} className="rounded-lg border border-line bg-panel p-3 space-y-3" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveContact(cust.id, contact); }}>
-                                    <div className="grid grid-cols-2 gap-3">
-                                      <div>
-                                        <Label>Name</Label>
-                                        <Input value={ce.name} onChange={(e) => updateContactEdit(contact.id, { name: e.target.value })} placeholder="Contact name" />
-                                      </div>
-                                      <div>
-                                        <Label>Title</Label>
-                                        <Input value={ce.title} onChange={(e) => updateContactEdit(contact.id, { title: e.target.value })} placeholder="Job title" />
-                                      </div>
-                                    </div>
-                                    <div className="grid grid-cols-2 gap-3">
-                                      <div>
-                                        <Label>Phone</Label>
-                                        <Input value={ce.phone} onChange={(e) => updateContactEdit(contact.id, { phone: e.target.value })} placeholder="Phone" />
-                                      </div>
-                                      <div>
-                                        <Label>Email</Label>
-                                        <Input value={ce.email} onChange={(e) => updateContactEdit(contact.id, { email: e.target.value })} placeholder="Email" />
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                      <label className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
-                                        <input
-                                          type="checkbox"
-                                          checked={ce.isPrimary}
-                                          onChange={(e) => updateContactEdit(contact.id, { isPrimary: e.target.checked })}
-                                          className="rounded border-line accent-accent"
-                                        />
-                                        Primary Contact
-                                      </label>
-                                      <span className="flex-1" />
-                                      {contactDeleteConfirm === contact.id ? (
-                                        <div className="flex items-center gap-2">
-                                          <Button variant="danger" size="xs" onClick={() => deleteContact(cust.id, contact.id)}>Confirm</Button>
-                                          <Button variant="secondary" size="xs" onClick={() => setContactDeleteConfirm(null)}>Cancel</Button>
-                                        </div>
-                                      ) : (
-                                        <button
-                                          onClick={() => setContactDeleteConfirm(contact.id)}
-                                          className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors"
-                                        >
-                                          <Trash2 className="h-3.5 w-3.5" />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Contacts</p>
+                              {!cust.id.startsWith("new-") && (
+                                <Button variant="secondary" size="xs" onClick={() => addContact(cust.id)}>
+                                  <Plus className="h-3 w-3" />
+                                  Add Contact
+                                </Button>
+                              )}
                             </div>
-                          )}
-
-                          {/* Actions */}
-                          <div className="flex items-center gap-2 pt-2">
-                            {custDeleteConfirm === cust.id ? (
-                              <div className="flex items-center gap-2 ml-2">
-                                <span className="text-xs text-danger">Delete this client?</span>
-                                <Button variant="danger" size="xs" onClick={() => deleteCustomer(cust.id)}>Confirm</Button>
-                                <Button variant="secondary" size="xs" onClick={() => setCustDeleteConfirm(null)}>Cancel</Button>
+                            {cust.id.startsWith("new-") && (
+                              <p className="text-xs text-fg/40">Save the client first, then add contacts.</p>
+                            )}
+                            {contacts.length > 0 && (
+                              <div className="space-y-2">
+                                {contacts.map((contact) => {
+                                  const ce = getContactEdit(contact);
+                                  return (
+                                    <div key={contact.id} className="rounded-lg border border-line bg-panel2/30 p-3 space-y-3" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveContact(cust.id, contact); }}>
+                                      <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                          <Label>Name</Label>
+                                          <Input value={ce.name} onChange={(e) => updateContactEdit(contact.id, { name: e.target.value })} placeholder="Contact name" />
+                                        </div>
+                                        <div>
+                                          <Label>Title</Label>
+                                          <Input value={ce.title} onChange={(e) => updateContactEdit(contact.id, { title: e.target.value })} placeholder="Job title" />
+                                        </div>
+                                      </div>
+                                      <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                          <Label>Phone</Label>
+                                          <Input value={ce.phone} onChange={(e) => updateContactEdit(contact.id, { phone: e.target.value })} placeholder="Phone" />
+                                        </div>
+                                        <div>
+                                          <Label>Email</Label>
+                                          <Input value={ce.email} onChange={(e) => updateContactEdit(contact.id, { email: e.target.value })} placeholder="Email" />
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        <label className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={ce.isPrimary}
+                                            onChange={(e) => updateContactEdit(contact.id, { isPrimary: e.target.checked })}
+                                            className="rounded border-line accent-accent"
+                                          />
+                                          Primary Contact
+                                        </label>
+                                        <span className="flex-1" />
+                                        {contactDeleteConfirm === contact.id ? (
+                                          <div className="flex items-center gap-2">
+                                            <Button variant="danger" size="xs" onClick={() => deleteContact(cust.id, contact.id)}>Confirm</Button>
+                                            <Button variant="secondary" size="xs" onClick={() => setContactDeleteConfirm(null)}>Cancel</Button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            onClick={() => setContactDeleteConfirm(contact.id)}
+                                            className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            ) : (
-                              <button
-                                onClick={() => setCustDeleteConfirm(cust.id)}
-                                className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors ml-2"
-                                title="Delete client"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
                             )}
                           </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
+
+                        {/* Footer */}
+                        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-panel2/40">
+                          <Button variant="secondary" size="sm" onClick={() => setExpandedCustId(null)}>Cancel</Button>
+                          <Button variant="accent" size="sm" onClick={() => { saveCustomer(cust); setExpandedCustId(null); }}>Save</Button>
+                        </div>
+                      </motion.div>
+                    );
+                  })()}
+                </AnimatePresence>,
+                document.body
+                )}
               </div>
             </Card>
           )}
@@ -2090,15 +2141,49 @@ export function SettingsPage({
             </Card>
           )}
 
-          {/* ── Items & Catalogs ─── (kept mounted to preserve state across tab switches) */}
-          <div className={activeGroup === "estimating" && estimatingSubTab === "catalogs" ? "" : "hidden"}>
-            <ItemsManager catalogs={initialCatalogs} />
-          </div>
+          {/* ── Terms & Conditions Tab ─────────────────────────────────── */}
+          {activeGroup === "organization" && orgSubTab === "terms" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Terms & Conditions</CardTitle>
+              </CardHeader>
+              <CardBody>
+                <div className="space-y-4">
+                  <div>
+                    <Label>Organization Terms & Conditions</Label>
+                    <p className="text-xs text-fg/40 mt-1 mb-3">
+                      Paste your standard terms and conditions below. These will be included in all generated quote PDFs when the Terms & Conditions section is enabled.
+                    </p>
+                    <textarea
+                      className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-sm text-fg leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[400px]"
+                      rows={20}
+                      value={settings.termsAndConditions}
+                      onChange={(e) => setSettings((prev) => ({ ...prev, termsAndConditions: e.target.value }))}
+                      placeholder={"1. SCOPE OF WORK\nThe Contractor shall provide all labour, materials, and equipment necessary to complete the work as described in this proposal.\n\n2. PAYMENT TERMS\nPayment is due within 30 days of invoice date...\n\n3. WARRANTY\nAll work shall be warranted for a period of one (1) year from the date of completion..."}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-xs text-fg/30">
+                      {settings.termsAndConditions.length > 0
+                        ? `${settings.termsAndConditions.length.toLocaleString()} characters`
+                        : "No terms configured"}
+                    </span>
+                    <span className="text-xs text-fg/30">Auto-saves when changed</span>
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          )}
 
-          {/* ── Rate Schedules ─── (kept mounted to preserve state across tab switches) */}
-          <div className={activeGroup === "estimating" && estimatingSubTab === "rates" ? "" : "hidden"}>
+          {/* ── Items & Catalogs ─── */}
+          {activeGroup === "data" && dataSubTab === "catalogs" && (
+            <ItemsManager catalogs={initialCatalogs} />
+          )}
+
+          {/* ── Rate Schedules ─── */}
+          {activeGroup === "data" && dataSubTab === "rates" && (
             <RateScheduleManager schedules={rateSchedules} setSchedules={setRateSchedules} loading={ratesLoading} catalogs={initialCatalogs} />
-          </div>
+          )}
 
           {/* ── Inclusions / Exclusions ─── */}
           {activeGroup === "data" && dataSubTab === "conditions" && (
@@ -2187,14 +2272,27 @@ export function SettingsPage({
             </Card>
           )}
 
+          {/* ── Labour Costs & Burden ─── */}
+          {activeGroup === "data" && dataSubTab === "costs" && (
+            <div className="space-y-6">
+              <LabourCostManager />
+              <BurdenManager />
+            </div>
+          )}
+
+          {/* ── Travel Policies ─── */}
+          {activeGroup === "data" && dataSubTab === "travel" && (
+            <TravelPolicyManager />
+          )}
+
           {/* ── Agent Runtime ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "agent" && (
-            <AgentRuntimeSettings settings={settings} onUpdate={(patch) => setSettings((prev) => ({ ...prev, integrations: { ...prev.integrations, ...patch } }))} />
+            <AgentRuntimeSettings settings={settings} onUpdate={(patch) => setSettings((prev) => ({ ...prev, integrations: { ...prev.integrations, ...patch } }))} onUpdateDefaults={updateDefaults} />
           )}
 
           {/* ── Plugins ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "plugins" && (
-            <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} />
+            <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} entityCategories={categories} />
           )}
 
         </FadeIn>
@@ -2207,9 +2305,11 @@ export function SettingsPage({
 function AgentRuntimeSettings({
   settings,
   onUpdate,
+  onUpdateDefaults,
 }: {
-  settings: { integrations: IntegrationSettings & Record<string, any> };
+  settings: { integrations: IntegrationSettings & Record<string, any>; defaults: DefaultSettings & Record<string, any> };
   onUpdate: (patch: Record<string, any>) => void;
+  onUpdateDefaults: (patch: Partial<DefaultSettings>) => void;
 }) {
   const [cliStatus, setCliStatus] = useState<{
     claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
@@ -2350,6 +2450,20 @@ function AgentRuntimeSettings({
           }}
         />
         <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
+      </div>
+
+      {/* Max Iterations */}
+      <div>
+        <Label>Max Agent Iterations</Label>
+        <Input
+          type="number"
+          value={(settings.defaults as any).maxAgentIterations ?? 200}
+          onChange={(e) => onUpdateDefaults({ maxAgentIterations: parseInt(e.target.value) || 200 } as any)}
+          placeholder="200"
+          min={10}
+          max={1000}
+        />
+        <p className="mt-1 text-[11px] text-fg/40">Maximum tool call iterations for AI estimating runs</p>
       </div>
 
       {/* Auth Note */}

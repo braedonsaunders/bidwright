@@ -5,7 +5,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, sendMessage, type AgentRuntime } from "../services/cli-runtime.js";
+import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";

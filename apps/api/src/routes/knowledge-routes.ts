@@ -15,7 +15,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
   // ── POST /api/knowledge/ingest-file ─────────────────────────────────
   // Upload and ingest a file via multipart/form-data.
   // Fields: file (binary), title, category, scope, projectId?, chunkStrategy?, chunkSize?
-  app.post("/api/knowledge/ingest-file", async (request, reply) => {
+  app.post("/knowledge/ingest-file", async (request, reply) => {
     try {
       const parts = request.parts();
       let fileBuffer: Buffer | undefined;
@@ -49,7 +49,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         return reply.code(400).send({ message: "Category is required" });
       }
 
-      const result = await knowledgeService.ingestDocument({
+      const ingestionRequest = {
         file: { buffer: fileBuffer, filename: fileName, mimeType },
         title: fields.title,
         category: fields.category as "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general",
@@ -62,10 +62,20 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           enableContextualEnrichment: fields.enableContextualEnrichment === "true",
           enableEmbeddings: fields.enableEmbeddings === "false" ? false : true,
         },
-      }, request.store!);
+      };
 
+      // Create the book record quickly and respond immediately
+      const { bookId } = await knowledgeService.createBookRecord(ingestionRequest, request.store!);
+
+      // Fire-and-forget: process text extraction, chunking, embeddings in background
+      knowledgeService.processBookBackground(bookId, ingestionRequest, request.store!).catch((err) => {
+        request.log.error(err, `Background processing failed for book ${bookId}`);
+      });
+
+      // Return the newly created book so the UI can display it
+      const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
       reply.code(201);
-      return result;
+      return book;
     } catch (err) {
       request.log.error(err, "Knowledge ingest-file failed");
       return reply.code(500).send({

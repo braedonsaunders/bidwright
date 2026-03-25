@@ -84,7 +84,7 @@ export function RichTextEditor({
     exec(action.command, action.value);
   }
 
-  /* Emit change from contentEditable */
+  /* Emit change from contentEditable (called on input events) */
   function emitChange() {
     if (!editorRef.current) return;
     const html = editorRef.current.innerHTML;
@@ -93,6 +93,17 @@ export function RichTextEditor({
     isInternalChange.current = true;
     lastEmittedHtml.current = html;
     onChange(html);
+  }
+
+  /* Blur handler: only emit if content actually changed since last emission */
+  function handleBlur() {
+    if (!editorRef.current) return;
+    const html = editorRef.current.innerHTML;
+    // Only emit on blur if content differs from last known value.
+    // This prevents unmount-blur and no-op blur from clearing parent state.
+    if (html !== lastEmittedHtml.current) {
+      emitChange();
+    }
   }
 
   /* Sync external value into editor (only when it truly differs) */
@@ -125,12 +136,12 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        "rounded-lg border border-line bg-bg overflow-hidden focus-within:border-accent/60 transition-colors",
+        "rounded-lg border border-line bg-bg focus-within:border-accent/60 transition-colors",
         className,
       )}
     >
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-0.5 border-b border-line bg-panel2/40 px-1.5 py-1">
+      <div className="flex flex-wrap items-center gap-0.5 border-b border-line bg-panel2/40 px-1.5 py-1 shrink-0">
         {TOOLBAR_ACTIONS.map((action) => {
           const Icon = action.icon;
           return (
@@ -151,7 +162,7 @@ export function RichTextEditor({
       </div>
 
       {/* Editor area */}
-      <div className="relative">
+      <div className="relative flex-1 flex flex-col">
         {isEmpty && placeholder && (
           <div
             className="pointer-events-none absolute inset-0 px-3 py-2 text-sm text-fg/30"
@@ -165,9 +176,9 @@ export function RichTextEditor({
           contentEditable
           suppressContentEditableWarning
           onInput={emitChange}
-          onBlur={emitChange}
+          onBlur={handleBlur}
           onPaste={handlePaste}
-          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none overflow-visible"
+          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none overflow-visible flex-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5"
           style={{ minHeight, height: "auto" }}
         />
       </div>

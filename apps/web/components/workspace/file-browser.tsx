@@ -4,16 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   AlertTriangle,
+  Box,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
   Edit3,
-  Expand,
   ExternalLink,
   Eye,
   File,
+  FilePlus,
+  FileSpreadsheet,
   FileText,
   Folder,
   FolderOpen,
@@ -21,17 +23,77 @@ import {
   Image as ImageIcon,
   Loader2,
   Minus,
-  Maximize2,
   MoreHorizontal,
   Plus,
+  Scaling,
   Search,
   Table2,
+  ClipboardCheck,
+  Pencil,
+  PenTool,
+  Maximize2,
+  Minimize2,
+  MonitorUp,
   Trash2,
+  Type,
   Upload,
   X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import { createPortal } from "react-dom";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import dynamic from "next/dynamic";
+
+const RichTextEditor = dynamic(
+  () => import("./editors/rich-text-editor").then((m) => ({ default: m.RichTextEditor })),
+  { ssr: false }
+);
+const SpreadsheetEditor = dynamic(
+  () => import("./editors/spreadsheet-editor").then((m) => ({ default: m.SpreadsheetEditor })),
+  { ssr: false }
+);
+const CadViewer = dynamic(
+  () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
+  { ssr: false }
+);
+const WhiteboardEditor = dynamic(
+  () => import("./editors/whiteboard-editor").then((m) => ({ default: m.WhiteboardEditor })),
+  { ssr: false }
+);
+const MarkdownEditor = dynamic(
+  () => import("./editors/markdown-editor").then((m) => ({ default: m.MarkdownEditor })),
+  { ssr: false }
+);
+const ChecklistEditor = dynamic(
+  () => import("./editors/checklist-editor").then((m) => ({ default: m.ChecklistEditor })),
+  { ssr: false }
+);
+const DocxViewer = dynamic(
+  () => import("./viewers/docx-viewer").then((m) => ({ default: m.DocxViewer })),
+  { ssr: false }
+);
+const XlsxViewer = dynamic(
+  () => import("./viewers/xlsx-viewer").then((m) => ({ default: m.XlsxViewer })),
+  { ssr: false }
+);
+const EmailViewer = dynamic(
+  () => import("./viewers/email-viewer").then((m) => ({ default: m.EmailViewer })),
+  { ssr: false }
+);
+const DxfViewer = dynamic(
+  () => import("./viewers/dxf-viewer").then((m) => ({ default: m.DxfViewer })),
+  { ssr: false }
+);
+const ZipViewer = dynamic(
+  () => import("./viewers/zip-viewer").then((m) => ({ default: m.ZipViewer })),
+  { ssr: false }
+);
+const RtfViewer = dynamic(
+  () => import("./viewers/rtf-viewer").then((m) => ({ default: m.RtfViewer })),
+  { ssr: false }
+);
+
 import type {
   FileNode,
   PackageRecord,
@@ -108,7 +170,14 @@ const TYPE_BADGE_TONE: Record<string, "default" | "success" | "warning" | "dange
 const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "svg"]);
 const PDF_EXTENSIONS = new Set(["pdf"]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv"]);
-const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv", "log", "cfg", "ini", "html", "css", "js", "ts"]);
+const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "log", "cfg", "ini", "html", "css", "js", "ts"]);
+const CAD_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
+const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
+const XLSX_EXTENSIONS = new Set(["xlsx", "xls"]);
+const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
+const DXF_EXTENSIONS = new Set(["dxf", "dwg"]);
+const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz"]);
+const RTF_EXTENSIONS = new Set(["rtf"]);
 
 /* ─── Helpers ─── */
 
@@ -128,14 +197,21 @@ function getFileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
 }
 
-type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "none";
+type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
 
 function getFilePreviewType(item: TreeItem): FilePreviewType {
   const ext = getFileExtension(item.name);
   if (PDF_EXTENSIONS.has(ext)) return "pdf";
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
-  if (SPREADSHEET_EXTENSIONS.has(ext)) return "spreadsheet";
   if (TEXT_EXTENSIONS.has(ext)) return "text";
+  if (CAD_EXTENSIONS.has(ext)) return "cad";
+  if (DOCX_EXTENSIONS.has(ext)) return "docx";
+  if (XLSX_EXTENSIONS.has(ext)) return "xlsx";
+  if (SPREADSHEET_EXTENSIONS.has(ext)) return "xlsx";
+  if (EMAIL_EXTENSIONS.has(ext)) return "email";
+  if (DXF_EXTENSIONS.has(ext)) return "dxf";
+  if (ZIP_EXTENSIONS.has(ext)) return "zip";
+  if (RTF_EXTENSIONS.has(ext)) return "rtf";
   return "none";
 }
 
@@ -187,7 +263,16 @@ function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
   return attachChildren(null);
 }
 
+function isJunkFile(name: string): boolean {
+  const base = name.split("/").pop() ?? name;
+  if (base.startsWith("._")) return true;
+  if (base === "Thumbs.db" || base === ".DS_Store") return true;
+  return false;
+}
+
 function buildAutoFolders(documents: SourceDocument[]): TreeItem[] {
+  // Filter out macOS resource forks (._*) and other junk files
+  documents = documents.filter((d) => !isJunkFile(d.fileName));
   const folders: TreeItem[] = [];
 
   for (const cfg of FOLDER_CONFIG) {
@@ -321,7 +406,8 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
         setLoading(false);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load PDF");
+          const msg = err instanceof Error ? err.message : "Failed to load PDF";
+          setError(msg.includes("Invalid PDF") ? "This PDF file could not be loaded — the file may be missing or corrupted." : msg);
           setLoading(false);
         }
       }
@@ -451,52 +537,58 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
       {/* PDF Controls */}
       <div className="flex items-center justify-between border-b border-line px-3 py-2 bg-panel2/30 shrink-0">
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
             disabled={pageNumber <= 1}
-            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30"
           >
             <ChevronLeft className="h-4 w-4" />
-          </button>
+          </Button>
           <span className="text-xs text-fg/60 min-w-[80px] text-center">
             {pageNumber} / {pageCount}
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}
             disabled={pageNumber >= pageCount}
-            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30"
           >
             <ChevronRight className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
         <div className="flex items-center gap-1">
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleZoomOut}
-            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
             title="Zoom out"
           >
             <ZoomOut className="h-3.5 w-3.5" />
-          </button>
+          </Button>
           <span className="text-xs text-fg/50 min-w-[40px] text-center">
             {displayZoom}%
           </span>
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleZoomIn}
-            className="rounded p-1 text-fg/50 hover:bg-panel2 hover:text-fg"
             title="Zoom in"
           >
             <ZoomIn className="h-3.5 w-3.5" />
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
             onClick={handleFitToWidth}
             className={cn(
-              "rounded p-1 hover:bg-panel2 ml-1",
+              "ml-1",
               isFitMode ? "text-accent" : "text-fg/50 hover:text-fg"
             )}
             title="Fit to width"
           >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
+            <Scaling className="h-3.5 w-3.5" />
+          </Button>
         </div>
       </div>
 
@@ -548,11 +640,14 @@ function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
 
 function TextPreview({ url, extractedText }: { url: string | null; extractedText?: string }) {
   const [content, setContent] = useState<string | null>(extractedText ?? null);
-  const [loading, setLoading] = useState(!extractedText);
+  const [loading, setLoading] = useState(!extractedText && !!url);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (extractedText || !url) return;
+    if (extractedText || !url) {
+      setLoading(false);
+      return;
+    }
 
     let cancelled = false;
     setLoading(true);
@@ -597,10 +692,19 @@ function TextPreview({ url, extractedText }: { url: string | null; extractedText
     );
   }
 
+  if (!content) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 p-8 flex-1">
+        <FileText className="h-8 w-8 text-fg/15" />
+        <p className="text-sm text-fg/40">No content available for preview</p>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-auto bg-bg/30 p-4 flex-1">
       <pre className="text-xs text-fg/70 leading-relaxed whitespace-pre-wrap font-mono">
-        {truncateText(content ?? "", 50000)}
+        {truncateText(content, 50000)}
       </pre>
     </div>
   );
@@ -733,46 +837,6 @@ function parseCSV(text: string, separator: string): string[][] {
   return rows;
 }
 
-/* ─── Full Screen PDF Overlay ─── */
-
-function FullScreenPdfOverlay({
-  url,
-  fileName,
-  onClose,
-}: {
-  url: string;
-  fileName: string;
-  onClose: () => void;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-50 flex flex-col bg-black/70 backdrop-blur-sm"
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-panel/90 border-b border-line">
-        <div className="flex items-center gap-2">
-          <FileText className="h-4 w-4 text-accent" />
-          <span className="text-sm font-medium text-fg truncate max-w-[500px]">{fileName}</span>
-        </div>
-        <button
-          onClick={onClose}
-          className="rounded-md p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg transition-colors"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      {/* PDF content */}
-      <div className="flex-1 overflow-hidden">
-        <PdfPreview url={url} fileName={fileName} />
-      </div>
-    </motion.div>
-  );
-}
-
 /* ─── Structured Content View ─── */
 
 function StructuredContentView({
@@ -800,7 +864,7 @@ function StructuredContentView({
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-panel2/50">
-                    <th className="text-left px-3 py-1.5 font-medium text-fg/60 border-b border-line w-[40%]">Key</th>
+                    <th className="text-left px-3 py-1.5 font-medium text-fg/60 border-b border-line w-[30%]">Key</th>
                     <th className="text-left px-3 py-1.5 font-medium text-fg/60 border-b border-line">Value</th>
                     <th className="text-right px-3 py-1.5 font-medium text-fg/60 border-b border-line w-[80px]">Conf.</th>
                   </tr>
@@ -1292,46 +1356,318 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   // Show tabs when there is extracted content (so user can toggle between file view and text)
   const showPreviewTabs = selectedItem?.type === "file" && (hasExtracted && filePreviewType !== "none" || hasExtracted);
   const [previewTab, setPreviewTab] = useState<"file" | "extracted">("file");
-  const [fullScreenPdf, setFullScreenPdf] = useState(false);
+  const [editorMode, setEditorMode] = useState<"none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist">("none");
+  const [editorFileName, setEditorFileName] = useState("");
+
+  // ── Resizable divider ──────────────────────────────────────────────────
+  const [leftPanelWidth, setLeftPanelWidth] = useState(30);
+  const isDraggingDivider = useRef(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingDivider.current = true;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, []);
+
+  useEffect(() => {
+    function cleanupDrag() {
+      isDraggingDivider.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    function handleMouseMove(e: MouseEvent) {
+      if (!isDraggingDivider.current || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      let pct = ((e.clientX - rect.left) / rect.width) * 100;
+      pct = Math.max(20, Math.min(60, pct));
+      setLeftPanelWidth(pct);
+    }
+    function handleMouseUp() {
+      if (isDraggingDivider.current) cleanupDrag();
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      cleanupDrag(); // ensure body styles are always restored on unmount
+    };
+  }, []);
+
+  // ── Fullscreen ─────────────────────────────────────────────────────────
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setIsFullscreen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isFullscreen]);
+
+  // ── Detached window (pop-out) ──────────────────────────────────────────
+  const [isDetached, setIsDetached] = useState(false);
+  const [detachedContainer, setDetachedContainer] = useState<HTMLDivElement | null>(null);
+  const detachedWindowRef = useRef<Window | null>(null);
+
+  const handlePopOut = useCallback(() => {
+    if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
+      detachedWindowRef.current.focus();
+      return;
+    }
+    const newWindow = window.open("", "_blank", "width=1200,height=800");
+    if (!newWindow) return;
+    detachedWindowRef.current = newWindow;
+    setIsDetached(true);
+
+    newWindow.document.title = selectedItem?.name ?? "Preview";
+    newWindow.document.documentElement.className = document.documentElement.className;
+    newWindow.document.body.className = document.body.className;
+    newWindow.document.body.style.margin = "0";
+
+    const rootStyles = document.documentElement.getAttribute("style");
+    if (rootStyles) newWindow.document.documentElement.setAttribute("style", rootStyles);
+
+    document.querySelectorAll('style, link[rel="stylesheet"]').forEach((el) => {
+      newWindow.document.head.appendChild(el.cloneNode(true));
+    });
+
+    const mount = newWindow.document.createElement("div");
+    mount.id = "detached-root";
+    mount.style.height = "100vh";
+    mount.style.display = "flex";
+    mount.style.flexDirection = "column";
+    newWindow.document.body.appendChild(mount);
+    setDetachedContainer(mount);
+
+    newWindow.addEventListener("beforeunload", () => {
+      detachedWindowRef.current = null;
+      setIsDetached(false);
+      setDetachedContainer(null);
+    });
+  }, [selectedItem?.name]);
+
+  useEffect(() => {
+    if (detachedWindowRef.current && !detachedWindowRef.current.closed && selectedItem) {
+      detachedWindowRef.current.document.title = selectedItem.name;
+    }
+  }, [selectedItem]);
+
+  useEffect(() => {
+    return () => {
+      if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
+        detachedWindowRef.current.close();
+      }
+    };
+  }, []);
+
+  const handleEditorSave = useCallback(async (content: string | Blob, fileName: string, mimeType: string, extension: string) => {
+    try {
+      const safeName = fileName.endsWith(`.${extension}`) ? fileName : `${fileName}.${extension}`;
+      const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
+      const file = new globalThis.File([blob], safeName, { type: mimeType });
+      const node = await uploadFile(projectId, file);
+      // Refresh tree
+      const updatedNodes = await getFileTree(projectId);
+      setUserNodes(updatedNodes);
+      // Select the new file
+      setSelectedId(node.id);
+      setEditorMode("none");
+    } catch (err) {
+      showError(`Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [projectId, showError]);
 
   // Reset to file tab when selection changes
   useEffect(() => {
     setPreviewTab("file");
-    setFullScreenPdf(false);
   }, [selectedId]);
 
+  /* ─── Preview content (extracted for fullscreen / detach reuse) ─── */
+  const previewContent = editorMode !== "none" ? (
+    <div className="flex-1 overflow-hidden flex flex-col">
+      {editorMode === "rich-text" && (
+        <RichTextEditor fileName={editorFileName} onSave={(html) => handleEditorSave(html, editorFileName, "text/html", "html")} onClose={() => setEditorMode("none")} />
+      )}
+      {editorMode === "spreadsheet" && (
+        <SpreadsheetEditor fileName={editorFileName} onSave={(blob) => handleEditorSave(blob, editorFileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx")} onClose={() => setEditorMode("none")} />
+      )}
+      {editorMode === "whiteboard" && (
+        <WhiteboardEditor fileName={editorFileName} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "excalidraw")} onClose={() => setEditorMode("none")} />
+      )}
+      {editorMode === "markdown" && (
+        <MarkdownEditor fileName={editorFileName} onSave={(content) => handleEditorSave(content, editorFileName, "text/markdown", "md")} onClose={() => setEditorMode("none")} />
+      )}
+      {editorMode === "checklist" && (
+        <ChecklistEditor fileName={editorFileName} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "checklist.json")} onClose={() => setEditorMode("none")} />
+      )}
+    </div>
+  ) : !selectedItem ? (
+    <div className="flex-1 flex items-center justify-center">
+      <EmptyState>Click a file or folder in the tree to view its details and preview.</EmptyState>
+    </div>
+  ) : selectedItem.type === "directory" ? (
+    <div className="flex-1 flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-line">
+        <span className="text-sm font-semibold text-fg">{selectedItem.name}</span>
+        {selectedItem.isAutoFolder && (
+          <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType ?? ""] ?? "default"}>Auto-organized</Badge>
+        )}
+      </div>
+      <CardBody className="flex-1">
+        <div className="space-y-4">
+          <div><p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Contents</p><p className="mt-1 text-sm text-fg/70">{selectedItem.children.length} item{selectedItem.children.length !== 1 ? "s" : ""}</p></div>
+          {selectedItem.fileNode && (
+            <div className="flex gap-2 pt-2">
+              <Button variant="secondary" size="xs" onClick={() => { setRenamingId(selectedItem.fileNode!.id); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /> Rename</Button>
+              <Button variant="danger" size="xs" onClick={() => handleDelete(selectedItem)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
+            </div>
+          )}
+        </div>
+      </CardBody>
+    </div>
+  ) : (
+    <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Preview area */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        {previewTab === "file" || !hasExtracted ? (
+          <>
+            {filePreviewType === "pdf" && previewUrl && <PdfPreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "image" && previewUrl && <ImagePreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "text" && <TextPreview key={selectedItem.id} url={previewUrl} extractedText={!hasExtracted ? selectedItem.extractedText : undefined} />}
+            {filePreviewType === "cad" && previewUrl && <div className="flex-1 min-h-[400px]"><CadViewer fileUrl={previewUrl} fileName={selectedItem.name} /></div>}
+            {filePreviewType === "docx" && previewUrl && <DocxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "xlsx" && previewUrl && <div className="flex-1 min-h-0"><XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
+            {filePreviewType === "email" && previewUrl && <EmailViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "dxf" && previewUrl && <div className="flex-1 min-h-[400px]"><DxfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
+            {filePreviewType === "zip" && previewUrl && <ZipViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "rtf" && previewUrl && <RtfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "none" && (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+                <File className="h-12 w-12 text-fg/15" />
+                <p className="text-sm text-fg/40">Preview not available for this file type</p>
+                {downloadUrl && <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-4 w-4" /> Download File</Button></a>}
+                {hasExtracted && !showPreviewTabs && (
+                  <div className="w-full mt-4">
+                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">Extracted Text</p>
+                    <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">{truncateText(selectedItem.extractedText!, 2000)}</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        ) : (
+          <StructuredContentView key={selectedItem.id} structuredData={selectedItem.sourceDocument?.structuredData} extractedText={selectedItem.extractedText} />
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="flex h-full gap-4">
-      {/* ─── Left Panel: File Tree ─── */}
-      <div className="flex w-[40%] flex-col">
-        <Card className="flex flex-1 flex-col overflow-hidden">
-          <CardHeader className="flex flex-row items-center justify-between gap-3">
+    <div className="flex h-full" ref={containerRef}>
+      <Card className="flex flex-1 flex-row overflow-hidden">
+        {/* ─── Left Panel: File Tree ─── */}
+        <div className="flex flex-col overflow-hidden border-r border-line" style={{ width: `${leftPanelWidth}%` }}>
+          <CardHeader className="flex flex-row items-center justify-between gap-3 shrink-0">
             <CardTitle>Project Documents</CardTitle>
             <div className="flex items-center gap-1.5">
-              <Button
-                variant="secondary"
-                size="xs"
-                onClick={() => {
-                  setCreatingFolder(true);
-                  setNewFolderParentId(null);
-                }}
-              >
-                <FolderPlus className="h-3.5 w-3.5" />
-                New Folder
-              </Button>
-              <Button
-                variant="secondary"
-                size="xs"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Upload className="h-3.5 w-3.5" />
-                )}
-                Upload
-              </Button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild>
+                  <Button variant="secondary" size="xs">
+                    <FilePlus className="h-3.5 w-3.5" />
+                    New
+                    <ChevronDown className="h-3 w-3 ml-0.5" />
+                  </Button>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    className="z-[100] min-w-[180px] rounded-lg border border-line bg-panel p-1 shadow-xl"
+                    sideOffset={4}
+                    align="end"
+                  >
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setCreatingFolder(true);
+                        setNewFolderParentId(null);
+                      }}
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" />
+                      New Folder
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="my-1 h-px bg-line" />
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setEditorFileName("Untitled Document");
+                        setEditorMode("rich-text");
+                        setSelectedId(null);
+                      }}
+                    >
+                      <Type className="h-3.5 w-3.5" />
+                      Rich Text Document
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setEditorFileName("Untitled Spreadsheet");
+                        setEditorMode("spreadsheet");
+                        setSelectedId(null);
+                      }}
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      Spreadsheet
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setEditorFileName("Untitled Whiteboard");
+                        setEditorMode("whiteboard");
+                        setSelectedId(null);
+                      }}
+                    >
+                      <PenTool className="h-3.5 w-3.5" />
+                      Whiteboard / Diagram
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setEditorFileName("Untitled Note");
+                        setEditorMode("markdown");
+                        setSelectedId(null);
+                      }}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Markdown Note
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        setEditorFileName("Untitled Checklist");
+                        setEditorMode("checklist");
+                        setSelectedId(null);
+                      }}
+                    >
+                      <ClipboardCheck className="h-3.5 w-3.5" />
+                      Checklist / Punch List
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator className="my-1 h-px bg-line" />
+                    <DropdownMenu.Label className="px-3 py-1 text-[10px] font-medium text-fg/30 uppercase tracking-wider">
+                      Import
+                    </DropdownMenu.Label>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => fileInputRef.current?.click()}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Upload Files
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1508,264 +1844,105 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
               ))
             )}
           </div>
-        </Card>
-      </div>
+        </div>
 
-      {/* ─── Right Panel: Preview + Details ─── */}
-      <div className="w-[60%]">
-        <Card className="flex h-full flex-col overflow-hidden">
-          {!selectedItem ? (
+        {/* ─── Resizable Divider ─── */}
+        <div
+          className="w-1.5 shrink-0 cursor-col-resize bg-transparent hover:bg-accent/20 active:bg-accent/30 transition-colors"
+          onMouseDown={handleDividerMouseDown}
+        />
+
+        {/* ─── Right Panel: Preview ─── */}
+        <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+          {/* File header — only in normal panel view (not in fullscreen/detached) */}
+          {editorMode === "none" && selectedItem && selectedItem.type === "file" && (
             <>
-              <CardHeader>
-                <CardTitle>Select a File</CardTitle>
-              </CardHeader>
-              <CardBody className="flex-1">
-                <EmptyState>
-                  Click a file or folder in the tree to view its details and preview.
-                </EmptyState>
-              </CardBody>
-            </>
-          ) : selectedItem.type === "directory" ? (
-            <>
-              <CardHeader className="flex flex-row items-center justify-between gap-3">
-                <CardTitle>{selectedItem.name}</CardTitle>
-                {selectedItem.isAutoFolder && (
-                  <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType ?? ""] ?? "default"}>
-                    Auto-organized
-                  </Badge>
-                )}
-              </CardHeader>
-              <CardBody className="flex-1">
-                <div className="space-y-4">
-                  <div className="flex items-center gap-4">
-                    <div>
-                      <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                        Contents
-                      </p>
-                      <p className="mt-1 text-sm text-fg/70">
-                        {selectedItem.children.length} item
-                        {selectedItem.children.length !== 1 ? "s" : ""}
-                      </p>
-                    </div>
-                  </div>
-                  {selectedItem.fileNode && (
-                    <div className="flex gap-2 pt-2">
-                      <Button
-                        variant="secondary"
-                        size="xs"
-                        onClick={() => {
-                          setRenamingId(selectedItem.fileNode!.id);
-                          setRenameValue(selectedItem.name);
-                        }}
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                        Rename
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="xs"
-                        onClick={() => handleDelete(selectedItem)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Delete
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </CardBody>
-            </>
-          ) : (
-            <>
-              {/* File header with actions */}
-              <CardHeader className="flex flex-row items-center justify-between gap-3">
+              <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line shrink-0">
                 <div className="flex items-center gap-2 min-w-0">
-                  <CardTitle className="truncate">{selectedItem.name}</CardTitle>
+                  <span className="text-sm font-semibold text-fg truncate">{selectedItem.name}</span>
                   {selectedItem.documentType && (
-                    <Badge
-                      tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}
-                    >
-                      {selectedItem.documentType}
-                    </Badge>
+                    <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}>{selectedItem.documentType}</Badge>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  {filePreviewType === "pdf" && previewUrl && (
-                    <Button variant="secondary" size="xs" onClick={() => setFullScreenPdf(true)}>
-                      <Expand className="h-3.5 w-3.5" />
-                      Full Screen
-                    </Button>
-                  )}
+                  <Button variant="ghost" size="xs" onClick={() => setIsFullscreen(true)} title="Fullscreen">
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={handlePopOut} title="Open in new window">
+                    <MonitorUp className="h-3.5 w-3.5" />
+                  </Button>
                   {downloadUrl && (
-                    <a href={downloadUrl} download>
-                      <Button variant="secondary" size="xs">
-                        <Download className="h-3.5 w-3.5" />
-                        Download
-                      </Button>
-                    </a>
-                  )}
-                  {previewUrl && (
-                    <a href={previewUrl} target="_blank" rel="noopener noreferrer">
-                      <Button variant="secondary" size="xs">
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        Open
-                      </Button>
-                    </a>
+                    <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
                   )}
                   {selectedItem.fileNode && (
                     <>
-                      <Button
-                        variant="secondary"
-                        size="xs"
-                        onClick={() => {
-                          setRenamingId(selectedItem.fileNode!.id);
-                          setRenameValue(selectedItem.name);
-                        }}
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="xs"
-                        onClick={() => handleDelete(selectedItem)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
+                      <Button variant="secondary" size="xs" onClick={() => { setRenamingId(selectedItem.fileNode!.id); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="danger" size="xs" onClick={() => handleDelete(selectedItem)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </>
                   )}
                 </div>
-              </CardHeader>
-
-              {/* File metadata bar */}
-              <div className="flex items-center gap-4 border-b border-line px-4 py-2 text-xs text-fg/50">
-                {selectedItem.fileType && (
-                  <span className="uppercase font-medium">{selectedItem.fileType}</span>
-                )}
-                {selectedItem.pageCount != null && selectedItem.pageCount > 0 && (
-                  <span>{selectedItem.pageCount} pages</span>
-                )}
-                {selectedItem.size != null && (
-                  <span>{formatBytes(selectedItem.size)}</span>
-                )}
-                {selectedItem.createdAt && (
-                  <span>{formatDate(selectedItem.createdAt)}</span>
-                )}
               </div>
-
+              {/* Metadata bar */}
+              <div className="flex items-center gap-4 border-b border-line px-4 py-2 text-xs text-fg/50 shrink-0">
+                {selectedItem.fileType && <span className="uppercase font-medium">{selectedItem.fileType}</span>}
+                {selectedItem.pageCount != null && selectedItem.pageCount > 0 && <span>{selectedItem.pageCount} pages</span>}
+                {selectedItem.size != null && <span>{formatBytes(selectedItem.size)}</span>}
+                {selectedItem.createdAt && <span>{formatDate(selectedItem.createdAt)}</span>}
+              </div>
               {/* Preview tabs */}
               {showPreviewTabs && (
-                <div className="flex items-center gap-1 px-4 border-b border-line">
-                  <button
-                    onClick={() => setPreviewTab("file")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
-                      previewTab === "file"
-                        ? "border-accent text-accent"
-                        : "border-transparent text-fg/50 hover:text-fg/70"
-                    )}
-                  >
-                    <Eye className="h-3 w-3" />
-                    File
-                  </button>
-                  <button
-                    onClick={() => setPreviewTab("extracted")}
-                    className={cn(
-                      "flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px",
-                      previewTab === "extracted"
-                        ? "border-accent text-accent"
-                        : "border-transparent text-fg/50 hover:text-fg/70"
-                    )}
-                  >
-                    <FileText className="h-3 w-3" />
-                    Extracted
-                  </button>
+                <div className="flex items-center gap-1 px-4 border-b border-line shrink-0">
+                  <button onClick={() => setPreviewTab("file")} className={cn("flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px", previewTab === "file" ? "border-accent text-accent" : "border-transparent text-fg/50 hover:text-fg/70")}><Eye className="h-3 w-3" /> File</button>
+                  <button onClick={() => setPreviewTab("extracted")} className={cn("flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors border-b-2 -mb-px", previewTab === "extracted" ? "border-accent text-accent" : "border-transparent text-fg/50 hover:text-fg/70")}><FileText className="h-3 w-3" /> Extracted</button>
                 </div>
               )}
-
-              {/* Preview area */}
-              <div className="flex-1 overflow-hidden flex flex-col">
-                {previewTab === "file" || !hasExtracted ? (
-                  <>
-                    {filePreviewType === "pdf" && previewUrl && (
-                      <PdfPreview
-                        key={previewUrl}
-                        url={previewUrl}
-                        fileName={selectedItem.name}
-                      />
-                    )}
-                    {filePreviewType === "image" && previewUrl && (
-                      <ImagePreview
-                        key={previewUrl}
-                        url={previewUrl}
-                        fileName={selectedItem.name}
-                      />
-                    )}
-                    {filePreviewType === "spreadsheet" && (
-                      <SpreadsheetPreview
-                        key={selectedItem.id}
-                        url={previewUrl}
-                        extractedText={selectedItem.extractedText}
-                        fileName={selectedItem.name}
-                      />
-                    )}
-                    {filePreviewType === "text" && !SPREADSHEET_EXTENSIONS.has(getFileExtension(selectedItem.name)) && (
-                      <TextPreview
-                        key={selectedItem.id}
-                        url={previewUrl}
-                        extractedText={!hasExtracted ? selectedItem.extractedText : undefined}
-                      />
-                    )}
-                    {filePreviewType === "none" && (
-                      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
-                        <File className="h-12 w-12 text-fg/15" />
-                        <p className="text-sm text-fg/40">
-                          Preview not available for this file type
-                        </p>
-                        {downloadUrl && (
-                          <a href={downloadUrl} download>
-                            <Button variant="secondary" size="sm">
-                              <Download className="h-4 w-4" />
-                              Download File
-                            </Button>
-                          </a>
-                        )}
-                        {/* If no file preview but has extracted content and no tabs, show inline */}
-                        {hasExtracted && !showPreviewTabs && (
-                          <div className="w-full mt-4">
-                            <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">
-                              Extracted Text
-                            </p>
-                            <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">
-                              {truncateText(selectedItem.extractedText!, 2000)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  /* Extracted content tab — structured view */
-                  <StructuredContentView
-                    key={selectedItem.id}
-                    structuredData={selectedItem.sourceDocument?.structuredData}
-                    extractedText={selectedItem.extractedText}
-                  />
-                )}
-              </div>
-
-              {/* Full screen PDF overlay */}
-              <AnimatePresence>
-                {fullScreenPdf && previewUrl && (
-                  <FullScreenPdfOverlay
-                    url={previewUrl}
-                    fileName={selectedItem.name}
-                    onClose={() => setFullScreenPdf(false)}
-                  />
-                )}
-              </AnimatePresence>
             </>
           )}
-        </Card>
-      </div>
+          {previewContent}
+        </div>
+      </Card>
+
+      {/* ─── Fullscreen Overlay ─── */}
+      {isFullscreen && (
+        <div className="fixed inset-0 z-50 bg-bg flex flex-col" onClick={(e) => { if (e.target === e.currentTarget) setIsFullscreen(false); }}>
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0 bg-panel">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm font-semibold text-fg truncate">{selectedItem?.name ?? editorFileName}</span>
+              {selectedItem?.documentType && (
+                <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}>{selectedItem.documentType}</Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              {downloadUrl && (
+                <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
+              )}
+              <Button variant="secondary" size="xs" onClick={() => setIsFullscreen(false)}>
+                <Minimize2 className="h-3.5 w-3.5" />
+                Exit
+              </Button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {previewContent}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Detached Window Portal ─── */}
+      {isDetached && detachedContainer && createPortal(
+        <div className="flex flex-col h-full bg-bg text-fg">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0">
+            <span className="text-sm font-semibold truncate">{selectedItem?.name ?? editorFileName}</span>
+            {downloadUrl && (
+              <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
+            )}
+          </div>
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {previewContent}
+          </div>
+        </div>,
+        detachedContainer
+      )}
     </div>
   );
 }
