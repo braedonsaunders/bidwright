@@ -2231,37 +2231,6 @@ export class PrismaApiStore {
         );
       }
 
-      // Auto-populate tierUnits from unit1/unit2/unit3 if tierUnits is empty.
-      // Maps unit1→first tier (Regular), unit2→second tier (OT), unit3→third tier (DT)
-      // by tier sortOrder. This ensures the calc engine can compute cost/price.
-      if (Object.keys(item.tierUnits ?? {}).length === 0 && (item.unit1 || item.unit2 || item.unit3)) {
-        const parentSchedule = revisionSchedules.find((s) => s.items.some((i) => i.id === item.rateScheduleItemId));
-        if (parentSchedule) {
-          const sortedTiers = [...parentSchedule.tiers].sort((a, b) => a.sortOrder - b.sortOrder);
-          const autoTierUnits: Record<string, number> = {};
-          if (sortedTiers[0] && item.unit1) autoTierUnits[sortedTiers[0].id] = item.unit1;
-          if (sortedTiers[1] && item.unit2) autoTierUnits[sortedTiers[1].id] = item.unit2;
-          if (sortedTiers[2] && item.unit3) autoTierUnits[sortedTiers[2].id] = item.unit3;
-          item.tierUnits = autoTierUnits;
-        }
-      }
-
-      // Auto-set entityName to the rate schedule item name if the agent provided
-      // a combined "ItemName — description" format. The description belongs in the
-      // description field, not in entityName.
-      const rsItemName = match.name;
-      if (item.entityName.includes(" — ") || item.entityName.includes(" - ")) {
-        const separator = item.entityName.includes(" — ") ? " — " : " - ";
-        const parts = item.entityName.split(separator);
-        if (parts[0].trim() === rsItemName) {
-          // Move the suffix to description if description is empty or generic
-          const suffix = parts.slice(1).join(separator).trim();
-          if (suffix && (!item.description || item.description.length < suffix.length)) {
-            item.description = suffix + (item.description ? `\n${item.description}` : "");
-          }
-          item.entityName = rsItemName;
-        }
-      }
     } else if (itemSource === "rate_schedule") {
       throw new Error(
         `Category "${item.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
