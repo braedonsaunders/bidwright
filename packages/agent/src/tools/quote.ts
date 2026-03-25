@@ -296,7 +296,14 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
   if (autoCategories.length > 0) {
     const names = autoCategories.map((c: any) => c.name).join(", ");
     if (rateItems.length > 0) {
-      instructions += `RATE SCHEDULE CATEGORIES [${names}]: These categories REQUIRE a valid rateScheduleItemId from the rateScheduleItems list below. You MUST pick an existing rate — do NOT invent labour classes, equipment types, or rates that don't exist in the list. If no suitable rate exists, use the closest match and note the discrepancy in the description. `;
+      // Build tier examples from the first rate item
+      const exampleItem = rateItems[0];
+      const tierExample = exampleItem.tiers.map((t: any) => `"${t.id}": <hours>`).join(", ");
+      instructions += `RATE SCHEDULE CATEGORIES [${names}]: These categories REQUIRE:\n`;
+      instructions += `  1. rateScheduleItemId — pick from the rateScheduleItems list below\n`;
+      instructions += `  2. tierUnits — map hours to tier IDs. Each rate item has tiers (see tiers array). Set tierUnits like: {${tierExample}}. This is how cost/price gets calculated.\n`;
+      instructions += `  3. entityName — use ONLY the rate item name (e.g. the "name" field). Put task details in description.\n`;
+      instructions += `  Do NOT invent items. If no suitable rate exists, use the closest match.\n`;
     } else {
       instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. You MUST import rate schedules using rateSchedule.import before creating items in these categories. `;
     }
@@ -357,10 +364,11 @@ If the server rejects your item, read the error message — it will tell you wha
     uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
     cost: z.number().optional().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
     markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%)"),
-    unit1: z.number().optional().default(0).describe("Unit 1 value per unit (e.g. regular hours for Labour)"),
-    unit2: z.number().optional().default(0).describe("Unit 2 value per unit (e.g. overtime hours for Labour)"),
-    unit3: z.number().optional().default(0).describe("Unit 3 value per unit (e.g. double-time hours for Labour)"),
-    rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for Labour items. Get from listRateItems tool."),
+    tierUnits: z.record(z.number()).optional().describe("Hours per rate tier — keys are tier IDs from getItemConfig, values are hours. E.g. {\"rst-abc\": 40, \"rst-def\": 8} for 40 regular + 8 overtime hours. REQUIRED for rate_schedule categories to calculate cost/price."),
+    unit1: z.number().optional().default(0).describe("Regular hours (fallback if tierUnits not set)"),
+    unit2: z.number().optional().default(0).describe("Overtime hours (fallback if tierUnits not set)"),
+    unit3: z.number().optional().default(0).describe("Double-time hours (fallback if tierUnits not set)"),
+    rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for rate_schedule categories."),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
   }),
   tags: ["item", "create", "write"],
