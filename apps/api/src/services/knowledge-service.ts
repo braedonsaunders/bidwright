@@ -317,8 +317,8 @@ async function extractText(
     if (doc.tables && doc.tables.length > 0) {
       parts.push("\n\n--- EXTRACTED TABLES ---\n");
       for (const table of doc.tables) {
-        if (table.markdown) {
-          parts.push(table.markdown);
+        if (table.rawMarkdown) {
+          parts.push(table.rawMarkdown);
         }
       }
     }
@@ -337,14 +337,14 @@ async function extractText(
         kind: c.kind, // "columnHeader" | "rowHeader" | "content"
       })),
       pageNumber: t.boundingRegions?.[0]?.pageNumber,
-      markdown: t.markdown,
+      markdown: t.rawMarkdown,
     }));
 
     return {
       text: text || doc.content,
       pageCount: doc.metadata.pageCount || 1,
       tables: extractedTables.length > 0 ? extractedTables : undefined,
-    };
+    } as any;
   }
 
   // Excel/CSV: convert to text table

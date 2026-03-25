@@ -326,7 +326,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   useEffect(() => {
     Promise.all([
       getSettings().then((s) => {
-        const integ = s?.integrations;
+        const integ = s?.integrations as Record<string, any> | undefined;
         if (integ?.llmProvider) setProvider(integ.llmProvider);
         if (integ?.llmModel) setModel(integ.llmModel);
         // Use configured runtime if set
@@ -655,7 +655,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       // Update the matching tool call with result
       setLiveToolCalls((prev) => {
         const updated = [...prev];
-        const match = updated.findLast((tc) => tc.id === data.toolUseId || !tc.result.duration_ms);
+        const match = [...updated].reverse().find((tc) => tc.id === data.toolUseId || !tc.result.duration_ms);
         if (match) {
           match.result = {
             success: !data.content?.includes("error"),

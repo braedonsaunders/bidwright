@@ -154,7 +154,7 @@ function CatalogItemDrawer({
       animate={{ x: 0 }}
       exit={{ x: "100%" }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed inset-y-0 right-0 z-40 w-[400px] bg-panel border-l border-line shadow-2xl flex flex-col"
+      className="fixed inset-y-0 right-0 z-50 w-[400px] bg-panel border-l border-line shadow-2xl flex flex-col"
     >
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
@@ -319,12 +319,13 @@ export function ItemsManager({
   const [selectedCatalogId, setSelectedCatalogId] = useState<string | null>(
     initialCatalogs[0]?.id ?? null
   );
+  const [deletedCatalogIds, setDeletedCatalogIds] = useState<Set<string>>(new Set());
 
-  // Sync when parent finishes fetching catalogs
+  // Sync when parent finishes fetching catalogs (but exclude locally deleted ones)
   useEffect(() => {
-    setCatalogs(initialCatalogs);
+    setCatalogs(initialCatalogs.filter((c) => !deletedCatalogIds.has(c.id)));
     setSelectedCatalogId((prev) => prev ?? initialCatalogs[0]?.id ?? null);
-  }, [initialCatalogs]);
+  }, [initialCatalogs]); // eslint-disable-line react-hooks/exhaustive-deps
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [search, setSearch] = useState("");
@@ -436,6 +437,7 @@ export function ItemsManager({
   const handleDeleteCatalog = useCallback(async (catalogId: string) => {
     try {
       await deleteCatalog(catalogId);
+      setDeletedCatalogIds((prev) => new Set(prev).add(catalogId));
       setCatalogs((prev) => prev.filter((c) => c.id !== catalogId));
       if (selectedCatalogId === catalogId) {
         setSelectedCatalogId(null);
@@ -987,18 +989,31 @@ export function ItemsManager({
       </div>
 
       {/* ─── Item Detail Drawer ─── */}
-      <AnimatePresence>
-        {drawerItem && selectedCatalogId && (
-          <CatalogItemDrawer
-            key={drawerItem.id}
-            item={drawerItem}
-            catalogId={selectedCatalogId}
-            onSave={handleDrawerSave}
-            onDelete={handleDeleteItem}
-            onClose={() => setDrawerItemId(null)}
-          />
-        )}
-      </AnimatePresence>
+      {typeof document !== "undefined" && createPortal(
+        <AnimatePresence>
+          {drawerItem && selectedCatalogId && (
+            <>
+              <motion.div
+                key="item-drawer-backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-40 bg-black/20"
+                onClick={() => setDrawerItemId(null)}
+              />
+              <CatalogItemDrawer
+                key={drawerItem.id}
+                item={drawerItem}
+                catalogId={selectedCatalogId}
+                onSave={handleDrawerSave}
+                onDelete={handleDeleteItem}
+                onClose={() => setDrawerItemId(null)}
+              />
+            </>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* ─── Library Browser Modal ─── */}
       {typeof document !== "undefined" && createPortal(

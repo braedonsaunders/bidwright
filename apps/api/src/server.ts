@@ -3357,10 +3357,13 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const ext = book.sourceFileName.split(".").pop()?.toLowerCase() ?? "";
 
     if (ext === "pdf") {
-      // Use pdftoppm to generate thumbnail from first page
+      // Use pdftoppm to generate thumbnail from first page (Linux/Mac only)
       try {
         const { execSync } = await import("node:child_process");
         const { mkdir } = await import("node:fs/promises");
+        // Check if pdftoppm is available
+        const whichCmd = process.platform === "win32" ? "where" : "which";
+        execSync(`${whichCmd} pdftoppm`, { stdio: "ignore" });
         await mkdir(path.dirname(thumbAbsPath), { recursive: true });
         execSync(
           `pdftoppm -f 1 -l 1 -png -r 150 -singlefile "${sourceAbsPath}" "${thumbAbsPath.replace(/\.png$/, "")}"`,
@@ -3372,7 +3375,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
           .header("Cache-Control", "public, max-age=86400")
           .send(createReadStream(thumbAbsPath));
       } catch {
-        return reply.code(500).send({ message: "Thumbnail generation failed" });
+        // pdftoppm not available (Windows) or failed — return a 204 so the UI shows a fallback
+        return reply.code(204).send();
       }
     } else if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) {
       // For images, just serve the original

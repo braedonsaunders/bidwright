@@ -336,9 +336,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       return { admin, org, orgUser };
     });
 
-    // Create a super admin session — no org context so they land in admin mode
+    // Create a super admin session — with org context if an org was created
     const token = await createSuperAdminSession(prisma, {
       superAdminId: result.admin.id,
+      organizationId: result.org?.id,
       userAgent: request.headers["user-agent"] ?? "",
     });
 

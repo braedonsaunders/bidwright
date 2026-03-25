@@ -200,11 +200,11 @@ export function AppShell({
               </div>
               <div className="min-w-0 flex-1 text-left">
                 <p className="text-sm font-semibold tracking-tight truncate">
-                  {authOrg?.name ?? "Bidwright"}
+                  Bidwright
                 </p>
-                {authOrg?.slug && (
-                  <p className="truncate text-[10px] text-fg/30">{authOrg.slug}</p>
-                )}
+                <p className="truncate text-[10px] font-medium uppercase tracking-widest text-fg/30">
+                  {authOrg?.name ?? (isSuperAdmin ? "Super Admin" : "Personal")}
+                </p>
               </div>
               <ChevronsUpDown className="h-3.5 w-3.5 text-fg/25 shrink-0" />
             </button>

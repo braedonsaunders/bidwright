@@ -2834,7 +2834,7 @@ export class PrismaApiStore {
         // Create new documents
         for (const doc of sourceDocuments) {
           // Strip null bytes (0x00) — PostgreSQL rejects them in text columns
-          const sanitize = (s: string | null | undefined) => s?.replace(/\0/g, "") ?? null;
+          const sanitize = (s: string | null | undefined) => s?.replace(/\0/g, "") ?? undefined;
           await tx.sourceDocument.create({
             data: {
               id: doc.id,

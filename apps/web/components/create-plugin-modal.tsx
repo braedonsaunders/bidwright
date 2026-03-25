@@ -574,7 +574,7 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Category *</Label>
-                  <StyledSelect value={category} onValueChange={setCategory} placeholder="Select category...">
+                  <StyledSelect value={category} onValueChange={setCategory as (val: string) => void} placeholder="Select category...">
                     {(entityCategories && entityCategories.length > 0
                       ? entityCategories.filter((c) => c.enabled).map((c) => (
                           <SelectItem key={c.name} value={c.name.toLowerCase()}>{c.name}</SelectItem>
@@ -600,7 +600,7 @@ export function CreatePluginModal({
                 </div>
                 <div>
                   <Label>Default Output Type</Label>
-                  <StyledSelect value={defaultOutputType} onValueChange={setDefaultOutputType} placeholder="Select output type...">
+                  <StyledSelect value={defaultOutputType} onValueChange={setDefaultOutputType as (val: string) => void} placeholder="Select output type...">
                     <SelectItem value="line_items">Line Items</SelectItem>
                     <SelectItem value="worksheet">Worksheet</SelectItem>
                     <SelectItem value="text_content">Text Content</SelectItem>
