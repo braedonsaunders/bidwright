@@ -16,6 +16,7 @@ interface PdfCanvasViewerProps {
   pageNumber: number;
   zoom: number;
   onPageCount?: (count: number) => void;
+  onCanvasResize?: (width: number, height: number) => void;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
 }
 
@@ -24,6 +25,7 @@ export function PdfCanvasViewer({
   pageNumber,
   zoom,
   onPageCount,
+  onCanvasResize,
   canvasRef,
 }: PdfCanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -95,6 +97,7 @@ export function PdfCanvasViewer({
       canvas.height = viewport.height;
       canvas.style.width = `${viewport.width}px`;
       canvas.style.height = `${viewport.height}px`;
+      onCanvasResize?.(viewport.width, viewport.height);
 
       const renderTask = page.render({
         canvas,
@@ -108,7 +111,7 @@ export function PdfCanvasViewer({
       /* Ignore cancellation errors */
       if (err instanceof Error && err.message?.includes("Rendering cancelled")) return;
     }
-  }, [pageNumber, zoom, canvasRef]);
+  }, [pageNumber, zoom, canvasRef, onCanvasResize]);
 
   useEffect(() => {
     if (!loading && !error) {

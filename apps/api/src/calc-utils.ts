@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { WorksheetItem, QuoteRevision, CalculationType } from "@bidwright/domain";
+import { calculateItem, type CalcContext, type RateScheduleContext, type LabourCostContext, type TravelPolicyContext } from "./services/calc-engine.js";
 
 export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+export interface CalcLineItemOptions {
+  labourCost?: LabourCostContext;
+  travelPolicy?: TravelPolicyContext;
 }
 
 export function calculateLineItem(
@@ -10,56 +16,32 @@ export function calculateLineItem(
   _revision: QuoteRevision,
   calculationType: CalculationType,
   rateSchedules?: Array<{
+    tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number }>;
     items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
   }>,
+  options?: CalcLineItemOptions,
 ): Partial<WorksheetItem> {
-  switch (calculationType) {
-    case "auto_labour": {
-      // Use rate schedule if item has rateScheduleItemId and tierUnits
-      if (item.rateScheduleItemId && item.tierUnits && Object.keys(item.tierUnits).length > 0 && rateSchedules?.length) {
-        for (const sched of rateSchedules) {
-          const rsItem = sched.items.find((i) => i.id === item.rateScheduleItemId);
-          if (rsItem) {
-            let totalPrice = 0;
-            let totalCost = 0;
-            let totalHours = 0;
-            for (const [tierId, hours] of Object.entries(item.tierUnits)) {
-              const h = Number(hours) || 0;
-              totalPrice += (rsItem.rates[tierId] ?? 0) * h;
-              totalCost += (rsItem.costRates[tierId] ?? 0) * h;
-              totalHours += h;
-            }
-            totalPrice *= item.quantity;
-            totalCost *= item.quantity;
-            totalCost += rsItem.burden * totalHours * item.quantity;
-            totalCost += rsItem.perDiem * Math.ceil(totalHours / 8) * item.quantity;
-            return { price: roundMoney(totalPrice), cost: roundMoney(totalCost) };
-          }
-        }
-      }
+  // Build a CalcContext and delegate to the universal calc engine
+  const ctx: CalcContext = {
+    rateSchedules: rateSchedules?.map((s) => ({
+      id: "",
+      category: "labour",
+      tiers: s.tiers ?? [],
+      items: s.items,
+    })) as RateScheduleContext[],
+    labourCost: options?.labourCost,
+    travelPolicy: options?.travelPolicy,
+  };
 
-      return {};
-    }
-    case "auto_equipment": {
-      const days = item.laborHourReg;
-      const price = item.cost * days * item.quantity;
-      return { price: roundMoney(price) };
-    }
-    case "direct_price": {
-      return { cost: 0, markup: 0 };
-    }
-    case "auto_consumable": {
-      const cost = item.quantity * item.cost;
-      const price = cost * (1 + item.markup);
-      return { price: roundMoney(price) };
-    }
-    case "formula":
-    case "manual":
-    default: {
-      const price = item.quantity * item.cost * (1 + item.markup);
-      return { price: roundMoney(price) };
-    }
-  }
+  // Build a fake EntityCategory to pass calculationType
+  const category = { calculationType } as any;
+
+  const result = calculateItem(item, category, ctx);
+  const patch: Partial<WorksheetItem> = {};
+  if (result.cost !== undefined) patch.cost = result.cost;
+  if (result.price !== undefined) patch.price = result.price;
+  if (result.markup !== undefined) patch.markup = result.markup;
+  return patch;
 }
 
 export function documentTypeFromIngestion(kind: string): "rfq" | "spec" | "drawing" | "addendum" | "vendor" | "reference" {

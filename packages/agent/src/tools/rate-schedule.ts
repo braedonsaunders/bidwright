@@ -180,7 +180,7 @@ const removeTierTool = createRsTool({
 const addItemTool = createRsTool({
   id: "rateSchedule.addItem",
   name: "Add Rate Item",
-  description: "Add a new item (e.g., 'Journeyman Pipefitter') to a rate schedule with rates per tier.",
+  description: "Add a new item to a rate schedule with rates per tier.",
   inputSchema: z.object({
     scheduleId: z.string().describe("Rate schedule ID"),
     name: z.string().describe("Item name"),

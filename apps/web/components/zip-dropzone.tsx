@@ -77,6 +77,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           projectId: projectId || undefined,
           packageName,
           clientName: customerOptions.find((c) => c.id === customerId)?.name || undefined,
+          customerId: customerId || undefined,
           location: location || undefined,
           dueDate: dueDate || undefined,
           scope: scope || undefined,
@@ -93,7 +94,6 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
 
         if (nextProjectId) {
           router.push(`/projects/${nextProjectId}?tab=estimate&intake=true`);
-          router.refresh();
         }
       } catch (submissionError) {
         setError(submissionError instanceof Error ? submissionError.message : "Upload failed.");

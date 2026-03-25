@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Button,
   Card,
@@ -47,6 +47,7 @@ interface CreateAnnotationModalProps {
   open: boolean;
   onClose: () => void;
   onConfirm: (config: AnnotationConfig) => void;
+  initialType?: string;
 }
 
 export interface AnnotationConfig {
@@ -67,8 +68,9 @@ export function CreateAnnotationModal({
   open,
   onClose,
   onConfirm,
+  initialType,
 }: CreateAnnotationModalProps) {
-  const [type, setType] = useState("linear");
+  const [type, setType] = useState(initialType ?? "linear");
   const [label, setLabel] = useState("");
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [customColor, setCustomColor] = useState("");
@@ -80,6 +82,10 @@ export function CreateAnnotationModal({
   const [wallHeight, setWallHeight] = useState(8);
   const [height, setHeight] = useState(0);
   const [spacing, setSpacing] = useState(1);
+
+  useEffect(() => {
+    if (open && initialType) setType(initialType);
+  }, [open, initialType]);
 
   const selectedType = ANNOTATION_TYPES.find((t) => t.value === type);
   const needsDropDistance = type === "linear-drop";

@@ -57,7 +57,11 @@ async function apiPost(ctx: ToolExecutionContext, path: string, body: Record<str
     headers: authHeaders(ctx),
     body: JSON.stringify(body),
   });
-  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    const errMsg = errBody ? tryParseErrorMessage(errBody) : `${res.status} ${res.statusText}`;
+    return { success: false, error: `API error: ${errMsg}`, duration_ms: 0 };
+  }
   const data = await res.json() as Record<string, unknown>;
   return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
 }
@@ -68,9 +72,30 @@ async function apiPatch(ctx: ToolExecutionContext, path: string, body: Record<st
     headers: authHeaders(ctx),
     body: JSON.stringify(body),
   });
-  if (!res.ok) return { success: false, error: `API error: ${res.status} ${res.statusText}`, duration_ms: 0 };
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    const errMsg = errBody ? tryParseErrorMessage(errBody) : `${res.status} ${res.statusText}`;
+    return { success: false, error: `API error: ${errMsg}`, duration_ms: 0 };
+  }
   const data = await res.json() as Record<string, unknown>;
   return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
+}
+
+/** Extract human-readable message from API error response JSON */
+function tryParseErrorMessage(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    const parts: string[] = [];
+    if (parsed.message) parts.push(parsed.message);
+    if (parsed.hint) parts.push(`Hint: ${parsed.hint}`);
+    if (parsed.availableItems) {
+      const items = parsed.availableItems.slice(0, 10);
+      parts.push(`Available items: ${items.map((i: any) => `${i.name} (${i.id})`).join(", ")}`);
+    }
+    return parts.length > 0 ? parts.join(" | ") : (parsed.error || body);
+  } catch {
+    return body;
+  }
 }
 
 async function apiDelete(ctx: ToolExecutionContext, path: string, sideEffect: string): Promise<ToolResult> {
@@ -216,6 +241,8 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
     validUoms: ec.validUoms,
     calculationType: ec.calculationType,
     editableFields: ec.editableFields,
+    itemSource: ec.itemSource, // "rate_schedule", "catalog", or "freeform"
+    catalogId: ec.catalogId ?? null,
     // Derive whether this category needs rate schedule linking
     usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
   }));
@@ -262,18 +289,38 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
   const autoCategories = categoryConfig.filter((c: any) => c.usesRateSchedule);
   const manualCategories = categoryConfig.filter((c: any) => !c.usesRateSchedule);
 
+  // Identify categories that have catalogs
+  const catalogCategories = categoryConfig.filter((c: any) => c.itemSource === "catalog");
+
   let instructions = "";
   if (autoCategories.length > 0) {
     const names = autoCategories.map((c: any) => c.name).join(", ");
     if (rateItems.length > 0) {
-      instructions += `Categories [${names}] use auto-calculation from rate schedules. When creating items in these categories, set rateScheduleItemId to link to the appropriate rate. `;
+      instructions += `RATE SCHEDULE CATEGORIES [${names}]: These categories REQUIRE a valid rateScheduleItemId from the rateScheduleItems list below. You MUST pick an existing rate — do NOT invent labour classes, equipment types, or rates that don't exist in the list. If no suitable rate exists, use the closest match and note the discrepancy in the description. `;
     } else {
-      instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. Create items with estimated costs and note "NEEDS RATE SCHEDULE" in description. `;
+      instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. You MUST import rate schedules using rateSchedule.import before creating items in these categories. `;
     }
   }
+  if (catalogCategories.length > 0) {
+    const names = catalogCategories.map((c: any) => c.name).join(", ");
+    instructions += `CATALOG CATEGORIES [${names}]: Items must be selected from the catalogItems list. Do NOT invent items — pick from the available catalog entries only. `;
+  }
   if (manualCategories.length > 0) {
-    const names = manualCategories.map((c: any) => c.name).join(", ");
-    instructions += `Categories [${names}] use manual pricing — set cost and quantity directly.`;
+    const freeformManual = manualCategories.filter((c: any) => c.itemSource === "freeform");
+    if (freeformManual.length > 0) {
+      const names = freeformManual.map((c: any) => c.name).join(", ");
+      instructions += `FREEFORM CATEGORIES [${names}]: Set cost and quantity directly. `;
+    }
+  }
+
+  // Add explicit warning about consumables if applicable
+  const consumableCat = categoryConfig.find((c: any) => c.calculationType === "auto_consumable");
+  if (consumableCat) {
+    const hasConsumableRates = rateItems.some((r: any) => r.forCategory === "consumable" || r.forCategory === "consumables");
+    const hasConsumableCatalog = catalogItems.some((c: any) => c.catalogKind === "consumable" || c.catalogKind === "consumables");
+    if (hasConsumableRates || hasConsumableCatalog) {
+      instructions += `CONSUMABLES: Must be selected from the available rate/catalog items — do NOT invent consumable items. `;
+    }
   }
 
   return {
@@ -294,31 +341,35 @@ export const createWorksheetItemTool = createQuoteTool({
   id: "quote.createWorksheetItem",
   name: "Create Line Item",
   description: `Create a new line item in a worksheet. Requires worksheetId and entityName.
-IMPORTANT: For LABOUR items, you MUST first call listRateItems to find the correct rateScheduleItemId, then pass it here.
-Labour items need: rateScheduleItemId, laborHourReg (regular hours), and quantity.
-For other categories (Material, Equipment, Subcontractor), provide cost and quantity directly.`,
+
+STRICT RULES — the server will REJECT items that violate these:
+- For LABOUR and EQUIPMENT categories (itemSource=rate_schedule): you MUST provide a valid rateScheduleItemId from the getItemConfig results. Do NOT invent labour classes or equipment — pick from the available rate schedule items.
+- For CATALOG categories: you MUST use an existing catalogItemId from getItemConfig results.
+- For FREEFORM categories (Material, Subcontractors, etc.): provide cost and quantity directly.
+
+If the server rejects your item, read the error message — it will tell you what items are available.`,
   inputSchema: z.object({
     worksheetId: z.string().describe("ID of the worksheet to add the item to"),
-    category: z.string().optional().default("Material").describe("Item category: Material, Labour, Equipment, Subcontractor"),
+    category: z.string().describe("Item category — MUST match a category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables', 'Rental Equipment', 'Subcontractors'). Use the correct category for each item type."),
     entityName: z.string().describe("Name of the line item"),
     description: z.string().optional().default("").describe("Detailed description with document reference and assumptions"),
     quantity: z.number().optional().default(1).describe("Quantity of the item"),
     uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
     cost: z.number().optional().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
     markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%)"),
-    laborHourReg: z.number().optional().default(0).describe("Regular labor hours per unit (for Labour items)"),
-    laborHourOver: z.number().optional().default(0).describe("Overtime labor hours per unit"),
-    laborHourDouble: z.number().optional().default(0).describe("Double-time labor hours per unit"),
+    unit1: z.number().optional().default(0).describe("Unit 1 value per unit (e.g. regular hours for Labour)"),
+    unit2: z.number().optional().default(0).describe("Unit 2 value per unit (e.g. overtime hours for Labour)"),
+    unit3: z.number().optional().default(0).describe("Unit 3 value per unit (e.g. double-time hours for Labour)"),
     rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for Labour items. Get from listRateItems tool."),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
   }),
   tags: ["item", "create", "write"],
 }, async (ctx, input) => {
   const { worksheetId, category, ...rest } = input;
-  const cost = rest.cost ?? 0;
-  const markup = rest.markup ?? 0;
+  const cost = Number(rest.cost ?? 0);
+  const markup = Number(rest.markup ?? 0);
   const price = cost * (1 + markup / 100);
-  const cat = category ?? "Material";
+  const cat = category;
   const body: Record<string, unknown> = {
     ...rest,
     category: cat,
@@ -356,9 +407,9 @@ export const updateWorksheetItemTool = createQuoteTool({
     cost: z.number().optional().describe("Unit cost"),
     markup: z.number().optional().describe("Markup percentage"),
     price: z.number().optional().describe("Override unit price"),
-    laborHourReg: z.number().optional().describe("Regular labor hours per unit"),
-    laborHourOver: z.number().optional().describe("Overtime labor hours per unit"),
-    laborHourDouble: z.number().optional().describe("Double-time labor hours per unit"),
+    unit1: z.number().optional().describe("Unit 1 value per unit"),
+    unit2: z.number().optional().describe("Unit 2 value per unit"),
+    unit3: z.number().optional().describe("Unit 3 value per unit"),
     phaseId: z.string().optional().describe("Phase ID"),
     sortOrder: z.number().optional().describe("Sort order"),
   }),
@@ -668,8 +719,10 @@ export const deleteALITool = createQuoteTool({
 export const updateRevisionTool = createQuoteTool({
   id: "quote.updateRevision",
   name: "Update Revision",
-  description: "Update revision-level fields such as name, notes, or status.",
+  description: "Update revision-level fields such as title, description, notes, or status.",
   inputSchema: z.object({
+    title: z.string().optional().describe("Revision title"),
+    description: z.string().optional().describe("Revision description / scope of work"),
     name: z.string().optional().describe("Revision name"),
     notes: z.string().optional().describe("Revision notes"),
     status: z.enum(["draft", "review", "approved", "sent", "declined", "accepted"]).optional().describe("Revision status"),
@@ -754,20 +807,61 @@ export const copyQuoteTool = createQuoteTool({
 export const updateQuoteTool = createQuoteTool({
   id: "quote.updateQuote",
   name: "Update Quote",
-  description: "Update quote-level fields such as project name, client info, or settings.",
+  description: "Update quote-level fields: project name (quote title), description (scope of work), client, and other metadata. Call this early to set the quote title and scope.",
   inputSchema: z.object({
-    projectName: z.string().optional().describe("Project name"),
+    projectName: z.string().optional().describe("Project name — also sets the quote title displayed in the UI"),
+    description: z.string().optional().describe("Scope of work / description (rich text supported). This is the main description field shown on the quote page."),
     clientName: z.string().optional().describe("Client/customer name"),
+    customerId: z.string().optional().describe("Customer ID to link from the client dropdown (e.g. 'cust_apex_industrial')"),
     clientEmail: z.string().optional().describe("Client email"),
     clientPhone: z.string().optional().describe("Client phone number"),
     clientAddress: z.string().optional().describe("Client address"),
     projectAddress: z.string().optional().describe("Project/job site address"),
     bidDate: z.string().optional().describe("Bid date (ISO 8601)"),
-    notes: z.string().optional().describe("General project notes"),
+    notes: z.string().optional().describe("General project notes / assumptions"),
   }),
   tags: ["quote", "update", "write"],
 }, async (ctx, input) => {
-  return apiPatch(ctx, "/quote", input, "Updated quote");
+  const results: string[] = [];
+
+  // Project-level fields → PATCH /projects/{id} (routes to Project + Quote.title + QuoteRevision.description)
+  const projectFields: Record<string, unknown> = {};
+  if (input.projectName) projectFields.projectName = input.projectName;
+  if (input.description) projectFields.description = input.description;
+  if (input.notes) projectFields.notes = input.notes;
+  if (input.clientName) projectFields.clientName = input.clientName;
+  if (input.clientEmail) projectFields.clientEmail = input.clientEmail;
+  if (input.clientPhone) projectFields.clientPhone = input.clientPhone;
+  if (input.clientAddress) projectFields.clientAddress = input.clientAddress;
+  if (input.projectAddress) projectFields.location = input.projectAddress;
+  if (input.bidDate) projectFields.bidDate = input.bidDate;
+
+  if (Object.keys(projectFields).length > 0) {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}`, {
+      method: "PATCH",
+      headers: authHeaders(ctx),
+      body: JSON.stringify(projectFields),
+    });
+    if (!res.ok) return { success: false, error: `Project update failed: ${res.status} ${res.statusText}`, duration_ms: 0 };
+    results.push("Updated project metadata");
+  }
+
+  // Quote-level fields → PATCH /projects/{id}/quote (customerId, etc.)
+  const quoteFields: Record<string, unknown> = {};
+  if (input.customerId) quoteFields.customerId = input.customerId;
+  if (input.clientName) quoteFields.customerString = input.clientName;
+
+  if (Object.keys(quoteFields).length > 0) {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/projects/${ctx.projectId}/quote`, {
+      method: "PATCH",
+      headers: authHeaders(ctx),
+      body: JSON.stringify(quoteFields),
+    });
+    if (!res.ok) return { success: false, error: `Quote update failed: ${res.status} ${res.statusText}`, duration_ms: 0 };
+    results.push("Updated quote client");
+  }
+
+  return { success: true, data: { updated: results }, sideEffects: results, duration_ms: 0 };
 });
 
 // ──────────────────────────────────────────────────────────────
@@ -838,6 +932,89 @@ export const deleteReportSectionTool = createQuoteTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 34. quote.applySummaryPreset
+// ──────────────────────────────────────────────────────────────
+export const applySummaryPresetTool = createQuoteTool({
+  id: "quote.applySummaryPreset",
+  name: "Apply Summary Preset",
+  description: "Apply a summary preset to configure how the quote total is broken out. Presets: quick_total (single total), by_category (one row per item category), by_phase (one row per project phase), phase_x_category (phases with category detail), custom (empty — build from scratch). After applying, rows can be individually customized.",
+  inputSchema: z.object({
+    preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]).describe("The preset to apply"),
+  }),
+  tags: ["summary", "breakout", "preset", "write"],
+}, async (ctx, input) => {
+  return apiPost(ctx, "/summary-rows/apply-preset", { preset: input.preset }, `Applied summary preset: ${input.preset}`);
+});
+
+// ──────────────────────────────────────────────────────────────
+// 35. quote.createSummaryRow
+// ──────────────────────────────────────────────────────────────
+export const createSummaryRowTool = createQuoteTool({
+  id: "quote.createSummaryRow",
+  name: "Create Summary Row",
+  description: "Add a row to the quote summary. Types: auto_category (aggregates items by category name), auto_phase (aggregates by phase name), manual (user-defined value/cost), modifier (percentage or fixed amount applied to other rows), subtotal (sums preceding rows), separator (visual divider).",
+  inputSchema: z.object({
+    type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).describe("Row type"),
+    label: z.string().describe("Display label for the row"),
+    sourceCategory: z.string().optional().describe("For auto_category: the EntityCategory name to aggregate"),
+    sourcePhase: z.string().optional().describe("For auto_phase: the phase name to aggregate"),
+    manualValue: z.number().optional().describe("For manual rows: the sell/price value"),
+    manualCost: z.number().optional().describe("For manual rows: the cost value"),
+    modifierPercent: z.number().optional().describe("For modifier rows: percentage to apply"),
+    modifierAmount: z.number().optional().describe("For modifier rows: fixed dollar amount"),
+    appliesTo: z.array(z.string()).optional().describe("For modifier rows: array of row IDs or ['all']"),
+    visible: z.boolean().optional().describe("Whether visible on PDF output (default true)"),
+    style: z.enum(["normal", "bold", "indent", "highlight"]).optional().describe("Display style"),
+  }),
+  tags: ["summary", "row", "create", "write"],
+}, async (ctx, input) => {
+  return apiPost(ctx, "/summary-rows", input, `Created summary row: ${input.label}`);
+});
+
+// ──────────────────────────────────────────────────────────────
+// 36. quote.updateSummaryRow
+// ──────────────────────────────────────────────────────────────
+export const updateSummaryRowTool = createQuoteTool({
+  id: "quote.updateSummaryRow",
+  name: "Update Summary Row",
+  description: "Update an existing summary row. Can change label, type, values, visibility, etc.",
+  inputSchema: z.object({
+    rowId: z.string().describe("ID of the summary row to update"),
+    label: z.string().optional(),
+    type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).optional(),
+    sourceCategory: z.string().nullable().optional(),
+    sourcePhase: z.string().nullable().optional(),
+    manualValue: z.number().nullable().optional(),
+    manualCost: z.number().nullable().optional(),
+    modifierPercent: z.number().nullable().optional(),
+    modifierAmount: z.number().nullable().optional(),
+    appliesTo: z.array(z.string()).optional(),
+    visible: z.boolean().optional(),
+    style: z.enum(["normal", "bold", "indent", "highlight"]).optional(),
+  }),
+  tags: ["summary", "row", "update", "write"],
+}, async (ctx, input) => {
+  const { rowId, ...patch } = input;
+  return apiPatch(ctx, `/summary-rows/${rowId}`, patch, `Updated summary row ${rowId}`);
+});
+
+// ──────────────────────────────────────────────────────────────
+// 37. quote.deleteSummaryRow
+// ──────────────────────────────────────────────────────────────
+export const deleteSummaryRowTool = createQuoteTool({
+  id: "quote.deleteSummaryRow",
+  name: "Delete Summary Row",
+  description: "Remove a summary row from the quote.",
+  inputSchema: z.object({
+    rowId: z.string().describe("ID of the summary row to delete"),
+  }),
+  requiresConfirmation: true,
+  tags: ["summary", "row", "delete", "write"],
+}, async (ctx, input) => {
+  return apiDelete(ctx, `/summary-rows/${input.rowId}`, "Deleted summary row");
+});
+
+// ──────────────────────────────────────────────────────────────
 // Export all tools as array
 // ──────────────────────────────────────────────────────────────
 export const quoteTools: Tool[] = [
@@ -872,4 +1049,8 @@ export const quoteTools: Tool[] = [
   createReportSectionTool,
   updateReportSectionTool,
   deleteReportSectionTool,
+  applySummaryPresetTool,
+  createSummaryRowTool,
+  updateSummaryRowTool,
+  deleteSummaryRowTool,
 ];

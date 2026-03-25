@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
-const RENDER_SCRIPT = path.join(PYTHON_DIR, "render_page.py");
+
+/** New standalone renderer in tools/ directory */
+const RENDER_SCRIPT = path.join(PYTHON_DIR, "tools", "renderer.py");
 
 export interface RenderPageRequest {
   pdfPath: string;
@@ -38,7 +40,7 @@ export async function renderPdfPage(request: RenderPageRequest): Promise<RenderP
 
   return new Promise((resolve) => {
     const pythonPath = process.env.PYTHON_PATH ?? "python3";
-    const proc = spawn(pythonPath, [RENDER_SCRIPT, "--json"], {
+    const proc = spawn(pythonPath, [RENDER_SCRIPT], {
       cwd: PYTHON_DIR,
       timeout: 30_000,
       env: { ...process.env },

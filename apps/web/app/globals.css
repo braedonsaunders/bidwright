@@ -75,6 +75,12 @@ body {
   background: hsla(var(--accent), 0.2);
 }
 
+/* Ensure text is selectable in all form inputs and editable areas */
+input, textarea, [contenteditable="true"], [role="textbox"] {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
 a {
   color: inherit;
   text-decoration: none;

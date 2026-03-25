@@ -18,6 +18,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent } from "@/lib/format";
 import type { CatalogSummary, CatalogItem } from "@/lib/api";
@@ -763,18 +764,30 @@ export function ItemsManager({
                 />
               </div>
 
-              <Select
-                className="h-8 w-28 text-[11px]"
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-              >
-                <option value="">All</option>
-                {ITEM_CATEGORIES.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
-              </Select>
+              <RadixSelect.Root value={categoryFilter || "__all__"} onValueChange={(val) => setCategoryFilter(val === "__all__" ? "" : val)}>
+                <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors whitespace-nowrap">
+                  <RadixSelect.Value placeholder="All" />
+                  <RadixSelect.Icon className="ml-1 shrink-0">
+                    <ChevronDown className="h-3 w-3 text-fg/40" />
+                  </RadixSelect.Icon>
+                </RadixSelect.Trigger>
+                <RadixSelect.Portal>
+                  <RadixSelect.Content className="z-50 rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
+                    <RadixSelect.Viewport className="p-1">
+                      <RadixSelect.Item value="__all__" className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+                        <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+                        <RadixSelect.ItemText>All</RadixSelect.ItemText>
+                      </RadixSelect.Item>
+                      {ITEM_CATEGORIES.map((cat) => (
+                        <RadixSelect.Item key={cat} value={cat} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+                          <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+                          <RadixSelect.ItemText>{cat}</RadixSelect.ItemText>
+                        </RadixSelect.Item>
+                      ))}
+                    </RadixSelect.Viewport>
+                  </RadixSelect.Content>
+                </RadixSelect.Portal>
+              </RadixSelect.Root>
 
               {selectedItems.size > 0 && (
                 <Button variant="danger" size="sm" onClick={handleBulkDelete}>

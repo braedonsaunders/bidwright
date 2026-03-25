@@ -69,7 +69,7 @@ export function AIReviewQueue({
                   <div className="mt-2 flex gap-4 text-[11px] text-fg/35">
                     <span>{item.model}</span>
                     <span>{item.promptVersion}</span>
-                    <span>{item.input.sources.length} sources</span>
+                    <span>{item.input?.sources?.length ?? 0} sources</span>
                   </div>
                 )}
               </div>

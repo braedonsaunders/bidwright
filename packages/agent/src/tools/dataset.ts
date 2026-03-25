@@ -152,10 +152,97 @@ export const suggestSchemaTool = createDatasetGenTool({
 });
 
 // ──────────────────────────────────────────────────────────────
-// Export all dataset generation tools as array
+// 4. dataset.list
+// ──────────────────────────────────────────────────────────────
+export const listDatasetsTool = createDatasetGenTool({
+  id: "dataset.list",
+  name: "List Datasets",
+  description: "List all available datasets in the organization. Optionally filter by project. Returns dataset metadata including id, name, category, column schema, and row count. Use this to discover what structured data is available before querying.",
+  inputSchema: z.object({
+    projectId: z.string().optional().describe("Filter to datasets available in this project (includes global datasets)"),
+    category: z.string().optional().describe("Filter by category: labour_units, equipment_rates, material_prices, productivity, burden_rates, custom"),
+  }),
+  tags: ["dataset", "list", "read", "discovery"],
+}, async (ctx, input) => {
+  const params = new URLSearchParams();
+  if (input.projectId) params.set("projectId", String(input.projectId));
+  const qs = params.toString();
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets${qs ? `?${qs}` : ""}`);
+  if (!res.ok) return { success: false, error: `Failed to list datasets: ${res.status}` };
+  let datasets = await res.json() as any[];
+  if (input.category) {
+    datasets = datasets.filter((d: any) => d.category === input.category);
+  }
+  return {
+    success: true,
+    data: datasets.map((d: any) => ({
+      id: d.id, name: d.name, description: d.description, category: d.category,
+      scope: d.scope, columns: d.columns, rowCount: d.rowCount, tags: d.tags,
+    })),
+  };
+});
+
+// ──────────────────────────────────────────────────────────────
+// 5. dataset.queryRows
+// ──────────────────────────────────────────────────────────────
+export const queryRowsTool = createDatasetGenTool({
+  id: "dataset.queryRows",
+  name: "Query Dataset Rows",
+  description: "Query rows from a dataset using typed filters. Supports operators: eq (equals), gt (greater than), lt (less than), gte (>=), lte (<=), contains (text search). Combine multiple filters for AND logic. Use dataset.list first to find the dataset ID and column names.",
+  inputSchema: z.object({
+    datasetId: z.string().describe("Dataset ID to query"),
+    filters: z.array(z.object({
+      column: z.string().describe("Column key to filter on"),
+      op: z.enum(["eq", "gt", "lt", "gte", "lte", "contains"]).describe("Filter operator"),
+      value: z.union([z.string(), z.number(), z.boolean()]).describe("Value to compare against"),
+    })).describe("Array of filter conditions (AND logic)"),
+    limit: z.number().optional().default(50).describe("Max rows to return"),
+  }),
+  tags: ["dataset", "query", "read"],
+}, async (ctx, input) => {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets/${input.datasetId}/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filters: input.filters }),
+  });
+  if (!res.ok) return { success: false, error: `Query failed: ${res.status}` };
+  let rows = await res.json() as any[];
+  const limit = (input.limit as number) || 50;
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  return { success: true, data: { rows: rows.map((r: any) => r.data ?? r), total: rows.length } };
+});
+
+// ──────────────────────────────────────────────────────────────
+// 6. dataset.searchRows
+// ──────────────────────────────────────────────────────────────
+export const searchRowsTool = createDatasetGenTool({
+  id: "dataset.searchRows",
+  name: "Search Dataset Rows",
+  description: "Full-text search across all columns in a dataset. Returns rows where any column value contains the search query. Useful for finding items by name, description, or any text content. Use dataset.list first to find the dataset ID.",
+  inputSchema: z.object({
+    datasetId: z.string().describe("Dataset ID to search"),
+    query: z.string().describe("Search text — matches against all column values"),
+    limit: z.number().optional().default(20).describe("Max rows to return"),
+  }),
+  tags: ["dataset", "search", "read"],
+}, async (ctx, input) => {
+  const params = new URLSearchParams({ q: String(input.query) });
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/datasets/${input.datasetId}/search?${params.toString()}`);
+  if (!res.ok) return { success: false, error: `Search failed: ${res.status}` };
+  let rows = await res.json() as any[];
+  const limit = (input.limit as number) || 20;
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  return { success: true, data: { rows: rows.map((r: any) => r.data ?? r), total: rows.length } };
+});
+
+// ──────────────────────────────────────────────────────────────
+// Export all dataset tools as array
 // ──────────────────────────────────────────────────────────────
 export const datasetGenTools: Tool[] = [
   generateFromBookTool,
   importCsvTool,
   suggestSchemaTool,
+  listDatasetsTool,
+  queryRowsTool,
+  searchRowsTool,
 ];

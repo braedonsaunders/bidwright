@@ -51,11 +51,11 @@ export async function visionRoutes(app: FastifyInstance) {
   });
 
   // ── POST /api/vision/count-symbols ─────────────────────────────────────
-  // Runs the OpenCV symbol matching pipeline on a PDF page.
+  // Runs the NEW optimized OpenCV symbol matching pipeline on a PDF page.
   // Body: {
   //   projectId, documentId, pageNumber (1-based),
   //   boundingBox: { x, y, width, height, imageWidth, imageHeight },
-  //   threshold?: number, methods?: string[]
+  //   threshold?: number
   // }
   app.post("/api/vision/count-symbols", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
@@ -63,35 +63,20 @@ export async function visionRoutes(app: FastifyInstance) {
     const documentId = body.documentId as string;
     const pageNumber = (body.pageNumber as number) ?? 1;
     const boundingBox = body.boundingBox as Record<string, number> | undefined;
-    const threshold = (body.threshold as number) ?? 0.65;
-    const methods = (body.methods as string[]) ?? [];
+    const threshold = (body.threshold as number) ?? 0.75;
+    const crossScale = (body.crossScale as boolean) ?? false;
 
     if (!projectId || !documentId) {
       return reply.code(400).send({ message: "projectId and documentId are required" });
     }
 
-    // Resolve the PDF file path from the document's storagePath
-    const doc = await request.store!.getDocument(projectId, documentId);
-    if (!doc) {
-      return reply.code(404).send({ message: "Document not found" });
-    }
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
 
-    if (!doc.storagePath) {
-      return reply.code(400).send({ message: "Document has no file on disk (storagePath is empty)" });
-    }
-
-    const absPath = resolveApiPath(doc.storagePath);
-    try {
-      await access(absPath);
-    } catch {
-      return reply.code(404).send({ message: `PDF file not found on disk: ${doc.storagePath}` });
-    }
-
-    // Dynamically import the vision package runner
-    let runAutoCount: typeof import("@bidwright/vision")["runAutoCount"];
+    let runCountSymbols: typeof import("@bidwright/vision")["runCountSymbols"];
     try {
       const vision = await import("@bidwright/vision");
-      runAutoCount = vision.runAutoCount;
+      runCountSymbols = vision.runCountSymbols;
     } catch (err) {
       return reply.code(500).send({
         message: "Vision package not available",
@@ -100,9 +85,10 @@ export async function visionRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await runAutoCount({
-        pdfPath: absPath,
+      const result = await runCountSymbols({
+        pdfPath: resolved.absPath,
         pageNumber,
+        crossScale,
         boundingBox: boundingBox ? {
           x: boundingBox.x ?? 0,
           y: boundingBox.y ?? 0,
@@ -112,7 +98,6 @@ export async function visionRoutes(app: FastifyInstance) {
           imageHeight: boundingBox.imageHeight ?? 0,
         } : undefined,
         threshold,
-        methods: methods as any[],
         documentId,
       });
 
@@ -123,12 +108,151 @@ export async function visionRoutes(app: FastifyInstance) {
         totalCount: result.totalCount,
         matches: result.matches,
         snippetImage: result.snippetImage,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
         duration_ms: result.duration_ms,
         errors: result.errors,
       };
     } catch (err) {
       return reply.code(500).send({
         message: "Vision processing failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/vision/count-symbols-all-pages ──────────────────────────
+  // Runs count_symbols on EVERY page of a document with the same template bbox.
+  // Body: { projectId, documentId, boundingBox, threshold? }
+  // Returns: { pages: [{ pageNumber, matches, totalCount }], grandTotal }
+  app.post("/api/vision/count-symbols-all-pages", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    const boundingBox = body.boundingBox as Record<string, number> | undefined;
+    const threshold = (body.threshold as number) ?? 0.75;
+
+    if (!projectId || !documentId || !boundingBox) {
+      return reply.code(400).send({ message: "projectId, documentId, and boundingBox are required" });
+    }
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let runCountSymbols: typeof import("@bidwright/vision")["runCountSymbols"];
+    let renderPdfPage: typeof import("@bidwright/vision")["renderPdfPage"];
+    try {
+      const vision = await import("@bidwright/vision");
+      runCountSymbols = vision.runCountSymbols;
+      renderPdfPage = vision.renderPdfPage;
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Vision package not available",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Get page count by rendering page 1 (returns pageCount in result)
+    const probe = await renderPdfPage({ pdfPath: resolved.absPath, pageNumber: 1, dpi: 72 });
+    if (!probe.success || !probe.pageCount) {
+      return reply.code(500).send({ message: "Could not determine page count", error: probe.error });
+    }
+
+    const bbox = {
+      x: boundingBox.x ?? 0,
+      y: boundingBox.y ?? 0,
+      width: boundingBox.width ?? 0,
+      height: boundingBox.height ?? 0,
+      imageWidth: boundingBox.imageWidth ?? 0,
+      imageHeight: boundingBox.imageHeight ?? 0,
+    };
+
+    const pages: { pageNumber: number; matches: any[]; totalCount: number; errors: string[] }[] = [];
+    let grandTotal = 0;
+
+    // Run count on each page sequentially to avoid overwhelming the system
+    for (let pg = 1; pg <= probe.pageCount; pg++) {
+      try {
+        const result = await runCountSymbols({
+          pdfPath: resolved.absPath,
+          pageNumber: pg,
+          boundingBox: bbox,
+          threshold,
+          documentId,
+        });
+        pages.push({
+          pageNumber: pg,
+          matches: result.matches,
+          totalCount: result.totalCount,
+          errors: result.errors,
+        });
+        grandTotal += result.totalCount;
+      } catch (err) {
+        pages.push({
+          pageNumber: pg,
+          matches: [],
+          totalCount: 0,
+          errors: [err instanceof Error ? err.message : String(err)],
+        });
+      }
+    }
+
+    return { success: true, documentId, pages, grandTotal, pageCount: probe.pageCount };
+  });
+
+  // ── POST /api/vision/find-symbols ─────────────────────────────────────
+  // Discover symbol candidates on a page using connected component analysis.
+  // Body: { projectId, documentId, pageNumber?, minSize?, maxSize? }
+  // Returns: { candidates: [{x, y, w, h, area, aspect}], total, imageWidth, imageHeight }
+  app.post("/api/vision/find-symbols", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    const pageNumber = (body.pageNumber as number) ?? 1;
+    const minSize = body.minSize as number | undefined;
+    const maxSize = body.maxSize as number | undefined;
+
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let runFindSymbols: typeof import("@bidwright/vision")["runFindSymbols"];
+    try {
+      const vision = await import("@bidwright/vision");
+      runFindSymbols = vision.runFindSymbols;
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Vision package not available",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const result = await runFindSymbols({
+        pdfPath: resolved.absPath,
+        pageNumber,
+        minSize,
+        maxSize,
+      });
+
+      if (result.error) {
+        return reply.code(500).send({ message: result.error });
+      }
+
+      return {
+        success: true,
+        candidates: result.candidates,
+        total: result.total,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        duration_ms: result.duration_ms,
+      };
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Find symbols failed",
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -165,22 +289,21 @@ export async function visionRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: "PDF file not found on disk" });
     }
 
-    // Use the Python pipeline just for the crop
-    let runAutoCount: typeof import("@bidwright/vision")["runAutoCount"];
+    // Use the render pipeline to crop the region directly
+    let renderPdfPage: typeof import("@bidwright/vision")["renderPdfPage"];
     try {
       const vision = await import("@bidwright/vision");
-      runAutoCount = vision.runAutoCount;
+      renderPdfPage = vision.renderPdfPage;
     } catch {
       return reply.code(500).send({ message: "Vision package not available" });
     }
 
-    // We run auto_count with a very high threshold (effectively disabling matching)
-    // to just get the snippet image back
     try {
-      const result = await runAutoCount({
+      const result = await renderPdfPage({
         pdfPath: absPath,
         pageNumber,
-        boundingBox: {
+        dpi: 300,
+        region: {
           x: boundingBox.x ?? 0,
           y: boundingBox.y ?? 0,
           width: boundingBox.width ?? 0,
@@ -188,19 +311,104 @@ export async function visionRoutes(app: FastifyInstance) {
           imageWidth: boundingBox.imageWidth ?? 0,
           imageHeight: boundingBox.imageHeight ?? 0,
         },
-        threshold: 1.1, // Effectively disable matching – we just want the crop
-        methods: [],
-        documentId,
       });
 
       return {
-        success: true,
-        image: result.snippetImage ?? null,
+        success: result.success,
+        image: result.image ?? null,
         duration_ms: result.duration_ms,
       };
     } catch (err) {
       return reply.code(500).send({
         message: "Crop failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/vision/save-crop ────────────────────────────────────────
+  // Saves a base64 crop image to the project directory so the CLI agent
+  // can read and analyze it. Returns the absolute file path.
+  // Body: { projectId, image (data URL), filename? }
+  app.post("/api/vision/save-crop", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const image = body.image as string;
+    const filename = (body.filename as string) || `ask-ai-crop-${Date.now()}.png`;
+
+    if (!projectId || !image) {
+      return reply.code(400).send({ message: "projectId and image are required" });
+    }
+
+    const { resolveProjectDir } = await import("../paths.js");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+
+    const projectDir = resolveProjectDir(projectId);
+    const cropsDir = join(projectDir, ".bidwright", "crops");
+    await mkdir(cropsDir, { recursive: true });
+
+    // Strip data URL prefix
+    const base64 = image.replace(/^data:image\/\w+;base64,/, "");
+    const filePath = join(cropsDir, filename);
+    await writeFile(filePath, Buffer.from(base64, "base64"));
+
+    return { success: true, filePath, filename };
+  });
+
+  // ── POST /api/vision/scan-drawing ──────────────────────────────────────
+  // Proactively scans an entire drawing page: finds all symbol candidates,
+  // clusters them by visual similarity, and auto-counts each cluster.
+  // Returns a structured symbol inventory the agent can interpret directly.
+  // Body: { projectId, documentId, pageNumber? }
+  app.post("/api/vision/scan-drawing", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    const pageNumber = (body.pageNumber as number) ?? 1;
+
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let runScanDrawing: typeof import("@bidwright/vision")["runScanDrawing"];
+    try {
+      const vision = await import("@bidwright/vision");
+      runScanDrawing = vision.runScanDrawing;
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Vision package not available",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const result = await runScanDrawing({
+        pdfPath: resolved.absPath,
+        pageNumber,
+      });
+
+      if (result.error) {
+        return reply.code(500).send({ message: result.error });
+      }
+
+      return {
+        success: true,
+        documentId,
+        pageNumber,
+        clusters: result.clusters,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        totalClusters: result.totalClusters,
+        totalSymbolsFound: result.totalSymbolsFound,
+        scanDuration_ms: result.scanDuration_ms,
+      };
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Scan failed",
         error: err instanceof Error ? err.message : String(err),
       });
     }

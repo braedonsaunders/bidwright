@@ -405,79 +405,24 @@ async function callLLM(systemPrompt: string, userPrompt: string): Promise<string
 
 export class KnowledgeService {
   /**
-   * Ingest a document into the knowledge system.
-   *
-   * 1. Parse the document (PDF, Excel, image, text)
-   * 2. Create a KnowledgeBook record
-   * 3. Chunk the content smartly
-   * 4. Store chunks
-   * 5. Update book status
+   * Create a KnowledgeBook record quickly (file save + DB row) and return it.
+   * Call `processBookBackground()` afterwards to do the heavy lifting async.
    */
-  async ingestDocument(request: IngestionRequest, store?: PrismaApiStore): Promise<IngestionResult> {
-    const startTime = Date.now();
-    const errors: string[] = [];
-
-    let text = "";
-    let pageCount = 1;
+  async createBookRecord(request: IngestionRequest, store: PrismaApiStore): Promise<{ bookId: string; sourceFileName: string; sourceFileSize: number }> {
     let sourceFileName = "inline-text";
     let sourceFileSize = 0;
-
-    // Step 1: Extract text content
-    // Resolve Azure DI credentials from org settings, falling back to env vars
-    let azureConfig: { endpoint?: string; key?: string } | undefined;
-    if (store) {
-      try {
-        const settings = await store.getSettings();
-        const integrations = settings.integrations ?? {} as any;
-        if (integrations.azureDiEndpoint || integrations.azureDiKey) {
-          azureConfig = { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey };
-        }
-      } catch { /* ignore — env vars will be used as fallback */ }
-    }
-
-    let extractedTableData: any[] | undefined;
 
     if (request.file) {
       sourceFileName = request.file.filename;
       sourceFileSize = request.file.buffer.length;
-      try {
-        const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename, azureConfig);
-        text = extracted.text;
-        pageCount = extracted.pageCount;
-        // Store Azure-extracted table data in book metadata for later dataset extraction
-        if ((extracted as any).tables?.length > 0) {
-          extractedTableData = (extracted as any).tables;
-        }
-      } catch (err) {
-        errors.push(`Text extraction failed: ${err instanceof Error ? err.message : String(err)}`);
-        return {
-          bookId: "",
-          status: "failed",
-          chunkCount: 0,
-          pageCount: 0,
-          embeddingsGenerated: false,
-          processingTimeMs: Date.now() - startTime,
-          errors,
-        };
-      }
     } else if (request.content) {
-      text = request.content;
-      sourceFileSize = Buffer.byteLength(text, "utf-8");
+      sourceFileSize = Buffer.byteLength(request.content, "utf-8");
       sourceFileName = `${request.title}.txt`;
-      pageCount = Math.max(1, Math.ceil(text.length / 3000));
     } else {
-      return {
-        bookId: "",
-        status: "failed",
-        chunkCount: 0,
-        pageCount: 0,
-        embeddingsGenerated: false,
-        processingTimeMs: Date.now() - startTime,
-        errors: ["No file or content provided"],
-      };
+      throw new Error("No file or content provided");
     }
 
-    // Step 2: Save source file to disk and create KnowledgeBook record
+    // Save source file to disk
     let storagePath: string | null = null;
     if (request.file) {
       const tempId = `kb-${Date.now()}`;
@@ -488,7 +433,7 @@ export class KnowledgeService {
       storagePath = relPath;
     }
 
-    const book = await store!.createKnowledgeBook({
+    const book = await store.createKnowledgeBook({
       name: request.title,
       description: `Ingested from ${sourceFileName}`,
       category: request.category,
@@ -508,118 +453,220 @@ export class KnowledgeService {
         const { rename } = await import("node:fs/promises");
         await mkdir(path.dirname(correctAbsPath), { recursive: true });
         await rename(oldAbsPath, correctAbsPath);
-        // Clean up temp dir
         const { rmdir } = await import("node:fs/promises");
         await rmdir(path.dirname(oldAbsPath)).catch(() => {});
         storagePath = correctRelPath;
-        await store!.updateKnowledgeBook(book.id, { metadata: { ...((book.metadata as Record<string, unknown>) ?? {}), storagePath: correctRelPath } });
-        // Update via raw prisma since updateKnowledgeBook doesn't handle storagePath
+        await store.updateKnowledgeBook(book.id, { metadata: { ...((book.metadata as Record<string, unknown>) ?? {}), storagePath: correctRelPath } });
         await prisma.knowledgeBook.update({ where: { id: book.id }, data: { storagePath: correctRelPath } });
       }
     }
 
-    // Step 3: Chunk the content
-    const chunkStrategy = request.options?.chunkStrategy ?? "section-aware";
-    const chunkSize = request.options?.chunkSize ?? 512;
-    const chunkResults = smartChunk(text, {
-      strategy: chunkStrategy,
-      chunkSize,
-      overlap: chunkStrategy === "recursive" ? Math.floor(chunkSize * 0.1) : 0,
-    });
+    return { bookId: book.id, sourceFileName, sourceFileSize };
+  }
 
-    // Step 4: Create chunks in the store
-    let chunkCount = 0;
-    for (let i = 0; i < chunkResults.length; i++) {
-      const cr = chunkResults[i];
+  /**
+   * Background processing: text extraction, chunking, embedding.
+   * Runs fire-and-forget after the route responds.
+   */
+  async processBookBackground(bookId: string, request: IngestionRequest, store: PrismaApiStore): Promise<void> {
+    try {
+      // ── Text extraction ──
+      let azureConfig: { endpoint?: string; key?: string } | undefined;
       try {
-        await store!.createKnowledgeChunk(book.id, {
-          text: cr.text,
-          sectionTitle: cr.sectionTitle ?? "",
-          pageNumber: cr.pageNumber ?? null,
-          tokenCount: Math.ceil(cr.text.length / 4),
-          order: i,
-        });
-        chunkCount++;
-      } catch (err) {
-        errors.push(`Chunk ${i} failed: ${err instanceof Error ? err.message : String(err)}`);
+        const settings = await store.getSettings();
+        const integrations = settings.integrations ?? {} as any;
+        if (integrations.azureDiEndpoint || integrations.azureDiKey) {
+          azureConfig = { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey };
+        }
+      } catch { /* ignore — env vars will be used as fallback */ }
+
+      let text = "";
+      let pageCount = 1;
+      let extractedTableData: any[] | undefined;
+
+      if (request.file) {
+        const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename, azureConfig);
+        text = extracted.text;
+        pageCount = extracted.pageCount;
+        if ((extracted as any).tables?.length > 0) {
+          extractedTableData = (extracted as any).tables;
+        }
+      } else if (request.content) {
+        text = request.content;
+        pageCount = Math.max(1, Math.ceil(text.length / 3000));
       }
-    }
 
-    // Update page/chunk counts immediately so they're visible even if embeddings time out
-    await store!.updateKnowledgeBook(book.id, { pageCount, chunkCount, status: "processing" });
+      await store.updateKnowledgeBook(bookId, { status: "processing" });
 
-    // Step 5: Generate embeddings if an embedding provider is available
-    let embeddingsGenerated = false;
-    const embeddingCfg = getEmbeddingConfig();
-    if (embeddingCfg && chunkCount > 0 && request.options?.enableEmbeddings !== false) {
-      try {
-        const embedder = createEmbedder({
-          provider: embeddingCfg.provider,
-          apiKey: embeddingCfg.apiKey,
-          baseUrl: embeddingCfg.baseUrl,
-          model: embeddingCfg.model,
-          dimensions: embeddingCfg.dimensions,
-        });
-        const chunkTexts = chunkResults.slice(0, chunkCount).map((cr) => cr.text);
-        const vectors = await embedder.embed(chunkTexts);
-        const vectorStore = getVectorStore(request.organizationId ?? "default");
+      // ── Chunking ──
+      const chunkStrategy = request.options?.chunkStrategy ?? "section-aware";
+      const chunkSize = request.options?.chunkSize ?? 512;
+      const chunkResults = smartChunk(text, {
+        strategy: chunkStrategy,
+        chunkSize,
+        overlap: chunkStrategy === "recursive" ? Math.floor(chunkSize * 0.1) : 0,
+      });
 
-        const records: VectorRecord[] = vectors.map((embedding, i) => ({
-          id: `vec-${book.id}-${i}`,
-          chunkId: `chunk-${i}`,
-          documentId: book.id,
-          projectId: request.projectId ?? null,
-          scope: (request.scope === "project" ? "project" : "library") as "project" | "library",
-          embedding,
-          text: chunkTexts[i],
-          metadata: {
-            bookName: request.title,
-            category: request.category,
-            sectionTitle: chunkResults[i].sectionTitle ?? "",
-            pageNumber: chunkResults[i].pageNumber ?? 0,
-          },
-        }));
-
-        await vectorStore.upsert(records);
-        embeddingsGenerated = true;
-      } catch (err) {
-        errors.push(`Embedding generation failed: ${err instanceof Error ? err.message : String(err)}`);
+      let chunkCount = 0;
+      const errors: string[] = [];
+      for (let i = 0; i < chunkResults.length; i++) {
+        const cr = chunkResults[i];
+        try {
+          await store.createKnowledgeChunk(bookId, {
+            text: cr.text,
+            sectionTitle: cr.sectionTitle ?? "",
+            pageNumber: cr.pageNumber ?? null,
+            tokenCount: Math.ceil(cr.text.length / 4),
+            order: i,
+          });
+          chunkCount++;
+        } catch (err) {
+          errors.push(`Chunk ${i} failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-    }
 
-    // Step 6: Update book status
-    const finalMetadata: Record<string, unknown> = {
-      ...((book.metadata as Record<string, unknown>) ?? {}),
-    };
-    if (extractedTableData && extractedTableData.length > 0) {
-      finalMetadata.tableCount = extractedTableData.length;
-      // Save table data as JSON file to avoid bloating the DB row
+      // Mark as "chunked" — text extraction and chunking complete, embeddings still pending
+      await store.updateKnowledgeBook(bookId, { pageCount, chunkCount, status: "processing" });
+
+      // ── Embeddings ──
+      const embeddingCfg = getEmbeddingConfig();
+      if (embeddingCfg && chunkCount > 0 && request.options?.enableEmbeddings !== false) {
+        try {
+          const embedder = createEmbedder({
+            provider: embeddingCfg.provider,
+            apiKey: embeddingCfg.apiKey,
+            baseUrl: embeddingCfg.baseUrl,
+            model: embeddingCfg.model,
+            dimensions: embeddingCfg.dimensions,
+          });
+          const chunkTexts = chunkResults.slice(0, chunkCount).map((cr) => cr.text);
+
+          // Process embeddings in batches to avoid timeouts on large books
+          const EMBED_BATCH_SIZE = 100;
+          const allVectors: number[][] = [];
+          for (let batchStart = 0; batchStart < chunkTexts.length; batchStart += EMBED_BATCH_SIZE) {
+            const batchTexts = chunkTexts.slice(batchStart, batchStart + EMBED_BATCH_SIZE);
+            try {
+              const batchVectors = await embedder.embed(batchTexts);
+              allVectors.push(...batchVectors);
+            } catch (err) {
+              errors.push(`Embedding batch ${batchStart}-${batchStart + batchTexts.length} failed: ${err instanceof Error ? err.message : String(err)}`);
+              // Push empty vectors so indices stay aligned
+              for (let j = 0; j < batchTexts.length; j++) allVectors.push([]);
+            }
+          }
+
+          const vectorStore = getVectorStore(request.organizationId ?? "default");
+          const records: VectorRecord[] = allVectors
+            .map((embedding, i) => ({
+              id: `vec-${bookId}-${i}`,
+              chunkId: `chunk-${i}`,
+              documentId: bookId,
+              projectId: request.projectId ?? null,
+              scope: (request.scope === "project" ? "project" : "library") as "project" | "library",
+              embedding,
+              text: chunkTexts[i],
+              metadata: {
+                bookName: request.title,
+                category: request.category,
+                sectionTitle: chunkResults[i].sectionTitle ?? "",
+                pageNumber: chunkResults[i].pageNumber ?? 0,
+              },
+            }))
+            .filter((r) => r.embedding.length > 0); // skip failed batches
+
+          if (records.length > 0) {
+            // Upsert vectors in batches too
+            const UPSERT_BATCH_SIZE = 200;
+            for (let i = 0; i < records.length; i += UPSERT_BATCH_SIZE) {
+              try {
+                await vectorStore.upsert(records.slice(i, i + UPSERT_BATCH_SIZE));
+              } catch (err) {
+                errors.push(`Vector upsert batch ${i} failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+          }
+        } catch (err) {
+          errors.push(`Embedding generation failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      // ── Finalize — ALWAYS update status even if embeddings partially failed ──
+      let finalStatus: "uploading" | "processing" | "indexed" | "failed" = "indexed";
       try {
-        const tablesPath = book.storagePath
-          ? resolveApiPath(path.join(path.dirname(book.storagePath), "tables.json"))
-          : resolveApiPath(path.join("knowledge", book.id, "tables.json"));
-        await mkdir(path.dirname(tablesPath), { recursive: true });
-        await writeFile(tablesPath, JSON.stringify(extractedTableData, null, 2));
-        finalMetadata.tablesFilePath = path.relative(resolveApiPath(""), tablesPath);
-      } catch { /* store inline if file write fails */ }
+        const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
+        const finalMetadata: Record<string, unknown> = {
+          ...((book?.metadata as Record<string, unknown>) ?? {}),
+        };
+        if (extractedTableData && extractedTableData.length > 0) {
+          finalMetadata.tableCount = extractedTableData.length;
+          try {
+            const tablesPath = book?.storagePath
+              ? resolveApiPath(path.join(path.dirname(book.storagePath), "tables.json"))
+              : resolveApiPath(path.join("knowledge", bookId, "tables.json"));
+            await mkdir(path.dirname(tablesPath), { recursive: true });
+            await writeFile(tablesPath, JSON.stringify(extractedTableData, null, 2));
+            finalMetadata.tablesFilePath = path.relative(resolveApiPath(""), tablesPath);
+          } catch { /* store inline if file write fails */ }
+        }
+        if (errors.length > 0) {
+          finalMetadata.processingErrors = errors;
+        }
+        finalStatus = errors.length > 0 && chunkCount === 0 ? "failed" : "indexed";
+
+        await store.updateKnowledgeBook(bookId, {
+          status: finalStatus,
+          pageCount,
+          chunkCount,
+          metadata: finalMetadata,
+        });
+      } catch (finalErr) {
+        // Last-resort: at minimum set status so it doesn't stay stuck at "processing"
+        console.error(`[knowledge] Failed to finalize book ${bookId}, forcing status update:`, finalErr);
+        try {
+          await store.updateKnowledgeBook(bookId, { status: "indexed", pageCount, chunkCount });
+        } catch { /* truly can't update DB */ }
+      }
+    } catch (err) {
+      // Ensure status is always updated on unhandled failure
+      console.error(`[knowledge] Background processing failed for book ${bookId}:`, err);
+      try {
+        await store.updateKnowledgeBook(bookId, { status: "failed" });
+      } catch { /* last resort — can't update DB */ }
     }
+  }
 
-    await store!.updateKnowledgeBook(book.id, {
-      status: errors.length > 0 && chunkCount === 0 ? "failed" : "indexed",
-      pageCount,
-      chunkCount,
-      metadata: finalMetadata,
-    });
+  /**
+   * Ingest a document into the knowledge system (synchronous — waits for full pipeline).
+   * Used by ingest-text and other callers that need the full result.
+   */
+  async ingestDocument(request: IngestionRequest, store?: PrismaApiStore): Promise<IngestionResult> {
+    const startTime = Date.now();
 
-    return {
-      bookId: book.id,
-      status: errors.length > 0 && chunkCount === 0 ? "failed" : "completed",
-      chunkCount,
-      pageCount,
-      embeddingsGenerated,
-      processingTimeMs: Date.now() - startTime,
-      errors: errors.length > 0 ? errors : undefined,
-    };
+    try {
+      const { bookId } = await this.createBookRecord(request, store!);
+      await this.processBookBackground(bookId, request, store!);
+
+      const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
+      return {
+        bookId,
+        status: book?.status === "failed" ? "failed" : "completed",
+        chunkCount: book?.chunkCount ?? 0,
+        pageCount: book?.pageCount ?? 0,
+        embeddingsGenerated: book?.status === "indexed",
+        processingTimeMs: Date.now() - startTime,
+      };
+    } catch (err) {
+      return {
+        bookId: "",
+        status: "failed",
+        chunkCount: 0,
+        pageCount: 0,
+        embeddingsGenerated: false,
+        processingTimeMs: Date.now() - startTime,
+        errors: [err instanceof Error ? err.message : String(err)],
+      };
+    }
   }
 
   /**

@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
-import { Badge, Button, EmptyState, Select } from "@/components/ui";
+import { AlertTriangle, ArrowDown, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
+import { Badge, Button, Select } from "@/components/ui";
 import {
   startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { isVisionTool, VisionToolWidget, ProgressIndicator } from "./vision-chat-widgets";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -60,14 +61,6 @@ function hasMutatingToolCalls(toolCalls: Array<{ toolId: string; result?: { side
   );
 }
 
-const QUICK_PROMPTS = [
-  "Summarize the project scope",
-  "What are the key risks?",
-  "Suggest phases for this project",
-  "Check if the estimate is complete",
-  "What equipment do we need?",
-  "Identify gaps in the bid package",
-];
 
 // ─── File Access Detection ────────────────────────────────────────────
 
@@ -323,6 +316,8 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [sseConnected, setSseConnected] = useState(false);
   const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastRefreshToolCount = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -441,9 +436,25 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     }
   }, [open]);
 
+  // Auto-scroll only when user hasn't manually scrolled up
   useEffect(() => {
+    if (!isUserScrolledUp) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, liveToolCalls, isUserScrolledUp]);
+
+  // Track user scroll position
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setIsUserScrolledUp(distanceFromBottom > 80);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, liveToolCalls]);
+    setIsUserScrolledUp(false);
+  }, []);
 
   const intakeAutoStarted = useRef(false);
   const restoredFromDb = useRef(false);
@@ -707,12 +718,29 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
     es.onerror = () => {
       setSseConnected(false);
-      // EventSource auto-reconnects, but if the session is done, close
-      const status = intakeStatus?.status;
-      if (status && status !== "running") {
-        es.close();
-        eventSourceRef.current = null;
-      }
+      // EventSource auto-reconnect may have failed (readyState === CLOSED)
+      // If so, attempt manual reconnect after a delay
+      setTimeout(() => {
+        if (es.readyState === EventSource.CLOSED && eventSourceRef.current === es) {
+          // Use setState callback to read current status without stale closure
+          setIntakeStatus((current) => {
+            const isRunning = current?.status === "running";
+            if (isRunning) {
+              // Session still active — reconnect SSE
+              es.close();
+              eventSourceRef.current = null;
+              connectToSseStream(pid);
+            } else if (current) {
+              // Session finished — clean up
+              es.close();
+              eventSourceRef.current = null;
+            }
+            return current;
+          });
+        } else if (es.readyState === EventSource.OPEN) {
+          setSseConnected(true);
+        }
+      }, 3000);
     };
   }
 
@@ -918,12 +946,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           )}
 
           {/* Unified chronological stream */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-2">
-            {/* Start/Resume button — show when no active intake */}
+          <div className="relative flex-1 overflow-y-auto p-4 space-y-2" ref={scrollContainerRef} onScroll={handleScroll}>
+            {/* Start button — show when no active intake */}
             {messages.length === 0 && !intakeStatus && (
               <div className="space-y-3">
-                <EmptyState className="border-0 py-4">Ask me anything about this project</EmptyState>
-
                 <button
                   onClick={handleStartIntake}
                   disabled={intakeLoading}
@@ -941,18 +967,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     Automatically review bid documents and build a complete estimate
                   </div>
                 </button>
-
-                <div className="grid grid-cols-2 gap-2">
-                  {QUICK_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      onClick={() => sendMessage(prompt)}
-                      className="rounded-lg border border-line bg-panel2/50 px-3 py-2 text-left text-[11px] text-fg/50 transition-colors hover:bg-panel2 hover:text-fg/70"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
 
@@ -1083,7 +1097,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                         "max-w-[90%] rounded-lg px-3 py-2 text-sm",
                         role === "user" ? "bg-accent/15 text-fg" : "bg-panel2/60 text-fg/85"
                       )}>
-                        <div className="whitespace-pre-wrap text-xs">{content}</div>
+                        <MarkdownRenderer content={content} />
                       </div>
                     </div>
                   );
@@ -1150,6 +1164,17 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             )}
 
             <div ref={messagesEndRef} />
+
+            {/* Scroll to bottom button */}
+            {isUserScrolledUp && (
+              <button
+                onClick={scrollToBottom}
+                className="sticky bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 rounded-full bg-panel2 border border-line shadow-lg px-3 py-1.5 text-[10px] text-fg/60 hover:text-fg hover:bg-panel2/80 transition-all"
+              >
+                <ArrowDown className="h-3 w-3" />
+                New messages
+              </button>
+            )}
           </div>
 
           {/* Input */}

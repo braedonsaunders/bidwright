@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Calculator,
+  Check,
   ChevronDown,
   ChevronRight,
   DollarSign,
@@ -14,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import type { RateSchedule, CatalogSummary } from "@/lib/api";
 import {
@@ -91,10 +93,12 @@ export function RateScheduleManager({
     setParentSchedules(schedules);
   }, [schedules, setParentSchedules]);
 
-  // Sync from parent on load
-  useState(() => {
-    setSchedulesLocal(initialSchedules);
-  });
+  // Sync from parent when initial data arrives
+  useEffect(() => {
+    if (initialSchedules.length > 0) {
+      setSchedulesLocal(initialSchedules);
+    }
+  }, [initialSchedules]);
 
   // Load catalogs with items if not provided
   const [loadedCatalogs, setLoadedCatalogs] = useState<CatalogSummary[]>(catalogs);
@@ -467,12 +471,30 @@ export function RateScheduleManager({
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="w-20 text-[11px]">
-              <option value="">All</option>
-              {CATEGORIES.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </Select>
+            <RadixSelect.Root value={categoryFilter || "__all__"} onValueChange={(val) => setCategoryFilter(val === "__all__" ? "" : val)}>
+              <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors whitespace-nowrap">
+                <RadixSelect.Value placeholder="All" />
+                <RadixSelect.Icon className="ml-1 shrink-0">
+                  <ChevronDown className="h-3 w-3 text-fg/40" />
+                </RadixSelect.Icon>
+              </RadixSelect.Trigger>
+              <RadixSelect.Portal>
+                <RadixSelect.Content className="z-50 rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
+                  <RadixSelect.Viewport className="p-1">
+                    <RadixSelect.Item value="__all__" className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+                      <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+                      <RadixSelect.ItemText>All</RadixSelect.ItemText>
+                    </RadixSelect.Item>
+                    {CATEGORIES.map((c) => (
+                      <RadixSelect.Item key={c.value} value={c.value} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+                        <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+                        <RadixSelect.ItemText>{c.label}</RadixSelect.ItemText>
+                      </RadixSelect.Item>
+                    ))}
+                  </RadixSelect.Viewport>
+                </RadixSelect.Content>
+              </RadixSelect.Portal>
+            </RadixSelect.Root>
           </div>
 
           {loading ? (
@@ -773,7 +795,6 @@ export function RateScheduleManager({
                                   <div className="text-[9px] font-normal text-fg/25">sell / cost</div>
                                 </th>
                               ))}
-                            <th className="text-right py-2 pr-1 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-16">Burden</th>
                             <th className="w-8" />
                           </tr>
                         </thead>
@@ -839,9 +860,6 @@ export function RateScheduleManager({
                                       </div>
                                     </td>
                                   ))}
-                                <td className="py-2 pr-1 text-right text-xs text-fg/50">
-                                  {item.burden ? `$${item.burden.toFixed(2)}` : "—"}
-                                </td>
                                 <td className="py-2 text-right">
                                   <button
                                     onClick={() => handleDeleteItem(item.id)}

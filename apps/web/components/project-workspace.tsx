@@ -123,9 +123,9 @@ type ItemDraft = {
   cost: number;
   markup: number;
   price: number;
-  laborHourReg: number;
-  laborHourOver: number;
-  laborHourDouble: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
   lineOrder: number;
 };
 
@@ -181,8 +181,8 @@ function buildItemDraft(ws: WorkspaceWorksheet, item?: WorkspaceWorksheetItem): 
     vendor: item?.vendor ?? "", description: item?.description ?? "",
     quantity: item?.quantity ?? 1, uom: item?.uom ?? "EA",
     cost: item?.cost ?? 0, markup: item?.markup ?? 0.2, price: item?.price ?? 0,
-    laborHourReg: item?.laborHourReg ?? 0, laborHourOver: item?.laborHourOver ?? 0,
-    laborHourDouble: item?.laborHourDouble ?? 0, lineOrder: item?.lineOrder ?? ws.items.length + 1,
+    unit1: item?.unit1 ?? 0, unit2: item?.unit2 ?? 0,
+    unit3: item?.unit3 ?? 0, lineOrder: item?.lineOrder ?? ws.items.length + 1,
   };
 }
 
@@ -325,9 +325,22 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const workspace = data.workspace;
   const selectedWs = selectedWsId === "all" ? null : findWs(workspace, selectedWsId);
 
+  // Sync revDraft from workspace when server-side text content changes.
   useEffect(() => {
-    setRevDraft(buildRevDraftFromWs(workspace));
-  }, [workspace.currentRevision]);
+    const next = buildRevDraftFromWs(workspace);
+    setRevDraft((prev) => {
+      // Debug: warn if server is returning empty values that would clear local state
+      if (prev.description && !next.description) {
+        console.warn("[bidwright] Server returned empty description — preserving local. Prev length:", prev.description.length);
+        next.description = prev.description;
+      }
+      if (prev.title && !next.title) {
+        console.warn("[bidwright] Server returned empty title — preserving local. Prev:", prev.title);
+        next.title = prev.title;
+      }
+      return next;
+    });
+  }, [workspace.currentRevision.id, workspace.currentRevision.description, workspace.currentRevision.title, workspace.currentRevision.notes]);
 
   useEffect(() => {
     if (!findWs(workspace, selectedWsId)) setSelectedWsId((workspace.worksheets ?? [])[0]?.id ?? "all");
@@ -426,8 +439,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       phaseId: itemDraft.phaseId || null, category: itemDraft.category, entityType: itemDraft.entityType,
       entityName: itemDraft.entityName, vendor: itemDraft.vendor || null, description: itemDraft.description,
       quantity: itemDraft.quantity, uom: itemDraft.uom, cost: itemDraft.cost, markup: itemDraft.markup,
-      price: itemDraft.price, laborHourReg: itemDraft.laborHourReg, laborHourOver: itemDraft.laborHourOver,
-      laborHourDouble: itemDraft.laborHourDouble, lineOrder: itemDraft.lineOrder,
+      price: itemDraft.price, unit1: itemDraft.unit1, unit2: itemDraft.unit2,
+      unit3: itemDraft.unit3, lineOrder: itemDraft.lineOrder,
     };
     startTransition(async () => {
       try {
@@ -458,8 +471,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       phaseId: itemDraft.phaseId || null, category: itemDraft.category, entityType: itemDraft.entityType,
       entityName: itemDraft.entityName, vendor: itemDraft.vendor || null, description: itemDraft.description,
       quantity: itemDraft.quantity, uom: itemDraft.uom, cost: itemDraft.cost, markup: itemDraft.markup,
-      price: itemDraft.price, laborHourReg: itemDraft.laborHourReg, laborHourOver: itemDraft.laborHourOver,
-      laborHourDouble: itemDraft.laborHourDouble, lineOrder: itemDraft.lineOrder + 1,
+      price: itemDraft.price, unit1: itemDraft.unit1, unit2: itemDraft.unit2,
+      unit3: itemDraft.unit3, lineOrder: itemDraft.lineOrder + 1,
     };
     startTransition(async () => {
       try { apply(await createWorksheetItem(workspace.project.id, itemDraft.worksheetId, payload)); }
@@ -648,7 +661,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
                 {estimateSubTab === "takeoff" && (
                   <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <TakeoffTab workspace={workspace} />
+                    <TakeoffTab workspace={workspace} onOpenAgentChat={() => setChatOpen(true)} />
                   </motion.div>
                 )}
 
@@ -1047,7 +1060,7 @@ function EstimateTab({
                     <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{formatMoney(row.cost)}</td>
                     <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{formatPercent(row.markup, 1)}</td>
                     <td className="border-b border-line px-3 py-2.5 text-right tabular-nums font-medium">{formatMoney(row.price)}</td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{(row.laborHourReg + row.laborHourOver + row.laborHourDouble).toLocaleString()}</td>
+                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{(row.unit1 + row.unit2 + row.unit3).toLocaleString()}</td>
                   </tr>
                 );
               })}
@@ -1122,9 +1135,9 @@ function EstimateTab({
                 <div><Label>Line order</Label><Input type="number" step="1" value={String(itemDraft.lineOrder)} onChange={(e) => setItemDraft((c) => c ? { ...c, lineOrder: Math.max(1, Math.round(parseNum(e.target.value))) } : c)} /></div>
               </div>
               <div className="grid gap-3 grid-cols-3">
-                <div><Label>Unit 1</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourReg)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourReg: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Unit 2</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourOver)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourOver: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Unit 3</Label><Input type="number" step="0.01" value={String(itemDraft.laborHourDouble)} onChange={(e) => setItemDraft((c) => c ? { ...c, laborHourDouble: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 1</Label><Input type="number" step="0.01" value={String(itemDraft.unit1)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit1: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 2</Label><Input type="number" step="0.01" value={String(itemDraft.unit2)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit2: parseNum(e.target.value) } : c)} /></div>
+                <div><Label>Unit 3</Label><Input type="number" step="0.01" value={String(itemDraft.unit3)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit3: parseNum(e.target.value) } : c)} /></div>
               </div>
               <Separator />
               <div className="flex gap-2">

@@ -83,9 +83,9 @@ type EditableColumn =
   | "cost"
   | "markup"
   | "price"
-  | "laborHourReg"
-  | "laborHourOver"
-  | "laborHourDouble"
+  | "unit1"
+  | "unit2"
+  | "unit3"
   | "phaseId";
 
 type ContextMenuState = {
@@ -109,9 +109,9 @@ type ColumnId =
   | "description"
   | "quantity"
   | "uom"
-  | "laborHourReg"
-  | "laborHourOver"
-  | "laborHourDouble"
+  | "unit1"
+  | "unit2"
+  | "unit3"
   | "cost"
   | "markup"
   | "price"
@@ -167,9 +167,9 @@ const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
   "description",
   "quantity",
   "uom",
-  "laborHourReg",
-  "laborHourOver",
-  "laborHourDouble",
+  "unit1",
+  "unit2",
+  "unit3",
   "cost",
   "markup",
   "price",
@@ -177,17 +177,18 @@ const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
 ];
 
 const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
-  "expand",
-  "checkbox",
-  "lineOrder",
   "entityName",
   "description",
   "quantity",
   "uom",
+  "unit1",
+  "unit2",
+  "unit3",
   "cost",
   "extCost",
+  "markup",
+  "price",
   "margin",
-  "actions",
 ];
 
 const COLUMN_LABELS: Record<ColumnId, string> = {
@@ -200,9 +201,9 @@ const COLUMN_LABELS: Record<ColumnId, string> = {
   description: "Description",
   quantity: "Qty",
   uom: "UOM",
-  laborHourReg: "Units 1",
-  laborHourOver: "Units 2",
-  laborHourDouble: "Units 3",
+  unit1: "Units 1",
+  unit2: "Units 2",
+  unit3: "Units 3",
   cost: "Cost",
   markup: "Markup",
   price: "Price",
@@ -220,13 +221,13 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "description",
   "quantity",
   "uom",
-  "laborHourReg",
-  "laborHourOver",
-  "laborHourDouble",
+  "unit1",
+  "unit2",
+  "unit3",
   "cost",
+  "extCost",
   "markup",
   "price",
-  "extCost",
   "margin",
   "phaseId",
 ];
@@ -266,9 +267,9 @@ function isCellDisabledByCategory(
     cost: "cost",
     markup: "markup",
     price: "price",
-    laborHourReg: "laborHourReg",
-    laborHourOver: "laborHourOver",
-    laborHourDouble: "laborHourDouble",
+    unit1: "unit1",
+    unit2: "unit2",
+    unit3: "unit3",
   };
   const field = fieldMap[column];
   if (!field) return false;
@@ -276,15 +277,15 @@ function isCellDisabledByCategory(
 }
 
 function getLaborColumnLabel(
-  column: "laborHourReg" | "laborHourOver" | "laborHourDouble",
+  column: "unit1" | "unit2" | "unit3",
   category: EntityCategory | undefined
 ): string {
   if (!category) {
-    return column === "laborHourReg" ? "Unit 1" : column === "laborHourOver" ? "Unit 2" : "Unit 3";
+    return column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3";
   }
-  const map = { laborHourReg: "reg", laborHourOver: "over", laborHourDouble: "double" } as const;
-  const label = category.laborHourLabels[map[column]];
-  return label || (column === "laborHourReg" ? "Unit 1" : column === "laborHourOver" ? "Unit 2" : "Unit 3");
+  const map = { unit1: "reg", unit2: "over", unit3: "double" } as const;
+  const label = category.unitLabels[map[column]];
+  return label || (column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3");
 }
 
 /** Entity option item with optional pricing data from catalog */
@@ -619,14 +620,14 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     // If no rows have auto_labour calculation type, hide overtime and doubletime
     const hasAutoLabour = activeCatDefs.some((c) => c.calculationType === "auto_labour");
     if (!hasAutoLabour) {
-      cols.delete("laborHourOver");
-      cols.delete("laborHourDouble");
+      cols.delete("unit2");
+      cols.delete("unit3");
     }
 
-    // If no active categories allow laborHourReg editing, hide it too
-    const hasLaborRegEditable = activeCatDefs.some((c) => c.editableFields.laborHourReg);
+    // If no active categories allow unit1 editing, hide it too
+    const hasLaborRegEditable = activeCatDefs.some((c) => c.editableFields.unit1);
     if (!hasLaborRegEditable && allItems.length > 0) {
-      cols.delete("laborHourReg");
+      cols.delete("unit1");
     }
 
     return cols;
@@ -695,9 +696,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
           case "description": aVal = a.description.toLowerCase(); bVal = b.description.toLowerCase(); break;
           case "quantity": aVal = a.quantity; bVal = b.quantity; break;
           case "uom": aVal = a.uom; bVal = b.uom; break;
-          case "laborHourReg": aVal = a.laborHourReg; bVal = b.laborHourReg; break;
-          case "laborHourOver": aVal = a.laborHourOver; bVal = b.laborHourOver; break;
-          case "laborHourDouble": aVal = a.laborHourDouble; bVal = b.laborHourDouble; break;
+          case "unit1": aVal = a.unit1; bVal = b.unit1; break;
+          case "unit2": aVal = a.unit2; bVal = b.unit2; break;
+          case "unit3": aVal = a.unit3; bVal = b.unit3; break;
           case "cost": aVal = a.cost; bVal = b.cost; break;
           case "markup": aVal = a.markup; bVal = b.markup; break;
           case "price": aVal = a.price; bVal = b.price; break;
@@ -732,9 +733,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     return {
       cost: visibleRows.reduce((sum, r) => sum + r.cost * r.quantity, 0),
       price: visibleRows.reduce((sum, r) => sum + r.price, 0),
-      regHrs: visibleRows.reduce((sum, r) => sum + r.laborHourReg, 0),
-      otHrs: visibleRows.reduce((sum, r) => sum + r.laborHourOver, 0),
-      dtHrs: visibleRows.reduce((sum, r) => sum + r.laborHourDouble, 0),
+      regHrs: visibleRows.reduce((sum, r) => sum + r.unit1, 0),
+      otHrs: visibleRows.reduce((sum, r) => sum + r.unit2, 0),
+      dtHrs: visibleRows.reduce((sum, r) => sum + r.unit3, 0),
       count: visibleRows.length,
     };
   }, [visibleRows]);
@@ -763,9 +764,13 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   }, [allCatalogItems, catalogSearchTerm]);
 
   // Helper to check if a column is visible
+  // Checkbox column only appears when items are selected (bulk mode)
   const isColVisible = useCallback(
-    (col: ColumnId) => visibleColumns.has(col),
-    [visibleColumns]
+    (col: ColumnId) => {
+      if (col === "checkbox") return selectedIds.size > 0;
+      return visibleColumns.has(col);
+    },
+    [visibleColumns, selectedIds.size]
   );
 
   // Count visible data columns for colSpan on group header
@@ -841,9 +846,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       column === "quantity" ||
       column === "cost" ||
       column === "price" ||
-      column === "laborHourReg" ||
-      column === "laborHourOver" ||
-      column === "laborHourDouble"
+      column === "unit1" ||
+      column === "unit2" ||
+      column === "unit3"
     ) {
       const numVal = parseNum(editValue);
       if (numVal === currentVal) {
@@ -1012,9 +1017,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       patch.uom = catalogData?.uom ?? newCatDef.defaultUom;
 
       // Clear computed fields that are non-editable in the new category
-      if (!newCatDef.editableFields.laborHourReg) patch.laborHourReg = 0;
-      if (!newCatDef.editableFields.laborHourOver) patch.laborHourOver = 0;
-      if (!newCatDef.editableFields.laborHourDouble) patch.laborHourDouble = 0;
+      if (!newCatDef.editableFields.unit1) patch.unit1 = 0;
+      if (!newCatDef.editableFields.unit2) patch.unit2 = 0;
+      if (!newCatDef.editableFields.unit3) patch.unit3 = 0;
       if (!newCatDef.editableFields.cost) patch.cost = catalogData?.cost ?? 0;
       if (!newCatDef.editableFields.markup) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
       if (!newCatDef.editableFields.price) patch.price = 0;
@@ -1052,9 +1057,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       cost: 0,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: 0,
-      laborHourReg: 0,
-      laborHourOver: 0,
-      laborHourDouble: 0,
+      unit1: 0,
+      unit2: 0,
+      unit3: 0,
     };
 
     startTransition(async () => {
@@ -1101,9 +1106,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       cost: row.cost,
       markup: row.markup,
       price: row.price,
-      laborHourReg: row.laborHourReg,
-      laborHourOver: row.laborHourOver,
-      laborHourDouble: row.laborHourDouble,
+      unit1: row.unit1,
+      unit2: row.unit2,
+      unit3: row.unit3,
       lineOrder: row.lineOrder + 1,
     };
 
@@ -1270,9 +1275,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
             cost: row.cost,
             markup: row.markup,
             price: row.price,
-            laborHourReg: row.laborHourReg,
-            laborHourOver: row.laborHourOver,
-            laborHourDouble: row.laborHourDouble,
+            unit1: row.unit1,
+            unit2: row.unit2,
+            unit3: row.unit3,
           };
           last = await createWorksheetItem(workspace.project.id, row.worksheetId, payload);
         }
@@ -1310,9 +1315,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
             cost: ci.unitCost,
             markup: workspace.currentRevision.defaultMarkup ?? 0.2,
             price: ci.unitPrice,
-            laborHourReg: 0,
-            laborHourOver: 0,
-            laborHourDouble: 0,
+            unit1: 0,
+            unit2: 0,
+            unit3: 0,
           };
 
           last = await createWorksheetItem(workspace.project.id, wsId, payload);
@@ -1631,9 +1636,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
         column === "cost" ||
         column === "price" ||
         column === "markup" ||
-        column === "laborHourReg" ||
-        column === "laborHourOver" ||
-        column === "laborHourDouble"
+        column === "unit1" ||
+        column === "unit2" ||
+        column === "unit3"
           ? "number"
           : "text";
 
@@ -2064,7 +2069,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
           ) : (
             <div className="overflow-auto rounded-lg border border-line h-full">
               <table className="w-full text-sm">
-                <thead className="bg-panel2/60 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
+                <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
                     {/* Expand button column */}
                     {isColVisible("expand") && (
@@ -2115,24 +2120,29 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                         <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
                       </th>
                     )}
-                    {isColVisible("laborHourReg") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourReg")}>
-                        <span className="flex items-center justify-end gap-1">Units 1 {renderSortIcon("laborHourReg")}</span>
+                    {isColVisible("unit1") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
+                        <span className="flex items-center justify-end gap-1">Units 1 {renderSortIcon("unit1")}</span>
                       </th>
                     )}
-                    {isColVisible("laborHourOver") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourOver")}>
-                        <span className="flex items-center justify-end gap-1">Units 2 {renderSortIcon("laborHourOver")}</span>
+                    {isColVisible("unit2") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit2")}>
+                        <span className="flex items-center justify-end gap-1">Units 2 {renderSortIcon("unit2")}</span>
                       </th>
                     )}
-                    {isColVisible("laborHourDouble") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("laborHourDouble")}>
-                        <span className="flex items-center justify-end gap-1">Units 3 {renderSortIcon("laborHourDouble")}</span>
+                    {isColVisible("unit3") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit3")}>
+                        <span className="flex items-center justify-end gap-1">Units 3 {renderSortIcon("unit3")}</span>
                       </th>
                     )}
                     {isColVisible("cost") && (
                       <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("cost")}>
                         <span className="flex items-center justify-end gap-1">Cost {renderSortIcon("cost")}</span>
+                      </th>
+                    )}
+                    {isColVisible("extCost") && (
+                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("extCost")}>
+                        <span className="flex items-center justify-end gap-1">Ext. Cost {renderSortIcon("extCost")}</span>
                       </th>
                     )}
                     {isColVisible("markup") && (
@@ -2143,11 +2153,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                     {isColVisible("price") && (
                       <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("price")}>
                         <span className="flex items-center justify-end gap-1">Price {renderSortIcon("price")}</span>
-                      </th>
-                    )}
-                    {isColVisible("extCost") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("extCost")}>
-                        <span className="flex items-center justify-end gap-1">Ext. Cost {renderSortIcon("extCost")}</span>
                       </th>
                     )}
                     {isColVisible("margin") && (
@@ -2196,7 +2201,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                   })}
                 </tbody>
                 {/* ─── Totals footer ─── */}
-                <tfoot className="bg-panel2/40 text-xs font-medium sticky bottom-0">
+                <tfoot className="bg-panel2 text-xs font-medium sticky bottom-0 z-10">
                   <tr>
                     {isColVisible("expand") && <td className="border-t border-line px-1 py-2" />}
                     {isColVisible("checkbox") && <td className="border-t border-line px-1 py-2" />}
@@ -2213,17 +2218,17 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                     {isColVisible("description") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("quantity") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("uom") && <td className="border-t border-line px-2 py-2" />}
-                    {isColVisible("laborHourReg") && (
+                    {isColVisible("unit1") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums">
                         {totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}
                       </td>
                     )}
-                    {isColVisible("laborHourOver") && (
+                    {isColVisible("unit2") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums">
                         {totals.otHrs > 0 ? totals.otHrs.toLocaleString() : ""}
                       </td>
                     )}
-                    {isColVisible("laborHourDouble") && (
+                    {isColVisible("unit3") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums">
                         {totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : ""}
                       </td>
@@ -2233,15 +2238,15 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                         {formatMoney(totals.cost)}
                       </td>
                     )}
+                    {isColVisible("extCost") && (
+                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
+                        {formatMoney(totals.cost)}
+                      </td>
+                    )}
                     {isColVisible("markup") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("price") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums font-semibold">
                         {formatMoney(totals.price)}
-                      </td>
-                    )}
-                    {isColVisible("extCost") && (
-                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {formatMoney(totals.cost)}
                       </td>
                     )}
                     {isColVisible("margin") && <td className="border-t border-line px-2 py-2" />}
@@ -2628,9 +2633,9 @@ function GroupRows({
   isPending: boolean;
 }) {
   const catDef = group.catDef;
-  const regLabel = catDef ? catDef.laborHourLabels.reg : "";
-  const overLabel = catDef ? catDef.laborHourLabels.over : "";
-  const doubleLabel = catDef ? catDef.laborHourLabels.double : "";
+  const regLabel = catDef ? catDef.unitLabels.unit1 : "";
+  const overLabel = catDef ? catDef.unitLabels.unit2 : "";
+  const doubleLabel = catDef ? catDef.unitLabels.unit3 : "";
 
   return (
     <>
@@ -2805,25 +2810,25 @@ function GroupRows({
                 renderEditableCell(row, "uom", row.uom, "text-center")}
 
               {/* Unit columns - dynamic labels from category */}
-              {isColVisible("laborHourReg") &&
+              {isColVisible("unit1") &&
                 renderEditableCell(
                   row,
-                  "laborHourReg",
-                  <span className="tabular-nums">{row.laborHourReg || "--"}</span>,
+                  "unit1",
+                  <span className="tabular-nums">{row.unit1 || "--"}</span>,
                   "text-right"
                 )}
-              {isColVisible("laborHourOver") &&
+              {isColVisible("unit2") &&
                 renderEditableCell(
                   row,
-                  "laborHourOver",
-                  <span className="tabular-nums">{row.laborHourOver || "--"}</span>,
+                  "unit2",
+                  <span className="tabular-nums">{row.unit2 || "--"}</span>,
                   "text-right"
                 )}
-              {isColVisible("laborHourDouble") &&
+              {isColVisible("unit3") &&
                 renderEditableCell(
                   row,
-                  "laborHourDouble",
-                  <span className="tabular-nums">{row.laborHourDouble || "--"}</span>,
+                  "unit3",
+                  <span className="tabular-nums">{row.unit3 || "--"}</span>,
                   "text-right"
                 )}
 
@@ -2835,6 +2840,13 @@ function GroupRows({
                   <span className="tabular-nums">{formatMoney(row.cost, 2)}</span>,
                   "text-right"
                 )}
+
+              {/* Ext. Cost (read-only) */}
+              {isColVisible("extCost") && (
+                <td className="border-b border-line px-2 py-2 text-xs text-right tabular-nums text-fg/60">
+                  {formatMoney(extCost, 2)}
+                </td>
+              )}
 
               {/* Markup */}
               {isColVisible("markup") &&
@@ -2853,13 +2865,6 @@ function GroupRows({
                   <span className="tabular-nums font-medium">{formatMoney(row.price)}</span>,
                   "text-right"
                 )}
-
-              {/* Ext. Cost (read-only) */}
-              {isColVisible("extCost") && (
-                <td className="border-b border-line px-2 py-2 text-xs text-right tabular-nums text-fg/60">
-                  {formatMoney(extCost, 2)}
-                </td>
-              )}
 
               {/* Margin (read-only) */}
               {isColVisible("margin") && (

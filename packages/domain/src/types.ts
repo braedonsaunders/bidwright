@@ -32,9 +32,9 @@ export const estimateItemSchema = z.object({
   cost: z.number(),
   markup: z.number(),
   price: z.number(),
-  labourHoursReg: z.number(),
-  labourHoursOver: z.number(),
-  labourHoursDouble: z.number(),
+  unit1: z.number(),
+  unit2: z.number(),
+  unit3: z.number(),
   citations: z.array(citationSchema)
 });
 

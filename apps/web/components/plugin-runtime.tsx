@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   Plus,
   Minus,
@@ -10,6 +10,7 @@ import {
   Calculator,
   Search,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -37,24 +38,265 @@ import type {
   PluginFieldConditional,
   PluginOutput,
 } from "@/lib/api";
+import {
+  listDatasetRows,
+  queryDataset,
+  searchDatasetRows,
+  listRateSchedules,
+} from "@/lib/api";
+
+// ── Dataset Options Hook ────────────────────────────────────────────
+
+type DatasetRowData = Record<string, unknown>;
+
+// Cache for dataset rows to avoid redundant fetches
+const datasetRowsCache = new Map<string, { rows: DatasetRowData[]; ts: number }>();
+const CACHE_TTL = 60_000; // 1 minute
+
+async function fetchDatasetRows(datasetId: string): Promise<DatasetRowData[]> {
+  const cacheKey = `all:${datasetId}`;
+  const cached = datasetRowsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.rows;
+
+  try {
+    const result = await listDatasetRows(datasetId, { limit: 5000 });
+    const rows = (result.rows ?? []).map((r: any) => r.data ?? r);
+    datasetRowsCache.set(cacheKey, { rows, ts: Date.now() });
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
+function useDatasetOptions(
+  optionsSource: PluginField["optionsSource"],
+  parentValue?: unknown,
+): { options: PluginFieldOption[]; loading: boolean; allRows: DatasetRowData[] } {
+  const [options, setOptions] = useState<PluginFieldOption[]>([]);
+  const [allRows, setAllRows] = useState<DatasetRowData[]>([]);
+  const [loading, setLoading] = useState(false);
+  const prevKey = useRef("");
+
+  useEffect(() => {
+    if (!optionsSource?.datasetId || !optionsSource.column) return;
+    if (optionsSource.type !== "dataset" && optionsSource.type !== "cascade") return;
+
+    // For cascade, skip if no parent value
+    if (optionsSource.type === "cascade" && (!parentValue || parentValue === "")) {
+      setOptions([]);
+      setAllRows([]);
+      return;
+    }
+
+    const key = `${optionsSource.datasetId}:${optionsSource.column}:${optionsSource.type}:${parentValue ?? ""}`;
+    if (key === prevKey.current) return;
+    prevKey.current = key;
+
+    let cancelled = false;
+    setLoading(true);
+
+    (async () => {
+      try {
+        const rows = await fetchDatasetRows(optionsSource.datasetId!);
+
+        let filtered = rows;
+        if (optionsSource.type === "cascade" && optionsSource.parentColumn && parentValue) {
+          filtered = rows.filter(
+            (r) => String(r[optionsSource.parentColumn!] ?? "") === String(parentValue)
+          );
+        }
+
+        // Extract unique values for the column
+        const seen = new Set<string>();
+        const opts: PluginFieldOption[] = [];
+        for (const row of filtered) {
+          const val = String(row[optionsSource.column!] ?? "");
+          if (val && !seen.has(val)) {
+            seen.add(val);
+            opts.push({ value: val, label: val });
+          }
+        }
+        opts.sort((a, b) => a.label.localeCompare(b.label));
+
+        if (!cancelled) {
+          setOptions(opts);
+          setAllRows(rows);
+          setLoading(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setOptions([]);
+          setAllRows([]);
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [optionsSource?.datasetId, optionsSource?.column, optionsSource?.type, optionsSource?.parentColumn, parentValue]);
+
+  return { options, loading, allRows };
+}
+
+// ── Rate schedule options hook ──────────────────────────────────────
+
+function useRateScheduleOptions(
+  optionsSource: PluginField["optionsSource"],
+): { options: PluginFieldOption[]; loading: boolean } {
+  const [options, setOptions] = useState<PluginFieldOption[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (optionsSource?.type !== "rate_schedule") return;
+
+    setLoading(true);
+    (async () => {
+      try {
+        const schedules = await listRateSchedules();
+        const opts: PluginFieldOption[] = [];
+        for (const sched of schedules ?? []) {
+          for (const item of (sched as any).items ?? []) {
+            opts.push({
+              value: item.id,
+              label: `${item.name}${item.trade ? ` (${item.trade})` : ""}`,
+              description: `$${item.rate?.toFixed(2) ?? "0.00"}/hr`,
+            });
+          }
+        }
+        setOptions(opts);
+      } catch {
+        setOptions([]);
+      }
+      setLoading(false);
+    })();
+  }, [optionsSource?.type]);
+
+  return { options, loading };
+}
 
 // ── Formula Evaluator ─────────────────────────────────────────────────
 
-function evaluateFormula(formula: string, values: Record<string, unknown>): number {
+/** Lookup a value from dataset rows by matching field values. */
+function datasetLookup(
+  rows: DatasetRowData[],
+  matchColumns: string[],
+  matchValues: unknown[],
+  resultColumn: string,
+): number {
+  for (const row of rows) {
+    let match = true;
+    for (let i = 0; i < matchColumns.length; i++) {
+      const rowVal = String(row[matchColumns[i]] ?? "");
+      const matchVal = String(matchValues[i] ?? "");
+      if (!matchVal || rowVal !== matchVal) { match = false; break; }
+    }
+    if (match) {
+      const val = row[resultColumn];
+      return typeof val === "number" ? val : parseFloat(String(val)) || 0;
+    }
+  }
+  return 0;
+}
+
+/** Interpolate a value from a sorted dataset lookup table. */
+function datasetInterpolate(
+  rows: DatasetRowData[],
+  inputColumn: string,
+  inputValue: number,
+  resultColumn: string,
+): number {
+  if (rows.length === 0) return 0;
+  const sorted = [...rows].sort((a, b) => (Number(a[inputColumn]) || 0) - (Number(b[inputColumn]) || 0));
+  const first = Number(sorted[0][inputColumn]) || 0;
+  const last = Number(sorted[sorted.length - 1][inputColumn]) || 0;
+  if (inputValue <= first) return Number(sorted[0][resultColumn]) || 0;
+  if (inputValue >= last) return Number(sorted[sorted.length - 1][resultColumn]) || 0;
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const lo = Number(sorted[i][inputColumn]) || 0;
+    const hi = Number(sorted[i + 1][inputColumn]) || 0;
+    if (inputValue >= lo && inputValue <= hi) {
+      const t = hi !== lo ? (inputValue - lo) / (hi - lo) : 0;
+      const loVal = Number(sorted[i][resultColumn]) || 0;
+      const hiVal = Number(sorted[i + 1][resultColumn]) || 0;
+      return loVal + t * (hiVal - loVal);
+    }
+  }
+  return 0;
+}
+
+/** Nearest-neighbor lookup in a dataset by Euclidean distance across multiple columns. */
+function datasetNearest(
+  rows: DatasetRowData[],
+  matchColumns: string[],
+  matchValues: number[],
+  resultColumn: string,
+): number {
+  let bestDist = Infinity;
+  let bestVal = 0;
+  for (const row of rows) {
+    let dist = 0;
+    for (let i = 0; i < matchColumns.length; i++) {
+      const diff = (Number(row[matchColumns[i]]) || 0) - matchValues[i];
+      dist += diff * diff;
+    }
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestVal = Number(row[resultColumn]) || 0;
+    }
+  }
+  return bestVal;
+}
+
+function evaluateFormula(
+  formula: string,
+  values: Record<string, unknown>,
+  datasetRows?: DatasetRowData[],
+  computation?: PluginField["computation"],
+): number {
   try {
-    // Replace field references with their values
-    let expr = formula;
-    for (const [key, val] of Object.entries(values)) {
-      const numVal = typeof val === "number" ? val : parseFloat(String(val)) || 0;
-      expr = expr.replace(new RegExp(`\\b${key}\\b`, "g"), String(numVal));
+    // Handle lookup() formula — requires dataset context
+    if (formula.startsWith("lookup(") && datasetRows && computation) {
+      const lookupCols = computation.lookupColumns ?? [];
+      const resultCol = computation.resultColumn ?? "value";
+      const matchValues = lookupCols.map((col) => values[col]);
+      return datasetLookup(datasetRows, lookupCols, matchValues, resultCol);
     }
-    // Handle string comparisons for difficulty-like fields
-    for (const [key, val] of Object.entries(values)) {
-      if (typeof val === "string") {
-        expr = expr.replace(new RegExp(`'${val}'`, "g"), `'${val}'`);
+
+    // Handle interpolate() formula
+    if (formula.startsWith("interpolate(") && datasetRows && computation) {
+      const inputCol = computation.lookupColumns?.[0] ?? "";
+      const resultCol = computation.resultColumn ?? "value";
+      const inputValue = Number(values[inputCol]) || 0;
+      return datasetInterpolate(datasetRows, inputCol, inputValue, resultCol);
+    }
+
+    // Handle nearest() formula
+    if (formula.startsWith("nearest(") && datasetRows && computation) {
+      const matchCols = computation.lookupColumns ?? [];
+      const resultCol = computation.resultColumn ?? "value";
+      const matchValues = matchCols.map((col) => Number(values[col]) || 0);
+      return datasetNearest(datasetRows, matchCols, matchValues, resultCol);
+    }
+
+    // Handle sum() aggregation for table data
+    // sum(tableId, 'columnId') — evaluates from table data stored in values
+    const sumMatch = formula.match(/^sum\((\w+),\s*'(\w+)'\)\s*(.*)/);
+    if (sumMatch) {
+      const [, tableId, colId, rest] = sumMatch;
+      const tableRows = values[`__table_${tableId}`] as Record<string, unknown>[] | undefined;
+      const sum = (tableRows ?? []).reduce((acc, row) => acc + (Number(row[colId]) || 0), 0);
+      if (rest) {
+        // Evaluate rest of expression with sum value
+        // eslint-disable-next-line no-new-func
+        const fn = new Function("__sum__", ...Object.keys(values), `"use strict"; try { return __sum__ ${rest}; } catch { return 0; }`);
+        const result = fn(sum, ...Object.keys(values).map((k) => values[k]));
+        return typeof result === "number" && isFinite(result) ? result : 0;
       }
+      return sum;
     }
-    // Handle ternary and comparison operators safely
+
+    // Standard formula evaluation
     // eslint-disable-next-line no-new-func
     const fn = new Function(
       ...Object.keys(values),
@@ -129,17 +371,41 @@ function PluginFieldRenderer({
   onChange,
   allValues,
   error,
+  datasetRows,
 }: {
   field: PluginField;
   value: unknown;
   onChange: (value: unknown) => void;
   allValues: Record<string, unknown>;
   error?: string;
+  datasetRows?: DatasetRowData[];
 }) {
   if (!isFieldVisible(field, allValues)) return null;
 
+  // Resolve dataset options for select fields
+  const parentField = field.optionsSource?.type === "cascade" ? field.optionsSource.dependsOn : undefined;
+  const parentValue = parentField ? allValues[parentField] : undefined;
+  const dsOpts = useDatasetOptions(
+    field.optionsSource?.type === "dataset" || field.optionsSource?.type === "cascade"
+      ? field.optionsSource
+      : undefined,
+    parentValue,
+  );
+  const rsOpts = useRateScheduleOptions(
+    field.optionsSource?.type === "rate_schedule" ? field.optionsSource : undefined,
+  );
+
+  // Merge: dataset/rate_schedule options override static options
+  const resolvedOptions = useMemo(() => {
+    if (dsOpts.options.length > 0) return dsOpts.options;
+    if (rsOpts.options.length > 0) return rsOpts.options;
+    return field.options ?? [];
+  }, [dsOpts.options, rsOpts.options, field.options]);
+
+  const optionsLoading = dsOpts.loading || rsOpts.loading;
+
   const computedValue = field.type === "computed" && field.computation
-    ? evaluateFormula(field.computation.formula, allValues)
+    ? evaluateFormula(field.computation.formula, allValues, datasetRows, field.computation)
     : undefined;
 
   return (
@@ -206,18 +472,26 @@ function PluginFieldRenderer({
       )}
 
       {field.type === "select" && (
-        <Select
-          id={field.id}
-          value={String(value ?? "")}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">{field.placeholder ?? "Select..."}</option>
-          {(field.options ?? []).map((opt) => (
-            <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-              {opt.label}
+        <div className="relative">
+          <Select
+            id={field.id}
+            value={String(value ?? "")}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={optionsLoading}
+          >
+            <option value="">
+              {optionsLoading ? "Loading..." : field.placeholder ?? "Select..."}
             </option>
-          ))}
-        </Select>
+            {resolvedOptions.map((opt) => (
+              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+                {opt.label}
+              </option>
+            ))}
+          </Select>
+          {optionsLoading && (
+            <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-fg/30" />
+          )}
+        </div>
       )}
 
       {field.type === "multi-select" && (
@@ -626,6 +900,7 @@ function PluginSectionRenderer({
   onTableDataChange,
   scoringData,
   onScoringDataChange,
+  datasetRows,
 }: {
   section: PluginUISection;
   values: Record<string, unknown>;
@@ -634,6 +909,7 @@ function PluginSectionRenderer({
   onTableDataChange: (tableId: string, rows: Record<string, unknown>[]) => void;
   scoringData: Record<string, Record<string, number>>;
   onScoringDataChange: (scoringId: string, scores: Record<string, number>) => void;
+  datasetRows?: DatasetRowData[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -674,6 +950,7 @@ function PluginSectionRenderer({
                     value={values[field.id]}
                     onChange={(v) => onChange(field.id, v)}
                     allValues={values}
+                    datasetRows={datasetRows}
                   />
                 ))}
             </div>
@@ -750,6 +1027,40 @@ export function PluginRuntime({
   const [tableData, setTableData] = useState<Record<string, Record<string, unknown>[]>>(initialTableData ?? {});
   const [scoringData, setScoringData] = useState<Record<string, Record<string, number>>>(initialScoringData ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [datasetRows, setDatasetRows] = useState<DatasetRowData[]>([]);
+
+  // Collect all dataset IDs referenced by computed fields (for lookup/interpolate/nearest)
+  useEffect(() => {
+    const dsIds = new Set<string>();
+    for (const section of schema.sections) {
+      if (!section.fields) continue;
+      for (const field of section.fields) {
+        if (field.computation?.datasetId) dsIds.add(field.computation.datasetId);
+      }
+    }
+    if (dsIds.size === 0) return;
+
+    // Fetch first dataset (most plugins reference one dataset)
+    const firstId = [...dsIds][0];
+    fetchDatasetRows(firstId).then(setDatasetRows);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Build cascade dependency map: fieldId → dependent field IDs
+  const cascadeDeps = useMemo(() => {
+    const deps: Record<string, string[]> = {};
+    for (const section of schema.sections) {
+      if (!section.fields) continue;
+      for (const field of section.fields) {
+        if (field.optionsSource?.type === "cascade" && field.optionsSource.dependsOn) {
+          const parent = field.optionsSource.dependsOn;
+          if (!deps[parent]) deps[parent] = [];
+          deps[parent].push(field.id);
+        }
+      }
+    }
+    return deps;
+  }, [schema.sections]);
 
   // Initialize default values from schema
   useEffect(() => {
@@ -779,12 +1090,26 @@ export function PluginRuntime({
   const handleFieldChange = useCallback((fieldId: string, value: unknown) => {
     setValues((prev) => {
       const next = { ...prev, [fieldId]: value };
+
+      // Clear cascade dependent fields when parent changes
+      const clearDeps = (parentId: string) => {
+        const deps = cascadeDeps[parentId];
+        if (!deps) return;
+        for (const depId of deps) {
+          next[depId] = "";
+          clearDeps(depId); // recursively clear
+        }
+      };
+      clearDeps(fieldId);
+
       // Recompute all computed fields
       for (const section of schema.sections) {
         if (section.fields) {
           for (const field of section.fields) {
             if (field.type === "computed" && field.computation) {
-              next[field.id] = evaluateFormula(field.computation.formula, next);
+              next[field.id] = evaluateFormula(
+                field.computation.formula, next, datasetRows, field.computation
+              );
             }
           }
         }
@@ -798,7 +1123,7 @@ export function PluginRuntime({
         return rest;
       });
     }
-  }, [schema.sections, errors]);
+  }, [schema.sections, errors, cascadeDeps, datasetRows]);
 
   const handleTableDataChange = useCallback((tableId: string, rows: Record<string, unknown>[]) => {
     setTableData((prev) => ({ ...prev, [tableId]: rows }));
@@ -856,6 +1181,7 @@ export function PluginRuntime({
           onTableDataChange={handleTableDataChange}
           scoringData={scoringData}
           onScoringDataChange={handleScoringDataChange}
+          datasetRows={datasetRows}
         />
       ))}
 

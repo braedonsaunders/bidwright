@@ -150,11 +150,11 @@ export function PluginToolsPanel({
 
   return (
     <motion.div
-      initial={{ x: 480 }}
+      initial={{ x: 640 }}
       animate={{ x: 0 }}
-      exit={{ x: 480 }}
+      exit={{ x: 640 }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed inset-y-0 right-0 z-50 w-[480px] bg-panel border-l border-line shadow-2xl flex flex-col"
+      className="fixed inset-y-0 right-0 z-50 w-[640px] bg-panel border-l border-line shadow-2xl flex flex-col"
     >
       {/* Header */}
       <div className="flex items-center justify-between border-b border-line px-4 py-3 bg-panel2/40 shrink-0">

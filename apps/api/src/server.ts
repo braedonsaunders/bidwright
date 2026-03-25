@@ -149,9 +149,9 @@ const worksheetItemPatchSchema = z.object({
   cost: z.number().finite().optional(),
   markup: z.number().finite().optional(),
   price: z.number().finite().optional(),
-  laborHourReg: z.number().finite().optional(),
-  laborHourOver: z.number().finite().optional(),
-  laborHourDouble: z.number().finite().optional(),
+  unit1: z.number().finite().optional(),
+  unit2: z.number().finite().optional(),
+  unit3: z.number().finite().optional(),
   lineOrder: z.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
@@ -169,9 +169,9 @@ const createWorksheetItemSchema = z.object({
   cost: z.coerce.number().finite(),
   markup: z.coerce.number().finite(),
   price: z.coerce.number().finite(),
-  laborHourReg: z.coerce.number().finite().default(0),
-  laborHourOver: z.coerce.number().finite().default(0),
-  laborHourDouble: z.coerce.number().finite().default(0),
+  unit1: z.coerce.number().finite().default(0),
+  unit2: z.coerce.number().finite().default(0),
+  unit3: z.coerce.number().finite().default(0),
   lineOrder: z.coerce.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
@@ -377,6 +377,7 @@ interface UploadFieldMap {
   projectName?: string;
   name?: string;
   clientName?: string;
+  customerId?: string;
   location?: string;
   packageName?: string;
   scope?: string;
@@ -485,6 +486,59 @@ async function saveMultipartPackageUpload(request: FastifyRequest): Promise<Mult
   };
 }
 
+/** Convert simple markdown (paragraphs, lists, bold, italic) to HTML for the RichTextEditor. */
+function markdownToBasicHtml(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inUl = false;
+  let inOl = false;
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+
+    // Unordered list item: "- item" or "* item"
+    const ulMatch = line.match(/^[\s]*[-*]\s+(.*)/);
+    // Ordered list item: "1. item"
+    const olMatch = line.match(/^[\s]*\d+\.\s+(.*)/);
+
+    if (ulMatch) {
+      if (inOl) { out.push("</ol>"); inOl = false; }
+      if (!inUl) { out.push("<ul>"); inUl = true; }
+      out.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
+    } else if (olMatch) {
+      if (inUl) { out.push("</ul>"); inUl = false; }
+      if (!inOl) { out.push("<ol>"); inOl = true; }
+      out.push(`<li>${inlineFormat(olMatch[1])}</li>`);
+    } else {
+      if (inUl) { out.push("</ul>"); inUl = false; }
+      if (inOl) { out.push("</ol>"); inOl = false; }
+
+      if (line.trim() === "") {
+        // skip blank lines between paragraphs
+      } else if (line.startsWith("### ")) {
+        out.push(`<h3>${inlineFormat(line.slice(4))}</h3>`);
+      } else if (line.startsWith("## ")) {
+        out.push(`<h2>${inlineFormat(line.slice(3))}</h2>`);
+      } else if (line.startsWith("# ")) {
+        out.push(`<h1>${inlineFormat(line.slice(2))}</h1>`);
+      } else {
+        out.push(`<p>${inlineFormat(line)}</p>`);
+      }
+    }
+  }
+  if (inUl) out.push("</ul>");
+  if (inOl) out.push("</ol>");
+  return out.join("");
+}
+
+function inlineFormat(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/__(.+?)__/g, "<strong>$1</strong>")
+    .replace(/_(.+?)_/g, "<em>$1</em>");
+}
+
 function createProjectInputFromUpload(fields: UploadFieldMap, originalFileName: string): CreateProjectInput {
   const packageName = fields.packageName?.trim() || path.basename(originalFileName, path.extname(originalFileName));
   return {
@@ -519,11 +573,13 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
   }
 
   const rateSchedules = await store.listRevisionRateSchedules(projectId);
+  const entityCategories = await store.listEntityCategories();
 
   return {
     workspace: {
       ...workspace,
       rateSchedules,
+      entityCategories,
     },
     workspaceState: await store.getWorkspaceState(projectId),
     summaryMetrics: summaryMetrics(workspace),
@@ -564,6 +620,18 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     return {
       message: "Project could not be resolved for package upload"
     };
+  }
+
+  // Sync customerId to the Quote so the client dropdown is populated on the quote page
+  const ingestCustomerId = multipartUpload.fields.customerId?.trim();
+  if (ingestCustomerId) {
+    const quote = await prisma.quote.findFirst({ where: { projectId: targetProjectId } });
+    if (quote) {
+      await prisma.quote.update({
+        where: { id: quote.id },
+        data: { customerId: ingestCustomerId },
+      });
+    }
   }
 
   const packageName =
@@ -791,7 +859,12 @@ export function buildServer() {
     if (body.summary) projectPatch.summary = body.summary;
 
     // Revision fields (description and notes live on QuoteRevision, not Project)
-    if (body.description) revisionPatch.description = body.description;
+    if (body.description) {
+      const desc = body.description as string;
+      // If the description doesn't already contain HTML tags, convert markdown-style text to basic HTML
+      // so the RichTextEditor in the UI renders it properly (lists, paragraphs, bold, etc.)
+      revisionPatch.description = /<[a-z][\s\S]*>/i.test(desc) ? desc : markdownToBasicHtml(desc);
+    }
     if (body.notes) revisionPatch.notes = body.notes;
 
     if (Object.keys(projectPatch).length === 0 && Object.keys(revisionPatch).length === 0) {
@@ -807,7 +880,7 @@ export function buildServer() {
         });
       }
 
-      // Sync name/client to Quote
+      // Sync name/client to Quote + Revision
       const quote = await prisma.quote.findFirst({ where: { projectId } });
       if (quote) {
         const quoteUpdate: Record<string, unknown> = {};
@@ -817,7 +890,10 @@ export function buildServer() {
           await prisma.quote.update({ where: { id: quote.id }, data: quoteUpdate });
         }
 
-        // Update revision description/notes
+        // Also sync project name to QuoteRevision.title so the setup tab reflects it
+        if (name) revisionPatch.title = name;
+
+        // Update revision description/notes/title
         if (Object.keys(revisionPatch).length > 0) {
           const revision = await prisma.quoteRevision.findFirst({
             where: { quoteId: quote.id },
@@ -1028,6 +1104,70 @@ export function buildServer() {
         message: "Invalid worksheet item payload",
         issues: parsed.error.flatten()
       });
+    }
+
+    // ── Validate item against entity category configuration ──
+    const entityCategories = await request.store!.listEntityCategories();
+    const matchedCategory = entityCategories.find(
+      (ec: any) => ec.name === parsed.data.category || ec.entityType === parsed.data.entityType
+    );
+
+    if (matchedCategory) {
+      const calcType = (matchedCategory as any).calculationType;
+      const itemSrc = (matchedCategory as any).itemSource;
+
+      // Rate schedule categories MUST have a valid rateScheduleItemId
+      if (calcType === "auto_labour" || calcType === "auto_equipment" || itemSrc === "rate_schedule") {
+        if (!parsed.data.rateScheduleItemId) {
+          // Check if rate schedules exist for this project
+          const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
+          const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
+            id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
+          })));
+
+          if (relevantItems.length > 0) {
+            return reply.code(400).send({
+              message: `Category "${parsed.data.category}" requires a rateScheduleItemId. You cannot create items with made-up rates. Choose from the available rate schedule items.`,
+              availableItems: relevantItems.slice(0, 20),
+              hint: "Call quote.getItemConfig to see all available rate schedule items, then pass rateScheduleItemId when creating this item.",
+            });
+          }
+          // No rate schedules at all — warn but allow
+          return reply.code(400).send({
+            message: `Category "${parsed.data.category}" requires rate schedule items but none are imported. Import a rate schedule first using rateSchedule.import, then create items with a valid rateScheduleItemId.`,
+            hint: "Call rateSchedule.list to see available master schedules, then rateSchedule.import to import one.",
+          });
+        }
+
+        // Validate that the rateScheduleItemId actually exists
+        const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
+        const allRateItemIds = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => i.id));
+        if (!allRateItemIds.includes(parsed.data.rateScheduleItemId)) {
+          const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
+            id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
+          })));
+          return reply.code(400).send({
+            message: `rateScheduleItemId "${parsed.data.rateScheduleItemId}" does not exist. Choose from the available rate schedule items.`,
+            availableItems: relevantItems.slice(0, 20),
+            hint: "Call quote.getItemConfig to see all available rate schedule items.",
+          });
+        }
+      }
+
+      // Catalog-backed categories should use a valid catalogItemId when catalogs are configured
+      if (itemSrc === "catalog" && !parsed.data.itemId && !parsed.data.rateScheduleItemId) {
+        // Check if there are actually catalog items available
+        const catalogs = await request.store!.listCatalogs?.() ?? [];
+        const catKind = (matchedCategory as any).entityType?.toLowerCase();
+        const relevantCatalog = catalogs.find((c: any) => c.kind === catKind || c.kind === "equipment");
+        if (relevantCatalog) {
+          return reply.code(400).send({
+            message: `Category "${parsed.data.category}" is catalog-backed. Set itemId to a valid catalog item ID, or set cost directly if no catalog is configured.`,
+            hint: "Call quote.getItemConfig to see available catalog items.",
+          });
+        }
+        // No catalog configured for this category — allow freeform
+      }
     }
 
     await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput);
@@ -1520,6 +1660,110 @@ export function buildServer() {
   app.delete("/projects/:projectId/ali/:aliId", async (request, reply) => {
     const { projectId, aliId } = request.params as { projectId: string; aliId: string };
     await request.store!.deleteAdditionalLineItem(projectId, aliId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  // ── Summary Row routes ──────────────────────────────────────────────
+
+  const summaryRowCreateSchema = z.object({
+    type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).optional(),
+    label: z.string().optional(),
+    order: z.number().int().optional(),
+    visible: z.boolean().optional(),
+    style: z.enum(["normal", "bold", "indent", "highlight"]).optional(),
+    sourceCategory: z.string().nullable().optional(),
+    sourcePhase: z.string().nullable().optional(),
+    manualValue: z.number().finite().nullable().optional(),
+    manualCost: z.number().finite().nullable().optional(),
+    overrideValue: z.number().finite().nullable().optional(),
+    overrideCost: z.number().finite().nullable().optional(),
+    modifierPercent: z.number().finite().nullable().optional(),
+    modifierAmount: z.number().finite().nullable().optional(),
+    appliesTo: z.array(z.string()).optional(),
+  });
+
+  const summaryRowPatchSchema = summaryRowCreateSchema;
+
+  app.get("/projects/:projectId/summary-rows", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    return request.store!.listSummaryRows(projectId);
+  });
+
+  app.post("/projects/:projectId/summary-rows", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = summaryRowCreateSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid summary row payload", issues: parsed.error.flatten() });
+    }
+
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+
+    await request.store!.createSummaryRow(projectId, workspace.currentRevision.id, parsed.data);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/summary-rows/:rowId", async (request, reply) => {
+    const { projectId, rowId } = request.params as { projectId: string; rowId: string };
+    const parsed = summaryRowPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid summary row payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.updateSummaryRow(projectId, rowId, parsed.data);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/summary-rows/:rowId", async (request, reply) => {
+    const { projectId, rowId } = request.params as { projectId: string; rowId: string };
+    await request.store!.deleteSummaryRow(projectId, rowId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.post("/projects/:projectId/summary-rows/reorder", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({ orderedIds: z.array(z.string()) }).safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid reorder payload" });
+    }
+
+    await request.store!.reorderSummaryRows(projectId, parsed.data.orderedIds);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.post("/projects/:projectId/summary-rows/apply-preset", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]),
+    }).safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid preset" });
+    }
+
+    await request.store!.applySummaryPreset(projectId, parsed.data.preset);
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({ message: "Project workspace not found" });
@@ -2353,6 +2597,23 @@ export function buildServer() {
     }
 
     const reportSections = await request.store!.listReportSections(projectId);
+
+    // Resolve image file paths for report sections so the PDF renderer can embed them
+    for (const section of reportSections) {
+      if (section.sectionType === "image" && section.content) {
+        try {
+          const parsed = JSON.parse(section.content);
+          if (parsed.fileNodeId) {
+            const node = await request.store!.getFileNode(parsed.fileNodeId);
+            if (node?.storagePath) {
+              parsed.resolvedImagePath = resolveApiPath(node.storagePath);
+              section.content = JSON.stringify(parsed);
+            }
+          }
+        } catch { /* not JSON, skip */ }
+      }
+    }
+
     const orgSettings = await request.store!.getSettings();
     const pdfData = buildPdfDataPackage(workspace, reportSections, orgSettings.termsAndConditions || "");
 
@@ -2588,9 +2849,9 @@ export function buildServer() {
         cost: item.estimatedCost,
         markup: 0,
         price: item.estimatedCost,
-        laborHourReg: 0,
-        laborHourOver: 0,
-        laborHourDouble: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
       });
     }
 
@@ -2754,6 +3015,64 @@ export function buildServer() {
     }
   });
 
+  // ── AI Plugin Generation ──────────────────────────────────────────
+  app.post("/plugins/generate", async (request, reply) => {
+    const { prompt, categories } = request.body as { prompt: string; categories?: string[] };
+    if (!prompt?.trim()) return reply.code(400).send({ message: "prompt is required" });
+
+    const settings = await request.store!.getSettings();
+    const integrations = settings.integrations ?? {} as any;
+    const apiKey = integrations.anthropicKey ?? process.env.ANTHROPIC_API_KEY ?? integrations.openaiKey ?? process.env.OPENAI_API_KEY ?? "";
+    const provider = integrations.llmProvider ?? process.env.LLM_PROVIDER ?? (apiKey ? "anthropic" : "openai");
+    const model = integrations.llmModel ?? process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+
+    if (!apiKey) return reply.code(400).send({ message: "No LLM API key configured. Set one in Settings > Integrations." });
+
+    try {
+      const { createLLMAdapter } = await import("@bidwright/agent");
+      const adapter = createLLMAdapter({ provider: provider as any, apiKey, model });
+
+      const categoryList = categories?.length ? categories.join(", ") : "Labour, Equipment, Material, Travel, General";
+
+      const systemPrompt = `You are an expert construction estimating plugin builder. Generate complete plugin definitions for the Bidwright estimation platform.
+
+A plugin has:
+- name, slug (url-safe), icon (lucide icon name), category (one of: ${categoryList}), description, llmDescription (for AI agent), version, author, tags
+- toolDefinitions: array of tools, each with:
+  - id, name, description, llmDescription, parameters (array of {name, type, description, required}), outputType (line_items|worksheet|text_content|revision_patch|score|modifier|summary)
+  - ui: declarative UI schema with sections, each section has type (fields|table|scoring) and contains:
+    - fields: array of {id, type (text|number|currency|percentage|select|computed|boolean|slider|textarea|date), label, description, placeholder, defaultValue, validation:{required,min,max}, width (full|half|third|quarter), options:[{value,label}], computation:{formula,dependencies,format(number|hours|currency|percentage)}}
+    - table: {id, label, columns:[{id,label,type,width,editable,options,computation,aggregate(sum|avg)}], defaultRows, allowAddRow, allowDeleteRow, totalsRow, rowTemplate}
+    - scoring: {id, label, criteria:[{id,label,description,weight,scale:{min,max,step,labels}}], resultMapping:[{minScore,maxScore,label,value,color}], outputField}
+
+For computed fields, use formulas like "quantity * hoursPerUnit" referencing other field IDs. For selects with static options, include the options array. For scoring tools, use outputType "score" with revision_patch effect.
+
+Return ONLY valid JSON — the complete plugin object. No markdown, no explanation.`;
+
+      const response = await adapter.chat({
+        model,
+        systemPrompt,
+        messages: [{ role: "user", content: `Generate a plugin for: ${prompt.trim()}` }],
+        maxTokens: 8192,
+        temperature: 0.3,
+      });
+
+      const text = response.content.find((b: any) => b.type === "text")?.text ?? "";
+      // Extract JSON from response (handle markdown code blocks)
+      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, text];
+      const jsonStr = (jsonMatch[1] ?? text).trim();
+      const generated = JSON.parse(jsonStr);
+
+      return generated;
+    } catch (err) {
+      request.log.error(err, "Plugin generation failed");
+      return reply.code(500).send({
+        message: "Generation failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
   app.post("/plugins/:pluginId/execute", async (request, reply) => {
     const { pluginId } = request.params as { pluginId: string };
     const body = request.body as {
@@ -2904,6 +3223,12 @@ export function buildServer() {
     const { bookId } = request.params as { bookId: string };
     const book = await request.store!.getKnowledgeBook(bookId);
     if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
+    const query = request.query as { limit?: string; offset?: string };
+    const limit = query.limit ? Math.min(parseInt(query.limit, 10), 200) : undefined;
+    const offset = query.offset ? parseInt(query.offset, 10) : undefined;
+    if (limit != null) {
+      return request.store!.listKnowledgeChunksPaginated(bookId, limit, offset ?? 0);
+    }
     return request.store!.listKnowledgeChunks(bookId);
   });
 

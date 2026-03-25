@@ -65,10 +65,14 @@ import {
 } from "@/components/ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { cn } from "@/lib/utils";
+import * as RadixSelect from "@radix-ui/react-select";
+import { useAuth } from "@/components/auth-provider";
+import type { AuthUser } from "@/lib/api";
+import { listUsers } from "@/lib/api";
 
 /* ─── Types ─── */
 
-type SetupSubTab = "general" | "notes" | "rates" | "other" | "settings";
+type SetupSubTab = "general" | "conditions" | "notes" | "rates" | "other" | "settings";
 
 type RevisionDraft = {
   title: string;
@@ -93,7 +97,8 @@ export interface SetupTabProps {
 
 const subTabs: Array<{ id: SetupSubTab; label: string }> = [
   { id: "general", label: "General" },
-  { id: "notes", label: "Notes & Conditions" },
+  { id: "conditions", label: "Inclusions & Exclusions" },
+  { id: "notes", label: "Notes" },
   { id: "rates", label: "Rates" },
   { id: "other", label: "Other" },
   { id: "settings", label: "Settings" },
@@ -157,12 +162,29 @@ export function SetupTab({
   const [isPending, startTransition] = useTransition();
   const busy = parentPending || isPending;
 
+  // Track which revDraft fields the user has actively edited in this session.
+  // saveRevision only sends dirty fields to avoid overwriting agent updates.
+  const dirtyFieldsRef = useRef<Set<string>>(new Set());
+  const markDirty = useCallback((field: string) => { dirtyFieldsRef.current.add(field); }, []);
+
+  // Clear dirty flags when workspace data refreshes from the server
+  const prevRevKey = useRef("");
+  useEffect(() => {
+    const key = workspace.currentRevision.id + String(workspace.currentRevision.description?.length ?? 0);
+    if (key !== prevRevKey.current) {
+      dirtyFieldsRef.current.clear();
+      prevRevKey.current = key;
+    }
+  }, [workspace.currentRevision]);
+
   // Scroll to highlighted field from global search
   useEffect(() => {
     if (!highlightField) return;
     // Switch to the correct sub-tab based on field
     const notesFields = ["notes", "scratchpad", "leadLetter", "followUpNote"];
-    if (notesFields.includes(highlightField)) setSubTab("notes");
+    const conditionFields = ["inclusions", "exclusions", "conditions"];
+    if (conditionFields.includes(highlightField)) setSubTab("conditions");
+    else if (notesFields.includes(highlightField)) setSubTab("notes");
     else setSubTab("general");
 
     requestAnimationFrame(() => {
@@ -176,18 +198,26 @@ export function SetupTab({
   }, [highlightField]);
 
   function saveRevision(patch?: Partial<RevisionPatchInput>) {
-    const payload: RevisionPatchInput = {
-      title: revDraft.title,
-      description: revDraft.description,
-      notes: revDraft.notes,
-      breakoutStyle: revDraft.breakoutStyle,
-      phaseWorksheetEnabled: revDraft.phaseWorksheetEnabled,
-      useCalculatedTotal: revDraft.useCalculatedTotal,
-      ...patch,
-    };
+    // Build payload from only locally-dirty fields + explicit patch to avoid
+    // overwriting concurrent agent updates with stale local state
+    const dirty = dirtyFieldsRef.current;
+    const payload: Partial<RevisionPatchInput> = {};
+    if (dirty.has("title")) payload.title = revDraft.title;
+    if (dirty.has("description")) payload.description = revDraft.description;
+    if (dirty.has("notes")) payload.notes = revDraft.notes;
+    if (dirty.has("breakoutStyle")) payload.breakoutStyle = revDraft.breakoutStyle;
+    if (dirty.has("phaseWorksheetEnabled")) payload.phaseWorksheetEnabled = revDraft.phaseWorksheetEnabled;
+    if (dirty.has("useCalculatedTotal")) payload.useCalculatedTotal = revDraft.useCalculatedTotal;
+    Object.assign(payload, patch);
+
+    // Nothing to save
+    if (Object.keys(payload).length === 0) return;
+
     startTransition(async () => {
       try {
-        onApply(await updateRevision(workspace.project.id, workspace.currentRevision.id, payload));
+        onApply(await updateRevision(workspace.project.id, workspace.currentRevision.id, payload as RevisionPatchInput));
+        // Clear dirty flags for saved fields
+        for (const key of Object.keys(payload)) dirty.delete(key);
       } catch (e) {
         onError(e instanceof Error ? e.message : "Save failed.");
       }
@@ -227,7 +257,7 @@ export function SetupTab({
         })}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 flex flex-col">
         {subTab === "general" && (
           <GeneralSubTab
             workspace={workspace}
@@ -235,6 +265,15 @@ export function SetupTab({
             setRevDraft={setRevDraft}
             saveRevision={saveRevision}
             saveQuote={saveQuote}
+            busy={busy}
+            markDirty={markDirty}
+          />
+        )}
+        {subTab === "conditions" && (
+          <ConditionsSubTab
+            workspace={workspace}
+            onApply={onApply}
+            onError={onError}
             busy={busy}
           />
         )}
@@ -244,9 +283,8 @@ export function SetupTab({
             revDraft={revDraft}
             setRevDraft={setRevDraft}
             saveRevision={saveRevision}
-            onApply={onApply}
-            onError={onError}
             busy={busy}
+            markDirty={markDirty}
           />
         )}
         {subTab === "rates" && (
@@ -272,6 +310,7 @@ export function SetupTab({
             setRevDraft={setRevDraft}
             saveRevision={saveRevision}
             busy={busy}
+            markDirty={markDirty}
           />
         )}
       </div>
@@ -290,6 +329,7 @@ function GeneralSubTab({
   saveRevision,
   saveQuote,
   busy,
+  markDirty,
 }: {
   workspace: ProjectWorkspaceData;
   revDraft: RevisionDraft;
@@ -297,6 +337,7 @@ function GeneralSubTab({
   saveRevision: (patch?: Partial<RevisionPatchInput>) => void;
   saveQuote: (patch: QuotePatchInput) => void;
   busy: boolean;
+  markDirty: (field: string) => void;
 }) {
   const rev = workspace.currentRevision;
   const quote = workspace.quote;
@@ -388,12 +429,12 @@ function GeneralSubTab({
   }
 
   return (
-    <div className="space-y-5">
-      <Card>
-        <CardHeader>
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+      <Card className="flex flex-col">
+        <CardHeader className="shrink-0">
           <CardTitle>Quote Details</CardTitle>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardBody className="flex flex-col gap-4">
           {/* Title with quote number */}
           <div data-field="title">
             <Label>Quote Title</Label>
@@ -403,7 +444,7 @@ function GeneralSubTab({
               </span>
               <Input
                 value={revDraft.title}
-                onChange={(e) => setRevDraft((d) => ({ ...d, title: e.target.value }))}
+                onChange={(e) => { markDirty("title"); setRevDraft((d) => ({ ...d, title: e.target.value })); }}
                 onBlur={() => saveRevision()}
                 placeholder="Quote title"
               />
@@ -530,15 +571,16 @@ function GeneralSubTab({
             </div>
           </div>
 
-          {/* Description */}
-          <div data-field="description">
-            <Label>Description / Scope of Work</Label>
-            <div onBlur={() => saveRevision()}>
+          {/* Description — fills remaining space */}
+          <div data-field="description" className="flex-1 min-h-[120px] flex flex-col">
+            <Label className="shrink-0">Description / Scope of Work</Label>
+            <div onBlur={() => saveRevision()} onInput={() => markDirty("description")} className="flex-1 flex flex-col mt-1.5">
               <RichTextEditor
                 value={revDraft.description}
                 onChange={(html) => setRevDraft((d) => ({ ...d, description: html }))}
                 placeholder="Scope of work description..."
-                minHeight="100px"
+                className="flex-1 flex flex-col"
+                minHeight="100%"
               />
             </div>
           </div>
@@ -549,22 +591,16 @@ function GeneralSubTab({
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Notes & Conditions Sub-Tab
+   Inclusions & Exclusions Sub-Tab
    ═══════════════════════════════════════════════════════════════════════════ */
 
-function NotesSubTab({
+function ConditionsSubTab({
   workspace,
-  revDraft,
-  setRevDraft,
-  saveRevision,
   onApply,
   onError,
   busy,
 }: {
   workspace: ProjectWorkspaceData;
-  revDraft: RevisionDraft;
-  setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
-  saveRevision: () => void;
   onApply: (next: WorkspaceResponse) => void;
   onError: (msg: string) => void;
   busy: boolean;
@@ -588,47 +624,68 @@ function NotesSubTab({
   const exclusionLibrary = library.filter((l) => l.type === "exclusion" || l.type === "Exclusion");
 
   return (
-    <div className="space-y-5">
-      {/* Inclusions & Exclusions side-by-side */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ConditionList
-          title="Inclusions"
-          type="inclusion"
-          conditions={inclusions}
-          allConditions={workspace.conditions ?? []}
-          projectId={workspace.project.id}
-          libraryEntries={inclusionLibrary}
-          onApply={onApply}
-          onError={onError}
-          loading={loading}
-          onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
-        />
-        <ConditionList
-          title="Exclusions"
-          type="exclusion"
-          conditions={exclusions}
-          allConditions={workspace.conditions ?? []}
-          projectId={workspace.project.id}
-          libraryEntries={exclusionLibrary}
-          onApply={onApply}
-          onError={onError}
-          loading={loading}
-          onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
-        />
-      </div>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0">
+      <ConditionList
+        title="Inclusions"
+        type="inclusion"
+        conditions={inclusions}
+        allConditions={workspace.conditions ?? []}
+        projectId={workspace.project.id}
+        libraryEntries={inclusionLibrary}
+        onApply={onApply}
+        onError={onError}
+        loading={loading}
+        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
+      />
+      <ConditionList
+        title="Exclusions"
+        type="exclusion"
+        conditions={exclusions}
+        allConditions={workspace.conditions ?? []}
+        projectId={workspace.project.id}
+        libraryEntries={exclusionLibrary}
+        onApply={onApply}
+        onError={onError}
+        loading={loading}
+        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
+      />
+    </div>
+  );
+}
 
-      {/* Notes */}
-      <Card data-field="notes">
-        <CardHeader>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Notes Sub-Tab
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function NotesSubTab({
+  workspace,
+  revDraft,
+  setRevDraft,
+  saveRevision,
+  busy,
+  markDirty,
+}: {
+  workspace: ProjectWorkspaceData;
+  revDraft: RevisionDraft;
+  setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
+  saveRevision: () => void;
+  busy: boolean;
+  markDirty: (field: string) => void;
+}) {
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <Card data-field="notes" className="flex flex-col flex-1 min-h-0">
+        <CardHeader className="shrink-0">
           <CardTitle>Notes</CardTitle>
         </CardHeader>
-        <CardBody>
-          <div onBlur={saveRevision}>
+        <CardBody className="flex-1 min-h-0 flex flex-col">
+          <div onBlur={saveRevision} onInput={() => markDirty("notes")} className="flex-1 flex flex-col min-h-[200px]">
             <RichTextEditor
               value={revDraft.notes}
               onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
               placeholder="General notes..."
-              minHeight="100px"
+              className="flex-1 flex flex-col"
+              minHeight="100%"
             />
           </div>
         </CardBody>
@@ -751,14 +808,14 @@ function ConditionList({
   }
 
   return (
-    <Card>
-      <CardHeader className="flex items-center justify-between">
+    <Card className="flex flex-col h-full min-h-0">
+      <CardHeader className="flex items-center justify-between shrink-0">
         <CardTitle>{title}</CardTitle>
         <Button size="xs" variant="ghost" onClick={() => setShowLibrary(!showLibrary)} disabled={busy}>
           <BookOpen className="h-3.5 w-3.5" /> Library
         </Button>
       </CardHeader>
-      <CardBody className="space-y-3">
+      <CardBody className="space-y-3 flex-1 min-h-0 overflow-y-auto">
         {/* Library panel */}
         {showLibrary && (
           <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 space-y-2 max-h-48 overflow-y-auto">
@@ -865,24 +922,24 @@ function ConditionList({
             ))}
           </div>
         ) : null}
-
-        {/* Add new */}
-        <div className="flex items-center gap-2">
-          <Input
-            className="flex-1"
-            placeholder={`Add ${type}...`}
-            value={newValue}
-            onChange={(e) => setNewValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") addCondition();
-            }}
-          />
-          <Button size="sm" onClick={() => addCondition()} disabled={busy || !newValue.trim()}>
-            <Plus className="h-3.5 w-3.5" />
-            Add
-          </Button>
-        </div>
       </CardBody>
+
+      {/* Add new — pinned to bottom, always visible */}
+      <div className="flex items-center gap-2 shrink-0 border-t border-line px-5 py-3">
+        <Input
+          className="flex-1"
+          placeholder={`Add ${type}...`}
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") addCondition();
+          }}
+        />
+        <Button size="sm" onClick={() => addCondition()} disabled={busy || !newValue.trim()}>
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </Button>
+      </div>
     </Card>
   );
 }
@@ -1013,17 +1070,17 @@ function RatesSubTab({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
       {/* ═══ Section 1: Rate Schedules ═══ */}
-      <Card>
-        <CardHeader className="flex items-center justify-between">
+      <Card className="flex flex-col flex-1 min-h-0">
+        <CardHeader className="flex items-center justify-between shrink-0">
           <CardTitle>Rate Schedules</CardTitle>
           <Button size="sm" onClick={handleOpenImportPicker} disabled={busy}>
             <Download className="h-3.5 w-3.5" />
             Import from Library
           </Button>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardBody className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           {/* Import picker */}
           {showImportPicker && (
             <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 p-3">
@@ -1284,6 +1341,7 @@ function OtherSubTab({
 }) {
   const rev = workspace.currentRevision;
   const quote = workspace.quote;
+  const { user: currentUser } = useAuth();
 
   const [dateEstimatedShip, setDateEstimatedShip] = useState(toDateInput(rev.dateEstimatedShip));
   const [shippingMethod, setShippingMethod] = useState(rev.shippingMethod ?? "");
@@ -1293,9 +1351,22 @@ function OtherSubTab({
   const [dateWorkEnd, setDateWorkEnd] = useState(toDateInput(rev.dateWorkEnd));
   const [followUpNote, setFollowUpNote] = useState(rev.followUpNote ?? "");
   const [userId, setUserId] = useState(quote.userId ?? "");
+  const [orgUsers, setOrgUsers] = useState<AuthUser[]>([]);
 
-  const otherStateRef = useRef({ dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote, userId });
-  otherStateRef.current = { dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote, userId };
+  // Load org users and auto-fill with current user if not yet assigned
+  useEffect(() => {
+    listUsers().then((users) => {
+      setOrgUsers(users.filter((u) => u.active));
+      // Auto-fill with current user if userId is empty
+      if (!quote.userId && currentUser?.id) {
+        setUserId(currentUser.id);
+        saveQuote({ userId: currentUser.id });
+      }
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const otherStateRef = useRef({ dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote });
+  otherStateRef.current = { dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote };
 
   const doSaveOther = useCallback(() => {
     const s = otherStateRef.current;
@@ -1308,15 +1379,12 @@ function OtherSubTab({
       dateWorkEnd: fromDateInput(s.dateWorkEnd),
       followUpNote: s.followUpNote,
     });
-    if (s.userId !== (quote.userId ?? "")) {
-      saveQuote({ userId: s.userId || null });
-    }
-  }, [saveRevision, saveQuote, quote.userId]);
+  }, [saveRevision]);
 
   const { trigger: debouncedSaveOther } = useDebouncedSave(doSaveOther);
 
   return (
-    <div className="space-y-5">
+    <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
       <Card>
         <CardHeader>
           <CardTitle>Shipping & Logistics</CardTitle>
@@ -1416,13 +1484,42 @@ function OtherSubTab({
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label>Estimator / User</Label>
-              <Input
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                onBlur={debouncedSaveOther}
-                placeholder="User ID"
-              />
+              <Label>Assigned Estimator</Label>
+              <RadixSelect.Root
+                value={userId || undefined}
+                onValueChange={(val) => {
+                  setUserId(val);
+                  saveQuote({ userId: val || null });
+                }}
+              >
+                <RadixSelect.Trigger className="inline-flex items-center justify-between w-full h-9 px-3 text-sm rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors">
+                  <RadixSelect.Value placeholder="Select estimator..." />
+                  <RadixSelect.Icon className="ml-2 shrink-0">
+                    <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
+                  </RadixSelect.Icon>
+                </RadixSelect.Trigger>
+                <RadixSelect.Portal>
+                  <RadixSelect.Content className="z-50 rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
+                    <RadixSelect.Viewport className="p-1">
+                      {orgUsers.map((u) => (
+                        <RadixSelect.Item
+                          key={u.id}
+                          value={u.id}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent"
+                        >
+                          <RadixSelect.ItemIndicator className="shrink-0">
+                            <Check className="h-3 w-3" />
+                          </RadixSelect.ItemIndicator>
+                          <RadixSelect.ItemText>
+                            {u.name}{u.id === currentUser?.id ? " (you)" : ""}
+                          </RadixSelect.ItemText>
+                          <span className="ml-auto text-[10px] text-fg/30">{u.role}</span>
+                        </RadixSelect.Item>
+                      ))}
+                    </RadixSelect.Viewport>
+                  </RadixSelect.Content>
+                </RadixSelect.Portal>
+              </RadixSelect.Root>
             </div>
           </div>
         </CardBody>
@@ -1441,12 +1538,14 @@ function SettingsSubTab({
   setRevDraft,
   saveRevision,
   busy,
+  markDirty,
 }: {
   workspace: ProjectWorkspaceData;
   revDraft: RevisionDraft;
   setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
   saveRevision: (patch?: Partial<RevisionPatchInput>) => void;
   busy: boolean;
+  markDirty: (field: string) => void;
 }) {
   const rev = workspace.currentRevision;
 
@@ -1454,7 +1553,7 @@ function SettingsSubTab({
   const [showOvertimeDoubletime, setShowOvertimeDoubletime] = useState(rev.showOvertimeDoubletime ?? false);
 
   return (
-    <div className="space-y-5">
+    <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
       {/* Estimate Behavior */}
       <Card>
         <CardHeader>

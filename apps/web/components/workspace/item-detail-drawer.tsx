@@ -54,9 +54,9 @@ export function ItemDetailDrawer({
     cost: item.cost,
     markup: item.markup,
     price: item.price,
-    laborHourReg: item.laborHourReg,
-    laborHourOver: item.laborHourOver,
-    laborHourDouble: item.laborHourDouble,
+    unit1: item.unit1,
+    unit2: item.unit2,
+    unit3: item.unit3,
     phaseId: item.phaseId ?? "",
   });
 
@@ -70,9 +70,9 @@ export function ItemDetailDrawer({
       cost: item.cost,
       markup: item.markup,
       price: item.price,
-      laborHourReg: item.laborHourReg,
-      laborHourOver: item.laborHourOver,
-      laborHourDouble: item.laborHourDouble,
+      unit1: item.unit1,
+      unit2: item.unit2,
+      unit3: item.unit3,
       phaseId: item.phaseId ?? "",
     });
   }, [item]);
@@ -96,9 +96,9 @@ export function ItemDetailDrawer({
       field === "quantity" ||
       field === "cost" ||
       field === "price" ||
-      field === "laborHourReg" ||
-      field === "laborHourOver" ||
-      field === "laborHourDouble"
+      field === "unit1" ||
+      field === "unit2" ||
+      field === "unit3"
     ) {
       const num = Number(value);
       if (!Number.isFinite(num)) return;
@@ -331,19 +331,19 @@ export function ItemDetailDrawer({
 
         <div className="grid grid-cols-3 gap-3">
           {renderNumericField(
-            "laborHourReg",
-            catDef?.laborHourLabels.reg || "Reg Hrs",
-            form.laborHourReg,
+            "unit1",
+            catDef?.unitLabels.unit1 || "Unit 1",
+            form.unit1,
           )}
           {renderNumericField(
-            "laborHourOver",
-            catDef?.laborHourLabels.over || "OT Hrs",
-            form.laborHourOver,
+            "unit2",
+            catDef?.unitLabels.unit2 || "Unit 2",
+            form.unit2,
           )}
           {renderNumericField(
-            "laborHourDouble",
-            catDef?.laborHourLabels.double || "DT Hrs",
-            form.laborHourDouble,
+            "unit3",
+            catDef?.unitLabels.unit3 || "Unit 3",
+            form.unit3,
           )}
         </div>
 

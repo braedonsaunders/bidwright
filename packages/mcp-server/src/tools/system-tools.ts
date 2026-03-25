@@ -53,16 +53,16 @@ export function registerSystemTools(server: McpServer) {
     async () => {
       const data = await apiGet(projectPath("/workspace"));
       const ws = data.workspace || data;
-      const project = ws.projects?.[0] || {};
-      const revision = ws.revisions?.[0] || {};
+      const project = ws.project || ws.projects?.[0] || {};
+      const revision = ws.currentRevision || ws.revisions?.[0] || {};
       const summary = {
         projectName: project.name,
         clientName: project.clientName,
         location: project.projectAddress,
-        quoteNumber: ws.quotes?.[0]?.quoteNumber,
+        quoteNumber: (ws.quote || ws.quotes?.[0])?.quoteNumber,
         status: revision.status,
         worksheetCount: (ws.worksheets || []).length,
-        lineItemCount: (ws.worksheetItems || []).length,
+        lineItemCount: (ws.worksheets || []).reduce((sum: number, w: any) => sum + (w.items || []).length, 0),
         phaseCount: (ws.phases || []).length,
         conditionCount: (ws.conditions || []).length,
         subtotal: revision.subtotal,

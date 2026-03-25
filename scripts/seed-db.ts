@@ -192,9 +192,9 @@ async function main() {
           cost: i.cost,
           markup: i.markup,
           price: i.price,
-          laborHourReg: i.laborHourReg,
-          laborHourOver: i.laborHourOver,
-          laborHourDouble: i.laborHourDouble,
+          unit1: i.unit1,
+          unit2: i.unit2,
+          unit3: i.unit3,
           lineOrder: i.lineOrder,
         },
       });
@@ -294,7 +294,7 @@ async function main() {
           id: ec.id, organizationId: orgId, name: ec.name, entityType: ec.entityType,
           shortform: ec.shortform, defaultUom: ec.defaultUom,
           validUoms: ec.validUoms, editableFields: ec.editableFields as any,
-          laborHourLabels: ec.laborHourLabels as any, calculationType: ec.calculationType,
+          unitLabels: ec.unitLabels as any, calculationType: ec.calculationType,
         },
       });
     }

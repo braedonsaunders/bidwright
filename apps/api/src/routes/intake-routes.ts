@@ -17,10 +17,9 @@ import {
   scheduleTools,
   rateScheduleTools,
 } from "@bidwright/agent";
-import { pricingTools } from "@bidwright/agent";
+import { pricingTools, pluginManagementTools } from "@bidwright/agent";
 import { createLLMAdapter } from "@bidwright/agent";
 import { buildIntakeSystemPrompt, type IntakePromptParams } from "@bidwright/agent";
-import { runIntakeOrchestration, type DocumentInfo } from "@bidwright/agent";
 
 // In-memory intake session storage
 const intakeSessions = new Map<string, AgentSession & {
@@ -61,6 +60,7 @@ export async function intakeRoutes(app: FastifyInstance) {
     ...scheduleTools,
     ...rateScheduleTools,
     ...pricingTools,
+    ...pluginManagementTools,
   ]);
 
   // ──────────────────────────────────────────────────────────────
@@ -228,13 +228,16 @@ export async function intakeRoutes(app: FastifyInstance) {
     const itemTools = new ToolRegistry();
     for (const id of [
       "project.readFile", "project.listFiles", "project.getDocumentManifest", "project.searchFiles",
-      "knowledge.queryProjectDocs", "quote.getWorkspace",
+      "knowledge.queryProjectDocs", "knowledge.searchBooks", "knowledge.queryGlobalLibrary",
+      "knowledge.queryDataset", "knowledge.listDatasets", "knowledge.searchDataset",
+      "quote.getWorkspace", "quote.getItemConfig",
       "quote.createWorksheet", "quote.updateQuote", "quote.createCondition", "quote.createPhase",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) planningTools.register(t); }
 
     for (const id of [
       "project.readFile", "project.searchFiles", "knowledge.queryProjectDocs",
+      "knowledge.searchBooks", "knowledge.queryDataset", "knowledge.searchDataset",
       "quote.getItemConfig", "quote.createWorksheetItem", "quote.getWorkspace",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) itemTools.register(t); }
@@ -346,7 +349,16 @@ Create line items for the "${ws.name}" worksheet using quote.createWorksheetItem
 - worksheetId: "${ws.id}"
 - Read relevant documents to find items for this system/trade
 - Create a createWorksheetItem call for EVERY item
-- Include: entityName, category (Material/Labour/Equipment/Subcontractor), description (cite source doc), quantity, uom, cost ($0 if unknown)
+- category is REQUIRED — use the correct category from getItemConfig (e.g. Labour, Equipment, Material, Consumables). Do NOT default everything to Material.
+- Include: entityName, category, description (cite source doc + knowledge reference), quantity, uom, cost ($0 if unknown)
+
+## Labour Hours — USE THE KNOWLEDGE BASE
+For EVERY labour item, you MUST query the knowledge base to find production rates and man-hour data:
+- Call knowledge.searchBooks with relevant terms (e.g. "butt weld man hours", "pipe fitting production rate", "valve installation hours")
+- Call knowledge.queryDataset or knowledge.searchDataset for structured lookups
+- Base your unit1 (regular hours) on actual reference data, NOT guesses
+- Cite the knowledge source in the item description (e.g. "Per Pipefitting Handbook: 2.5 MH per joint")
+- If no knowledge data is found, note "HOURS NEED VERIFICATION" in description
 
 Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
 
@@ -392,9 +404,20 @@ Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
 
         const s = intakeSessions.get(sessionId);
         const finalStatus = abortController.signal.aborted ? "stopped" : "completed";
+
+        // Build a completion summary from workspace data
+        const finalWs = await store.getWorkspace(body.projectId);
+        const wsCount = finalWs?.worksheets?.length ?? 0;
+        const itemCount = finalWs?.worksheets?.reduce((sum: number, w: any) => sum + (w.items?.length ?? 0), 0) ?? 0;
+        const condCount = finalWs?.conditions?.length ?? 0;
+        const completionMsg = finalStatus === "completed"
+          ? `Intake complete. Created ${wsCount} worksheets with ${itemCount} line items and ${condCount} conditions. Review the estimate and adjust pricing as needed.`
+          : "Intake stopped by user.";
+        onMessage({ role: "assistant", content: completionMsg });
+
         if (s) {
           s.intakeStatus = finalStatus;
-          s.summary = finalResult.message;
+          s.summary = completionMsg;
           s.updatedAt = new Date().toISOString();
         }
         // Final DB save

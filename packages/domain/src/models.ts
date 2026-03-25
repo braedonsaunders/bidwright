@@ -153,6 +153,7 @@ export interface QuoteRevision {
   doubleHours: number;
   breakoutPackage: unknown[];
   calculatedCategoryTotals: unknown[];
+  pdfPreferences: Record<string, unknown>;
   subtotal: number;
   cost: number;
   estimatedProfit: number;
@@ -184,9 +185,9 @@ export interface WorksheetItem {
   cost: number;
   markup: number;
   price: number;
-  laborHourReg: number;
-  laborHourOver: number;
-  laborHourDouble: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -263,6 +264,45 @@ export interface AdditionalLineItem {
     | "LineItemStandalone"
     | "CustomTotal";
   amount: number;
+}
+
+export type SummaryRowType = "auto_category" | "auto_phase" | "manual" | "modifier" | "subtotal" | "separator";
+export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
+export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
+
+export interface SummaryRow {
+  id: string;
+  revisionId: string;
+  type: SummaryRowType;
+  label: string;
+  order: number;
+  visible: boolean;
+  style: SummaryRowStyle;
+
+  // Auto source
+  sourceCategory?: string | null;
+  sourcePhase?: string | null;
+
+  // Manual rows: direct value entry (not backed by items)
+  manualValue?: number | null;
+  manualCost?: number | null;
+
+  // Auto row override: when set on auto_category/auto_phase rows,
+  // this value is used INSTEAD of the aggregated value from items.
+  // Set to null to go back to fully-auto. This lets users "pin" a
+  // number while keeping the row linked to its source.
+  overrideValue?: number | null;
+  overrideCost?: number | null;
+
+  // Modifier fields
+  modifierPercent?: number | null;
+  modifierAmount?: number | null;
+  appliesTo: string[]; // row IDs or ["all"]
+
+  // Computed (filled by recalculate — reflects override if set)
+  computedValue: number;
+  computedCost: number;
+  computedMargin: number;
 }
 
 export interface Condition {
@@ -365,6 +405,7 @@ export interface RateSchedule {
   projectId: string | null;
   revisionId: string | null;
   sourceScheduleId: string | null;
+  travelPolicyId: string | null;
   effectiveDate: string | null;
   expiryDate: string | null;
   defaultMarkup: number;
@@ -377,6 +418,75 @@ export interface RateSchedule {
 export interface RateScheduleWithChildren extends RateSchedule {
   tiers: RateScheduleTier[];
   items: RateScheduleItem[];
+}
+
+// ── Labour Cost & Burden ────────────────────────────────────────────────
+
+export interface LabourCostEntry {
+  id: string;
+  tableId: string;
+  code: string;
+  name: string;
+  group: string;
+  costRates: Record<string, number>;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
+}
+
+export interface LabourCostTable {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LabourCostTableWithEntries extends LabourCostTable {
+  entries: LabourCostEntry[];
+}
+
+export interface BurdenPeriod {
+  id: string;
+  organizationId: string;
+  name: string;
+  group: string;
+  percentage: number;
+  startDate: string;
+  endDate: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Travel Policy ──────────────────────────────────────────────────────
+
+export type PerDiemEmbedMode = "separate" | "embed_hourly" | "embed_cost_only";
+export type FuelSurchargeAppliesTo = "labour" | "all" | "none";
+
+export interface TravelPolicy {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string;
+  perDiemRate: number;
+  perDiemEmbedMode: PerDiemEmbedMode;
+  hoursPerDay: number;
+  travelTimeHours: number;
+  travelTimeTrips: number;
+  kmToDestination: number;
+  mileageRate: number;
+  fuelSurchargePercent: number;
+  fuelSurchargeAppliesTo: FuelSurchargeAppliesTo;
+  accommodationRate: number;
+  accommodationNights: number;
+  showAsSeparateLine: boolean;
+  breakoutLabel: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Activity {
@@ -508,7 +618,7 @@ export interface PluginField {
   defaultValue?: unknown;
   options?: PluginFieldOption[];            // for select/multi-select/radio
   optionsSource?: {                         // dynamic options from dataset or API
-    type: "dataset" | "api" | "cascade";
+    type: "dataset" | "api" | "cascade" | "rate_schedule" | "knowledge";
     datasetId?: string;
     column?: string;
     endpoint?: string;
@@ -521,6 +631,9 @@ export interface PluginField {
     formula: string;                        // e.g., "quantity * hoursPerUnit * difficultyFactor"
     dependencies: string[];                 // field ids used in formula
     format?: string;                        // display format: "number", "currency", "hours"
+    datasetId?: string;                     // dataset for lookup/interpolate/nearest formulas
+    lookupColumns?: string[];               // columns to match on in the dataset
+    resultColumn?: string;                  // column to return from the matched row
   };
   searchConfig?: {                          // for "search" type fields
     endpoint: string;
@@ -650,9 +763,9 @@ export interface PluginOutputLineItem {
   cost?: number;
   markup?: number;
   price?: number;
-  laborHourReg?: number;
-  laborHourOver?: number;
-  laborHourDouble?: number;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
   phaseId?: string;
   metadata?: Record<string, unknown>;
 }
@@ -836,6 +949,7 @@ export interface AppSettings {
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number; maxAgentIterations?: number };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string };
   brand: BrandProfile;
+  termsAndConditions: string;
 }
 
 // ── Knowledge Base ──
@@ -929,14 +1043,14 @@ export interface EntityCategory {
     cost: boolean;
     markup: boolean;
     price: boolean;
-    laborHourReg: boolean;
-    laborHourOver: boolean;
-    laborHourDouble: boolean;
+    unit1: boolean;
+    unit2: boolean;
+    unit3: boolean;
   };
-  laborHourLabels: {
-    reg: string;
-    over: string;
-    double: string;
+  unitLabels: {
+    unit1: string;
+    unit2: string;
+    unit3: string;
   };
   calculationType: CalculationType;
   calcFormula: string;
@@ -958,6 +1072,7 @@ export interface BidwrightStore {
   phases: Phase[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
+  summaryRows: SummaryRow[];
   conditions: Condition[];
   catalogs: Catalog[];
   catalogItems: CatalogItem[];
@@ -1026,6 +1141,7 @@ export interface ProjectWorkspace {
   phases: Phase[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
+  summaryRows: SummaryRow[];
   conditions: Condition[];
   catalogs: Array<Catalog & { items: CatalogItem[] }>;
   aiRuns: AiRun[];

@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
+
+/** Old script kept for backwards compatibility */
 const AUTO_COUNT_SCRIPT = path.join(PYTHON_DIR, "auto_count.py");
+
+/** New optimized counter (threshold=0.75, single-scale TM_CCOEFF_NORMED) */
+const COUNT_SYMBOLS_SCRIPT = path.join(PYTHON_DIR, "tools", "count_symbols.py");
 
 /* ── Request / Response types ────────────────────────────────── */
 
@@ -26,10 +31,12 @@ export interface SymbolCountRequest {
   pageNumber?: number;
   /** Bounding box of the selection region on the canvas */
   boundingBox?: BoundingBox;
-  /** Matching confidence threshold 0-1 (default 0.65) */
+  /** Matching confidence threshold 0-1 (default 0.75) */
   threshold?: number;
-  /** Which methods to enable (default: all) */
+  /** Which methods to enable (default: all) — only used by legacy auto_count */
   methods?: ("template" | "ocr" | "visual" | "text" | "autostitch")[];
+  /** Enable cross-scale matching for cross-document searches (0.75x-1.25x scale range) */
+  crossScale?: boolean;
   /** Passed through to result */
   documentId?: string;
 }
@@ -49,10 +56,108 @@ export interface SymbolCountResult {
   pagesSearched: number;
   duration_ms: number;
   snippetImage?: string; // data URL of the template/selection snippet
+  imageWidth?: number;
+  imageHeight?: number;
   errors: string[];
 }
 
-/* ── Run the Python auto_count pipeline ────────────────────── */
+/* ── Helper: spawn a Python script with stdin JSON ────────── */
+
+function spawnPython(script: string, payload: string, timeoutMs: number = 120_000): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve) => {
+    const pythonPath = process.env.PYTHON_PATH ?? "python3";
+    const proc = spawn(pythonPath, [script], {
+      cwd: PYTHON_DIR,
+      timeout: timeoutMs,
+      env: {
+        ...process.env,
+        PDF_BASE_PATH: process.env.DATA_DIR ?? "",
+      },
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdin.write(payload);
+    proc.stdin.end();
+
+    proc.stdout.on("data", (data) => { stdout += data.toString(); });
+    proc.stderr.on("data", (data) => { stderr += data.toString(); });
+
+    proc.on("close", (code) => { resolve({ stdout, stderr, code }); });
+    proc.on("error", (err) => { resolve({ stdout: "", stderr: err.message, code: -1 }); });
+  });
+}
+
+/* ── Run the NEW count_symbols pipeline (optimized) ──────── */
+
+export async function runCountSymbols(request: SymbolCountRequest): Promise<SymbolCountResult> {
+  const start = Date.now();
+
+  const payload = JSON.stringify({
+    pdfPath: request.pdfPath,
+    pageNumber: request.pageNumber ?? 1,
+    boundingBox: request.boundingBox ?? null,
+    threshold: request.threshold ?? 0.75,
+    dpi: 150,
+    crossScale: request.crossScale ?? false,
+  });
+
+  const { stdout, stderr, code } = await spawnPython(COUNT_SYMBOLS_SCRIPT, payload);
+  const duration_ms = Date.now() - start;
+
+  if (code !== 0) {
+    return {
+      matches: [],
+      totalCount: 0,
+      pagesSearched: 1,
+      duration_ms,
+      errors: [stderr || `Process exited with code ${code}`],
+    };
+  }
+
+  try {
+    const result = JSON.parse(stdout);
+
+    if (result.error) {
+      return {
+        matches: [],
+        totalCount: 0,
+        pagesSearched: 1,
+        duration_ms,
+        errors: [result.error],
+      };
+    }
+
+    const matches: SymbolMatch[] = (result.matches ?? []).map((m: any) => ({
+      rect: { x: m.x ?? 0, y: m.y ?? 0, width: m.w ?? 0, height: m.h ?? 0 },
+      confidence: m.confidence ?? 0,
+      image: m.image ?? undefined,
+      detection_method: "template",
+    }));
+
+    return {
+      matches,
+      totalCount: result.totalCount ?? matches.length,
+      pagesSearched: 1,
+      duration_ms,
+      snippetImage: result.templateImage ?? undefined,
+      imageWidth: result.imageWidth,
+      imageHeight: result.imageHeight,
+      errors: [],
+    };
+  } catch {
+    return {
+      matches: [],
+      totalCount: 0,
+      pagesSearched: 1,
+      duration_ms,
+      errors: [`Failed to parse Python output: ${stdout.slice(0, 500)}`],
+    };
+  }
+}
+
+/* ── Run the OLD auto_count pipeline (legacy, kept working) ── */
 
 export async function runAutoCount(request: SymbolCountRequest): Promise<SymbolCountResult> {
   const start = Date.now();

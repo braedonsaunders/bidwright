@@ -87,6 +87,73 @@ function drawEllipse(ctx: CanvasRenderingContext2D, a: Point, b: Point, fill: bo
   ctx.stroke();
 }
 
+function drawArrow(ctx: CanvasRenderingContext2D, a: Point, b: Point) {
+  const headLen = 12;
+  const angle = Math.atan2(b.y - a.y, b.x - a.x);
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  /* Arrowhead */
+  ctx.beginPath();
+  ctx.moveTo(b.x, b.y);
+  ctx.lineTo(b.x - headLen * Math.cos(angle - Math.PI / 6), b.y - headLen * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(b.x - headLen * Math.cos(angle + Math.PI / 6), b.y - headLen * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawHighlight(ctx: CanvasRenderingContext2D, a: Point, b: Point) {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  const w = Math.abs(b.x - a.x);
+  const h = Math.abs(b.y - a.y);
+  ctx.fillRect(x, y, w, h);
+}
+
+function drawNotePin(ctx: CanvasRenderingContext2D, p: Point, color: string) {
+  /* Small filled circle with a dot */
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 8, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  /* Inner dot */
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+}
+
+function drawCloudPolygon(ctx: CanvasRenderingContext2D, points: Point[]) {
+  if (points.length < 3) {
+    drawPolyline(ctx, points);
+    return;
+  }
+  /* Draw bumpy/cloud-like border using arcs between midpoints */
+  ctx.beginPath();
+  for (let i = 0; i < points.length; i++) {
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+    const mx = (curr.x + next.x) / 2;
+    const my = (curr.y + next.y) / 2;
+    const dx = next.x - curr.x;
+    const dy = next.y - curr.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    /* Bump outward perpendicular to segment */
+    const bumpSize = Math.min(dist * 0.3, 15);
+    const nx = -dy / dist * bumpSize;
+    const ny = dx / dist * bumpSize;
+    if (i === 0) ctx.moveTo(curr.x, curr.y);
+    ctx.quadraticCurveTo(mx + nx, my + ny, next.x, next.y);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+}
+
 function drawCountMarker(ctx: CanvasRenderingContext2D, p: Point, color: string, radius: number) {
   ctx.beginPath();
   ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
@@ -183,6 +250,28 @@ function renderAnnotation(
         ctx.setLineDash([]);
       }
       break;
+    case "markup-note":
+      if (points.length >= 1) drawNotePin(ctx, points[0], color);
+      break;
+    case "markup-cloud":
+      if (points.length >= 3) drawCloudPolygon(ctx, points);
+      else if (points.length >= 2) drawPolyline(ctx, points);
+      break;
+    case "markup-arrow":
+      if (points.length >= 2) {
+        ctx.fillStyle = color;
+        drawArrow(ctx, points[0], points[1]);
+      }
+      break;
+    case "markup-highlight":
+      if (points.length >= 2) {
+        ctx.save();
+        ctx.fillStyle = color + "50"; /* semi-transparent */
+        ctx.strokeStyle = "transparent";
+        drawHighlight(ctx, points[0], points[1]);
+        ctx.restore();
+      }
+      break;
   }
 
   /* Draw measurement label */
@@ -224,6 +313,11 @@ export function AnnotationCanvas({
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
   const [cursorPos, setCursorPos] = useState<Point | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
+     even if React hasn't re-rendered yet (stale closure problem). */
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<Point | null>(null);
 
   /* Full redraw */
   const redraw = useCallback(() => {
@@ -297,6 +391,28 @@ export function AnnotationCanvas({
         case "area-ellipse":
           if (allPts.length >= 2) drawEllipse(ctx, allPts[0], allPts[allPts.length - 1], true);
           break;
+        case "markup-cloud":
+          if (allPts.length >= 3) {
+            drawCloudPolygon(ctx, allPts);
+          } else if (allPts.length >= 2) {
+            drawPolyline(ctx, allPts);
+          }
+          break;
+        case "markup-arrow":
+          if (allPts.length >= 2) {
+            ctx.fillStyle = activeColor;
+            drawArrow(ctx, allPts[0], allPts[allPts.length - 1]);
+          }
+          break;
+        case "markup-highlight":
+          if (allPts.length >= 2) {
+            ctx.save();
+            ctx.fillStyle = activeColor + "50";
+            ctx.strokeStyle = "transparent";
+            drawHighlight(ctx, allPts[0], allPts[allPts.length - 1]);
+            ctx.restore();
+          }
+          break;
       }
 
       /* Live measurement preview */
@@ -363,11 +479,16 @@ export function AnnotationCanvas({
       "area-vertical-wall",
       "count",
       "count-by-distance",
+      "markup-cloud",
     ].includes(tool ?? "");
   }
 
   function isDragTool(tool: string | null): boolean {
-    return ["area-rectangle", "area-ellipse"].includes(tool ?? "");
+    return ["area-rectangle", "area-ellipse", "markup-arrow", "markup-highlight"].includes(tool ?? "");
+  }
+
+  function isSingleClickTool(tool: string | null): boolean {
+    return tool === "markup-note";
   }
 
   function isTriangleTool(tool: string | null): boolean {
@@ -385,6 +506,8 @@ export function AnnotationCanvas({
     const pt = getCanvasPoint(e);
 
     if (isDragTool(activeTool)) {
+      dragStartRef.current = pt;
+      isDraggingRef.current = true;
       setDrawingPoints([pt]);
       setIsDragging(true);
     }
@@ -394,29 +517,30 @@ export function AnnotationCanvas({
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
     setCursorPos(pt);
-
-    if (isDragging && isDragTool(activeTool) && drawingPoints.length === 1) {
-      /* Live preview for drag tools handled by cursorPos in redraw */
-    }
   }
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
 
-    if (isDragging && isDragTool(activeTool) && drawingPoints.length === 1) {
+    if (isDraggingRef.current && isDragTool(activeTool) && dragStartRef.current) {
+      isDraggingRef.current = false;
+      const finalPoints = [dragStartRef.current, pt];
+      dragStartRef.current = null;
       setIsDragging(false);
-      const finalPoints = [drawingPoints[0], pt];
+      setDrawingPoints([]);
       finishAnnotation(finalPoints);
       return;
     }
 
+    isDraggingRef.current = false;
+    dragStartRef.current = null;
     setIsDragging(false);
   }
 
   function handleClick(e: React.MouseEvent<HTMLCanvasElement>) {
     if (!activeTool || activeTool === "select") return;
-    if (isDragging) return;
+    if (isDragging || isDraggingRef.current) return;
 
     const pt = getCanvasPoint(e);
 
@@ -424,10 +548,20 @@ export function AnnotationCanvas({
     if (activeTool === "count") {
       const newPoints = [...drawingPoints, pt];
       setDrawingPoints(newPoints);
-      /* Each click produces one count annotation immediately */
       onAnnotationComplete({
         type: activeTool,
         points: newPoints,
+        color: activeColor,
+        thickness: activeThickness,
+      });
+      return;
+    }
+
+    /* Note: single click placement */
+    if (isSingleClickTool(activeTool)) {
+      onAnnotationComplete({
+        type: activeTool,
+        points: [pt],
         color: activeColor,
         thickness: activeThickness,
       });
@@ -503,6 +637,8 @@ export function AnnotationCanvas({
         setDrawingPoints([]);
         setCursorPos(null);
         setIsDragging(false);
+        isDraggingRef.current = false;
+        dragStartRef.current = null;
       }
     }
     window.addEventListener("keydown", handleKeyDown);
