@@ -106,17 +106,20 @@ export function RichTextEditor({
     }
   }
 
-  /* Sync external value into editor (only when it truly differs) */
+  /* Sync external value into editor */
   const lastEmittedHtml = useRef(value);
+  const mountedRef = useRef(false);
   useEffect(() => {
     if (isInternalChange.current) {
       isInternalChange.current = false;
       return;
     }
-    // Only reset if value changed AND it wasn't our own emission
-    if (editorRef.current && value !== lastEmittedHtml.current) {
+    const needsInit = !mountedRef.current;
+    mountedRef.current = true;
+    // Set innerHTML on first mount OR when value changes externally
+    if (editorRef.current && (needsInit || value !== lastEmittedHtml.current)) {
       // Don't clobber the editor if it's currently focused — user is typing
-      if (document.activeElement === editorRef.current) return;
+      if (!needsInit && document.activeElement === editorRef.current) return;
       editorRef.current.innerHTML = value;
       lastEmittedHtml.current = value;
       const text = editorRef.current.textContent ?? "";
