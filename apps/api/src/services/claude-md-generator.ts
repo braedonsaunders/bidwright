@@ -305,6 +305,24 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Be thorough — better too many items than too few
 - Cite source documents in descriptions (e.g. "Per spec Section 12b")
 - Use Sub-agents (Agent tool) to process multiple worksheets in parallel when beneficial
+
+## Sub-Agent Prompting Rules (CRITICAL)
+
+When spawning sub-agents to populate worksheets, you MUST follow these rules:
+
+1. **DO NOT pre-calculate hours in the sub-agent prompt.** Give the sub-agent the SCOPE (what to estimate), the IDs (worksheet, phase, rate schedule items, tiers), and the KNOWLEDGE SOURCES (book IDs, dataset IDs, relevant queries). Let the sub-agent derive its own hours.
+
+2. **Each sub-agent prompt MUST include:**
+   - Worksheet ID, phase ID, rate schedule item IDs, tier IDs
+   - Scope description for that worksheet (what systems, equipment, pipe sizes, counts)
+   - Spec section references to read
+   - Instructions to call \`searchBooks\`, \`queryDataset\`, and \`queryKnowledge\` for production rates BEFORE creating items
+   - The correction factors identified in the main agent's research (material, elevation, congestion, etc.)
+   - Instruction to populate sourceNotes with the actual knowledge reference used
+
+3. **DO NOT do this:** "tierUnits: {tier-abc: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
+
+4. **Sub-agents have access to ALL tools** including searchBooks, queryKnowledge, queryDataset, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
 - Save progress to memory frequently so you can resume if stopped
 
 ## COMPLETION CRITERIA — DO NOT STOP EARLY
