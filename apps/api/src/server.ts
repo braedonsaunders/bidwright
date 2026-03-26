@@ -785,7 +785,8 @@ export function buildServer() {
   });
 
   app.register(cors, {
-    origin: true
+    origin: true,
+    credentials: true
   });
 
   app.register(multipart, {

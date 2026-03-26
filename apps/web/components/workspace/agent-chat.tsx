@@ -44,10 +44,7 @@ interface AgentChatProps {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4001";
 
 function authHeaders(): Record<string, string> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") : null;
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (token) h["Authorization"] = `Bearer ${token}`;
-  return h;
+  return { "Content-Type": "application/json" };
 }
 
 function intakeStorageKey(projectId: string) {
@@ -360,7 +357,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     let active = true;
     const poll = async () => {
       try {
-        const res = await fetch(`${API_BASE}/projects/${projectId}/ingestion-status`, { headers: authHeaders() });
+        const res = await fetch(`${API_BASE}/projects/${projectId}/ingestion-status`, {
+          headers: authHeaders(),
+          credentials: "include",
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (active) {
@@ -424,7 +424,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       })
       .catch(() => {
         // Fall back to legacy intake session
-        fetch(`${API_BASE}/api/intake/project/${projectId}/latest`, { headers: authHeaders() })
+        fetch(`${API_BASE}/api/intake/project/${projectId}/latest`, {
+          headers: authHeaders(),
+          credentials: "include",
+        })
           .then(r => r.ok ? r.json() : null)
           .then(data => {
             if (!data) return;
@@ -477,6 +480,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ projectId, provider, model }),
+        credentials: "include",
       });
       if (!res.ok) {
         throw new Error(`Session creation failed (${res.status})`);
@@ -533,6 +537,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ content: content.trim(), provider, model }),
+        credentials: "include",
       });
       const data = await res.json();
 
