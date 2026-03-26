@@ -3341,6 +3341,15 @@ export async function sendCliMessage(projectId: string, message: string) {
   });
 }
 
+/** Lightweight Ask AI — direct API call, no CLI session */
+export async function askAi(projectId: string, prompt: string, imagePath?: string) {
+  return apiRequest<{ response: string }>(`/api/cli/${projectId}/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, imagePath }),
+  });
+}
+
 export async function getCliStatus(projectId: string) {
   return apiRequest<{
     status: string;

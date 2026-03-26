@@ -49,8 +49,7 @@ import {
   runVisionCropRegion,
   runVisionCountAllPages,
   saveVisionCrop,
-  sendCliMessage,
-  connectCliStream,
+  askAi,
 } from "@/lib/api";
 import {
   Badge,
@@ -793,7 +792,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     }
   }
 
-  /* ─── Ask AI: send cropped image to the CLI agent for analysis ─── */
+  /* ─── Ask AI: send cropped image to Claude API for analysis ─── */
 
   async function startAskAiAnalysis(image: string) {
     setAskAiCountRunning(true);
@@ -809,56 +808,19 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       }
 
       const docName = selectedDoc?.fileName ?? "the drawing";
-      const prompt = `Look at the image at ${saved.filePath} — it's a cropped region from "${docName}" (page ${page}). Identify what this symbol, component, or text is. Describe it and explain its significance in the context of this construction/engineering project. Be concise but thorough.`;
+      const prompt = `This is a cropped region from "${docName}" (page ${page}). Identify what this symbol, component, or text is. Describe it and explain its significance in the context of this construction/engineering project. Be concise but thorough.`;
 
-      await sendCliMessage(projectId, prompt);
-
-      // Connect SSE stream to capture the response
-      const es = connectCliStream(projectId);
-      askAiStreamRef.current = es;
-      let fullResponse = "";
-
-      es.addEventListener("message", (e) => {
-        const data = JSON.parse(e.data);
-        if (data.role === "assistant" && data.content) {
-          fullResponse += (fullResponse ? "\n\n" : "") + data.content;
-          setAskAiResponse(fullResponse);
-        }
-      });
-
-      es.addEventListener("status", (e) => {
-        const data = JSON.parse(e.data);
-        if (data.status === "completed" || data.status === "stopped" || data.status === "failed") {
-          setAskAiCountRunning(false);
-          es.close();
-          askAiStreamRef.current = null;
-          if (!fullResponse) {
-            setAskAiResponse("Analysis completed but no response was returned.");
-          }
-        }
-      });
-
-      es.addEventListener("error", () => { /* SSE may reconnect */ });
-
-      es.onerror = () => {
-        if (!fullResponse && !askAiCountRunning) {
-          setAskAiCountRunning(false);
-          es.close();
-          askAiStreamRef.current = null;
-        }
-      };
+      const result = await askAi(projectId, prompt, saved.filePath);
+      setAskAiResponse(result.response || "No response returned.");
     } catch (err) {
-      console.error("Ask AI analyze failed:", err);
-      setAskAiResponse("Failed to send to AI. Please try again.");
+      console.error("Ask AI failed:", err);
+      setAskAiResponse("Failed to get AI analysis. Check that an Anthropic API key is configured in Settings.");
+    } finally {
       setAskAiCountRunning(false);
     }
   }
 
   function handleCloseAskAiModal() {
-    if (askAiStreamRef.current) {
-      askAiStreamRef.current.close();
-      askAiStreamRef.current = null;
-    }
     setAskAiModalOpen(false);
     setAskAiCropImage(null);
     setAskAiBbox(null);
