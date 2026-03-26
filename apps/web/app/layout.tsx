@@ -28,6 +28,26 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
       <body>
+        {/* Force text selection — Next.js 16 devtools overlay blocks it */}
+        <script dangerouslySetInnerHTML={{ __html: `
+          (function() {
+            var style = document.createElement('style');
+            style.textContent = '* { -webkit-user-select: text !important; user-select: text !important; } .select-none { -webkit-user-select: none !important; user-select: none !important; }';
+            document.head.appendChild(style);
+            // Also watch for dynamically injected overlays
+            new MutationObserver(function(mutations) {
+              mutations.forEach(function(m) {
+                m.addedNodes.forEach(function(node) {
+                  if (node.nodeType === 1 && node.style && node.style.userSelect === 'none') {
+                    node.style.userSelect = 'text';
+                    node.style.webkitUserSelect = 'text';
+                    node.style.pointerEvents = 'none';
+                  }
+                });
+              });
+            }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+          })();
+        `}} />
         <AuthProvider>
           <ImpersonationBanner />
           {children}

@@ -75,19 +75,6 @@ body {
   background: hsla(var(--accent), 0.2);
 }
 
-/* Force text selection everywhere — Next.js devtools overlay injects
-   a fixed element with inline userSelect:none that blocks selection.
-   This nuclear override ensures selection always works. */
-*:not(.select-none) {
-  -webkit-user-select: text !important;
-  user-select: text !important;
-}
-
-/* Re-apply select-none only where explicitly used (table headers, etc) */
-.select-none {
-  -webkit-user-select: none !important;
-  user-select: none !important;
-}
 
 a {
   color: inherit;
