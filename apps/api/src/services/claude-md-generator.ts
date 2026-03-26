@@ -5,7 +5,7 @@
  * when starting a session. This replaces the old intake-prompt.ts system prompt.
  */
 
-import { writeFile, mkdir, symlink, readdir, stat } from "node:fs/promises";
+import { writeFile, mkdir, symlink, copyFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -25,6 +25,7 @@ export interface ClaudeMdParams {
     pageCount: number;
     storagePath?: string; // relative to dataRoot
   }>;
+  knowledgeBookFiles?: string[]; // filenames in knowledge/ directory (already symlinked)
   persona?: {
     name: string;
     trade: string;
@@ -145,6 +146,22 @@ ${docManifest}
 
 **Start by reading the main specification or RFQ document.** It defines the full scope of work and is the foundation for your estimate.
 
+## Knowledge Books (Reference Manuals)
+
+${params.knowledgeBookFiles && params.knowledgeBookFiles.length > 0
+  ? `The organization's reference manuals and estimating handbooks are available as **real PDF files** in the \`knowledge/\` folder:
+
+${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
+
+**HOW TO USE KNOWLEDGE BOOKS:**
+- Use the \`Read\` tool to read these PDFs directly — e.g. \`Read("knowledge/${params.knowledgeBookFiles[0]}", pages: "1-10")\`
+- These are FULL books (100-300+ pages). Read the TABLE OF CONTENTS first (usually pages 1-5) to find relevant chapters.
+- Then read the specific chapters/tables you need for THIS project's scope.
+- **This is your PRIMARY source for man-hour data, production rates, and correction factors.** Reading these books directly gives you full context that chunk-based search cannot.
+- The MCP tools (searchBooks, queryKnowledge) still work for quick lookups, but for deep research, READ THE ACTUAL BOOK.
+- When citing in sourceNotes, reference the book name, chapter, table number, and page.`
+  : `No knowledge books are available in the project directory. Use the MCP tools (searchBooks, queryKnowledge, queryDataset) to search the knowledge base.`}
+
 ## MCP Tools (Bidwright)
 
 You have access to Bidwright tools via MCP. Key tools:
@@ -219,15 +236,21 @@ You decide your own workflow. Here's the MANDATORY sequence:
    Do NOT write a paragraph summary. Write a detailed, section-by-section breakdown that an estimator would present to a client.
 3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
 4. **MANDATORY KNOWLEDGE GATE — DO NOT SKIP THIS STEP.**
-   You MUST call ALL of the following BEFORE creating ANY worksheets or items:
-   a. \`searchBooks\` — at least 3 different queries relevant to the scope (e.g. "carbon steel pipe welding hours", "valve installation man-hours", "equipment setting productivity")
-   b. \`listDatasets\` — review all available datasets
-   c. \`queryDataset\` — query at least 2 relevant datasets for production rates
-   d. \`WebSearch\` — search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
+   You MUST do ALL of the following BEFORE creating ANY worksheets or items:
 
-   **Write the results to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count — you must query fresh from knowledge/datasets every time.
+   **a. READ the knowledge books directly** (PRIMARY method — gives you full context):
+   - Open each PDF in \`knowledge/\` using the Read tool
+   - Read the Table of Contents first (pages 1-5) to find relevant chapters
+   - Then read the specific tables/chapters for THIS project (pipe welding hours, valve MH, equipment setting, correction factors, etc.)
+   - Example: \`Read("knowledge/Estimators-Piping-Man-Hour.pdf", pages: "1-5")\` then \`Read("knowledge/Estimators-Piping-Man-Hour.pdf", pages: "42-55")\` for the specific data tables
 
-   **This gate is enforced: if you create worksheets without having called searchBooks + listDatasets + queryDataset first, the estimate is invalid.**
+   **b. \`listDatasets\`** — review all available structured datasets
+   **c. \`queryDataset\`** — query at least 2 relevant datasets for production rates
+   **d. \`WebSearch\`** — search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
+
+   **Write the key findings to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count — you must read fresh from knowledge books/datasets every time.
+
+   **This gate is enforced: if you create worksheets without having read knowledge books and queried datasets first, the estimate is invalid.**
 
 4b. **Follow the Estimation Protocol** — Steps 1-10 below are MANDATORY for all labour hour estimates. Do not skip any step.
 5. **IMPORT RATE SCHEDULES** — If getItemConfig shows categories with itemSource="rate_schedule":
@@ -322,7 +345,8 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 
 3. **DO NOT do this:** "tierUnits: {tier-abc: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
 
-4. **Sub-agents have access to ALL tools** including searchBooks, queryKnowledge, queryDataset, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
+4. **Sub-agents have access to ALL tools** including the Read tool for knowledge/ PDFs, queryDataset, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
+5. **Tell sub-agents which knowledge book pages to read.** Example: "Read knowledge/Estimators-Piping-Man-Hour.pdf pages 42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
 - Save progress to memory frequently so you can resume if stopped
 
 ## COMPLETION CRITERIA — DO NOT STOP EARLY
@@ -483,25 +507,40 @@ export async function generateCodexMd(params: ClaudeMdParams): Promise<void> {
 
 /**
  * Symlink knowledge books into the project directory
- * so the CLI can access them as regular files
+ * so the CLI can access them as regular files via the Read tool.
+ * storagePath is relative to apiDataRoot (e.g. "knowledge/kb-xxx/file.pdf")
  */
 export async function symlinkKnowledgeBooks(
   projectDir: string,
-  knowledgeDir: string,
+  dataRoot: string,
   bookPaths: Array<{ bookId: string; fileName: string; storagePath: string }>
-): Promise<void> {
+): Promise<string[]> {
   const targetDir = join(projectDir, "knowledge");
   await mkdir(targetDir, { recursive: true });
+  const linked: string[] = [];
 
   for (const book of bookPaths) {
-    const sourcePath = join(knowledgeDir, book.storagePath);
-    const targetPath = join(targetDir, book.fileName);
+    // storagePath is relative to apiDataRoot, e.g. "knowledge/kb-xxx/file.pdf"
+    const sourcePath = join(dataRoot, book.storagePath);
+    // Clean filename for filesystem
+    const safeFileName = book.fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const targetPath = join(targetDir, safeFileName);
     if (existsSync(sourcePath) && !existsSync(targetPath)) {
       try {
         await symlink(sourcePath, targetPath);
+        linked.push(safeFileName);
       } catch {
-        // Symlink might fail on some systems — not critical
+        // Symlink might fail — try copy as fallback
+        try {
+          await copyFile(sourcePath, targetPath);
+          linked.push(safeFileName);
+        } catch {
+          // Not critical
+        }
       }
+    } else if (existsSync(targetPath)) {
+      linked.push(safeFileName);
     }
   }
+  return linked;
 }
