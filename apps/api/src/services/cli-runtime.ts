@@ -228,6 +228,7 @@ export async function spawnSession(opts: {
       "--verbose",
       "--max-turns", "200", // Prevent infinite loops
       "--mcp-config", mcpConfigPath, // Pass MCP config file path
+      "--no-session-persistence", // Don't save/resume sessions — each run starts fresh
     ];
     if (model) cliArgs.push("--model", model);
     // Auth: pass API key if provided. On bare metal (dev), the CLI uses
@@ -248,6 +249,15 @@ export async function spawnSession(opts: {
     if (openaiApiKey) {
       cliEnv.CODEX_API_KEY = openaiApiKey;
     }
+  }
+
+  // Clear stale Claude session data so the CLI starts fresh (not resuming old context)
+  const claudeSessionDir = join(projectDir, ".claude");
+  try {
+    const { rm } = await import("node:fs/promises");
+    await rm(claudeSessionDir, { recursive: true, force: true });
+  } catch {
+    // Ignore — directory may not exist
   }
 
   // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
