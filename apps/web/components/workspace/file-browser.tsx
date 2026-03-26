@@ -1368,14 +1368,12 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
     e.preventDefault();
     isDraggingDivider.current = true;
     document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
   }, []);
 
   useEffect(() => {
     function cleanupDrag() {
       isDraggingDivider.current = false;
       document.body.style.cursor = "";
-      document.body.style.userSelect = "";
     }
     function handleMouseMove(e: MouseEvent) {
       if (!isDraggingDivider.current || !containerRef.current) return;
