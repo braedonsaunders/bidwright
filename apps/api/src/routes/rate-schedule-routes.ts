@@ -154,7 +154,12 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
   app.post("/projects/:projectId/rate-schedules/import", async (request, reply) => {
     try {
       const { projectId } = request.params as { projectId: string };
-      const { scheduleId } = request.body as { scheduleId: string };
+      const body = request.body as { scheduleId?: string; sourceScheduleId?: string };
+      const scheduleId = body.scheduleId || body.sourceScheduleId;
+      if (!scheduleId) {
+        reply.code(400);
+        return { error: "scheduleId is required" };
+      }
       await request.store!.importRateScheduleToRevision(projectId, scheduleId);
       const payload = await buildWorkspaceResponse(request.store!, projectId);
       if (!payload) {

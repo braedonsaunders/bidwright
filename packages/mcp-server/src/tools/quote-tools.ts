@@ -592,7 +592,7 @@ export function registerQuoteTools(server: McpServer) {
       const gateError = await checkGate("importRateSchedule");
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
-      const data = await apiPost(projectPath("/rate-schedules/import"), { sourceScheduleId: globalScheduleId });
+      const data = await apiPost(projectPath("/rate-schedules/import"), { scheduleId: globalScheduleId });
       invalidateWs();
       return { content: [{ type: "text" as const, text: `Imported rate schedule into current revision` }] };
     }
