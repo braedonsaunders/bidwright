@@ -24,9 +24,24 @@ export function registerCliRoutes(app: FastifyInstance) {
     const claudeAuth = checkCliAuth("claude-code", integrations.anthropicKey);
     const codexAuth = checkCliAuth("codex", integrations.openaiKey);
 
+    // Available models per runtime
+    const claudeModels = claude.available ? [
+      { id: "sonnet", name: "Claude Sonnet 4.6", description: "Fast, recommended for most estimates" },
+      { id: "opus", name: "Claude Opus 4.6", description: "Highest quality, slower and more expensive" },
+      { id: "haiku", name: "Claude Haiku 4.5", description: "Fastest and cheapest, less thorough" },
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (full ID)", description: "Explicit model ID" },
+      { id: "claude-opus-4-6", name: "Claude Opus 4.6 (full ID)", description: "Explicit model ID" },
+      { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5 (full ID)", description: "Explicit model ID" },
+    ] : [];
+    const codexModels = codex.available ? [
+      { id: "gpt-5.4", name: "GPT-5.4", description: "Recommended for Codex" },
+      { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", description: "Faster, cheaper" },
+      { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", description: "Code-optimized" },
+    ] : [];
+
     return {
-      claude: { ...claude, auth: claudeAuth },
-      codex: { ...codex, auth: codexAuth },
+      claude: { ...claude, auth: claudeAuth, models: claudeModels },
+      codex: { ...codex, auth: codexAuth, models: codexModels },
       configured: {
         runtime: integrations.agentRuntime || null,
         model: integrations.agentModel || null,

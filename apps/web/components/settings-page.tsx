@@ -2651,8 +2651,8 @@ function AgentRuntimeSettings({
   onUpdateDefaults: (patch: Partial<DefaultSettings>) => void;
 }) {
   const [cliStatus, setCliStatus] = useState<{
-    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
-    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string } };
+    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
+    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
     configured: { runtime: string | null; model: string | null };
   } | null>(null);
   const [detecting, setDetecting] = useState(true);
@@ -2751,26 +2751,28 @@ function AgentRuntimeSettings({
       {/* Model Selection */}
       <div>
         <Label>Model</Label>
-        <Select
-          value={currentModel}
-          onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
-        >
-          <option value="">Default</option>
-          {currentRuntime !== "codex" && (
-            <>
-              <option value="sonnet">Claude Sonnet (recommended)</option>
-              <option value="opus">Claude Opus (best quality, slower)</option>
-              <option value="haiku">Claude Haiku (fastest, cheaper)</option>
-            </>
-          )}
-          {currentRuntime !== "claude-code" && (
-            <>
-              <option value="gpt-5.4">GPT-5.4 (recommended)</option>
-              <option value="gpt-5.4-mini">GPT-5.4 Mini (faster)</option>
-              <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
-            </>
-          )}
-        </Select>
+        {(() => {
+          const models = currentRuntime === "codex"
+            ? (cliStatus?.codex?.models || [])
+            : currentRuntime === "claude-code"
+            ? (cliStatus?.claude?.models || [])
+            : [...(cliStatus?.claude?.models || []), ...(cliStatus?.codex?.models || [])];
+          // Only show alias models (short IDs), not full ID duplicates
+          const filtered = models.filter(m => !m.id.startsWith("claude-") && !m.id.startsWith("gpt-5."));
+          const displayModels = filtered.length > 0 ? filtered : models;
+          return (
+            <Select
+              value={currentModel}
+              onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
+            >
+              <option value="">Default</option>
+              {displayModels.map((m) => (
+                <option key={m.id} value={m.id}>{m.name} — {m.description}</option>
+              ))}
+            </Select>
+          );
+        })()}
+        <p className="text-[10px] text-fg/30 mt-1.5">Models detected from installed CLI runtimes. Change runtime above to see different models.</p>
       </div>
 
       {/* CLI Path Override */}
