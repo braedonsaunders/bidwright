@@ -841,9 +841,11 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     }
   }, [autoStartIntake, open, settingsReady, intakeSessionId]);
 
-  // Poll intake status with live tool call accumulation
+  // Poll intake status with live tool call accumulation (legacy agent mode only — CLI uses SSE)
   useEffect(() => {
     if (!intakeSessionId || intakeStatus?.status !== "running") return;
+    // When using CLI runtime, the SSE stream handles all updates — skip polling
+    if (cliRuntime) return;
     const interval = setInterval(async () => {
       try {
         const status = await getIntakeStatus(intakeSessionId);
