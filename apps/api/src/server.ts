@@ -156,6 +156,7 @@ const worksheetItemPatchSchema = z.object({
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
   tierUnits: z.record(z.number()).optional(),
+  sourceNotes: z.string().optional(),
 });
 const createWorksheetItemSchema = z.object({
   phaseId: z.string().nullable().optional(),
@@ -176,6 +177,7 @@ const createWorksheetItemSchema = z.object({
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
   tierUnits: z.record(z.number()).optional(),
+  sourceNotes: z.string().default(""),
 });
 const createWorksheetSchema = z.object({
   name: z.string().min(1)
@@ -3543,6 +3545,43 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const dataset = await request.store!.getDataset(datasetId);
     if (!dataset) return reply.code(404).send({ message: "Dataset not found" });
     return request.store!.queryDataset(datasetId, filters as Parameters<PrismaApiStore["queryDataset"]>[1]);
+  });
+
+  // ── Estimator Persona Routes ────────────────────────────────────────
+
+  const personaSchema = z.object({
+    name: z.string().min(1),
+    trade: z.string().default("mechanical"),
+    description: z.string().default(""),
+    systemPrompt: z.string().default(""),
+    knowledgeBookIds: z.array(z.string()).default([]),
+    datasetTags: z.array(z.string()).default([]),
+    isDefault: z.boolean().default(false),
+    enabled: z.boolean().default(true),
+    order: z.number().int().default(0),
+  });
+
+  app.get("/personas", async (request) => {
+    return request.store!.listEstimatorPersonas();
+  });
+
+  app.post("/personas", async (request, reply) => {
+    const parsed = personaSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    return request.store!.createEstimatorPersona(parsed.data);
+  });
+
+  app.patch("/personas/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = personaSchema.partial().safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    return request.store!.updateEstimatorPersona(id, parsed.data);
+  });
+
+  app.delete("/personas/:id", async (request) => {
+    const { id } = request.params as { id: string };
+    await request.store!.deleteEstimatorPersona(id);
+    return { deleted: true };
   });
 
   // ── Settings Routes ──────────────────────────────────────────────────

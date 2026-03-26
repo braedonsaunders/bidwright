@@ -42,6 +42,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       model?: string;
       scope?: string;
       prompt?: string;
+      personaId?: string;
     };
 
     const { projectId, runtime = "claude-code", scope, prompt } = body;
@@ -70,6 +71,14 @@ export function registerCliRoutes(app: FastifyInstance) {
       storagePath: d.storagePath || "",
     }));
 
+    // Fetch persona if provided
+    let persona = null;
+    if (body.personaId) {
+      persona = await prisma.estimatorPersona.findFirst({
+        where: { id: body.personaId },
+      });
+    }
+
     const projectDir = resolveProjectDir(projectId);
 
     // Generate CLAUDE.md / codex.md
@@ -82,6 +91,23 @@ export function registerCliRoutes(app: FastifyInstance) {
       quoteNumber: quote.quoteNumber || "",
       dataRoot: apiDataRoot,
       documents,
+      persona: persona ? await (async () => {
+        const bookIds: string[] = Array.isArray(persona.knowledgeBookIds) ? persona.knowledgeBookIds : JSON.parse(persona.knowledgeBookIds as string || "[]");
+        const datasetTags: string[] = Array.isArray(persona.datasetTags) ? persona.datasetTags : JSON.parse(persona.datasetTags as string || "[]");
+        // Resolve book IDs to human-readable names for the agent prompt
+        let bookNames: string[] = [];
+        if (bookIds.length > 0) {
+          const books = await prisma.knowledgeBook.findMany({ where: { id: { in: bookIds } }, select: { name: true } });
+          bookNames = books.map((b: any) => b.name);
+        }
+        return {
+          name: persona.name,
+          trade: persona.trade,
+          systemPrompt: persona.systemPrompt,
+          knowledgeBookNames: bookNames,
+          datasetTags,
+        };
+      })() : null,
     };
 
     if (runtime === "claude-code") {

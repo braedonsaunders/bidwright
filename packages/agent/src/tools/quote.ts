@@ -370,6 +370,9 @@ If the server rejects your item, read the error message — it will tell you wha
     unit3: z.number().optional().default(0).describe("Double-time hours (fallback if tierUnits not set)"),
     rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for rate_schedule categories."),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
+    sourceNotes: z.string().optional().default("").describe(
+      "MANDATORY source citations for this line item. Include: knowledge book references (book name, table, page, rate found), dataset lookups, correction factors applied with sources, web search URLs and findings, assumptions. Every item MUST have sourceNotes."
+    ),
   }),
   tags: ["item", "create", "write"],
 }, async (ctx, input) => {
@@ -388,6 +391,7 @@ If the server rejects your item, read the error message — it will tell you wha
     quantity: rest.quantity ?? 1,
     uom: rest.uom ?? "EA",
     description: rest.description ?? "",
+    sourceNotes: rest.sourceNotes ?? "",
   };
 
   // If rateScheduleItemId provided, include it and set up tierUnits
@@ -420,6 +424,7 @@ export const updateWorksheetItemTool = createQuoteTool({
     unit3: z.number().optional().describe("Unit 3 value per unit"),
     phaseId: z.string().optional().describe("Phase ID"),
     sortOrder: z.number().optional().describe("Sort order"),
+    sourceNotes: z.string().optional().describe("Source citations and notes — knowledge refs, dataset lookups, correction factors, web URLs, assumptions"),
   }),
   tags: ["item", "update", "write"],
 }, async (ctx, input) => {

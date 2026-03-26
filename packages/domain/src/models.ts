@@ -192,6 +192,7 @@ export interface WorksheetItem {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export interface Phase {

@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import * as React from "react";
 import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
+import * as Popover from "@radix-ui/react-popover";
 
 /* ─────────────────────── Button ─────────────────────── */
 
@@ -334,5 +335,145 @@ export function SlideIn({
     >
       {children}
     </motion.div>
+  );
+}
+
+/* ─────────────────────── MultiSelect ─────────────────────── */
+
+export interface MultiSelectOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export function MultiSelect({
+  options,
+  selected,
+  onChange,
+  placeholder = "Select...",
+  className,
+}: {
+  options: MultiSelectOption[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [search, setSearch] = React.useState("");
+  const filtered = options.filter(
+    (o) =>
+      o.label.toLowerCase().includes(search.toLowerCase()) ||
+      (o.description ?? "").toLowerCase().includes(search.toLowerCase()),
+  );
+
+  const toggle = (value: string) => {
+    onChange(
+      selected.includes(value)
+        ? selected.filter((v) => v !== value)
+        : [...selected, value],
+    );
+  };
+
+  const selectedLabels = options
+    .filter((o) => selected.includes(o.value))
+    .map((o) => o.label);
+
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "flex min-h-[36px] w-full items-center gap-1.5 rounded-lg border border-line bg-bg/50 px-3 py-1.5 text-left text-sm outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20",
+            className,
+          )}
+        >
+          {selectedLabels.length === 0 ? (
+            <span className="text-fg/30">{placeholder}</span>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {selectedLabels.map((label) => (
+                <span
+                  key={label}
+                  className="inline-flex items-center rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent"
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          )}
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="z-50 w-[var(--radix-popover-trigger-width)] rounded-lg border border-line bg-panel shadow-xl"
+          sideOffset={4}
+          align="start"
+        >
+          <div className="p-2">
+            <input
+              type="text"
+              className="w-full rounded border border-line bg-bg px-2.5 py-1.5 text-xs text-fg outline-none placeholder:text-fg/30 focus:border-accent/50"
+              placeholder="Search..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="max-h-[240px] overflow-y-auto px-1 pb-1">
+            {filtered.length === 0 && (
+              <div className="px-2.5 py-3 text-center text-xs text-fg/30">
+                No matches
+              </div>
+            )}
+            {filtered.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => toggle(opt.value)}
+                className={cn(
+                  "flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-panel2",
+                  selected.includes(opt.value) && "bg-accent/5",
+                )}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors",
+                    selected.includes(opt.value)
+                      ? "border-accent bg-accent text-white"
+                      : "border-line bg-bg",
+                  )}
+                >
+                  {selected.includes(opt.value) && (
+                    <svg
+                      className="h-2.5 w-2.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={3}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M5 13l4 4L19 7"
+                      />
+                    </svg>
+                  )}
+                </span>
+                <div className="min-w-0">
+                  <div className="font-medium text-fg truncate">
+                    {opt.label}
+                  </div>
+                  {opt.description && (
+                    <div className="text-[10px] text-fg/40 truncate mt-0.5">
+                      {opt.description}
+                    </div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

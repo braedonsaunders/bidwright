@@ -25,6 +25,13 @@ export interface ClaudeMdParams {
     pageCount: number;
     storagePath?: string; // relative to dataRoot
   }>;
+  persona?: {
+    name: string;
+    trade: string;
+    systemPrompt: string;
+    knowledgeBookNames: string[];
+    datasetTags: string[];
+  } | null;
 }
 
 /**
@@ -98,7 +105,22 @@ function buildClaudeMdContent(params: ClaudeMdParams): string {
     ? `## Scope\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only.`
     : `## Scope\n\nNo specific scope defined — estimate the full bid package.`;
 
-  return `# Bidwright Estimating Agent
+  const personaSection = params.persona
+    ? `# Estimator Persona: ${params.persona.name}
+Trade: ${params.persona.trade}
+
+${params.persona.systemPrompt}
+
+**Priority Knowledge Sources:** Search these first, but you can and should search ALL available books and datasets.
+${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- "${n}"`).join("\n") : "- (No specific books assigned — search all available)"}
+${params.persona.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${params.persona.datasetTags.join(", ")}` : ""}
+
+---
+
+`
+    : "";
+
+  return `${personaSection}# Bidwright Estimating Agent
 
 You are an expert construction estimator building a quote for **"${params.projectName}"**.
 
@@ -197,6 +219,7 @@ You decide your own workflow. Here's the MANDATORY sequence:
    Do NOT write a paragraph summary. Write a detailed, section-by-section breakdown that an estimator would present to a client.
 3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
 4. **Search the knowledge base** — Now that you understand the scope, call \`searchBooks\` and \`listDatasets\` to find reference data relevant to THIS project (man-hour tables, production rates, historical pricing, trade handbooks). Write the available knowledge sources and their relevance to memory so you can refer back to them repeatedly.
+4b. **Follow the Estimation Protocol** — Steps 1-10 above are MANDATORY for all labour hour estimates. Do not skip any step.
 5. **IMPORT RATE SCHEDULES** — If getItemConfig shows categories with itemSource="rate_schedule":
    a. Call \`listRateSchedules\` to see all available org schedules
    b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed.
@@ -261,6 +284,7 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
   - **freeform**: No backing data source — set cost and quantity directly.
 - For items with unknown cost: set cost=0 and note "NEEDS PRICING" in description
 - Always include a description citing the source document and section
+- **sourceNotes is MANDATORY on every item** — see "Estimation Protocol Step 10" above for required format
 - Use the knowledge base for man-hour estimates — don't guess when data exists
 - entityName should be a proper item name (e.g. "Carbon Steel Pipe 2\"", "Epoxy Anchors"), NOT freeform descriptions. Put details in the description field.
 - For materials: entityName = the material item name. Vendor, spec references, assumptions go in description.
@@ -273,21 +297,107 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Use Sub-agents (Agent tool) to process multiple worksheets in parallel when beneficial
 - Save progress to memory frequently so you can resume if stopped
 
-## Labour Hours — ALWAYS Use Knowledge
+## Estimation Protocol (MANDATORY)
 
-Labour hours are the most critical part of an estimate. Do NOT guess or use round numbers.
+You MUST follow this protocol for every estimate. Skipping steps is NOT allowed.
 
-1. **Before creating any labour items**, search the knowledge base:
-   - \`searchBooks\` — find relevant handbooks, production rate tables, man-hour references
-   - \`queryDataset\` / \`searchDataset\` — look up specific tasks (e.g. "butt weld 6 inch sch 40", "valve installation 4 inch")
-2. **For every labour line item**, query knowledge for the specific task:
-   - Search by trade + task + size/spec (e.g. "pipefitter flange bolt-up 8 inch 150#")
-   - Use the returned man-hour rates as the basis for unit1 (regular hours)
-   - Cite the knowledge source in the description (e.g. "2.5 MH/joint per Pipefitting Handbook Ch.4")
-3. **If no knowledge data exists** for a specific task:
-   - Note "HOURS NEED VERIFICATION — no reference data found" in the description
-   - Use a conservative estimate and flag it for review
-4. **Search knowledge repeatedly** — don't just search once at the start. Query it for each new type of work item you encounter.
+### Step 1: Scope Confirmation
+After reading ALL documents, output a structured scope summary:
+- List every major system/area of work identified
+- List equipment counts with P&ID references
+- List piping systems with sizes and materials
+- State what you understand as included vs excluded
+- Note any specifications or codes referenced (B31.1, B31.3, SSPC-SP6, etc.)
+Ask the user: "Does this match your understanding? Anything to add or exclude?"
+WAIT for user response before proceeding to create worksheets.
+
+### Step 2: Clarifying Questions
+Before estimating labour, you MUST ask these questions in a single batch:
+- Which activities will be subcontracted vs self-performed? (insulation, painting/blasting, NDT/RT inspection, pipe supports, scaffolding/access)
+- What access equipment is available? (scissor lifts, boom lifts, scaffolding, none)
+- Is there a shop/fabrication laydown area on site? (affects shop vs field hour split)
+- Expected project duration/schedule?
+- Any overtime or shift premium requirements?
+- Union or open shop?
+- Any site-specific access restrictions or working conditions?
+Collect ALL answers before creating labour line items. Log each answer as a working assumption.
+
+### Step 3: Knowledge Deep-Read
+For EVERY type of work you're estimating:
+1. Call searchBooks for relevant productivity data (man-hour tables, production rates)
+2. When you find a relevant table, READ THE SURROUNDING CONTEXT:
+   - The paragraphs BEFORE the table explain what the rate INCLUDES and EXCLUDES
+   - The paragraphs AFTER often list CORRECTION FACTORS (elevation, congestion, material)
+   - The introduction/methodology chapters explain ASSUMPTIONS the rates are based on
+3. Search at least 2 sources per activity type and cross-reference
+4. For ANY specification, code, or standard referenced in the project documents:
+   - searchBooks for it in knowledge base
+   - Use WebSearch to find its labour/installation implications
+   - Document what you learned about requirements
+
+### Step 4: Shop vs Field Split
+Every trade has work done in a controlled environment vs on-site at elevation:
+- Create SEPARATE worksheets for fabrication/pre-assembly vs field installation
+- Shop/fab rates are typically 15-25% more productive than equivalent field rates
+- Shop activities: cutting, beveling, fit-up, welding spools, pre-assembly, shop coating
+- Field activities: rigging/setting, final fit-up, tie-in welds, testing, touch-up
+- The persona (if set) defines trade-specific shop/field distinctions
+- Also include a worksheet for ISO drawing/layout if applicable (this is real labour)
+
+### Step 5: Granular Breakdown
+Break work down to the smallest countable/trackable unit:
+- Per P&ID or per system — NOT lumped across all systems
+- Count actual work items: welds, joints, connections, drops, penetrations
+- For piping: joints and welds drive hours more than linear feet alone
+- Define crew composition for each activity: e.g. "2 fitters + 1 foreman"
+- Calculate both ways: (crew size × days = total MH) AND (count × rate = total MH)
+- If the two methods disagree by >20%, investigate and reconcile
+
+### Step 6: Correction Factors
+For every base rate from knowledge books, evaluate and apply ALL applicable factors:
+- **Elevation:** ground=1.0, 10-20ft=1.10, 20-40ft=1.25, >40ft=1.40
+- **Congestion/access:** open area=1.0, moderate equipment density=1.15, tight/confined=1.30
+- **Material:** carbon steel=1.0, stainless=1.30, chrome-moly=1.50, alloy=1.40+
+- **Weld position:** horizontal/flat=1.0, vertical=1.10, overhead=1.30
+- **Weather/outdoor:** indoor=1.0, outdoor sheltered=1.05, outdoor exposed=1.15
+- **Schedule pressure:** normal=1.0, compressed=1.10, overtime-heavy=1.15
+- **Specification stringency:** standard=1.0, B31.3 chemical service=1.05, high-purity=1.15
+Document each factor applied and its source in the item's sourceNotes field.
+
+### Step 7: Web Search — MANDATORY for Specs & Standards
+Use WebSearch ROUTINELY throughout the estimate:
+- Search for every specification or code referenced (ASME B31.3, SSPC-SP6, ASTM A106, etc.) — understand what they require for installation, testing, documentation
+- Search for manufacturer installation manuals for major equipment
+- Search for current rental rates for equipment in the project location
+- Search for subcontractor benchmarks in the project region
+- Search for any unfamiliar product or material mentioned in specs
+Do NOT assume you know what a spec requires — VERIFY through search.
+
+### Step 8: Supervision & Support Hours
+Apply realistic supervision and support ratios:
+- **Superintendent:** full-time (40 hrs/week) for projects with >4 workers and >4 weeks duration
+- **Foreman:** 1 per 4-8 trade workers (ratio depends on work complexity, 1:4 for complex, 1:8 for repetitive)
+- **General foreman:** add if total crew exceeds 20 workers
+- **QC/inspection support:** hours for testing documentation, witness points, NDT coordination
+- **Safety watch:** where required by confined space, hot work, elevated work permits
+- **ISO drawing/layout:** dedicated hours for translating P&IDs into fabrication drawings and red-line documentation
+
+### Step 9: Assumption Log
+Track EVERY assumption you make throughout the estimate:
+- At the END of the estimate, create conditions (exclusions/clarifications/assumptions) for each
+- Tag assumptions with impact level: HIGH (>5% cost impact), MEDIUM (2-5%), LOW (<2%)
+- Present the full assumption list to the user for review
+- Common assumptions to track: access conditions, site power/utilities, material delivery schedule, concurrent work by others, weather impacts, testing medium (water vs N2 vs air)
+
+### Step 10: sourceNotes — MANDATORY on Every Item
+For EVERY line item you create, populate the sourceNotes field with:
+- **Knowledge reference:** "[Book Name], Table X.X, p.XX — base rate Y MH/unit"
+- **Dataset match:** "Dataset [name], row matching [conditions] → value Z"
+- **Correction factors:** "Elevation ×1.10, congestion ×1.15 = combined ×1.27"
+- **Web search:** "WebSearch '[query]' → [key finding], URL: [url]"
+- **Assumptions:** any item-specific assumptions
+- **Reasoning:** brief note explaining why this rate/quantity was chosen
+Items without sourceNotes are not acceptable — they cannot be defended or reviewed.
 
 ## Progress Reporting
 
