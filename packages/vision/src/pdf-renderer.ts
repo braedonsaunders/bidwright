@@ -39,7 +39,7 @@ export async function renderPdfPage(request: RenderPageRequest): Promise<RenderP
   const payload = JSON.stringify(request);
 
   return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? "python3";
+    const pythonPath = process.env.PYTHON_PATH ?? (process.platform === "win32" ? "python" : "python3");
     const proc = spawn(pythonPath, [RENDER_SCRIPT], {
       cwd: PYTHON_DIR,
       timeout: 30_000,
