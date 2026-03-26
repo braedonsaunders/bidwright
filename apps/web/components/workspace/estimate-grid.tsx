@@ -109,6 +109,7 @@ type ColumnId =
   | "description"
   | "quantity"
   | "uom"
+  | "units"
   | "unit1"
   | "unit2"
   | "unit3"
@@ -181,14 +182,11 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
   "description",
   "quantity",
   "uom",
-  "unit1",
-  "unit2",
-  "unit3",
+  "units",
   "cost",
   "extCost",
   "markup",
   "price",
-  "margin",
 ];
 
 const COLUMN_LABELS: Record<ColumnId, string> = {
@@ -201,9 +199,10 @@ const COLUMN_LABELS: Record<ColumnId, string> = {
   description: "Description",
   quantity: "Qty",
   uom: "UOM",
-  unit1: "Units 1",
-  unit2: "Units 2",
-  unit3: "Units 3",
+  units: "Units",
+  unit1: "Reg",
+  unit2: "OT",
+  unit3: "DT",
   cost: "Cost",
   markup: "Markup",
   price: "Price",
@@ -221,9 +220,7 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "description",
   "quantity",
   "uom",
-  "unit1",
-  "unit2",
-  "unit3",
+  "units",
   "cost",
   "extCost",
   "markup",
@@ -617,17 +614,10 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
     const cols = new Set(DEFAULT_VISIBLE_COLUMNS);
 
-    // If no rows have auto_labour calculation type, hide overtime and doubletime
-    const hasAutoLabour = activeCatDefs.some((c) => c.calculationType === "auto_labour");
-    if (!hasAutoLabour) {
-      cols.delete("unit2");
-      cols.delete("unit3");
-    }
-
-    // Show unit1 if any category uses auto_labour (hours column) or has unit1 editable
+    // Hide combined units column if no rows use labour or have unit fields
     const hasLabourOrUnit1 = activeCatDefs.some((c) => c.calculationType === "auto_labour" || c.editableFields.unit1);
     if (!hasLabourOrUnit1 && allItems.length > 0) {
-      cols.delete("unit1");
+      cols.delete("units");
     }
 
     return cols;
@@ -1552,6 +1542,69 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
   // ─── Render cell helpers ───
 
+  /** Combined units cell — shows unit1 · unit2 · unit3 inline */
+  function renderUnitsCell(row: WorkspaceWorksheetItem) {
+    const catDef = findCategoryForRow(row, entityCategories);
+    const hasAutoLabour = catDef?.calculationType === "auto_labour";
+
+    const renderUnitSlot = (
+      field: "unit1" | "unit2" | "unit3",
+      value: number,
+      label: string
+    ) => {
+      const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
+      const disabled = isCellDisabledByCategory(catDef, field);
+
+      if (isEditing) {
+        return (
+          <input
+            ref={(el) => { editInputRef.current = el; }}
+            type="number"
+            step="0.01"
+            className="w-12 text-center rounded border border-accent/50 bg-bg px-0.5 py-0.5 text-[11px] outline-none tabular-nums"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={handleCellKeyDown}
+            autoFocus
+          />
+        );
+      }
+      if (disabled) {
+        return (
+          <span className="tabular-nums text-[11px] text-fg/30 italic" title={label}>
+            {value || "–"}
+          </span>
+        );
+      }
+      return (
+        <button
+          className="tabular-nums text-[11px] px-1 py-0.5 rounded hover:bg-accent/5 hover:text-accent transition-colors min-w-[28px] text-center"
+          title={label}
+          onClick={() => startEditing(row.id, field, value)}
+        >
+          {value || <span className="text-fg/20">–</span>}
+        </button>
+      );
+    };
+
+    return (
+      <td className="border-b border-line px-1 py-0.5">
+        <div className="flex items-center justify-center gap-px">
+          {renderUnitSlot("unit1", row.unit1, "Unit 1")}
+          {hasAutoLabour && (
+            <>
+              <span className="text-fg/15 text-[10px] mx-px">·</span>
+              {renderUnitSlot("unit2", row.unit2, "Unit 2")}
+              <span className="text-fg/15 text-[10px] mx-px">·</span>
+              {renderUnitSlot("unit3", row.unit3, "Unit 3")}
+            </>
+          )}
+        </div>
+      </td>
+    );
+  }
+
   function renderEditableCell(
     row: WorkspaceWorksheetItem,
     column: EditableColumn,
@@ -2120,19 +2173,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                         <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
                       </th>
                     )}
-                    {isColVisible("unit1") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
-                        <span className="flex items-center justify-end gap-1">Units 1 {renderSortIcon("unit1")}</span>
-                      </th>
-                    )}
-                    {isColVisible("unit2") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit2")}>
-                        <span className="flex items-center justify-end gap-1">Units 2 {renderSortIcon("unit2")}</span>
-                      </th>
-                    )}
-                    {isColVisible("unit3") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit3")}>
-                        <span className="flex items-center justify-end gap-1">Units 3 {renderSortIcon("unit3")}</span>
+                    {isColVisible("units") && (
+                      <th className="border-b border-line px-1.5 py-2 text-center cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
+                        <span className="flex items-center justify-center gap-1 text-[10px]">Units {renderSortIcon("unit1")}</span>
                       </th>
                     )}
                     {isColVisible("cost") && (
@@ -2184,6 +2227,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                         onContextMenu={handleContextMenu}
                         onDescDoubleClick={handleDescDoubleClick}
                         renderEditableCell={renderEditableCell}
+                        renderUnitsCell={renderUnitsCell}
                         entityCategories={entityCategories}
                         workspace={workspace}
                         visibleColumns={visibleColumns}
@@ -2218,19 +2262,19 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                     {isColVisible("description") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("quantity") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("uom") && <td className="border-t border-line px-2 py-2" />}
-                    {isColVisible("unit1") && (
-                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}
-                      </td>
-                    )}
-                    {isColVisible("unit2") && (
-                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {totals.otHrs > 0 ? totals.otHrs.toLocaleString() : ""}
-                      </td>
-                    )}
-                    {isColVisible("unit3") && (
-                      <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : ""}
+                    {isColVisible("units") && (
+                      <td className="border-t border-line px-1 py-2">
+                        <div className="flex items-center justify-center gap-1 tabular-nums text-xs">
+                          <span title="Regular">{totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}</span>
+                          {(totals.otHrs > 0 || totals.dtHrs > 0) && (
+                            <>
+                              <span className="text-fg/15">·</span>
+                              <span title="Overtime">{totals.otHrs > 0 ? totals.otHrs.toLocaleString() : "0"}</span>
+                              <span className="text-fg/15">·</span>
+                              <span title="Double Time">{totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : "0"}</span>
+                            </>
+                          )}
+                        </div>
                       </td>
                     )}
                     {isColVisible("cost") && (
@@ -2588,6 +2632,7 @@ function GroupRows({
   onContextMenu,
   onDescDoubleClick,
   renderEditableCell,
+  renderUnitsCell,
   entityCategories,
   workspace,
   visibleColumns,
@@ -2619,6 +2664,7 @@ function GroupRows({
     displayValue: React.ReactNode,
     className?: string
   ) => React.ReactNode;
+  renderUnitsCell: (row: WorkspaceWorksheetItem) => React.ReactNode;
   entityCategories: EntityCategory[];
   workspace: ProjectWorkspaceData;
   visibleColumns: Set<ColumnId>;
@@ -2809,28 +2855,8 @@ function GroupRows({
               {isColVisible("uom") &&
                 renderEditableCell(row, "uom", row.uom, "text-center")}
 
-              {/* Unit columns - dynamic labels from category */}
-              {isColVisible("unit1") &&
-                renderEditableCell(
-                  row,
-                  "unit1",
-                  <span className="tabular-nums">{row.unit1 || "--"}</span>,
-                  "text-right"
-                )}
-              {isColVisible("unit2") &&
-                renderEditableCell(
-                  row,
-                  "unit2",
-                  <span className="tabular-nums">{row.unit2 || "--"}</span>,
-                  "text-right"
-                )}
-              {isColVisible("unit3") &&
-                renderEditableCell(
-                  row,
-                  "unit3",
-                  <span className="tabular-nums">{row.unit3 || "--"}</span>,
-                  "text-right"
-                )}
+              {/* Combined units column */}
+              {isColVisible("units") && renderUnitsCell(row)}
 
               {/* Cost */}
               {isColVisible("cost") &&
