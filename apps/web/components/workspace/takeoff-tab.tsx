@@ -465,8 +465,8 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         setActiveTool("select");
         setAutoCountResults(null);
         setAutoCountSnippet(null);
-        setQuickCountResults(null);
         setCrossPageResults(null);
+        setMultiDocResults(null);
         setAskAiModalOpen(false);
         setAskAiCropImage(null);
       }
@@ -696,7 +696,6 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         threshold: autoCountThreshold,
       });
 
-      console.log("[autocount] result:", { totalCount: result.totalCount, matchCount: result.matches.length, hasSnippet: !!result.snippetImage, firstMatchHasImage: !!result.matches[0]?.image });
       setAutoCountResults(result.matches);
       setAutoCountSnippet(result.snippetImage ?? null);
 
@@ -1635,7 +1634,9 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
               </button>
             </div>
             <div className="overflow-y-auto flex-1 min-h-0 divide-y divide-line">
-              {autoCountPending.matches.map((match, i) => (
+              {autoCountPending.matches.map((match, i) => {
+                const previewSrc = match.image ?? autoCountPending.snippetImage ?? undefined;
+                return (
                 <div
                   key={i}
                   className={cn(
@@ -1654,10 +1655,10 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
                     onChange={() => {}}
                     className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
                   />
-                  {(match.image || autoCountPending.snippetImage) && (
+                  {previewSrc && (
                     <div className="shrink-0 rounded border border-line bg-white p-0.5">
                       <img
-                        src={match.image || autoCountPending.snippetImage}
+                        src={previewSrc}
                         alt={`Match #${i + 1}`}
                         className="h-10 w-10 object-contain"
                       />
@@ -1671,7 +1672,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
                     ({Math.round(match.rect.x)}, {Math.round(match.rect.y)})
                   </span>
                 </div>
-              ))}
+              )})}
             </div>
             <div className="flex items-center justify-between px-4 py-2.5 border-t border-line shrink-0">
               <span className="text-[10px] text-fg/40">

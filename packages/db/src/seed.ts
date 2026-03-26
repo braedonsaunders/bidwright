@@ -1,59 +1,36 @@
-import { getPrismaClient } from "./client.js";
+import { PrismaClient } from "@prisma/client";
+import { seedAllForOrganization } from "./seed-data.js";
+import { seedDatasetTemplates } from "./seed-datasets.js";
+import { seedCatalogTemplates } from "./seed-items.js";
+import { seedPluginTemplates } from "./seed-plugins.js";
 
 async function main() {
-  const prisma = (await getPrismaClient()) as {
-    project: { upsert: (args: unknown) => Promise<unknown> };
-    sourceDocument: { createMany: (args: unknown) => Promise<unknown> };
-    $disconnect?: () => Promise<void>;
-  };
+  const prisma = new PrismaClient();
+  await prisma.$connect();
 
-  await prisma.project.upsert({
-    where: { id: "project-harbour-pump" },
+  const existingOrg = await prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
+  const org = existingOrg ?? await prisma.organization.create({
+    data: { id: "default", name: "Default Organization", slug: "default" },
+  });
+
+  console.log(`Seeding into organization: ${org.name} (${org.slug})`);
+
+  await prisma.organizationSettings.upsert({
+    where: { organizationId: org.id },
     update: {},
-    create: {
-      id: "project-harbour-pump",
-      name: "Harbour Centre Boiler & Pump Replacement",
-      customer: "Northshore Property Group",
-      stage: "Bid Review",
-      estimator: "Avery Chen",
-      dueDate: new Date("2026-04-05T00:00:00.000Z")
-    }
+    create: { organizationId: org.id },
   });
 
-  await prisma.sourceDocument.createMany({
-    data: [
-      {
-        id: "doc-spec-232113",
-        projectId: "project-harbour-pump",
-        name: "Division 23 Mechanical Specifications",
-        kind: "spec",
-        discipline: "Mechanical",
-        pages: 312,
-        summary: "Primary mechanical specification package."
-      },
-      {
-        id: "doc-rfq",
-        projectId: "project-harbour-pump",
-        name: "RFQ & Bid Form",
-        kind: "rfq",
-        discipline: "Commercial",
-        pages: 18,
-        summary: "Commercial package and bid form."
-      }
-    ],
-    skipDuplicates: true
-  });
+  await seedAllForOrganization(prisma, org.id);
+  await seedDatasetTemplates(prisma);
+  await seedCatalogTemplates(prisma);
+  await seedPluginTemplates(prisma, org.id);
 
-  await prisma.$disconnect?.();
+  await prisma.$disconnect();
+  console.log("Done.");
 }
 
-main().catch(async (error) => {
+main().catch((error) => {
   console.error(error);
-  try {
-    const prisma = await getPrismaClient();
-    await prisma.$disconnect?.();
-  } catch {
-    // Ignore disconnect failures when Prisma is unavailable.
-  }
-  process.exit(1);
+  process.exitCode = 1;
 });

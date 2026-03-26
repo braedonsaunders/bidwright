@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { SettingsPage } from "@/components/settings-page";
 import {
@@ -40,12 +40,14 @@ export default function SettingsRoute() {
 
   return (
     <AppShell projects={projects}>
-      <SettingsPage
-        initialCatalogs={catalogs}
-        initialSchedules={schedules}
-        initialPlugins={plugins}
-        initialDatasets={datasets}
-      />
+      <Suspense fallback={<div className="px-6 py-10 text-sm text-fg/40">Loading settings...</div>}>
+        <SettingsPage
+          initialCatalogs={catalogs}
+          initialSchedules={schedules}
+          initialPlugins={plugins}
+          initialDatasets={datasets}
+        />
+      </Suspense>
     </AppShell>
   );
 }
