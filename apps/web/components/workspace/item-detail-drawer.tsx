@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { motion } from "motion/react";
-import { Copy, Info, Trash2, X } from "lucide-react";
+import { ChevronDown, Copy, Info, Trash2, X } from "lucide-react";
 import type {
   EntityCategory,
   ProjectWorkspaceData,
@@ -10,6 +10,7 @@ import type {
 } from "@/lib/api";
 import { updateWorksheetItem } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { Badge, Button, Input, Select } from "@/components/ui";
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -45,6 +46,7 @@ export function ItemDetailDrawer({
 }: ItemDetailDrawerProps) {
   const [isPending, startTransition] = useTransition();
 
+  const [showSources, setShowSources] = useState(!!item.sourceNotes);
   const [form, setForm] = useState({
     entityName: item.entityName,
     vendor: item.vendor ?? "",
@@ -58,6 +60,7 @@ export function ItemDetailDrawer({
     unit2: item.unit2,
     unit3: item.unit3,
     phaseId: item.phaseId ?? "",
+    sourceNotes: item.sourceNotes ?? "",
   });
 
   useEffect(() => {
@@ -74,7 +77,9 @@ export function ItemDetailDrawer({
       unit2: item.unit2,
       unit3: item.unit3,
       phaseId: item.phaseId ?? "",
+      sourceNotes: item.sourceNotes ?? "",
     });
+    setShowSources(!!item.sourceNotes);
   }, [item]);
 
   const catDef = entityCategories.find((c) => c.name === item.category);
@@ -366,6 +371,35 @@ export function ItemDetailDrawer({
               </option>
             ))}
           </Select>
+        </div>
+
+        {/* Sources & Notes */}
+        <div className="border border-line rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowSources(!showSources)}
+            className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider hover:bg-panel2/30 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              Sources & Notes
+              {form.sourceNotes && (
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent/60" />
+              )}
+            </span>
+            <ChevronDown className={cn("h-3 w-3 transition-transform", showSources && "rotate-180")} />
+          </button>
+          {showSources && (
+            <div className="px-3 pb-3">
+              <textarea
+                className="w-full rounded border border-line bg-bg px-3 py-2 text-xs font-mono leading-relaxed outline-none focus:border-accent/50 resize-y"
+                rows={6}
+                placeholder="Knowledge book refs, dataset lookups, correction factors, web search results, assumptions..."
+                value={form.sourceNotes}
+                onChange={(e) => setForm({ ...form, sourceNotes: e.target.value })}
+                onBlur={() => handleFieldBlur("sourceNotes", form.sourceNotes)}
+              />
+            </div>
+          )}
         </div>
 
         {calcInfoText && (

@@ -32,6 +32,7 @@ model Organization {
   labourCostTables LabourCostTable[]
   burdenPeriods    BurdenPeriod[]
   travelPolicies   TravelPolicy[]
+  estimatorPersonas EstimatorPersona[]
 }
 
 model OrganizationSettings {
@@ -49,6 +50,27 @@ model OrganizationSettings {
   maxKnowledgeBooks Int       @default(0) // 0 = unlimited
   termsAndConditions String   @default("")
   updatedAt      DateTime     @updatedAt
+}
+
+// ── Estimator Personas ───────────────────────────────────────────────────
+
+model EstimatorPersona {
+  id               String       @id @default(cuid())
+  organizationId   String
+  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  trade            String       @default("mechanical")
+  description      String       @default("")
+  systemPrompt     String       @default("")
+  knowledgeBookIds Json         @default("[]")
+  datasetTags      Json         @default("[]")
+  isDefault        Boolean      @default(false)
+  enabled          Boolean      @default(true)
+  order            Int          @default(0)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([organizationId])
 }
 
 // ── Users & Auth ──────────────────────────────────────────────────────────
@@ -285,6 +307,7 @@ model WorksheetItem {
   rateScheduleItemId  String?
   itemId              String?  // FK to CatalogItem (for catalog-backed categories)
   tierUnits           Json     @default("{}")
+  sourceNotes         String   @default("")
 
   @@index([worksheetId])
   @@index([phaseId])

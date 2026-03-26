@@ -316,6 +316,9 @@ export function registerQuoteTools(server: McpServer) {
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       phaseId: z.string().optional().describe("Phase ID"),
+      sourceNotes: z.string().default("").describe(
+        "MANDATORY: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions for this item"
+      ),
     },
     async (input) => {
       const gateError = await checkGate("createWorksheetItem");

@@ -15,6 +15,7 @@ import {
   Mail,
   Plus,
   Search,
+  Star,
   Trash2,
   Upload,
   Download,
@@ -37,6 +38,8 @@ import {
   Select,
   Separator,
   Toggle,
+  MultiSelect,
+  type MultiSelectOption,
 } from "@/components/ui";
 import {
   getSettings as apiGetSettings,
@@ -81,6 +84,13 @@ import {
   type CatalogSummary,
   type RateSchedule,
   type DatasetRecord,
+  type EstimatorPersona,
+  listPersonas as apiListPersonas,
+  createPersona as apiCreatePersona,
+  updatePersona as apiUpdatePersona,
+  deletePersona as apiDeletePersona,
+  listKnowledgeBooks as apiListKnowledgeBooks,
+  type KnowledgeBookRecord,
 } from "@/lib/api";
 import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
@@ -100,7 +110,7 @@ import {
 const STORAGE_KEY = "bidwright-settings";
 
 type SettingsGroup = "organization" | "data" | "integrations" | "users";
-type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms";
+type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
 type DataSubTab = "categories" | "clients" | "conditions" | "catalogs" | "rates" | "costs" | "travel";
 type IntegrationsSubTab = "email" | "apikeys" | "agent" | "plugins";
 
@@ -110,6 +120,7 @@ const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "departments", label: "Departments" },
   { id: "defaults", label: "Defaults" },
   { id: "terms", label: "Terms & Conditions" },
+  { id: "personas", label: "Estimator Personas" },
 ];
 const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "categories", label: "Categories" },
@@ -551,6 +562,13 @@ export function SettingsPage({
   const [deptSaving, setDeptSaving] = useState<string | null>(null);
   const [deptDeleteConfirm, setDeptDeleteConfirm] = useState<string | null>(null);
 
+  // Personas
+  const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
+  const [expandedPersonaId, setExpandedPersonaId] = useState<string | null>(null);
+  const [personaEdits, setPersonaEdits] = useState<Record<string, Partial<EstimatorPersona>>>({});
+  const [personaDeleteConfirm, setPersonaDeleteConfirm] = useState<string | null>(null);
+  const [knowledgeBooks, setKnowledgeBooks] = useState<KnowledgeBookRecord[]>([]);
+
   // Conditions library
   const [conditionLibrary, setConditionLibrary] = useState<ConditionLibraryEntry[]>([]);
   const [newInclusion, setNewInclusion] = useState("");
@@ -712,6 +730,14 @@ export function SettingsPage({
   useEffect(() => {
     apiGetDepartments().then(setDepartments).catch(() => {});
   }, []);
+
+  // Load personas + knowledge books
+  useEffect(() => {
+    if (activeGroup === "organization" && orgSubTab === "personas") {
+      apiListPersonas().then(setPersonas).catch(() => {});
+      apiListKnowledgeBooks().then(setKnowledgeBooks).catch(() => {});
+    }
+  }, [activeGroup, orgSubTab]);
 
   // Load condition library
   useEffect(() => {
@@ -950,6 +976,67 @@ export function SettingsPage({
     setDepartments((prev) => prev.map((d) => (d.id === dept.id ? { ...d, active } : d)));
     if (!dept.id.startsWith("new-")) {
       try { await apiUpdateDepartment(dept.id, { active }); } catch { /* revert silently */ }
+    }
+  }, []);
+
+  // ── Persona CRUD ───────────────────────────────────────────────────────
+
+  const TRADE_OPTIONS = ["mechanical", "electrical", "structural", "civil", "general", "controls", "insulation"] as const;
+
+  const TRADE_COLORS: Record<string, string> = {
+    mechanical: "bg-blue-500/15 text-blue-400",
+    electrical: "bg-yellow-500/15 text-yellow-400",
+    structural: "bg-red-500/15 text-red-400",
+    civil: "bg-green-500/15 text-green-400",
+    general: "bg-gray-500/15 text-gray-400",
+    controls: "bg-purple-500/15 text-purple-400",
+    insulation: "bg-orange-500/15 text-orange-400",
+  };
+
+  const getPersonaEdit = (p: EstimatorPersona): EstimatorPersona => ({ ...p, ...(personaEdits[p.id] || {}) });
+  const updatePersonaEdit = (id: string, patch: Partial<EstimatorPersona>) =>
+    setPersonaEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+
+  const addPersona = () => {
+    const tempId = `new-${Date.now()}`;
+    const newPersona: EstimatorPersona = {
+      id: tempId, organizationId: "", name: "", trade: "general", description: "",
+      systemPrompt: "", knowledgeBookIds: [], datasetTags: [], isDefault: false,
+      enabled: true, order: personas.length, createdAt: "", updatedAt: "",
+    };
+    setPersonas((prev) => [...prev, newPersona]);
+    setExpandedPersonaId(tempId);
+  };
+
+  const savePersona = useCallback(async (persona: EstimatorPersona) => {
+    const merged = { ...persona, ...(personaEdits[persona.id] || {}) };
+    try {
+      if (persona.id.startsWith("new-")) {
+        const created = await apiCreatePersona(merged);
+        setPersonas((prev) => prev.map((p) => (p.id === persona.id ? created : p)));
+        setPersonaEdits((prev) => { const n = { ...prev }; delete n[persona.id]; return n; });
+        setExpandedPersonaId(created.id);
+      } else {
+        const updated = await apiUpdatePersona(persona.id, merged);
+        setPersonas((prev) => prev.map((p) => (p.id === persona.id ? updated : p)));
+        setPersonaEdits((prev) => { const n = { ...prev }; delete n[persona.id]; return n; });
+      }
+    } catch { /* keep edits */ }
+  }, [personaEdits]);
+
+  const deletePersonaById = useCallback(async (id: string) => {
+    try {
+      if (!id.startsWith("new-")) await apiDeletePersona(id);
+      setPersonas((prev) => prev.filter((p) => p.id !== id));
+      setPersonaEdits((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      if (expandedPersonaId === id) setExpandedPersonaId(null);
+    } catch { /* keep */ } finally { setPersonaDeleteConfirm(null); }
+  }, [expandedPersonaId]);
+
+  const togglePersonaEnabled = useCallback(async (persona: EstimatorPersona, enabled: boolean) => {
+    setPersonas((prev) => prev.map((p) => (p.id === persona.id ? { ...p, enabled } : p)));
+    if (!persona.id.startsWith("new-")) {
+      try { await apiUpdatePersona(persona.id, { enabled }); } catch { /* revert silently */ }
     }
   }, []);
 
@@ -2243,6 +2330,149 @@ export function SettingsPage({
                   </div>
                 </div>
               </CardBody>
+            </Card>
+          )}
+
+          {/* ── Estimator Personas Tab ─────────────────────────────── */}
+          {activeGroup === "organization" && orgSubTab === "personas" && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Estimator Personas</CardTitle>
+                <Button variant="accent" size="xs" onClick={addPersona}>
+                  <Plus className="h-3 w-3" />
+                  Add Persona
+                </Button>
+              </CardHeader>
+              <div className="divide-y divide-line">
+                {personas.length === 0 && (
+                  <div className="px-5 py-8 text-center text-xs text-fg/40">
+                    No personas yet. Click &quot;Add Persona&quot; to get started.
+                  </div>
+                )}
+                {personas.map((persona) => {
+                  const edited = getPersonaEdit(persona);
+                  const isExpanded = expandedPersonaId === persona.id;
+                  return (
+                    <div key={persona.id}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => setExpandedPersonaId(isExpanded ? null : persona.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedPersonaId(isExpanded ? null : persona.id); } }}
+                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
+                      >
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
+                        <span className="font-medium text-fg truncate">{edited.name || "Untitled"}</span>
+                        {edited.trade && (
+                          <Badge className={cn("text-[10px] shrink-0", TRADE_COLORS[edited.trade] || "")}>
+                            {edited.trade}
+                          </Badge>
+                        )}
+                        {edited.isDefault && <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400 shrink-0" />}
+                        {edited.description && <span className="text-xs text-fg/40 truncate">{edited.description}</span>}
+                        <span className="flex-1" />
+                        <span onClick={(e) => e.stopPropagation()}>
+                          <Toggle checked={edited.enabled} onChange={(val) => togglePersonaEnabled(persona, val)} />
+                        </span>
+                      </div>
+                      {isExpanded && (
+                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label>Name</Label>
+                              <Input value={edited.name} onChange={(e) => updatePersonaEdit(persona.id, { name: e.target.value })} placeholder="Persona name" />
+                            </div>
+                            <div>
+                              <Label>Trade</Label>
+                              <Select value={edited.trade} onChange={(e) => updatePersonaEdit(persona.id, { trade: e.target.value })}>
+                                {TRADE_OPTIONS.map((t) => (
+                                  <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
+                                ))}
+                              </Select>
+                            </div>
+                          </div>
+                          <div>
+                            <Label>Description</Label>
+                            <Input value={edited.description} onChange={(e) => updatePersonaEdit(persona.id, { description: e.target.value })} placeholder="Brief description of this persona" />
+                          </div>
+                          <div>
+                            <Label>System Prompt</Label>
+                            <textarea
+                              className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-sm text-fg font-mono leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[200px]"
+                              rows={16}
+                              value={edited.systemPrompt}
+                              onChange={(e) => updatePersonaEdit(persona.id, { systemPrompt: e.target.value })}
+                              placeholder="Enter the persona's system prompt... This instructs the agent how to think about estimates for this trade."
+                            />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label>Priority Knowledge Books</Label>
+                              <p className="text-[10px] text-fg/30 mb-1.5">Agent searches these first but can access all books</p>
+                              <MultiSelect
+                                options={knowledgeBooks
+                                  .filter((b) => b.status === "indexed")
+                                  .map((b) => ({
+                                    value: b.id,
+                                    label: b.name,
+                                    description: `${b.category} · ${b.pageCount} pages · ${b.sourceFileName}`,
+                                  }))}
+                                selected={edited.knowledgeBookIds || []}
+                                onChange={(ids) => updatePersonaEdit(persona.id, { knowledgeBookIds: ids })}
+                                placeholder="Select knowledge books..."
+                              />
+                            </div>
+                            <div>
+                              <Label>Dataset Tags</Label>
+                              <Input
+                                value={(edited.datasetTags || []).join(", ")}
+                                onChange={(e) => updatePersonaEdit(persona.id, { datasetTags: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                                placeholder="Comma-separated tags"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <label className="flex items-center gap-2 text-sm text-fg">
+                              <input
+                                type="checkbox"
+                                checked={edited.isDefault}
+                                onChange={(e) => updatePersonaEdit(persona.id, { isDefault: e.target.checked })}
+                                className="rounded border-line"
+                              />
+                              Is Default
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <Label className="mb-0">Enabled</Label>
+                              <Toggle checked={edited.enabled} onChange={(val) => updatePersonaEdit(persona.id, { enabled: val })} />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-2">
+                            <Button variant="accent" size="xs" onClick={() => savePersona(persona)}>
+                              Save
+                            </Button>
+                            {personaDeleteConfirm === persona.id ? (
+                              <div className="flex items-center gap-2 ml-2">
+                                <span className="text-xs text-danger">Delete this persona?</span>
+                                <Button variant="danger" size="xs" onClick={() => deletePersonaById(persona.id)}>Confirm</Button>
+                                <Button variant="secondary" size="xs" onClick={() => setPersonaDeleteConfirm(null)}>Cancel</Button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setPersonaDeleteConfirm(persona.id)}
+                                className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors ml-2"
+                                title="Delete persona"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </Card>
           )}
 

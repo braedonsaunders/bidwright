@@ -168,6 +168,7 @@ export interface WorkspaceWorksheetItem {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export interface WorkspaceWorksheet {
@@ -914,6 +915,7 @@ export interface WorksheetItemPatchInput {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export interface CreateWorksheetItemInput {
@@ -935,6 +937,7 @@ export interface CreateWorksheetItemInput {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export async function updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
@@ -3261,11 +3264,54 @@ export async function startCliSession(input: {
   model?: string;
   scope?: string;
   prompt?: string;
+  personaId?: string;
 }) {
   return apiRequest<{ sessionId: string; projectId: string; runtime: string; status: string }>(
     "/api/cli/start",
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }
   );
+}
+
+// ── Estimator Personas ──────────────────────────────────────────────────
+
+export interface EstimatorPersona {
+  id: string;
+  organizationId: string;
+  name: string;
+  trade: string;
+  description: string;
+  systemPrompt: string;
+  knowledgeBookIds: string[];
+  datasetTags: string[];
+  isDefault: boolean;
+  enabled: boolean;
+  order: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listPersonas(): Promise<EstimatorPersona[]> {
+  return apiRequest<EstimatorPersona[]>("/personas");
+}
+
+export async function createPersona(input: Partial<EstimatorPersona>): Promise<EstimatorPersona> {
+  return apiRequest<EstimatorPersona>("/personas", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updatePersona(id: string, patch: Partial<EstimatorPersona>): Promise<EstimatorPersona> {
+  return apiRequest<EstimatorPersona>(`/personas/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deletePersona(id: string): Promise<void> {
+  await apiRequest(`/personas/${id}`, { method: "DELETE" });
 }
 
 export function connectCliStream(projectId: string): EventSource {

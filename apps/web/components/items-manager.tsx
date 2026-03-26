@@ -574,20 +574,20 @@ export function ItemsManager({
   return (
     <div className="space-y-5">
       <FadeIn>
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-fg">Items &amp; Catalogs</h1>
-            <p className="text-xs text-fg/50">
-              Manage your material, labor, and equipment catalogs
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={openLibrary}>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>Items &amp; Catalogs</CardTitle>
+              <p className="text-xs text-fg/40 mt-0.5">
+                Manage your material, labor, and equipment catalogs
+              </p>
+            </div>
+            <Button variant="accent" size="xs" onClick={openLibrary}>
               <Library className="h-3.5 w-3.5" />
               Browse Library
             </Button>
-          </div>
-        </div>
+          </CardHeader>
+        </Card>
       </FadeIn>
 
       <div className="flex gap-5">

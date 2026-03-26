@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
+import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Calculator,
@@ -385,67 +386,46 @@ export function RateScheduleManager({
 
   return (
     <div className="space-y-5">
+      {/* Header */}
       <FadeIn>
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-fg">Rate Schedules</h1>
-            <p className="text-xs text-fg/50 mt-0.5">
-              Manage your organization&apos;s master rate library. Import these into projects.
-            </p>
-          </div>
-          <Button size="sm" onClick={() => setShowCreate(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            New Schedule
-          </Button>
-        </div>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle>Rate Schedules</CardTitle>
+              <p className="text-xs text-fg/40 mt-0.5">
+                Manage your organization&apos;s master rate library. Import these into projects.
+              </p>
+            </div>
+            <Button variant="accent" size="xs" onClick={() => setShowCreate(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              New Schedule
+            </Button>
+          </CardHeader>
+        </Card>
       </FadeIn>
 
       {/* Create form */}
       <AnimatePresence>
         {showCreate && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
             <Card>
-              <CardHeader>
-                <CardTitle>New Rate Schedule</CardTitle>
-              </CardHeader>
+              <CardHeader><CardTitle>New Rate Schedule</CardTitle></CardHeader>
               <div className="px-5 pb-5 space-y-3">
                 <div className="grid grid-cols-3 gap-3">
                   <div className="col-span-2">
                     <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
-                    <Input
-                      className="mt-1"
-                      value={newForm.name}
-                      onChange={(e) => setNewForm({ ...newForm, name: e.target.value })}
-                      placeholder="e.g. Mechanical Labour Rates"
-                      onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-                    />
+                    <Input className="mt-1" value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} placeholder="e.g. Mechanical Labour Rates" onKeyDown={(e) => e.key === "Enter" && handleCreate()} />
                   </div>
                   <div>
                     <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                    <Select
-                      className="mt-1"
-                      value={newForm.category}
-                      onChange={(e) => setNewForm({ ...newForm, category: e.target.value })}
-                    >
-                      {CATEGORIES.map((c) => (
-                        <option key={c.value} value={c.value}>{c.label}</option>
-                      ))}
+                    <Select className="mt-1" value={newForm.category} onChange={(e) => setNewForm({ ...newForm, category: e.target.value })}>
+                      {CATEGORIES.map((c) => (<option key={c.value} value={c.value}>{c.label}</option>))}
                     </Select>
                   </div>
                 </div>
                 <div>
                   <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Description</label>
-                  <Input
-                    className="mt-1"
-                    value={newForm.description}
-                    onChange={(e) => setNewForm({ ...newForm, description: e.target.value })}
-                    placeholder="Optional description"
-                  />
+                  <Input className="mt-1" value={newForm.description} onChange={(e) => setNewForm({ ...newForm, description: e.target.value })} placeholder="Optional description" />
                 </div>
                 <div className="flex gap-2 justify-end">
                   <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
@@ -457,429 +437,266 @@ export function RateScheduleManager({
         )}
       </AnimatePresence>
 
-      {/* Main layout: sidebar + detail */}
-      <div className="flex gap-5 min-h-[600px]">
-        {/* Schedule list sidebar */}
-        <div className="w-72 shrink-0 space-y-3">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
-              <Input
-                className="pl-8 text-xs"
-                placeholder="Search schedules..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <RadixSelect.Root value={categoryFilter || "__all__"} onValueChange={(val) => setCategoryFilter(val === "__all__" ? "" : val)}>
-              <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors whitespace-nowrap">
-                <RadixSelect.Value placeholder="All" />
-                <RadixSelect.Icon className="ml-1 shrink-0">
-                  <ChevronDown className="h-3 w-3 text-fg/40" />
-                </RadixSelect.Icon>
-              </RadixSelect.Trigger>
-              <RadixSelect.Portal>
-                <RadixSelect.Content className="z-50 rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
-                  <RadixSelect.Viewport className="p-1">
-                    <RadixSelect.Item value="__all__" className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
-                      <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
-                      <RadixSelect.ItemText>All</RadixSelect.ItemText>
-                    </RadixSelect.Item>
-                    {CATEGORIES.map((c) => (
-                      <RadixSelect.Item key={c.value} value={c.value} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
-                        <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
-                        <RadixSelect.ItemText>{c.label}</RadixSelect.ItemText>
-                      </RadixSelect.Item>
-                    ))}
-                  </RadixSelect.Viewport>
-                </RadixSelect.Content>
-              </RadixSelect.Portal>
-            </RadixSelect.Root>
-          </div>
+      {/* Toolbar: search + filter */}
+      <div className="flex items-center gap-3">
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
+          <Input className="pl-8 text-xs h-8" placeholder="Search schedules..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-1">
+          {[{ value: "", label: "All" }, ...CATEGORIES].map((c) => (
+            <button
+              key={c.value}
+              onClick={() => setCategoryFilter(c.value === categoryFilter ? "" : c.value)}
+              className={cn(
+                "px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors",
+                (c.value === "" ? !categoryFilter : categoryFilter === c.value) ? "bg-accent/10 text-accent" : "text-fg/40 hover:text-fg/60 hover:bg-panel2/60"
+              )}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] text-fg/30 ml-auto">{filtered.length} schedule{filtered.length !== 1 ? "s" : ""}</span>
+      </div>
 
-          {loading ? (
-            <div className="text-sm text-fg/40 text-center py-8">Loading...</div>
-          ) : filtered.length === 0 ? (
-            <EmptyState>No rate schedules found.</EmptyState>
-          ) : (
-            <div className="space-y-1">
-              {filtered.map((schedule) => (
-                <div
-                  key={schedule.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => loadDetail(schedule.id)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadDetail(schedule.id); } }}
-                  className={cn(
-                    "w-full text-left px-3 py-2.5 rounded-lg border transition-all group cursor-pointer",
-                    selectedId === schedule.id
-                      ? "border-accent/40 bg-accent/5"
-                      : "border-transparent hover:bg-panel2/40"
-                  )}
-                >
-                  <div className="flex items-center justify-between">
+      {/* Full-width list */}
+      <Card className="overflow-hidden">
+        {loading ? (
+          <div className="text-xs text-fg/30 text-center py-12">Loading...</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-xs text-fg/30 text-center py-12">No rate schedules found.</div>
+        ) : (
+          <div className="divide-y divide-line">
+            {filtered.map((schedule) => (
+              <div
+                key={schedule.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => loadDetail(schedule.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); loadDetail(schedule.id); } }}
+                className="flex items-center gap-4 px-5 py-3.5 hover:bg-panel2/40 transition-colors cursor-pointer group"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-fg truncate">{schedule.name}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(schedule.id);
-                      }}
-                      className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"
-                    >
-                      <Trash2 className="h-3 w-3" />
+                    <Badge tone={CATEGORY_BADGE[schedule.category] ?? "default"} className="text-[10px] shrink-0">{schedule.category}</Badge>
+                  </div>
+                  {schedule.description && <p className="text-xs text-fg/40 mt-0.5 truncate">{schedule.description}</p>}
+                </div>
+                <div className="flex items-center gap-4 shrink-0 text-[11px] text-fg/40">
+                  <span>{schedule.items?.length ?? 0} items</span>
+                  <span>{schedule.tiers?.length ?? 0} tiers</span>
+                </div>
+                <ChevronRight className="h-3.5 w-3.5 text-fg/20 shrink-0" />
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDelete(schedule.id); }}
+                  className="p-1.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all shrink-0"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Edit Drawer (portalled to body to escape FadeIn transform) ── */}
+      {typeof document !== "undefined" && ReactDOM.createPortal(
+      <AnimatePresence>
+        {selectedId && detail && (
+          <motion.div
+            key="rate-schedule-drawer"
+            initial={{ x: 560 }}
+            animate={{ x: 0 }}
+            exit={{ x: 560 }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+            className="fixed inset-y-0 right-0 z-40 w-[560px] bg-panel border-l border-line shadow-2xl flex flex-col"
+          >
+            {/* Drawer header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
+              {editingHeader ? (
+                <div className="flex-1 space-y-2">
+                  <div className="flex gap-2">
+                    <Input className="text-sm font-medium flex-1" value={headerForm.name} onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })} />
+                    <Select className="w-32" value={headerForm.category} onChange={(e) => setHeaderForm({ ...headerForm, category: e.target.value })}>
+                      {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    </Select>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input className="flex-1 text-xs" value={headerForm.description} onChange={(e) => setHeaderForm({ ...headerForm, description: e.target.value })} placeholder="Description" />
+                    <Input className="w-24 text-xs" type="number" step="0.1" value={headerForm.defaultMarkup} onChange={(e) => setHeaderForm({ ...headerForm, defaultMarkup: Number(e.target.value) || 0 })} placeholder="Markup %" />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button size="xs" variant="ghost" onClick={() => setEditingHeader(false)}>Cancel</Button>
+                    <Button size="xs" onClick={handleUpdateHeader}>Save</Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-sm font-semibold text-fg truncate">{detail.name}</h2>
+                      <Badge tone={CATEGORY_BADGE[detail.category] ?? "default"} className="text-[10px]">{detail.category}</Badge>
+                    </div>
+                    {detail.description && <p className="text-xs text-fg/40 mt-0.5">{detail.description}</p>}
+                    <p className="text-[10px] text-fg/30 mt-0.5">Markup: {detail.defaultMarkup}%</p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setHeaderForm({ name: detail.name, description: detail.description ?? "", category: detail.category, defaultMarkup: detail.defaultMarkup }); setEditingHeader(true); }} title="Edit">
+                      <Edit3 className="h-3.5 w-3.5" />
+                    </button>
+                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setSelectedId(null); setDetail(null); }} title="Close">
+                      <X className="h-4 w-4" />
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge tone={CATEGORY_BADGE[schedule.category] ?? "default"} className="text-[10px]">
-                      {schedule.category}
-                    </Badge>
-                    {schedule.items?.length != null && (
-                      <span className="text-[10px] text-fg/40">{schedule.items.length} items</span>
-                    )}
-                    {schedule.tiers?.length != null && (
-                      <span className="text-[10px] text-fg/40">{schedule.tiers.length} tiers</span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                </>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Detail panel */}
-        <div className="flex-1 min-w-0">
-          {!selectedId ? (
-            <div className="flex items-center justify-center h-full text-sm text-fg/40">
-              <div className="text-center space-y-2">
-                <Layers className="h-8 w-8 mx-auto text-fg/20" />
-                <p>Select a schedule to view and edit</p>
-              </div>
-            </div>
-          ) : loadingDetail ? (
-            <div className="flex items-center justify-center h-full text-sm text-fg/40">Loading...</div>
-          ) : !detail ? (
-            <div className="flex items-center justify-center h-full text-sm text-fg/40">Schedule not found</div>
-          ) : (
-            <div className="space-y-4">
-              {/* Header */}
-              <Card>
-                <div className="px-5 py-4">
-                  {editingHeader ? (
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="col-span-2">
-                          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
-                          <Input className="mt-1" value={headerForm.name} onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })} />
-                        </div>
-                        <div>
-                          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                          <Select className="mt-1" value={headerForm.category} onChange={(e) => setHeaderForm({ ...headerForm, category: e.target.value })}>
-                            {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-3">
-                        <div className="col-span-2">
-                          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Description</label>
-                          <Input className="mt-1" value={headerForm.description} onChange={(e) => setHeaderForm({ ...headerForm, description: e.target.value })} />
-                        </div>
-                        <div>
-                          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Default Markup %</label>
-                          <Input className="mt-1" type="number" step="0.1" value={headerForm.defaultMarkup} onChange={(e) => setHeaderForm({ ...headerForm, defaultMarkup: Number(e.target.value) || 0 })} />
-                        </div>
-                      </div>
-                      <div className="flex gap-2 justify-end">
-                        <Button size="sm" variant="ghost" onClick={() => setEditingHeader(false)}>Cancel</Button>
-                        <Button size="sm" onClick={handleUpdateHeader}>Save</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h2 className="text-base font-semibold text-fg">{detail.name}</h2>
-                          <Badge tone={CATEGORY_BADGE[detail.category] ?? "default"} className="text-[10px]">
-                            {detail.category}
-                          </Badge>
-                        </div>
-                        {detail.description && (
-                          <p className="text-xs text-fg/50 mt-1">{detail.description}</p>
+            {/* Drawer body */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+              {loadingDetail ? (
+                <div className="flex items-center justify-center py-12 text-xs text-fg/30">Loading...</div>
+              ) : (
+                <>
+                  {/* Tiers */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Tiers</h3>
+                      <div className="flex gap-1.5">
+                        {detail.autoCalculate && detail.tiers.length > 0 && (
+                          <Button size="xs" variant="ghost" onClick={handleAutoCalculate}><Calculator className="h-3 w-3" /> Auto-Calc</Button>
                         )}
-                        <p className="text-[10px] text-fg/30 mt-1">
-                          Markup: {detail.defaultMarkup}% · Auto-calculate: {detail.autoCalculate ? "Yes" : "No"}
-                        </p>
+                        <Button size="xs" variant="ghost" onClick={() => setShowAddTier(true)}><Plus className="h-3 w-3" /> Add</Button>
                       </div>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setHeaderForm({
-                            name: detail.name,
-                            description: detail.description ?? "",
-                            category: detail.category,
-                            defaultMarkup: detail.defaultMarkup,
-                          });
-                          setEditingHeader(true);
-                        }}
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                        Edit
-                      </Button>
                     </div>
-                  )}
-                </div>
-              </Card>
-
-              {/* Tiers */}
-              <Card>
-                <CardHeader className="flex items-center justify-between">
-                  <CardTitle className="text-sm">Tiers</CardTitle>
-                  <div className="flex gap-2">
-                    {detail.autoCalculate && detail.tiers.length > 0 && (
-                      <Button size="sm" variant="ghost" onClick={handleAutoCalculate}>
-                        <Calculator className="h-3.5 w-3.5" />
-                        Auto-Calculate
-                      </Button>
+                    {showAddTier && (
+                      <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
+                        <div className="flex-1">
+                          <label className="text-[10px] font-medium text-fg/40 uppercase">Name</label>
+                          <Input className="mt-1 h-8 text-xs" value={newTierName} onChange={(e) => setNewTierName(e.target.value)} placeholder="e.g. Overtime" onKeyDown={(e) => e.key === "Enter" && handleAddTier()} />
+                        </div>
+                        <div className="w-24">
+                          <label className="text-[10px] font-medium text-fg/40 uppercase">Multiplier</label>
+                          <Input className="mt-1 h-8 text-xs" type="number" step="0.1" value={newTierMultiplier} onChange={(e) => setNewTierMultiplier(e.target.value)} />
+                        </div>
+                        <Button size="xs" onClick={handleAddTier} disabled={!newTierName.trim()}>Add</Button>
+                        <Button size="xs" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); }}><X className="h-3 w-3" /></Button>
+                      </div>
                     )}
-                    <Button size="sm" variant="ghost" onClick={() => setShowAddTier(true)}>
-                      <Plus className="h-3.5 w-3.5" />
-                      Add Tier
-                    </Button>
-                  </div>
-                </CardHeader>
-                <div className="px-5 pb-4">
-                  {showAddTier && (
-                    <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
-                      <div className="flex-1">
-                        <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
-                        <Input
-                          className="mt-1"
-                          value={newTierName}
-                          onChange={(e) => setNewTierName(e.target.value)}
-                          placeholder="e.g. Overtime"
-                          onKeyDown={(e) => e.key === "Enter" && handleAddTier()}
-                        />
-                      </div>
-                      <div className="w-28">
-                        <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Multiplier</label>
-                        <Input
-                          className="mt-1"
-                          type="number"
-                          step="0.1"
-                          value={newTierMultiplier}
-                          onChange={(e) => setNewTierMultiplier(e.target.value)}
-                        />
-                      </div>
-                      <Button size="sm" onClick={handleAddTier} disabled={!newTierName.trim()}>Add</Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); }}>
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  )}
-                  {detail.tiers.length === 0 ? (
-                    <p className="text-xs text-fg/40 py-2">No tiers defined. Add tiers like Regular, Overtime, Double Time.</p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {detail.tiers
-                        .sort((a, b) => a.sortOrder - b.sortOrder)
-                        .map((tier) => (
-                          <div
-                            key={tier.id}
-                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group"
-                          >
-                            <span className="text-sm font-medium text-fg">{tier.name}</span>
+                    {detail.tiers.length === 0 ? (
+                      <p className="text-xs text-fg/30 py-2">No tiers. Add Regular, Overtime, Double Time, etc.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
+                          <div key={tier.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group">
+                            <span className="text-xs font-medium text-fg">{tier.name}</span>
                             <span className="text-[10px] text-fg/40">{tier.multiplier}×</span>
-                            <button
-                              onClick={() => handleDeleteTier(tier.id)}
-                              className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"
-                            >
-                              <X className="h-3 w-3" />
+                            <button onClick={() => handleDeleteTier(tier.id)} className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all">
+                              <X className="h-2.5 w-2.5" />
                             </button>
                           </div>
                         ))}
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              {/* Rate table */}
-              <Card>
-                <CardHeader className="flex items-center justify-between">
-                  <CardTitle className="text-sm">Items &amp; Rates</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={() => setShowAddItem(true)}>
-                    <Plus className="h-3.5 w-3.5" />
-                    Add Item
-                  </Button>
-                </CardHeader>
-                <div className="px-5 pb-4">
-                  <AnimatePresence>
-                    {showAddItem && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.15 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
-                          <div className="flex-1 min-w-0">
-                            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Item</label>
-                            <div className="mt-1">
-                              {loadedCatalogs.length > 0 ? (
-                                <CatalogItemPicker
-                                  catalogs={loadedCatalogs}
-                                  value={newItemForm.catalogItemId}
-                                  onSelect={handlePickerSelect}
-                                  allowFreeText
-                                  freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name}
-                                  onFreeTextChange={(val) =>
-                                    setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })
-                                  }
-                                  placeholder="Search catalog items..."
-                                />
-                              ) : (
-                                <Input
-                                  value={newItemForm.name}
-                                  onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })}
-                                  placeholder="e.g. Journeyman Pipefitter"
-                                  onKeyDown={(e) => e.key === "Enter" && handleAddItem()}
-                                />
-                              )}
-                            </div>
-                          </div>
-                          <div className="w-24">
-                            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Code</label>
-                            <Input
-                              className="mt-1"
-                              value={newItemForm.code}
-                              onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })}
-                              placeholder="JP-01"
-                            />
-                          </div>
-                          <div className="w-20">
-                            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Unit</label>
-                            <Select
-                              className="mt-1"
-                              value={newItemForm.unit}
-                              onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}
-                            >
-                              {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (
-                                <option key={u} value={u}>{u}</option>
-                              ))}
-                            </Select>
-                          </div>
-                          <Button size="sm" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
-                          <Button size="sm" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </motion.div>
+                      </div>
                     )}
-                  </AnimatePresence>
+                  </div>
 
-                  {detail.items.length === 0 ? (
-                    <EmptyState>No items yet. Add rate items to this schedule.</EmptyState>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-line">
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-20">Code</th>
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider min-w-[140px]">Name</th>
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-14">Unit</th>
-                            {detail.tiers
-                              .sort((a, b) => a.sortOrder - b.sortOrder)
-                              .map((tier) => (
-                                <th key={tier.id} className="text-right py-2 px-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-24" colSpan={1}>
+                  {/* Items & Rates */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
+                      <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
+                    </div>
+                    <AnimatePresence>
+                      {showAddItem && (
+                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
+                          <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
+                            <div className="flex-1 min-w-0">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
+                              <div className="mt-1">
+                                {loadedCatalogs.length > 0 ? (
+                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items..." />
+                                ) : (
+                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
+                                )}
+                              </div>
+                            </div>
+                            <div className="w-20">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
+                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
+                            </div>
+                            <div className="w-16">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
+                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
+                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
+                              </Select>
+                            </div>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
+                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {detail.items.length === 0 ? (
+                      <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-line">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-line bg-panel2/30">
+                              <th className="text-left py-2 px-3 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-16">Code</th>
+                              <th className="text-left py-2 px-3 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
+                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-12">Unit</th>
+                              {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
+                                <th key={tier.id} className="text-right py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-24">
                                   <div>{tier.name}</div>
-                                  <div className="text-[9px] font-normal text-fg/25">sell / cost</div>
+                                  <div className="text-[9px] font-normal text-fg/20">sell / cost</div>
                                 </th>
                               ))}
-                            <th className="w-8" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detail.items
-                            .sort((a, b) => a.sortOrder - b.sortOrder)
-                            .map((item) => (
+                              <th className="w-8" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
                               <tr key={item.id} className="border-b border-line/50 hover:bg-panel2/20 group">
-                                <td className="py-2 pr-3 text-fg/60 font-mono text-xs">{item.code || "—"}</td>
-                                <td className="py-2 pr-3 text-fg font-medium">{item.name}</td>
-                                <td className="py-2 pr-3 text-fg/50 text-xs">{item.unit}</td>
-                                {detail.tiers
-                                  .sort((a, b) => a.sortOrder - b.sortOrder)
-                                  .map((tier) => (
-                                    <td key={tier.id} className="py-1 px-1">
-                                      <div className="flex flex-col items-end gap-0.5">
-                                        {/* Sell rate */}
-                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
-                                          <input
-                                            type="number"
-                                            step="0.01"
-                                            className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"
-                                            value={editValue}
-                                            onChange={(e) => setEditValue(e.target.value)}
-                                            onBlur={() => saveRateEdit(item)}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") saveRateEdit(item);
-                                              if (e.key === "Escape") setEditingCell(null);
-                                            }}
-                                            autoFocus
-                                          />
-                                        ) : (
-                                          <button
-                                            onClick={() => startRateEdit(item, tier.id)}
-                                            className="text-right text-xs text-fg/80 hover:text-accent px-1 py-0.5 rounded hover:bg-accent/5 transition-colors w-20"
-                                          >
-                                            {fmt(item.rates?.[tier.id])}
-                                          </button>
-                                        )}
-                                        {/* Cost rate */}
-                                        {editingCostCell?.itemId === item.id && editingCostCell?.tierId === tier.id ? (
-                                          <input
-                                            type="number"
-                                            step="0.01"
-                                            className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-emerald-500/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                                            value={editCostValue}
-                                            onChange={(e) => setEditCostValue(e.target.value)}
-                                            onBlur={() => saveCostEdit(item)}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") saveCostEdit(item);
-                                              if (e.key === "Escape") setEditingCostCell(null);
-                                            }}
-                                            autoFocus
-                                          />
-                                        ) : (
-                                          <button
-                                            onClick={() => startCostEdit(item, tier.id)}
-                                            className="text-right text-[10px] text-fg/40 hover:text-emerald-400 px-1 py-0.5 rounded hover:bg-emerald-500/5 transition-colors w-20"
-                                          >
-                                            {fmt(item.costRates?.[tier.id])}
-                                          </button>
-                                        )}
-                                      </div>
-                                    </td>
-                                  ))}
-                                <td className="py-2 text-right">
-                                  <button
-                                    onClick={() => handleDeleteItem(item.id)}
-                                    className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </button>
+                                <td className="py-2 px-3 text-fg/50 font-mono">{item.code || "—"}</td>
+                                <td className="py-2 px-3 text-fg font-medium">{item.name}</td>
+                                <td className="py-2 px-2 text-fg/50">{item.unit}</td>
+                                {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
+                                  <td key={tier.id} className="py-1 px-1">
+                                    <div className="flex flex-col items-end gap-0.5">
+                                      {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
+                                        <input type="number" step="0.01" className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => saveRateEdit(item)} onKeyDown={(e) => { if (e.key === "Enter") saveRateEdit(item); if (e.key === "Escape") setEditingCell(null); }} autoFocus />
+                                      ) : (
+                                        <button onClick={() => startRateEdit(item, tier.id)} className="text-right text-xs text-fg/80 hover:text-accent px-1 py-0.5 rounded hover:bg-accent/5 transition-colors w-20">{fmt(item.rates?.[tier.id])}</button>
+                                      )}
+                                      {editingCostCell?.itemId === item.id && editingCostCell?.tierId === tier.id ? (
+                                        <input type="number" step="0.01" className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-emerald-500/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500/50" value={editCostValue} onChange={(e) => setEditCostValue(e.target.value)} onBlur={() => saveCostEdit(item)} onKeyDown={(e) => { if (e.key === "Enter") saveCostEdit(item); if (e.key === "Escape") setEditingCostCell(null); }} autoFocus />
+                                      ) : (
+                                        <button onClick={() => startCostEdit(item, tier.id)} className="text-right text-[10px] text-fg/40 hover:text-emerald-400 px-1 py-0.5 rounded hover:bg-emerald-500/5 transition-colors w-20">{fmt(item.costRates?.[tier.id])}</button>
+                                      )}
+                                    </div>
+                                  </td>
+                                ))}
+                                <td className="py-2 px-1 text-right">
+                                  <button onClick={() => handleDeleteItem(item.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"><Trash2 className="h-3 w-3" /></button>
                                 </td>
                               </tr>
                             ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </Card>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </motion.div>
+        )}
+      </AnimatePresence>,
+      document.body)}
     </div>
   );
 }

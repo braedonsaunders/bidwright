@@ -262,6 +262,7 @@ export interface WorksheetItemPatchInput {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export interface CreateWorksheetItemInput {
@@ -283,6 +284,7 @@ export interface CreateWorksheetItemInput {
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  sourceNotes?: string;
 }
 
 export interface CreateWorksheetInput {
@@ -729,6 +731,7 @@ function mapWorksheetItem(i: any): WorksheetItem {
     rateScheduleItemId: i.rateScheduleItemId ?? null,
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
+    sourceNotes: i.sourceNotes ?? "",
   };
 }
 
@@ -995,6 +998,24 @@ function mapUser(u: any): User {
     lastLoginAt: toISOString(u.lastLoginAt),
     createdAt: toISO(u.createdAt),
     updatedAt: toISO(u.updatedAt),
+  };
+}
+
+function mapPersona(row: any): any {
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    name: row.name,
+    trade: row.trade,
+    description: row.description,
+    systemPrompt: row.systemPrompt,
+    knowledgeBookIds: Array.isArray(row.knowledgeBookIds) ? row.knowledgeBookIds : JSON.parse(row.knowledgeBookIds || "[]"),
+    datasetTags: Array.isArray(row.datasetTags) ? row.datasetTags : JSON.parse(row.datasetTags || "[]"),
+    isDefault: row.isDefault,
+    enabled: row.enabled,
+    order: row.order,
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
   };
 }
 
@@ -2202,6 +2223,7 @@ export class PrismaApiStore {
       rateScheduleItemId: input.rateScheduleItemId ?? null,
       itemId: input.itemId ?? null,
       tierUnits: input.tierUnits ?? {},
+      sourceNotes: input.sourceNotes ?? "",
     };
 
     const revisionSchedules = await this.db.rateSchedule.findMany({
@@ -2432,6 +2454,7 @@ export class PrismaApiStore {
         rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
         itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},
+        sourceNotes: domainItem.sourceNotes ?? "",
       },
     });
 
@@ -6029,6 +6052,73 @@ export class PrismaApiStore {
       orderBy: { startDate: "desc" },
     });
     return { entries, burdenPeriods: periods.map(mapBurdenPeriod) };
+  }
+
+  // ── Estimator Persona CRUD ──────────────────────────────────────────────
+
+  async listEstimatorPersonas(): Promise<any[]> {
+    const rows = await this.db.estimatorPersona.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { order: "asc" },
+    });
+    return rows.map(mapPersona);
+  }
+
+  async getEstimatorPersona(id: string): Promise<any | null> {
+    const row = await this.db.estimatorPersona.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    return row ? mapPersona(row) : null;
+  }
+
+  async createEstimatorPersona(input: {
+    name: string;
+    trade?: string;
+    description?: string;
+    systemPrompt?: string;
+    knowledgeBookIds?: string[];
+    datasetTags?: string[];
+    isDefault?: boolean;
+    enabled?: boolean;
+    order?: number;
+  }): Promise<any> {
+    const row = await this.db.estimatorPersona.create({
+      data: {
+        organizationId: this.organizationId,
+        name: input.name,
+        trade: input.trade ?? "mechanical",
+        description: input.description ?? "",
+        systemPrompt: input.systemPrompt ?? "",
+        knowledgeBookIds: input.knowledgeBookIds ?? [],
+        datasetTags: input.datasetTags ?? [],
+        isDefault: input.isDefault ?? false,
+        enabled: input.enabled ?? true,
+        order: input.order ?? 0,
+      },
+    });
+    return mapPersona(row);
+  }
+
+  async updateEstimatorPersona(id: string, patch: {
+    name?: string;
+    trade?: string;
+    description?: string;
+    systemPrompt?: string;
+    knowledgeBookIds?: string[];
+    datasetTags?: string[];
+    isDefault?: boolean;
+    enabled?: boolean;
+    order?: number;
+  }): Promise<any> {
+    const row = await this.db.estimatorPersona.update({
+      where: { id },
+      data: patch,
+    });
+    return mapPersona(row);
+  }
+
+  async deleteEstimatorPersona(id: string): Promise<void> {
+    await this.db.estimatorPersona.delete({ where: { id } });
   }
 }
 

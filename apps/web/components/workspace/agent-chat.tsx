@@ -7,6 +7,7 @@ import { Badge, Button, Select } from "@/components/ui";
 import {
   startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
+  listPersonas, type EstimatorPersona,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { isVisionTool, VisionToolWidget, ProgressIndicator } from "./vision-chat-widgets";
@@ -313,6 +314,8 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [docsExpanded, setDocsExpanded] = useState(false);
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
   const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
+  const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
   const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -339,6 +342,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           if (result.claude.available) setCliRuntime("claude-code");
           else if (result.codex.available) setCliRuntime("codex");
         }
+      }).catch(() => {}),
+      listPersonas().then((list) => {
+        const enabled = list.filter(p => p.enabled);
+        setPersonas(enabled);
+        const defaultP = enabled.find(p => p.isDefault);
+        if (defaultP) setSelectedPersonaId(defaultP.id);
       }).catch(() => {}),
     ]).finally(() => setSettingsReady(true));
   }, []);
@@ -588,7 +597,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         // CLI-based intake (preferred)
         // Use the agent-specific model, not the legacy LLM model setting
         const cliModel = cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4";
-        const result = await startCliSession({ projectId, runtime: cliRuntime, model: cliModel });
+        const result = await startCliSession({ projectId, runtime: cliRuntime, model: cliModel, personaId: selectedPersonaId || undefined });
         setIntakeSessionId(result.sessionId);
         setIntakeStatus({
           sessionId: result.sessionId, projectId, scope: "", status: "running",
@@ -950,6 +959,31 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             {/* Start button — show when no active intake */}
             {messages.length === 0 && !intakeStatus && (
               <div className="space-y-3">
+                {/* Persona selection */}
+                {personas.length > 0 && (
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                      Estimator Persona
+                    </label>
+                    <Select
+                      className="h-8 text-xs"
+                      value={selectedPersonaId ?? ""}
+                      onChange={(e) => setSelectedPersonaId(e.target.value || null)}
+                    >
+                      <option value="">No persona (generic estimator)</option>
+                      {personas.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {p.trade}
+                        </option>
+                      ))}
+                    </Select>
+                    {selectedPersonaId && (
+                      <div className="text-[10px] text-fg/30 leading-tight">
+                        {personas.find(p => p.id === selectedPersonaId)?.description || "Custom estimation persona"}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   onClick={handleStartIntake}
                   disabled={intakeLoading}
