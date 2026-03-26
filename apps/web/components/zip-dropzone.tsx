@@ -1,12 +1,48 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
-import { FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
+import { ChevronDown, FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
+import * as RadixSelect from "@radix-ui/react-select";
 import type { Customer, ProjectListItem } from "@/lib/api";
 import { submitPackageIngest, getCustomers, createCustomer } from "@/lib/api";
-import { Badge, Button, Card, CardBody, Input, Label, Select, Textarea } from "@/components/ui";
+import { Badge, Button, Card, CardBody, Input, Label, Textarea } from "@/components/ui";
 import { cn } from "@/lib/utils";
+
+/* ── Radix styled select ── */
+function StyledSelect({ value, onValueChange, placeholder, children }: {
+  value: string;
+  onValueChange: (val: string) => void;
+  placeholder?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <RadixSelect.Root value={value || undefined} onValueChange={onValueChange}>
+      <RadixSelect.Trigger className="inline-flex items-center justify-between gap-1.5 h-9 w-full px-3 text-sm rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors">
+        <RadixSelect.Value placeholder={placeholder ?? "Select..."} />
+        <RadixSelect.Icon className="shrink-0">
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </RadixSelect.Icon>
+      </RadixSelect.Trigger>
+      <RadixSelect.Portal>
+        <RadixSelect.Content className="z-[300] rounded-lg border border-line bg-panel shadow-xl min-w-[var(--radix-select-trigger-width)] max-h-[300px]" position="popper" sideOffset={4}>
+          <RadixSelect.Viewport className="p-1">
+            {children}
+          </RadixSelect.Viewport>
+        </RadixSelect.Content>
+      </RadixSelect.Portal>
+    </RadixSelect.Root>
+  );
+}
+
+function SelectItem({ value, children }: { value: string; children: React.ReactNode }) {
+  return (
+    <RadixSelect.Item value={value} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
+      <RadixSelect.ItemIndicator className="shrink-0 w-3"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
+      <RadixSelect.ItemText>{children}</RadixSelect.ItemText>
+    </RadixSelect.Item>
+  );
+}
 
 export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const router = useRouter();
@@ -167,14 +203,14 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
         <div className="space-y-3">
           <div>
             <Label>Destination</Label>
-            <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">New project</option>
+            <StyledSelect value={projectId || "__new__"} onValueChange={(v) => setProjectId(v === "__new__" ? "" : v)} placeholder="New project">
+              <SelectItem value="__new__">New project</SelectItem>
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}{p.quote ? ` (${p.quote.quoteNumber})` : ""}
-                </option>
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}{(p as any).quote ? ` (${(p as any).quote.quoteNumber})` : ""}
+                </SelectItem>
               ))}
-            </Select>
+            </StyledSelect>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -202,12 +238,13 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                 </div>
               ) : (
                 <div className="flex gap-1.5">
-                  <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="flex-1">
-                    <option value="">Select client...</option>
-                    {customerOptions.filter((c) => c.active).map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</option>
-                    ))}
-                  </Select>
+                  <div className="flex-1">
+                    <StyledSelect value={customerId} onValueChange={setCustomerId} placeholder="Select client...">
+                      {customerOptions.filter((c) => c.active).map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</SelectItem>
+                      ))}
+                    </StyledSelect>
+                  </div>
                   <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
                     <Plus className="h-3 w-3" />
                   </Button>
