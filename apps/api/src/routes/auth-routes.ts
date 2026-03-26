@@ -8,6 +8,7 @@ import {
   revokeSession,
   validateSession,
 } from "../services/auth-service.js";
+import { clearSessionCookie, getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
 
 // ---------------------------------------------------------------------------
 // Helper: strip passwordHash from user records
@@ -16,6 +17,10 @@ import {
 function safeUser(user: any) {
   const { passwordHash, ...rest } = user;
   return rest;
+}
+
+function orgSettingsPayload(orgName: string) {
+  return { companyName: orgName };
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +69,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         organizationId: firstOrg?.id,
         userAgent: request.headers["user-agent"] ?? "",
       });
+      setSessionCookie(reply, token);
 
       return {
         token,
@@ -106,6 +112,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         organizationId: targetUser.organizationId,
         userAgent: request.headers["user-agent"] ?? "",
       });
+      setSessionCookie(reply, superToken);
       return {
         ...(result as any),
         token: superToken,
@@ -147,7 +154,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       await tx.organizationSettings.create({
         data: {
           organizationId: org.id,
-          general: JSON.stringify({ companyName: orgName }),
+          general: orgSettingsPayload(orgName),
         },
       });
 
@@ -170,6 +177,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       organizationId: result.org.id,
       userAgent: request.headers["user-agent"] ?? "",
     });
+    setSessionCookie(reply, token);
 
     await prisma.user.update({
       where: { id: result.user.id },
@@ -205,6 +213,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       superAdminId: admin.id,
       userAgent: request.headers["user-agent"] ?? "",
     });
+    setSessionCookie(reply, token);
 
     return {
       token,
@@ -215,16 +224,20 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // ── POST /api/auth/logout ──────────────────────────────────────────────
   fastify.post("/api/auth/logout", async (request: FastifyRequest, reply: FastifyReply) => {
     const headerToken = (request.headers.authorization ?? "").replace("Bearer ", "");
+    const cookieToken = getSessionCookieToken(request);
     const { token: bodyToken } = (request.body as { token?: string }) ?? {};
-    const resolvedToken = bodyToken || headerToken;
-    if (!resolvedToken) return reply.code(400).send({ error: "Token is required" });
+    const resolvedToken = bodyToken || headerToken || cookieToken;
+    clearSessionCookie(reply);
+    if (!resolvedToken) return { ok: true };
     await revokeSession(prisma, resolvedToken);
     return { ok: true };
   });
 
   // ── GET /api/auth/me ───────────────────────────────────────────────────
   fastify.get("/api/auth/me", async (request: FastifyRequest, reply: FastifyReply) => {
-    const token = (request.headers.authorization ?? "").replace("Bearer ", "");
+    const token =
+      getSessionCookieToken(request) ||
+      (request.headers.authorization ?? "").replace("Bearer ", "");
     if (!token) return reply.code(401).send({ error: "Not authenticated" });
 
     const validated = await validateSession(prisma, token);
@@ -317,7 +330,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         await tx.organizationSettings.create({
           data: {
             organizationId: org.id,
-            general: JSON.stringify({ companyName: orgName }),
+            general: orgSettingsPayload(orgName),
           },
         });
         // Create an admin user in the org with the same credentials
@@ -342,6 +355,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       organizationId: result.org?.id,
       userAgent: request.headers["user-agent"] ?? "",
     });
+    setSessionCookie(reply, token);
 
     reply.code(201);
     return {
@@ -439,7 +453,9 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // Revoke current session
-    const currentToken = (request.headers.authorization ?? "").replace("Bearer ", "");
+    const currentToken =
+      getSessionCookieToken(request) ||
+      (request.headers.authorization ?? "").replace("Bearer ", "");
     if (currentToken) {
       await revokeSession(prisma, currentToken);
     }
@@ -450,6 +466,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       organizationId: targetUser.organizationId,
       userAgent: request.headers["user-agent"] ?? "",
     });
+    setSessionCookie(reply, token);
 
     return {
       token,
@@ -545,6 +562,7 @@ async function loginUser(
     organizationId: user.organizationId,
     userAgent: request.headers["user-agent"] ?? "",
   });
+  setSessionCookie(reply, token);
 
   await prisma.user.update({
     where: { id: user.id },

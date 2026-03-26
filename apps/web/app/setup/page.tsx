@@ -30,7 +30,7 @@ export default function SetupPage() {
   const [slugEdited, setSlugEdited] = useState(false);
 
   // Result from init
-  const [setupResult, setSetupResult] = useState<{ token: string; organization: { id: string; name: string; slug: string } | null } | null>(null);
+  const [setupResult, setSetupResult] = useState<{ organization: { id: string; name: string; slug: string } | null } | null>(null);
 
   // Seed state
   const [seeding, setSeeding] = useState(false);
@@ -62,11 +62,7 @@ export default function SetupPage() {
         orgSlug: orgSlug || undefined,
       });
 
-      localStorage.setItem("bw_token", result.token);
-      if (result.organization) {
-        localStorage.setItem("bw_org", JSON.stringify(result.organization));
-      }
-      setSetupResult(result);
+      setSetupResult({ organization: result.organization });
       await refreshUser();
 
       // Always seed entity categories for the org (required for app to function)

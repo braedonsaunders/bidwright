@@ -6,6 +6,7 @@ import {
   revokeSession,
 } from "../services/auth-service.js";
 import { datasetLibrary, catalogLibrary } from "../prisma-store.js";
+import { getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
 
 // ---------------------------------------------------------------------------
 // Guard: require super admin
@@ -87,7 +88,7 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       await tx.organizationSettings.create({
         data: {
           organizationId: org.id,
-          general: JSON.stringify({ companyName: name }),
+          general: { companyName: name },
         },
       });
 
@@ -393,6 +394,7 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       organizationId: org.id,
       userAgent: request.headers["user-agent"] ?? "",
     });
+    setSessionCookie(reply, token);
 
     return {
       token,
@@ -404,10 +406,18 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post("/api/admin/stop-impersonation", async (request, reply) => {
     if (!requireSuperAdmin(request, reply)) return;
 
-    const headerToken = (request.headers.authorization ?? "").replace("Bearer ", "");
-    if (headerToken) {
-      await revokeSession(prisma, headerToken);
+    const currentToken =
+      getSessionCookieToken(request) ||
+      (request.headers.authorization ?? "").replace("Bearer ", "");
+    if (currentToken) {
+      await revokeSession(prisma, currentToken);
     }
+
+    const token = await createSuperAdminSession(prisma, {
+      superAdminId: request.user!.id,
+      userAgent: request.headers["user-agent"] ?? "",
+    });
+    setSessionCookie(reply, token);
 
     return { ok: true };
   });

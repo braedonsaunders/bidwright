@@ -280,7 +280,7 @@ function getLaborColumnLabel(
   if (!category) {
     return column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3";
   }
-  const map = { unit1: "reg", unit2: "over", unit3: "double" } as const;
+  const map = { unit1: "unit1", unit2: "unit2", unit3: "unit3" } as const;
   const label = category.unitLabels[map[column]];
   return label || (column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3");
 }

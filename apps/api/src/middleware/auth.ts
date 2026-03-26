@@ -3,6 +3,7 @@ import fp from "fastify-plugin";
 import { prisma } from "@bidwright/db";
 import { createApiStore, type PrismaApiStore } from "../prisma-store.js";
 import { validateSession } from "../services/auth-service.js";
+import { getSessionCookieToken } from "../services/session-cookie.js";
 
 // ---------------------------------------------------------------------------
 // Type augmentation — every request gets user + org-scoped store
@@ -36,11 +37,27 @@ const PUBLIC_EXACT_ROUTES = [
   "/api/setup/seed-essentials",
 ];
 
+const SUPER_ADMIN_NO_ORG_ROUTES = [
+  "/api/auth/me",
+  "/api/auth/logout",
+  "/api/auth/profile",
+  "/api/auth/organizations",
+  "/api/auth/switch-org",
+];
+
 function isPublicRoute(url: string): boolean {
   // Strip query string for matching
   const path = url.split("?")[0];
   if (PUBLIC_EXACT_ROUTES.includes(path)) return true;
   return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function requiresOrganizationContext(url: string): boolean {
+  const path = url.split("?")[0];
+  if (isPublicRoute(path)) return false;
+  if (path.startsWith("/api/admin/")) return false;
+  if (SUPER_ADMIN_NO_ORG_ROUTES.includes(path)) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,13 +75,12 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
     }
 
     const authHeader = request.headers.authorization;
-    // Also support ?token= query param for img/embed URLs that can't send headers
-    const queryToken = (request.query as Record<string, string>)?.token;
-    if (!authHeader?.startsWith("Bearer ") && !queryToken) {
-      return reply.code(401).send({ error: "Missing or invalid Authorization header" });
+    const cookieToken = getSessionCookieToken(request);
+    if (!authHeader?.startsWith("Bearer ") && !cookieToken) {
+      return reply.code(401).send({ error: "Missing session" });
     }
 
-    const token = queryToken || authHeader!.slice(7);
+    const token = cookieToken || authHeader!.slice(7);
     const validated = await validateSession(prisma, token);
 
     if (!validated) {
@@ -112,6 +128,10 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
       request.store = null;
     } else {
       return reply.code(401).send({ error: "Invalid session" });
+    }
+
+    if (!request.store && requiresOrganizationContext(request.url)) {
+      return reply.code(403).send({ error: "Select an organization before accessing this route" });
     }
   });
 }
