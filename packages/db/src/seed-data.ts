@@ -349,6 +349,12 @@ const PERSONAS = [
 - Leak test documentation, data recorder setup, drain-down time
 - Pneumatic testing (N2/air) requires safety perimeter and is slower
 
+### Rate Schedule Imports (MANDATORY)
+- ALWAYS import BOTH a labour rate schedule AND an equipment rate schedule for the project area
+- Labour: hourly rates for journeymen, apprentices, foremen, superintendents
+- Equipment: daily/weekly rates for lifts, cranes, welding machines, compressors, scaffolding, etc.
+- If no equipment schedule exists, flag it and create equipment items with estimated rental rates
+
 ### What to Search For in Knowledge
 - Base welding/fitting rates by NPS and schedule
 - Valve installation hours by type and size
