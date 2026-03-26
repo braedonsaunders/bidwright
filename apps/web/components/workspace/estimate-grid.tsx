@@ -1542,7 +1542,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
   // ─── Render cell helpers ───
 
-  /** Combined units cell — shows unit1 · unit2 · unit3 inline */
+  /** Combined units cell — shows unit1 · unit2 · unit3 inline, each editable */
   function renderUnitsCell(row: WorkspaceWorksheetItem) {
     const catDef = findCategoryForRow(row, entityCategories);
     const hasAutoLabour = catDef?.calculationType === "auto_labour";
@@ -1558,10 +1558,11 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       if (isEditing) {
         return (
           <input
+            key={field}
             ref={(el) => { editInputRef.current = el; }}
             type="number"
             step="0.01"
-            className="w-12 text-center rounded border border-accent/50 bg-bg px-0.5 py-0.5 text-[11px] outline-none tabular-nums"
+            className="w-14 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}
@@ -1572,31 +1573,43 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       }
       if (disabled) {
         return (
-          <span className="tabular-nums text-[11px] text-fg/30 italic" title={label}>
+          <span key={field} className="tabular-nums text-xs text-fg/30 italic px-1" title={label}>
             {value || "–"}
           </span>
         );
       }
       return (
-        <button
-          className="tabular-nums text-[11px] px-1 py-0.5 rounded hover:bg-accent/5 hover:text-accent transition-colors min-w-[28px] text-center"
-          title={label}
-          onClick={() => startEditing(row.id, field, value)}
+        <span
+          key={field}
+          role="button"
+          tabIndex={0}
+          className="tabular-nums text-xs px-1.5 py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors min-w-[32px] text-center inline-block"
+          title={`Click to edit ${label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            startEditing(row.id, field, value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              startEditing(row.id, field, value);
+            }
+          }}
         >
           {value || <span className="text-fg/20">–</span>}
-        </button>
+        </span>
       );
     };
 
     return (
       <td className="border-b border-line px-1 py-0.5">
-        <div className="flex items-center justify-center gap-px">
+        <div className="flex items-center justify-center gap-0">
           {renderUnitSlot("unit1", row.unit1, "Unit 1")}
           {hasAutoLabour && (
             <>
-              <span className="text-fg/15 text-[10px] mx-px">·</span>
+              <span className="text-fg/15 text-[9px] select-none">·</span>
               {renderUnitSlot("unit2", row.unit2, "Unit 2")}
-              <span className="text-fg/15 text-[10px] mx-px">·</span>
+              <span className="text-fg/15 text-[9px] select-none">·</span>
               {renderUnitSlot("unit3", row.unit3, "Unit 3")}
             </>
           )}
