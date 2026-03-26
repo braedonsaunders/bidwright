@@ -267,28 +267,29 @@ export async function spawnSession(opts: {
 
   // Note: .claude/ directory was already cleaned and recreated with settings.json above
 
-  // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
-  // On Windows, shell:true is required to execute .cmd wrappers (e.g. claude.cmd)
-  // MCP config is passed as a file path (not inline JSON) so shell escaping is safe
-  // Debug: write spawn info to file for diagnostics
-  const debugInfo = { cmd: cliCmd, args: cliArgs, cwd: projectDir, shell: process.platform === "win32", envKeys: Object.keys(cliEnv) };
-  console.log(`[cli:spawn:v3] ${JSON.stringify(debugInfo)}`);
-  await writeFile(join(projectDir, ".spawn-debug.json"), JSON.stringify(debugInfo, null, 2));
+  // On Windows, write prompt to a temp file and use file-based approach
+  // to avoid cmd.exe issues with special characters in arguments.
+  // Then spawn with shell:true since .cmd files require it.
+  if (isWin) {
+    // Write prompt to file, replace -p arg with file-based approach
+    const promptFile = join(projectDir, ".bidwright-prompt.txt");
+    const promptIdx = cliArgs.indexOf("-p");
+    if (promptIdx >= 0 && promptIdx + 1 < cliArgs.length) {
+      await writeFile(promptFile, cliArgs[promptIdx + 1]);
+      // Replace multiline prompt with a simple one-liner that references the file
+      cliArgs[promptIdx + 1] = "Follow the instructions in .bidwright-prompt.txt exactly.";
+    }
+  }
+
+  console.log(`[cli:spawn] cmd=${cliCmd} cwd=${projectDir} argCount=${cliArgs.length} shell=${isWin}`);
 
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: isWin,
   });
-  console.log(`[cli:spawn:v3] pid=${child.pid} killed=${child.killed} exitCode=${child.exitCode}`);
-
-  // Detect immediate failure
-  if (!child.pid) {
-    console.error(`[cli:spawn:v3] FAILED - no PID assigned. This usually means the command was not found.`);
-  }
-  child.on("error", (err) => console.error(`[cli:spawn:v3:error] ${err.message}`));
-  child.on("exit", (code, signal) => console.log(`[cli:spawn:v3:exit] code=${code} signal=${signal}`));
+  console.log(`[cli:spawn] pid=${child.pid}`);
 
   const events = new EventEmitter();
   const session: CliSession = {
