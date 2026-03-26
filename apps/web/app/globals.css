@@ -107,17 +107,3 @@ table {
   border-collapse: collapse;
 }
 
-/* Force text selectability — must come after Tailwind utilities to win specificity */
-@layer utilities {
-  .select-text-override {
-    -webkit-user-select: text !important;
-    user-select: text !important;
-  }
-}
-
-/* Global: ensure all text is selectable by default.
-   This overrides any Tailwind preflight that might set user-select: none. */
-body {
-  -webkit-user-select: text;
-  user-select: text;
-}

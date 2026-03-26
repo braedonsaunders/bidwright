@@ -15,6 +15,9 @@ export interface TakeoffAnnotation {
   points: Point[];
   visible: boolean;
   groupName?: string;
+  /** Canvas dimensions when this annotation was created — used to scale points on zoom */
+  canvasWidth?: number;
+  canvasHeight?: number;
   opts?: {
     dropDistance?: number;
     wallHeight?: number;
@@ -328,9 +331,20 @@ export function AnnotationCanvas({
 
     ctx.clearRect(0, 0, width, height);
 
-    /* Render stored annotations */
+    /* Render stored annotations — scale points if created at different canvas size */
     for (const ann of annotations) {
-      renderAnnotation(ctx, ann, calibration);
+      if (ann.canvasWidth && ann.canvasHeight && (ann.canvasWidth !== width || ann.canvasHeight !== height)) {
+        const sx = width / ann.canvasWidth;
+        const sy = height / ann.canvasHeight;
+        const scaled: TakeoffAnnotation = {
+          ...ann,
+          points: ann.points.map((p) => ({ x: p.x * sx, y: p.y * sy })),
+          thickness: ann.thickness * Math.min(sx, sy),
+        };
+        renderAnnotation(ctx, scaled, calibration);
+      } else {
+        renderAnnotation(ctx, ann, calibration);
+      }
     }
 
     /* Render in-progress drawing */

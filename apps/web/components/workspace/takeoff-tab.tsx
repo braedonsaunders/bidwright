@@ -355,6 +355,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   const [autoCountResults, setAutoCountResults] = useState<VisionMatch[] | null>(null);
   const [autoCountSnippet, setAutoCountSnippet] = useState<string | null>(null);
   const [autoCountThreshold, setAutoCountThreshold] = useState(0.65);
+  const [autoCountModalOpen, setAutoCountModalOpen] = useState(false);
+  const [autoCountPending, setAutoCountPending] = useState<{
+    matches: VisionMatch[];
+    matchPoints: Point[];
+    totalCount: number;
+    snippetImage: string | null;
+  } | null>(null);
 
   /* Ask AI state */
   const [askAiRunning, setAskAiRunning] = useState(false);
@@ -606,6 +613,8 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       groupName: activeGroupName,
       opts: activeOpts,
       measurement: data.measurement,
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
     };
 
     setAnnotations((prev) => [...prev, newAnnotation]);
@@ -689,8 +698,6 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       setAutoCountSnippet(result.snippetImage ?? null);
 
       if (result.matches.length > 0) {
-        /* Python renders at 150 DPI → matches are in that space.
-           Scale back to the canvas size that was current when the user drew the box. */
         const imgW = result.imageWidth ?? capturedW;
         const imgH = result.imageHeight ?? capturedH;
         const sx = capturedW / imgW;
@@ -699,41 +706,20 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         const matchPoints: Point[] = result.matches.map((m) => {
           const centerX = m.rect.x + m.rect.width / 2;
           const centerY = m.rect.y + m.rect.height / 2;
-          return {
-            x: centerX * sx,
-            y: centerY * sy,
-          };
+          return { x: centerX * sx, y: centerY * sy };
         });
 
-        const countAnnotation: TakeoffAnnotation = {
-          id: crypto.randomUUID(),
-          type: "count",
-          label: `Auto Count (${result.totalCount} found)`,
-          color: "#22c55e",
-          thickness: 4,
-          points: matchPoints,
-          visible: true,
-          groupName: "Auto Count",
-          measurement: { value: result.totalCount, unit: "count" },
-        };
-
-        setAnnotations((prev) => [...prev, countAnnotation]);
-
-        // Persist
-        try {
-          const saved = await createTakeoffAnnotation(projectId, {
-            ...countAnnotation,
-            documentId: selectedDocId,
-            page,
-          });
-          if (saved?.id) {
-            setAnnotations((prev) =>
-              prev.map((a) => (a.id === countAnnotation.id ? { ...a, id: saved.id } : a))
-            );
-          }
-        } catch {
-          /* local annotation is fine */
-        }
+        // Show modal for user to accept/reject
+        setAutoCountPending({
+          matches: result.matches,
+          matchPoints,
+          totalCount: result.totalCount,
+          snippetImage: result.snippetImage ?? null,
+        });
+        setAutoCountModalOpen(true);
+      } else {
+        setToastMessage("No matching symbols found. Try adjusting the selection area.");
+        setToastType("error");
       }
     } catch (err) {
       console.error("Auto-count failed:", err);
@@ -819,6 +805,53 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     } finally {
       setAskAiCountRunning(false);
     }
+  }
+
+  async function handleAcceptAutoCount() {
+    if (!autoCountPending) return;
+    const countAnnotation: TakeoffAnnotation = {
+      id: crypto.randomUUID(),
+      type: "count",
+      label: `Auto Count (${autoCountPending.totalCount} found)`,
+      color: "#22c55e",
+      thickness: 4,
+      points: autoCountPending.matchPoints,
+      visible: true,
+      groupName: "Auto Count",
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
+      measurement: { value: autoCountPending.totalCount, unit: "count" },
+    };
+    setAnnotations((prev) => [...prev, countAnnotation]);
+    setAutoCountModalOpen(false);
+    setAutoCountPending(null);
+
+    // Persist
+    try {
+      const saved = await createTakeoffAnnotation(projectId, {
+        documentId: selectedDocId,
+        pageNumber: page,
+        annotationType: "count",
+        label: countAnnotation.label,
+        color: countAnnotation.color,
+        lineThickness: countAnnotation.thickness,
+        visible: true,
+        groupName: "Auto Count",
+        points: countAnnotation.points,
+        measurement: countAnnotation.measurement ?? {},
+      });
+      if (saved?.id) {
+        setAnnotations((prev) =>
+          prev.map((a) => (a.id === countAnnotation.id ? { ...a, id: saved.id } : a))
+        );
+      }
+    } catch { /* local is fine */ }
+  }
+
+  function handleRejectAutoCount() {
+    setAutoCountModalOpen(false);
+    setAutoCountPending(null);
+    setAutoCountResults(null);
   }
 
   function handleCloseAskAiModal() {
@@ -1563,6 +1596,44 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       )}
 
       {/* ─── Ask AI Slide-Up Panel ─── */}
+      {/* ─── Auto Count Results Modal ─── */}
+      {autoCountModalOpen && autoCountPending && (
+        <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
+          <Card className="border border-emerald-400/30 shadow-xl max-h-[50vh] flex flex-col">
+            <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
+              <ScanSearch className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span className="text-xs font-semibold text-fg flex-1">
+                Auto Count — {autoCountPending.totalCount} found
+              </span>
+              <button onClick={handleRejectAutoCount} className="text-fg/30 hover:text-fg/60 transition-colors">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex gap-3 px-4 py-3 overflow-y-auto flex-1 min-h-0">
+              {autoCountPending.snippetImage && (
+                <div className="shrink-0 flex items-start">
+                  <div className="rounded-md border border-line bg-white p-1.5">
+                    <img src={autoCountPending.snippetImage} alt="Template" className="h-16 w-16 object-contain" />
+                  </div>
+                </div>
+              )}
+              <div className="flex-1 min-w-0 text-xs space-y-2">
+                <p className="text-fg/70">
+                  Found <strong className="text-emerald-600">{autoCountPending.totalCount}</strong> matching symbols on this page.
+                </p>
+                <p className="text-fg/40">
+                  Accept to add count annotations, or reject to discard.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-line shrink-0">
+              <Button size="xs" variant="secondary" onClick={handleRejectAutoCount}>Reject</Button>
+              <Button size="xs" variant="accent" onClick={handleAcceptAutoCount}>Accept ({autoCountPending.totalCount})</Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {askAiModalOpen && askAiCropImage && (
         <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
           <Card className="border border-violet-300/30 shadow-xl max-h-[50vh] flex flex-col">
