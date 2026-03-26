@@ -160,7 +160,12 @@ export async function spawnSession(opts: {
   }
 
   const mcpServerPath = getMcpServerPath();
-  const mcpRunner = existsSync(mcpServerPath) && mcpServerPath.endsWith(".ts") ? "npx" : "node";
+  // On Windows, Claude CLI spawns MCP servers without shell:true,
+  // so we must use the .cmd wrapper for npx/node to be executable
+  const isWin = process.platform === "win32";
+  const npxCmd = isWin ? "npx.cmd" : "npx";
+  const nodeCmd = isWin ? "node.exe" : "node";
+  const mcpRunner = existsSync(mcpServerPath) && mcpServerPath.endsWith(".ts") ? npxCmd : nodeCmd;
   const mcpArgs = mcpServerPath.endsWith(".ts") ? ["tsx", mcpServerPath] : [mcpServerPath];
 
   // Environment for MCP server
