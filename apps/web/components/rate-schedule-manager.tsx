@@ -102,13 +102,10 @@ export function RateScheduleManager({
   }, [initialSchedules]);
 
   // Load catalogs with items if not provided
-  const [loadedCatalogs, setLoadedCatalogs] = useState<CatalogSummary[]>(catalogs);
+  const [loadedCatalogs, setLoadedCatalogs] = useState<CatalogSummary[]>([]);
   useEffect(() => {
-    if (catalogs.length > 0) {
-      setLoadedCatalogs(catalogs);
-      return;
-    }
-    getCatalogs().then(async (cats) => {
+    const baseCats = catalogs.length > 0 ? Promise.resolve(catalogs) : getCatalogs();
+    baseCats.then(async (cats) => {
       const withItems = await Promise.all(
         cats.map(async (cat) => {
           try {
@@ -141,6 +138,8 @@ export function RateScheduleManager({
   const [showAddTier, setShowAddTier] = useState(false);
   const [newTierName, setNewTierName] = useState("");
   const [newTierMultiplier, setNewTierMultiplier] = useState("1.0");
+  const [editingTierId, setEditingTierId] = useState<string | null>(null);
+  const [editTierForm, setEditTierForm] = useState({ name: "", multiplier: "1.0" });
   const [showAddItem, setShowAddItem] = useState(false);
   const [newItemForm, setNewItemForm] = useState({ name: "", code: "", unit: "HR", catalogItemId: null as string | null });
 
@@ -279,6 +278,23 @@ export function RateScheduleManager({
       }
     },
     [detail]
+  );
+
+  const handleSaveTierEdit = useCallback(
+    async () => {
+      if (!detail || !editingTierId) return;
+      const name = editTierForm.name.trim();
+      const multiplier = parseFloat(editTierForm.multiplier) || 1;
+      if (!name) return;
+      try {
+        const updated = await updateRateScheduleTier(detail.id, editingTierId, { name, multiplier });
+        setDetail(updated);
+        setEditingTierId(null);
+      } catch (err) {
+        console.error("Failed to update tier:", err);
+      }
+    },
+    [detail, editingTierId, editTierForm]
   );
 
   /* ─── Item CRUD ─── */
@@ -574,13 +590,23 @@ export function RateScheduleManager({
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
-                          <div key={tier.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group">
-                            <span className="text-xs font-medium text-fg">{tier.name}</span>
-                            <span className="text-[10px] text-fg/40">{tier.multiplier}×</span>
-                            <button onClick={() => handleDeleteTier(tier.id)} className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all">
-                              <X className="h-2.5 w-2.5" />
-                            </button>
-                          </div>
+                          editingTierId === tier.id ? (
+                            <div key={tier.id} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-accent/5 border border-accent/20">
+                              <Input className="h-6 w-24 text-xs" value={editTierForm.name} onChange={(e) => setEditTierForm({ ...editTierForm, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} autoFocus />
+                              <Input className="h-6 w-14 text-xs text-right" type="number" step="0.1" value={editTierForm.multiplier} onChange={(e) => setEditTierForm({ ...editTierForm, multiplier: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} />
+                              <span className="text-[10px] text-fg/40">×</span>
+                              <button onClick={handleSaveTierEdit} className="p-0.5 rounded hover:bg-accent/10 text-accent transition-colors"><Check className="h-3 w-3" /></button>
+                              <button onClick={() => setEditingTierId(null)} className="p-0.5 rounded hover:bg-panel2/60 text-fg/30 transition-colors"><X className="h-3 w-3" /></button>
+                            </div>
+                          ) : (
+                            <div key={tier.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group cursor-pointer hover:border-accent/30 transition-colors" onClick={() => { setEditingTierId(tier.id); setEditTierForm({ name: tier.name, multiplier: String(tier.multiplier) }); }}>
+                              <span className="text-xs font-medium text-fg">{tier.name}</span>
+                              <span className="text-[10px] text-fg/40">{tier.multiplier}×</span>
+                              <button onClick={(e) => { e.stopPropagation(); handleDeleteTier(tier.id); }} className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all">
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </div>
+                          )
                         ))}
                       </div>
                     )}
@@ -590,40 +616,12 @@ export function RateScheduleManager({
                   <div>
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
-                      <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
-                    </div>
-                    <AnimatePresence>
-                      {showAddItem && (
-                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
-                          <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
-                            <div className="flex-1 min-w-0">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
-                              <div className="mt-1">
-                                {loadedCatalogs.length > 0 ? (
-                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items..." />
-                                ) : (
-                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
-                                )}
-                              </div>
-                            </div>
-                            <div className="w-20">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
-                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
-                            </div>
-                            <div className="w-16">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
-                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
-                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
-                              </Select>
-                            </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
-                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
-                          </div>
-                        </motion.div>
+                      {!showAddItem && (
+                        <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
                       )}
-                    </AnimatePresence>
+                    </div>
 
-                  {detail.items.length === 0 ? (
+                  {detail.items.length === 0 && !showAddItem ? (
                     <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
                   ) : (
                     <div className="overflow-x-auto">
@@ -693,6 +691,36 @@ export function RateScheduleManager({
                         </table>
                       </div>
                     )}
+                    <AnimatePresence>
+                      {showAddItem && (
+                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
+                          <div className="flex items-end gap-2 mt-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
+                            <div className="flex-1 min-w-0">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
+                              <div className="mt-1">
+                                {loadedCatalogs.length > 0 ? (
+                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items or type to add..." />
+                                ) : (
+                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
+                                )}
+                              </div>
+                            </div>
+                            <div className="w-20">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
+                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
+                            </div>
+                            <div className="w-16">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
+                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
+                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
+                              </Select>
+                            </div>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
+                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </>
               )}
