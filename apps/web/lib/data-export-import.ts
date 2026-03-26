@@ -106,9 +106,6 @@ interface ExportRateScheduleItem {
   name: string;
   unit: string;
   rates: Record<string, number>;
-  costRates: Record<string, number>;
-  burden: number;
-  perDiem: number;
   metadata: Record<string, unknown>;
   sortOrder: number;
 }
@@ -332,9 +329,6 @@ export async function exportAllDataManagement(): Promise<void> {
         name: i.name,
         unit: i.unit,
         rates: i.rates,
-        costRates: i.costRates,
-        burden: i.burden,
-        perDiem: i.perDiem,
         metadata: i.metadata || {},
         sortOrder: i.sortOrder,
       })),
@@ -635,9 +629,6 @@ export async function importAllDataManagement(
             name: item.name,
             unit: item.unit,
             rates: item.rates,
-            costRates: item.costRates,
-            burden: item.burden,
-            perDiem: item.perDiem,
             sortOrder: item.sortOrder,
           });
         } catch (e: any) {

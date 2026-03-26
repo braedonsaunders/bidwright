@@ -136,8 +136,6 @@ export function RateScheduleManager({
   // Inline editing
   const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string } | null>(null);
   const [editValue, setEditValue] = useState("");
-  const [editingCostCell, setEditingCostCell] = useState<{ itemId: string; tierId: string } | null>(null);
-  const [editCostValue, setEditCostValue] = useState("");
 
   // New tier/item forms
   const [showAddTier, setShowAddTier] = useState(false);
@@ -172,7 +170,6 @@ export function RateScheduleManager({
     setSelectedId(id);
     setLoadingDetail(true);
     setEditingCell(null);
-    setEditingCostCell(null);
     setShowAddTier(false);
     setShowAddItem(false);
     setEditingHeader(false);
@@ -328,13 +325,6 @@ export function RateScheduleManager({
   const startRateEdit = (item: Item, tierId: string) => {
     setEditingCell({ itemId: item.id, tierId });
     setEditValue(String(item.rates?.[tierId] ?? 0));
-    setEditingCostCell(null);
-  };
-
-  const startCostEdit = (item: Item, tierId: string) => {
-    setEditingCostCell({ itemId: item.id, tierId });
-    setEditCostValue(String(item.costRates?.[tierId] ?? 0));
-    setEditingCell(null);
   };
 
   const saveRateEdit = useCallback(
@@ -351,22 +341,6 @@ export function RateScheduleManager({
       }
     },
     [detail, editingCell, editValue]
-  );
-
-  const saveCostEdit = useCallback(
-    async (item: Item) => {
-      if (!detail || !editingCostCell) return;
-      const val = parseFloat(editCostValue) || 0;
-      const newCostRates = { ...item.costRates, [editingCostCell.tierId]: val };
-      try {
-        const updated = await updateRateScheduleItem(detail.id, item.id, { costRates: newCostRates });
-        setDetail(updated);
-        setEditingCostCell(null);
-      } catch (err) {
-        console.error("Failed to update cost rate:", err);
-      }
-    },
-    [detail, editingCostCell, editCostValue]
   );
 
   const handleAutoCalculate = useCallback(async () => {
@@ -602,57 +576,21 @@ export function RateScheduleManager({
                     )}
                   </div>
 
-                  {/* Items & Rates */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
-                      <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
-                    </div>
-                    <AnimatePresence>
-                      {showAddItem && (
-                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
-                          <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
-                            <div className="flex-1 min-w-0">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
-                              <div className="mt-1">
-                                {loadedCatalogs.length > 0 ? (
-                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items..." />
-                                ) : (
-                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
-                                )}
-                              </div>
-                            </div>
-                            <div className="w-20">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
-                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
-                            </div>
-                            <div className="w-16">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
-                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
-                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
-                              </Select>
-                            </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
-                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {detail.items.length === 0 ? (
-                      <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
-                    ) : (
-                      <div className="overflow-x-auto rounded-lg border border-line">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="border-b border-line bg-panel2/30">
-                              <th className="text-left py-2 px-3 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-16">Code</th>
-                              <th className="text-left py-2 px-3 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
-                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-12">Unit</th>
-                              {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
-                                <th key={tier.id} className="text-right py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-24">
-                                  <div>{tier.name}</div>
-                                  <div className="text-[9px] font-normal text-fg/20">sell / cost</div>
+                  {detail.items.length === 0 ? (
+                    <EmptyState>No items yet. Add rate items to this schedule.</EmptyState>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-line">
+                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-20">Code</th>
+                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider min-w-[140px]">Name</th>
+                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-14">Unit</th>
+                            {detail.tiers
+                              .sort((a, b) => a.sortOrder - b.sortOrder)
+                              .map((tier) => (
+                                <th key={tier.id} className="text-right py-2 px-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-24" colSpan={1}>
+                                  {tier.name}
                                 </th>
                               ))}
                               <th className="w-8" />
@@ -661,27 +599,46 @@ export function RateScheduleManager({
                           <tbody>
                             {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
                               <tr key={item.id} className="border-b border-line/50 hover:bg-panel2/20 group">
-                                <td className="py-2 px-3 text-fg/50 font-mono">{item.code || "—"}</td>
-                                <td className="py-2 px-3 text-fg font-medium">{item.name}</td>
-                                <td className="py-2 px-2 text-fg/50">{item.unit}</td>
-                                {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
-                                  <td key={tier.id} className="py-1 px-1">
-                                    <div className="flex flex-col items-end gap-0.5">
-                                      {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
-                                        <input type="number" step="0.01" className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-accent/50" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => saveRateEdit(item)} onKeyDown={(e) => { if (e.key === "Enter") saveRateEdit(item); if (e.key === "Escape") setEditingCell(null); }} autoFocus />
-                                      ) : (
-                                        <button onClick={() => startRateEdit(item, tier.id)} className="text-right text-xs text-fg/80 hover:text-accent px-1 py-0.5 rounded hover:bg-accent/5 transition-colors w-20">{fmt(item.rates?.[tier.id])}</button>
-                                      )}
-                                      {editingCostCell?.itemId === item.id && editingCostCell?.tierId === tier.id ? (
-                                        <input type="number" step="0.01" className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-emerald-500/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500/50" value={editCostValue} onChange={(e) => setEditCostValue(e.target.value)} onBlur={() => saveCostEdit(item)} onKeyDown={(e) => { if (e.key === "Enter") saveCostEdit(item); if (e.key === "Escape") setEditingCostCell(null); }} autoFocus />
-                                      ) : (
-                                        <button onClick={() => startCostEdit(item, tier.id)} className="text-right text-[10px] text-fg/40 hover:text-emerald-400 px-1 py-0.5 rounded hover:bg-emerald-500/5 transition-colors w-20">{fmt(item.costRates?.[tier.id])}</button>
-                                      )}
-                                    </div>
-                                  </td>
-                                ))}
-                                <td className="py-2 px-1 text-right">
-                                  <button onClick={() => handleDeleteItem(item.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"><Trash2 className="h-3 w-3" /></button>
+                                <td className="py-2 pr-3 text-fg/60 font-mono text-xs">{item.code || "—"}</td>
+                                <td className="py-2 pr-3 text-fg font-medium">{item.name}</td>
+                                <td className="py-2 pr-3 text-fg/50 text-xs">{item.unit}</td>
+                                {detail.tiers
+                                  .sort((a, b) => a.sortOrder - b.sortOrder)
+                                  .map((tier) => (
+                                    <td key={tier.id} className="py-1 px-1">
+                                      <div className="flex flex-col items-end gap-0.5">
+                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"
+                                            value={editValue}
+                                            onChange={(e) => setEditValue(e.target.value)}
+                                            onBlur={() => saveRateEdit(item)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter") saveRateEdit(item);
+                                              if (e.key === "Escape") setEditingCell(null);
+                                            }}
+                                            autoFocus
+                                          />
+                                        ) : (
+                                          <button
+                                            onClick={() => startRateEdit(item, tier.id)}
+                                            className="text-right text-xs text-fg/80 hover:text-accent px-1 py-0.5 rounded hover:bg-accent/5 transition-colors w-20"
+                                          >
+                                            {fmt(item.rates?.[tier.id])}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  ))}
+                                <td className="py-2 text-right">
+                                  <button
+                                    onClick={() => handleDeleteItem(item.id)}
+                                    className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </button>
                                 </td>
                               </tr>
                             ))}
@@ -689,7 +646,6 @@ export function RateScheduleManager({
                         </table>
                       </div>
                     )}
-                  </div>
                 </>
               )}
             </div>
