@@ -624,17 +624,17 @@ export function RateScheduleManager({
                   {detail.items.length === 0 && !showAddItem ? (
                     <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
                   ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
+                    <div className="-mx-5 px-5 overflow-x-auto">
+                      <table className="w-full text-xs">
                         <thead>
                           <tr className="border-b border-line">
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-20">Code</th>
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider min-w-[140px]">Name</th>
-                            <th className="text-left py-2 pr-3 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-14">Unit</th>
+                            <th className="text-left py-2 pr-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-14">Code</th>
+                            <th className="text-left py-2 pr-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
+                            <th className="text-left py-2 pr-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-10">Unit</th>
                             {detail.tiers
                               .sort((a, b) => a.sortOrder - b.sortOrder)
                               .map((tier) => (
-                                <th key={tier.id} className="text-right py-2 px-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider w-24" colSpan={1}>
+                                <th key={tier.id} className="text-right py-2 px-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-18" colSpan={1}>
                                   {tier.name}
                                 </th>
                               ))}
@@ -644,19 +644,19 @@ export function RateScheduleManager({
                           <tbody>
                             {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
                               <tr key={item.id} className="border-b border-line/50 hover:bg-panel2/20 group">
-                                <td className="py-2 pr-3 text-fg/60 font-mono text-xs">{item.code || "—"}</td>
-                                <td className="py-2 pr-3 text-fg font-medium">{item.name}</td>
-                                <td className="py-2 pr-3 text-fg/50 text-xs">{item.unit}</td>
+                                <td className="py-1.5 pr-2 text-fg/60 font-mono text-[11px]">{item.code || "—"}</td>
+                                <td className="py-1.5 pr-2 text-fg font-medium text-[11px] truncate max-w-[160px]">{item.name}</td>
+                                <td className="py-1.5 pr-1 text-fg/50 text-[11px]">{item.unit}</td>
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
                                   .map((tier) => (
-                                    <td key={tier.id} className="py-1 px-1">
-                                      <div className="flex flex-col items-end gap-0.5">
+                                    <td key={tier.id} className="py-1 px-0.5">
+                                      <div className="flex flex-col items-end">
                                         {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
                                           <input
                                             type="number"
                                             step="0.01"
-                                            className="w-20 text-right px-1.5 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-xs focus:outline-none focus:ring-1 focus:ring-accent/50"
+                                            className="w-16 text-right px-1 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50"
                                             value={editValue}
                                             onChange={(e) => setEditValue(e.target.value)}
                                             onBlur={() => saveRateEdit(item)}
@@ -669,7 +669,7 @@ export function RateScheduleManager({
                                         ) : (
                                           <button
                                             onClick={() => startRateEdit(item, tier.id)}
-                                            className="text-right text-xs text-fg/80 hover:text-accent px-1 py-0.5 rounded hover:bg-accent/5 transition-colors w-20"
+                                            className="text-right text-[11px] text-fg/80 hover:text-accent px-0.5 py-0.5 rounded hover:bg-accent/5 transition-colors w-16"
                                           >
                                             {fmt(item.rates?.[tier.id])}
                                           </button>
