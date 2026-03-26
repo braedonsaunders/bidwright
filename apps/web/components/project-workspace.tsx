@@ -877,11 +877,11 @@ function buildRevDraftFromWs(workspace: ProjectWorkspaceData) {
 
 function MenuSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <>
+    <div className="group/section [&:last-child>.menu-divider]:hidden">
       <div className="px-3 py-1 text-[10px] font-medium uppercase text-fg/30">{label}</div>
       {children}
-      <div className="h-px bg-line mx-2 my-1" />
-    </>
+      <div className="menu-divider h-px bg-line mx-2 my-1" />
+    </div>
   );
 }
 
