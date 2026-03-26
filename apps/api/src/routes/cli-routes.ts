@@ -424,7 +424,6 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
         "--print",
         fullPrompt,
         "--model", "sonnet",
-        "--max-turns", "1",
       ];
 
       // Build env — pass API key if configured

@@ -26,6 +26,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
       reply.code(201);
       return annotation;
     } catch (error) {
+      console.error("[takeoff:create] Failed:", error instanceof Error ? error.message : error);
+      console.error("[takeoff:create] Body:", JSON.stringify(body, null, 2));
       return reply.code(400).send({ message: error instanceof Error ? error.message : "Bad request" });
     }
   });
