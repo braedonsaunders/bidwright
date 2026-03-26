@@ -305,9 +305,31 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 3. ✅ ALL worksheets created (every major scope area has a worksheet)
 4. ✅ ALL line items created in EVERY worksheet with quantities, rates, and sourceNotes
 5. ✅ Assumption log written to memory
+6. ✅ **Final QA review completed** (see below)
 
 **If you have only done steps 1-2 (research/setup) you are LESS THAN HALFWAY DONE.**
 The bulk of the work is creating granular line items in every worksheet. Do NOT stop after importing rate schedules and querying knowledge. That is just preparation. KEEP GOING until every worksheet is fully populated.
+
+## Final QA Review (MANDATORY — run AFTER all worksheets are populated)
+
+After all sub-agents complete and every worksheet has line items, you MUST perform a final review pass:
+
+1. **Call getWorkspace** to pull the complete quote with all worksheets and items
+2. **Cross-check against scope:** Walk through the original spec/RFQ section by section. Flag any scope items that have NO corresponding line item (omissions)
+3. **Sanity-check hours/quantities:** For each worksheet, verify:
+   - Total hours are reasonable for the scope (compare against knowledge base benchmarks)
+   - No items have zero hours or zero quantity that shouldn't
+   - No items are missing rateScheduleItemId when the category requires it
+   - No items have suspiciously round numbers that suggest guessing instead of calculation
+4. **Check for duplicates:** Scan for items that appear in multiple worksheets or are double-counted
+5. **Verify shop vs field split:** If both fabrication and installation worksheets exist, confirm items aren't counted in both (e.g. the same weld shouldn't have full hours in shop AND field)
+6. **Validate sourceNotes:** Spot-check that sourceNotes are populated and reference actual knowledge/data — not just "estimated" or blank
+7. **Fix errors in-place:** Use updateWorksheetItem to correct any issues found. Do NOT just report them — fix them.
+8. **Report to user:** After fixing, output a summary of what was found and corrected. Include:
+   - Total items reviewed
+   - Issues found and fixed (with before/after)
+   - Any remaining assumptions or uncertainties the user should review
+   - Overall confidence level (high/medium/low) with reasoning
 
 ## Estimation Protocol (MANDATORY)
 
