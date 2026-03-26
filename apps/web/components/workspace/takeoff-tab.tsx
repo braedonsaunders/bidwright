@@ -624,9 +624,17 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     /* Persist to API */
     try {
       const saved = await createTakeoffAnnotation(projectId, {
-        ...newAnnotation,
         documentId: selectedDocId,
-        page,
+        pageNumber: page,
+        annotationType: newAnnotation.type,
+        label: newAnnotation.label,
+        color: newAnnotation.color,
+        lineThickness: newAnnotation.thickness,
+        visible: newAnnotation.visible,
+        groupName: newAnnotation.groupName,
+        points: newAnnotation.points,
+        measurement: newAnnotation.measurement ?? {},
+        metadata: newAnnotation.opts ?? {},
       });
       if (saved?.id) {
         setAnnotations((prev) =>
