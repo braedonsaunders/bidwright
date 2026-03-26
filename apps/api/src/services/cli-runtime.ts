@@ -267,6 +267,8 @@ export async function spawnSession(opts: {
 
   // Note: .claude/ directory was already cleaned and recreated with settings.json above
 
+  const events = new EventEmitter();
+
   // On Windows, .cmd files require cmd.exe to run. Node's shell:true uses
   // /d /s /c which strips argument quotes, breaking multi-word args.
   // Instead, call cmd.exe directly with /c and build the command string ourselves.
@@ -311,7 +313,6 @@ export async function spawnSession(opts: {
   });
   console.log(`[cli:spawn] pid=${child.pid}`);
 
-  const events = new EventEmitter();
   const session: CliSession = {
     projectId,
     runtime,
