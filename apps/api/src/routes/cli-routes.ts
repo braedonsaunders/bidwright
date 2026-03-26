@@ -401,48 +401,51 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
     }
   });
 
-  // ── Ask AI (lightweight — no CLI session, direct API call) ──
-  // Used by takeoff/drawing analysis — sends an image + prompt to Claude API directly
+  // ── Ask AI (lightweight — uses Claude CLI --print, no full session) ──
+  // Used by takeoff/drawing analysis — spawns a one-shot CLI call
   app.post("/api/cli/:projectId/ask", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const { prompt, imagePath } = (request.body || {}) as { prompt: string; imagePath?: string };
     if (!prompt) return reply.code(400).send({ error: "Prompt required" });
 
+    // Build a prompt that includes the image path so Claude reads it
+    let fullPrompt = prompt;
+    if (imagePath) {
+      fullPrompt = `First, look at the image file at "${imagePath}". Then answer: ${prompt}`;
+    }
+
     const settings = await request.store!.getSettings();
     const integrations = (settings as any)?.integrations || {};
-    const apiKey = integrations.anthropicKey || process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) return reply.code(400).send({ error: "No Anthropic API key configured" });
 
     try {
-      const { default: Anthropic } = await import("@anthropic-ai/sdk");
-      const client = new Anthropic({ apiKey });
+      const { execSync } = await import("node:child_process");
+      const cliCmd = "claude";
+      const args = [
+        "--print",
+        fullPrompt,
+        "--model", "sonnet",
+        "--max-turns", "1",
+      ];
 
-      const content: any[] = [];
-      // If image path provided, read it and include as base64
-      if (imagePath) {
-        const { readFile } = await import("node:fs/promises");
-        const buf = await readFile(imagePath);
-        const base64 = buf.toString("base64");
-        const ext = imagePath.split(".").pop()?.toLowerCase() ?? "png";
-        const mediaType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
-        content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: base64 } });
-      }
-      content.push({ type: "text", text: prompt });
+      // Build env — pass API key if configured
+      const env: Record<string, string> = { ...process.env as any };
+      if (integrations.anthropicKey) env.ANTHROPIC_API_KEY = integrations.anthropicKey;
 
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 2048,
-        messages: [{ role: "user", content }],
-      });
+      const result = execSync(
+        `${cliCmd} ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`,
+        {
+          cwd: resolveProjectDir(projectId),
+          env,
+          timeout: 60_000,
+          encoding: "utf-8",
+          shell: true,
+        }
+      );
 
-      const text = response.content
-        .filter((b: any) => b.type === "text")
-        .map((b: any) => b.text)
-        .join("\n");
-
-      return { response: text };
-    } catch (err) {
-      return reply.code(500).send({ error: err instanceof Error ? err.message : "AI request failed" });
+      return { response: result.trim() };
+    } catch (err: any) {
+      const output = err.stdout?.toString() || err.stderr?.toString() || err.message;
+      return reply.code(500).send({ error: output || "AI request failed" });
     }
   });
 

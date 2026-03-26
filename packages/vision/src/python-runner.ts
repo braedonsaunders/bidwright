@@ -65,7 +65,7 @@ export interface SymbolCountResult {
 
 function spawnPython(script: string, payload: string, timeoutMs: number = 120_000): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? "python3";
+    const pythonPath = process.env.PYTHON_PATH ?? (process.platform === "win32" ? "python" : "python3");
     const proc = spawn(pythonPath, [script], {
       cwd: PYTHON_DIR,
       timeout: timeoutMs,
@@ -174,7 +174,7 @@ export async function runAutoCount(request: SymbolCountRequest): Promise<SymbolC
   });
 
   return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? "python3";
+    const pythonPath = process.env.PYTHON_PATH ?? (process.platform === "win32" ? "python" : "python3");
     const proc = spawn(pythonPath, [AUTO_COUNT_SCRIPT, "--json"], {
       cwd: PYTHON_DIR,
       timeout: 120_000,
