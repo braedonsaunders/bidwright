@@ -28,8 +28,6 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
       <body>
-        {/* Clear any stale inline userSelect:none left by previous JS */}
-        <script dangerouslySetInnerHTML={{ __html: `document.body.style.userSelect='';document.body.style.webkitUserSelect='';` }} />
         <AuthProvider>
           <ImpersonationBanner />
           {children}

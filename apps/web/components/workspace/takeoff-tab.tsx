@@ -1653,11 +1653,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
                     onChange={() => {}}
                     className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
                   />
-                  {autoCountPending.snippetImage && (
-                    <div className="shrink-0 rounded border border-line bg-white p-0.5">
-                      <img src={autoCountPending.snippetImage} alt="" className="h-8 w-8 object-contain" />
-                    </div>
-                  )}
+                  <div className="shrink-0 rounded border border-line bg-white p-0.5">
+                    <img
+                      src={match.image || autoCountPending.snippetImage || ""}
+                      alt={`Match #${i + 1}`}
+                      className="h-10 w-10 object-contain"
+                    />
+                  </div>
                   <div className="flex-1 min-w-0">
                     <span className="font-medium text-fg">Match #{i + 1}</span>
                     <span className="text-fg/40 ml-2">{(match.confidence * 100).toFixed(0)}% confidence</span>
