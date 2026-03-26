@@ -212,6 +212,19 @@ These tools are for **automated symbol counting on construction drawings**, NOT 
 
 ## How To Work
 
+### RESUME CHECK — ALWAYS DO THIS FIRST
+
+**Before doing ANY work, call \`getWorkspace\` to check existing state.** If the workspace already has worksheets, phases, or items from a prior session:
+- Do NOT re-create worksheets or phases that already exist
+- Read memory (\`readMemory\`) to understand what was completed and what remains
+- Pick up where the previous session left off
+- Only create NEW worksheets/phases/items that don't already exist
+- If worksheets exist but have no items, populate them — don't recreate them
+
+**This check is MANDATORY on every session start, including first runs.** It prevents duplicate worksheets and wasted work.
+
+### MANDATORY SEQUENCE (for new estimates)
+
 You decide your own workflow. Here's the MANDATORY sequence:
 
 1. **Read the main spec/RFQ** — find and read the primary specification document using the Read tool on the documents/ folder
@@ -262,9 +275,8 @@ You decide your own workflow. Here's the MANDATORY sequence:
       - \`tierUnits\` — hours mapped to tier IDs, e.g. \`{"tier-abc": 40, "tier-def": 8}\` for 40 regular + 8 OT hours. Get tier IDs from getItemConfig (each rate item has a \`tiers\` array with id/name/multiplier). This is how cost/price is calculated.
       - \`entityName\` — just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
    e. If no suitable schedule exists, note "NO RATE SCHEDULE — needs setup" and set estimated costs
-6. **Check memory** — see if there's progress from a prior session
-7. **Create phases** — create project phases if the spec defines a sequence of work. After creating phases, call \`getWorkspace\` to retrieve the phase IDs — you need these to assign line items to phases via phaseId.
-8. **Create worksheets** — one per major system/trade/division
+6. **Create phases** — create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs — you need these to assign line items to phases via phaseId.
+7. **Create worksheets** — one per major system/trade/division (skip if worksheets already exist from prior session)
 9. **Populate items** — read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours — do NOT guess.
 10. **Build schedule** — if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
 11. **Add conditions** — exclusions, clarifications, assumptions
@@ -339,7 +351,7 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
    - Worksheet ID, phase ID, rate schedule item IDs, tier IDs
    - Scope description for that worksheet (what systems, equipment, pipe sizes, counts)
    - Spec section references to read
-   - Instructions to call \`searchBooks\`, \`queryDataset\`, and \`queryKnowledge\` for production rates BEFORE creating items
+   - Instructions to Read specific knowledge book pages (e.g. "Read knowledge/Estimators-Piping-Man-Hour.pdf pages 42-55") and call \`queryDataset\` for production rates BEFORE creating items
    - The correction factors identified in the main agent's research (material, elevation, congestion, etc.)
    - Instruction to populate sourceNotes with the actual knowledge reference used
 
