@@ -28,24 +28,32 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
       <body>
-        {/* Force text selection — Next.js 16 devtools overlay blocks it */}
+        {/* Neutralize Next.js 16 devtools overlay that blocks text selection.
+            The devtools create a <nextjs-portal> with shadow DOM containing a
+            position:fixed inset:0 element with userSelect:none. We force
+            pointer-events:none on the portal so it can't capture mouse events. */}
         <script dangerouslySetInnerHTML={{ __html: `
           (function() {
-            var style = document.createElement('style');
-            style.textContent = '* { -webkit-user-select: text !important; user-select: text !important; } .select-none { -webkit-user-select: none !important; user-select: none !important; }';
-            document.head.appendChild(style);
-            // Also watch for dynamically injected overlays
-            new MutationObserver(function(mutations) {
-              mutations.forEach(function(m) {
-                m.addedNodes.forEach(function(node) {
-                  if (node.nodeType === 1 && node.style && node.style.userSelect === 'none') {
-                    node.style.userSelect = 'text';
-                    node.style.webkitUserSelect = 'text';
-                    node.style.pointerEvents = 'none';
+            function fixPortal() {
+              document.querySelectorAll('nextjs-portal').forEach(function(el) {
+                el.style.pointerEvents = 'none';
+                if (el.shadowRoot) {
+                  var style = document.createElement('style');
+                  style.textContent = '* { pointer-events: none !important; user-select: text !important; -webkit-user-select: text !important; }';
+                  if (!el.shadowRoot.querySelector('[data-fix-selection]')) {
+                    style.setAttribute('data-fix-selection', '');
+                    el.shadowRoot.appendChild(style);
                   }
-                });
+                }
               });
-            }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+            }
+            // Run on load and watch for new portals
+            if (document.readyState === 'loading') {
+              document.addEventListener('DOMContentLoaded', fixPortal);
+            } else {
+              fixPortal();
+            }
+            new MutationObserver(fixPortal).observe(document.body, { childList: true, subtree: false });
           })();
         `}} />
         <AuthProvider>
