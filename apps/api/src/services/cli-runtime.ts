@@ -267,27 +267,47 @@ export async function spawnSession(opts: {
 
   // Note: .claude/ directory was already cleaned and recreated with settings.json above
 
-  // On Windows, write prompt to a temp file and use file-based approach
-  // to avoid cmd.exe issues with special characters in arguments.
-  // Then spawn with shell:true since .cmd files require it.
+  // On Windows, .cmd files require cmd.exe to run. Node's shell:true uses
+  // /d /s /c which strips argument quotes, breaking multi-word args.
+  // Instead, call cmd.exe directly with /c and build the command string ourselves.
   if (isWin) {
-    // Write prompt to file, replace -p arg with file-based approach
-    const promptFile = join(projectDir, ".bidwright-prompt.txt");
-    const promptIdx = cliArgs.indexOf("-p");
-    if (promptIdx >= 0 && promptIdx + 1 < cliArgs.length) {
-      await writeFile(promptFile, cliArgs[promptIdx + 1]);
-      // Replace multiline prompt with a simple one-liner that references the file
-      cliArgs[promptIdx + 1] = "Follow the instructions in .bidwright-prompt.txt exactly.";
-    }
+    // Resolve full path to the .cmd file
+    let resolvedCmd = cliCmd;
+    try {
+      const candidates = execSync(`where ${cliCmd}`, { encoding: "utf-8" }).trim().split(/\r?\n/);
+      resolvedCmd = candidates.find(c => /\.(cmd|bat|exe)$/i.test(c)) || candidates[0];
+    } catch {}
+
+    // Build a properly quoted command string for cmd.exe /c
+    const quotedArgs = cliArgs.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ");
+    const fullCmd = `"${resolvedCmd}" ${quotedArgs}`;
+    console.log(`[cli:spawn:win] cmd.exe /c ${fullCmd.slice(0, 200)}...`);
+
+    const child = spawn("cmd.exe", ["/c", fullCmd], {
+      cwd: projectDir,
+      env: { ...process.env, ...cliEnv },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: true,
+    });
+    console.log(`[cli:spawn:win] pid=${child.pid}`);
+
+    const session: CliSession = {
+      projectId, runtime, process: child, sessionId: "", status: "running",
+      events, startedAt: new Date().toISOString(), pid: child.pid || 0,
+    };
+    session._spawnOpts = opts;
+    session._recoveryCount = 0;
+    sessions.set(projectId, session);
+    wireChildProcess(child, session, events);
+    return session;
   }
 
-  console.log(`[cli:spawn] cmd=${cliCmd} cwd=${projectDir} argCount=${cliArgs.length} shell=${isWin}`);
+  console.log(`[cli:spawn] cmd=${cliCmd} cwd=${projectDir} argCount=${cliArgs.length}`);
 
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
     stdio: ["ignore", "pipe", "pipe"],
-    shell: isWin,
   });
   console.log(`[cli:spawn] pid=${child.pid}`);
 
