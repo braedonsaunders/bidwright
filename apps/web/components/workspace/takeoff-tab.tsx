@@ -696,6 +696,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         threshold: autoCountThreshold,
       });
 
+      console.log("[autocount] result:", { totalCount: result.totalCount, matchCount: result.matches.length, hasSnippet: !!result.snippetImage, firstMatchHasImage: !!result.matches[0]?.image });
       setAutoCountResults(result.matches);
       setAutoCountSnippet(result.snippetImage ?? null);
 
