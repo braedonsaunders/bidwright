@@ -75,7 +75,18 @@ body {
   background: hsla(var(--accent), 0.2);
 }
 
-/* Ensure text is selectable in all form inputs and editable areas */
+/* Ensure text is selectable everywhere */
+*, *::before, *::after {
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+
+/* Override for specific interactive elements that shouldn't be selectable */
+button, [role="button"], .select-none {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 input, textarea, [contenteditable="true"], [role="textbox"] {
   -webkit-user-select: text !important;
   user-select: text !important;

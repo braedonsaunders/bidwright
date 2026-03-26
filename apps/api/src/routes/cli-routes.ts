@@ -401,6 +401,51 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
     }
   });
 
+  // ── Ask AI (lightweight — no CLI session, direct API call) ──
+  // Used by takeoff/drawing analysis — sends an image + prompt to Claude API directly
+  app.post("/api/cli/:projectId/ask", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const { prompt, imagePath } = (request.body || {}) as { prompt: string; imagePath?: string };
+    if (!prompt) return reply.code(400).send({ error: "Prompt required" });
+
+    const settings = await request.store!.getSettings();
+    const integrations = (settings as any)?.integrations || {};
+    const apiKey = integrations.anthropicKey || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return reply.code(400).send({ error: "No Anthropic API key configured" });
+
+    try {
+      const { default: Anthropic } = await import("@anthropic-ai/sdk");
+      const client = new Anthropic({ apiKey });
+
+      const content: any[] = [];
+      // If image path provided, read it and include as base64
+      if (imagePath) {
+        const { readFile } = await import("node:fs/promises");
+        const buf = await readFile(imagePath);
+        const base64 = buf.toString("base64");
+        const ext = imagePath.split(".").pop()?.toLowerCase() ?? "png";
+        const mediaType = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : "image/png";
+        content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: base64 } });
+      }
+      content.push({ type: "text", text: prompt });
+
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 2048,
+        messages: [{ role: "user", content }],
+      });
+
+      const text = response.content
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("\n");
+
+      return { response: text };
+    } catch (err) {
+      return reply.code(500).send({ error: err instanceof Error ? err.message : "AI request failed" });
+    }
+  });
+
   // ── Session Status ──────────────────────────────────────────
   app.get("/api/cli/:projectId/status", async (request) => {
     const { projectId } = request.params as { projectId: string };
