@@ -232,8 +232,12 @@ export async function spawnSession(opts: {
     const mcpConfigPath = join(projectDir, ".bidwright-mcp-config.json");
     await writeFile(mcpConfigPath, JSON.stringify(mcpConfigObj, null, 2));
 
+    // On Windows with shell:true, newlines in args break cmd.exe (it treats \n as command separator).
+    // Replace newlines with spaces to keep the prompt on one line.
+    const safePrompt = isWin ? prompt.replace(/\r?\n/g, " ") : prompt;
+
     cliArgs = [
-      "-p", prompt,
+      "-p", safePrompt,
       "--output-format", "stream-json",
       "--dangerously-skip-permissions", // Non-interactive, no permission prompts
       "--verbose",
@@ -266,14 +270,25 @@ export async function spawnSession(opts: {
   // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
   // On Windows, shell:true is required to execute .cmd wrappers (e.g. claude.cmd)
   // MCP config is passed as a file path (not inline JSON) so shell escaping is safe
-  console.log(`[cli:spawn] cmd=${cliCmd} cwd=${projectDir} args=${JSON.stringify(cliArgs.slice(0, 6))}...`);
+  // Debug: write spawn info to file for diagnostics
+  const debugInfo = { cmd: cliCmd, args: cliArgs, cwd: projectDir, shell: process.platform === "win32", envKeys: Object.keys(cliEnv) };
+  console.log(`[cli:spawn:v3] ${JSON.stringify(debugInfo)}`);
+  await writeFile(join(projectDir, ".spawn-debug.json"), JSON.stringify(debugInfo, null, 2));
+
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
   });
-  console.log(`[cli:spawn] pid=${child.pid} killed=${child.killed}`);
+  console.log(`[cli:spawn:v3] pid=${child.pid} killed=${child.killed} exitCode=${child.exitCode}`);
+
+  // Detect immediate failure
+  if (!child.pid) {
+    console.error(`[cli:spawn:v3] FAILED - no PID assigned. This usually means the command was not found.`);
+  }
+  child.on("error", (err) => console.error(`[cli:spawn:v3:error] ${err.message}`));
+  child.on("exit", (code, signal) => console.log(`[cli:spawn:v3:exit] code=${code} signal=${signal}`));
 
   const events = new EventEmitter();
   const session: CliSession = {
