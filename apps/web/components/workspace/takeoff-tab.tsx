@@ -361,6 +361,8 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     matchPoints: Point[];
     totalCount: number;
     snippetImage: string | null;
+    /** Per-match inclusion — user can toggle individual matches on/off */
+    included: boolean[];
   } | null>(null);
 
   /* Ask AI state */
@@ -709,12 +711,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
           return { x: centerX * sx, y: centerY * sy };
         });
 
-        // Show modal for user to accept/reject
+        // Show modal for user to accept/reject individual matches
         setAutoCountPending({
           matches: result.matches,
           matchPoints,
           totalCount: result.totalCount,
           snippetImage: result.snippetImage ?? null,
+          included: result.matches.map(() => true),
         });
         setAutoCountModalOpen(true);
       } else {
@@ -809,43 +812,55 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
   async function handleAcceptAutoCount() {
     if (!autoCountPending) return;
-    const countAnnotation: TakeoffAnnotation = {
+    const { included, matchPoints, matches } = autoCountPending;
+    const acceptedPoints = matchPoints.filter((_, i) => included[i]);
+    const acceptedCount = acceptedPoints.length;
+    if (acceptedCount === 0) { handleRejectAutoCount(); return; }
+
+    const groupId = crypto.randomUUID().slice(0, 8);
+    const groupName = `Auto Count ${groupId}`;
+
+    // Create individual annotations for each accepted match
+    const newAnnotations: TakeoffAnnotation[] = acceptedPoints.map((pt, i) => ({
       id: crypto.randomUUID(),
       type: "count",
-      label: `Auto Count (${autoCountPending.totalCount} found)`,
+      label: `#${i + 1}`,
       color: "#22c55e",
       thickness: 4,
-      points: autoCountPending.matchPoints,
+      points: [pt],
       visible: true,
-      groupName: "Auto Count",
+      groupName,
       canvasWidth: canvasSize.width,
       canvasHeight: canvasSize.height,
-      measurement: { value: autoCountPending.totalCount, unit: "count" },
-    };
-    setAnnotations((prev) => [...prev, countAnnotation]);
+      measurement: { value: 1, unit: "count" },
+    }));
+
+    setAnnotations((prev) => [...prev, ...newAnnotations]);
     setAutoCountModalOpen(false);
     setAutoCountPending(null);
 
-    // Persist
-    try {
-      const saved = await createTakeoffAnnotation(projectId, {
-        documentId: selectedDocId,
-        pageNumber: page,
-        annotationType: "count",
-        label: countAnnotation.label,
-        color: countAnnotation.color,
-        lineThickness: countAnnotation.thickness,
-        visible: true,
-        groupName: "Auto Count",
-        points: countAnnotation.points,
-        measurement: countAnnotation.measurement ?? {},
-      });
-      if (saved?.id) {
-        setAnnotations((prev) =>
-          prev.map((a) => (a.id === countAnnotation.id ? { ...a, id: saved.id } : a))
-        );
-      }
-    } catch { /* local is fine */ }
+    // Persist each individually
+    for (const ann of newAnnotations) {
+      try {
+        const saved = await createTakeoffAnnotation(projectId, {
+          documentId: selectedDocId,
+          pageNumber: page,
+          annotationType: "count",
+          label: ann.label,
+          color: ann.color,
+          lineThickness: ann.thickness,
+          visible: true,
+          groupName,
+          points: ann.points,
+          measurement: ann.measurement ?? {},
+        });
+        if (saved?.id) {
+          setAnnotations((prev) =>
+            prev.map((a) => (a.id === ann.id ? { ...a, id: saved.id } : a))
+          );
+        }
+      } catch { /* local is fine */ }
+    }
   }
 
   function handleRejectAutoCount() {
@@ -1603,32 +1618,66 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
             <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
               <ScanSearch className="h-4 w-4 text-emerald-500 shrink-0" />
               <span className="text-xs font-semibold text-fg flex-1">
-                Auto Count — {autoCountPending.totalCount} found
+                Auto Count — {autoCountPending.included.filter(Boolean).length} of {autoCountPending.totalCount} selected
               </span>
+              <button
+                onClick={() => {
+                  const allOn = autoCountPending.included.every(Boolean);
+                  setAutoCountPending({ ...autoCountPending, included: autoCountPending.included.map(() => !allOn) });
+                }}
+                className="text-[10px] text-accent hover:underline mr-2"
+              >
+                {autoCountPending.included.every(Boolean) ? "Deselect All" : "Select All"}
+              </button>
               <button onClick={handleRejectAutoCount} className="text-fg/30 hover:text-fg/60 transition-colors">
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="flex gap-3 px-4 py-3 overflow-y-auto flex-1 min-h-0">
-              {autoCountPending.snippetImage && (
-                <div className="shrink-0 flex items-start">
-                  <div className="rounded-md border border-line bg-white p-1.5">
-                    <img src={autoCountPending.snippetImage} alt="Template" className="h-16 w-16 object-contain" />
+            <div className="overflow-y-auto flex-1 min-h-0 divide-y divide-line">
+              {autoCountPending.matches.map((match, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "flex items-center gap-3 px-4 py-2 text-xs cursor-pointer transition-colors",
+                    autoCountPending.included[i] ? "bg-emerald-500/5" : "bg-panel opacity-50"
+                  )}
+                  onClick={() => {
+                    const next = [...autoCountPending.included];
+                    next[i] = !next[i];
+                    setAutoCountPending({ ...autoCountPending, included: next });
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoCountPending.included[i]}
+                    onChange={() => {}}
+                    className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
+                  />
+                  {autoCountPending.snippetImage && (
+                    <div className="shrink-0 rounded border border-line bg-white p-0.5">
+                      <img src={autoCountPending.snippetImage} alt="" className="h-8 w-8 object-contain" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <span className="font-medium text-fg">Match #{i + 1}</span>
+                    <span className="text-fg/40 ml-2">{(match.confidence * 100).toFixed(0)}% confidence</span>
                   </div>
+                  <span className="text-[10px] text-fg/30 tabular-nums shrink-0">
+                    ({Math.round(match.rect.x)}, {Math.round(match.rect.y)})
+                  </span>
                 </div>
-              )}
-              <div className="flex-1 min-w-0 text-xs space-y-2">
-                <p className="text-fg/70">
-                  Found <strong className="text-emerald-600">{autoCountPending.totalCount}</strong> matching symbols on this page.
-                </p>
-                <p className="text-fg/40">
-                  Accept to add count annotations, or reject to discard.
-                </p>
-              </div>
+              ))}
             </div>
-            <div className="flex items-center justify-end gap-2 px-4 py-2.5 border-t border-line shrink-0">
-              <Button size="xs" variant="secondary" onClick={handleRejectAutoCount}>Reject</Button>
-              <Button size="xs" variant="accent" onClick={handleAcceptAutoCount}>Accept ({autoCountPending.totalCount})</Button>
+            <div className="flex items-center justify-between px-4 py-2.5 border-t border-line shrink-0">
+              <span className="text-[10px] text-fg/40">
+                {autoCountPending.included.filter(Boolean).length} matches selected
+              </span>
+              <div className="flex gap-2">
+                <Button size="xs" variant="secondary" onClick={handleRejectAutoCount}>Reject All</Button>
+                <Button size="xs" variant="accent" onClick={handleAcceptAutoCount} disabled={!autoCountPending.included.some(Boolean)}>
+                  Accept ({autoCountPending.included.filter(Boolean).length})
+                </Button>
+              </div>
             </div>
           </Card>
         </div>
