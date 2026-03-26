@@ -269,9 +269,8 @@ export async function spawnSession(opts: {
 
   const events = new EventEmitter();
 
-  // On Windows, .cmd files require cmd.exe to run. Node's shell:true uses
-  // /d /s /c which strips argument quotes, breaking multi-word args.
-  // Instead, call cmd.exe directly with /c and build the command string ourselves.
+  // On Windows, .cmd files require cmd.exe to run.
+  // We write a .bat launcher script to avoid all cmd.exe quoting hell.
   if (isWin) {
     // Resolve full path to the .cmd file
     let resolvedCmd = cliCmd;
@@ -280,16 +279,31 @@ export async function spawnSession(opts: {
       resolvedCmd = candidates.find(c => /\.(cmd|bat|exe)$/i.test(c)) || candidates[0];
     } catch {}
 
-    // Build a properly quoted command string for cmd.exe /c
-    const quotedArgs = cliArgs.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ");
-    const fullCmd = `"${resolvedCmd}" ${quotedArgs}`;
-    console.log(`[cli:spawn:win] cmd.exe /c ${fullCmd.slice(0, 200)}...`);
+    // Write prompt to a file (avoids quoting issues with special chars)
+    const promptFile = join(projectDir, ".bidwright-prompt.txt");
+    const promptIdx = cliArgs.indexOf("-p");
+    if (promptIdx >= 0 && promptIdx + 1 < cliArgs.length) {
+      await writeFile(promptFile, cliArgs[promptIdx + 1]);
+      // Replace the prompt in args with a short reference
+      cliArgs[promptIdx + 1] = "Execute the instructions in .bidwright-prompt.txt";
+    }
 
-    const child = spawn("cmd.exe", ["/c", fullCmd], {
+    // Write a .bat file that calls the CLI with all args properly quoted
+    const batLines = ["@echo off"];
+    const quotedArgs = cliArgs.map(a => {
+      if (a.includes(" ") || a.includes("\\") || a.includes('"')) return `"${a}"`;
+      return a;
+    });
+    batLines.push(`call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
+    const batFile = join(projectDir, ".bidwright-run.bat");
+    await writeFile(batFile, batLines.join("\r\n") + "\r\n");
+
+    console.log(`[cli:spawn:win] bat=${batFile} cmd=${resolvedCmd}`);
+
+    const child = spawn("cmd.exe", ["/c", batFile], {
       cwd: projectDir,
       env: { ...process.env, ...cliEnv },
       stdio: ["ignore", "pipe", "pipe"],
-      windowsVerbatimArguments: true,
     });
     console.log(`[cli:spawn:win] pid=${child.pid}`);
 
