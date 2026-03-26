@@ -298,9 +298,10 @@ if __name__ == "__main__":
         cross_scale=payload.get("crossScale", False),
     )
 
-    # Strip images from CLI output to keep it manageable
-    for m in result.get("matches", []):
-        m.pop("image", None)
-    result.pop("templateImage", None)
+    # Include images unless caller opts out
+    if payload.get("stripImages", False):
+        for m in result.get("matches", []):
+            m.pop("image", None)
+        result.pop("templateImage", None)
 
     print(json.dumps(result))
