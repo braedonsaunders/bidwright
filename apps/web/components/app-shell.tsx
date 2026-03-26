@@ -226,9 +226,7 @@ export function AppShell({
                         return;
                       }
                       try {
-                        const result = await switchOrganization(org.organizationId);
-                        localStorage.setItem("bw_token", result.token);
-                        localStorage.setItem("bw_org", JSON.stringify(result.organization));
+                        await switchOrganization(org.organizationId);
                         await refreshUser();
                         setOrgSwitcherOpen(false);
                         window.location.href = "/";

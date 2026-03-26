@@ -51,6 +51,7 @@ export function useAuth(): AuthContextValue {
 // ---------------------------------------------------------------------------
 
 const PUBLIC_PATHS = ["/login", "/signup", "/setup"];
+const COOKIE_SESSION_TOKEN = "cookie-session";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -80,15 +81,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // Check for existing token
-        const storedToken = localStorage.getItem("bw_token");
-        if (!storedToken) {
-          setLoading(false);
-          return;
-        }
-
-        setToken(storedToken);
         const me = await getCurrentUser();
+        setToken(COOKIE_SESSION_TOKEN);
         setUser(me.user);
         setOrganization(me.organization);
         setIsSuperAdmin(me.isSuperAdmin);
@@ -100,12 +94,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } catch { /* ignore */ }
         }
       } catch {
-        // Token invalid or API unreachable
-        localStorage.removeItem("bw_token");
+        // Session invalid or API unreachable
         localStorage.removeItem("bw_user");
         localStorage.removeItem("bw_org");
         setToken(null);
         setUser(null);
+        setOrganization(null);
+        setIsSuperAdmin(false);
+        setImpersonating(false);
       } finally {
         setLoading(false);
       }
@@ -115,23 +111,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     try {
       const me = await getCurrentUser();
+      setToken(COOKIE_SESSION_TOKEN);
       setUser(me.user);
       setOrganization(me.organization);
       setIsSuperAdmin(me.isSuperAdmin);
       setImpersonating(me.impersonating);
     } catch {
-      // ignore
+      setToken(null);
+      setUser(null);
+      setOrganization(null);
+      setIsSuperAdmin(false);
+      setImpersonating(false);
     }
   }, []);
 
   const login = useCallback(async (email: string, password: string, orgSlug?: string) => {
     const result = await apiLogin(email, password, orgSlug);
-    localStorage.setItem("bw_token", result.token);
-    localStorage.setItem("bw_user", JSON.stringify(result.user));
-    if (result.organization) {
-      localStorage.setItem("bw_org", JSON.stringify(result.organization));
-    }
-    setToken(result.token);
+    setToken(COOKIE_SESSION_TOKEN);
     setUser(result.user);
     setOrganization(result.organization ?? null);
     const superAdmin = !!(result as any).isSuperAdmin;
@@ -147,10 +143,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signupFn = useCallback(async (data: { orgName: string; orgSlug: string; email: string; name: string; password: string }) => {
     const result = await apiSignup(data);
-    localStorage.setItem("bw_token", result.token);
-    localStorage.setItem("bw_user", JSON.stringify(result.user));
-    localStorage.setItem("bw_org", JSON.stringify(result.organization));
-    setToken(result.token);
+    setToken(COOKIE_SESSION_TOKEN);
     setUser(result.user);
     setOrganization(result.organization);
     setIsSuperAdmin(false);
@@ -161,8 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const superLoginFn = useCallback(async (email: string, password: string) => {
     const result = await apiSuperLogin(email, password);
-    localStorage.setItem("bw_token", result.token);
-    setToken(result.token);
+    setToken(COOKIE_SESSION_TOKEN);
     setUser({ id: result.superAdmin.id, email: result.superAdmin.email, name: result.superAdmin.name, role: "admin", active: true });
     setOrganization(null);
     setIsSuperAdmin(true);
@@ -176,10 +168,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logoutFn = useCallback(async () => {
     try { await apiLogout(); } catch { /* ignore */ }
-    localStorage.removeItem("bw_token");
     localStorage.removeItem("bw_user");
     localStorage.removeItem("bw_org");
-    localStorage.removeItem("bw_super_token");
     setToken(null);
     setUser(null);
     setOrganization(null);
@@ -189,15 +179,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const impersonateFn = useCallback(async (orgId: string) => {
-    // Save current super admin token
-    const currentToken = localStorage.getItem("bw_token");
-    if (currentToken) {
-      localStorage.setItem("bw_super_token", currentToken);
-    }
     const result = await adminImpersonate(orgId);
-    localStorage.setItem("bw_token", result.token);
-    localStorage.setItem("bw_org", JSON.stringify(result.organization));
-    setToken(result.token);
+    setToken(COOKIE_SESSION_TOKEN);
     setOrganization(result.organization);
     setImpersonating(true);
     router.push("/");
@@ -205,13 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const stopImpersonationFn = useCallback(async () => {
     try { await adminStopImpersonation(); } catch { /* ignore */ }
-    const superToken = localStorage.getItem("bw_super_token");
-    if (superToken) {
-      localStorage.setItem("bw_token", superToken);
-      localStorage.removeItem("bw_super_token");
-      setToken(superToken);
-    }
-    localStorage.removeItem("bw_org");
+    setToken(COOKIE_SESSION_TOKEN);
     setOrganization(null);
     setImpersonating(false);
     // Refresh user info with the restored super admin token

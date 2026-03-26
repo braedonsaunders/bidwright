@@ -42,6 +42,42 @@ import {
   type MultiSelectOption,
 } from "@/components/ui";
 import {
+  AgentRuntimeSettings,
+  ColorField,
+  SearchableModelSelect,
+  TagInput,
+} from "@/components/settings-page-helpers";
+import {
+  CALCULATION_TYPES,
+  CURRENCIES,
+  DATA_SUBTABS,
+  DATE_FORMATS,
+  DEFAULT_BRAND,
+  DEFAULT_SETTINGS,
+  EDITABLE_FIELD_KEYS,
+  GROUPS,
+  INTEGRATIONS_SUBTABS,
+  ITEM_SOURCE_OPTIONS,
+  MONTHS,
+  NEW_CATEGORY_TEMPLATE,
+  ORG_SUBTABS,
+  PROVIDER_CONFIG,
+  STORAGE_KEY,
+  TIMEZONES,
+  VALID_UOMS,
+  maskKey,
+  type AllSettings,
+  type DataSubTab,
+  type DefaultSettings,
+  type EmailSettings,
+  type GeneralSettings,
+  type IntegrationSettings,
+  type IntegrationsSubTab,
+  type OrgSubTab,
+  type SettingsGroup,
+  type UserRecord,
+} from "@/components/settings-page-config";
+import {
   getSettings as apiGetSettings,
   updateSettings as apiUpdateSettings,
   createUser as apiCreateUser,
@@ -98,7 +134,7 @@ import { PluginsPage } from "@/components/plugins-page";
 import { LabourCostManager } from "@/components/labour-cost-manager";
 import { BurdenManager } from "@/components/burden-manager";
 import { TravelPolicyManager } from "@/components/travel-policy-manager";
-import { detectCli, listRateSchedules } from "@/lib/api";
+import { listRateSchedules } from "@/lib/api";
 import {
   exportAllDataManagement,
   parseExportFile,
@@ -106,400 +142,6 @@ import {
   type ImportSummary,
   type ImportProgress,
 } from "@/lib/data-export-import";
-
-const STORAGE_KEY = "bidwright-settings";
-
-type SettingsGroup = "organization" | "data" | "integrations" | "users";
-type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
-type DataSubTab = "categories" | "clients" | "conditions" | "catalogs" | "rates" | "costs" | "travel";
-type IntegrationsSubTab = "email" | "apikeys" | "agent" | "plugins";
-
-const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "brand", label: "Brand" },
-  { id: "departments", label: "Departments" },
-  { id: "defaults", label: "Defaults" },
-  { id: "terms", label: "Terms & Conditions" },
-  { id: "personas", label: "Estimator Personas" },
-];
-const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
-  { id: "categories", label: "Categories" },
-  { id: "catalogs", label: "Items & Catalogs" },
-  { id: "rates", label: "Rate Schedules" },
-  { id: "costs", label: "Labour Costs" },
-  { id: "travel", label: "Travel Policies" },
-  { id: "clients", label: "Clients" },
-  { id: "conditions", label: "Inclusions & Exclusions" },
-];
-const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
-  { id: "agent", label: "Agent Runtime" },
-  { id: "apikeys", label: "API Keys" },
-  { id: "email", label: "Email" },
-  { id: "plugins", label: "Plugins" },
-];
-
-interface GeneralSettings {
-  timezone: string;
-  currency: string;
-  dateFormat: string;
-  fiscalYearStart: number;
-}
-
-interface EmailSettings {
-  smtpHost: string;
-  smtpPort: string;
-  smtpUsername: string;
-  smtpPassword: string;
-  fromAddress: string;
-  fromName: string;
-}
-
-interface DefaultSettings {
-  defaultMarkup: number;
-  defaultBreakoutStyle: string;
-  defaultQuoteType: string;
-}
-
-interface UserRecord {
-  id: string;
-  name: string;
-  email: string;
-  role: "Estimator" | "Admin" | "Viewer";
-  active: boolean;
-}
-
-interface IntegrationSettings {
-  openaiApiKey: string;
-  anthropicApiKey: string;
-  openrouterApiKey: string;
-  geminiApiKey: string;
-  lmstudioBaseUrl: string;
-  llmProvider: string;
-  llmModel: string;
-  azureDiEndpoint: string;
-  azureDiKey: string;
-}
-
-interface AllSettings {
-  general: GeneralSettings;
-  email: EmailSettings;
-  defaults: DefaultSettings;
-  users: UserRecord[];
-  integrations: IntegrationSettings;
-  termsAndConditions: string;
-}
-
-const DEFAULT_BRAND: BrandProfile = {
-  companyName: "",
-  tagline: "",
-  industry: "",
-  description: "",
-  services: [],
-  targetMarkets: [],
-  brandVoice: "",
-  colors: { primary: "", secondary: "", accent: "" },
-  logoUrl: "",
-  socialLinks: {},
-  websiteUrl: "",
-  lastCapturedAt: null,
-};
-
-const DEFAULT_SETTINGS: AllSettings = {
-  general: {
-    timezone: "America/New_York",
-    currency: "USD",
-    dateFormat: "MM/DD/YYYY",
-    fiscalYearStart: 1,
-  },
-  email: {
-    smtpHost: "",
-    smtpPort: "587",
-    smtpUsername: "",
-    smtpPassword: "",
-    fromAddress: "",
-    fromName: "",
-  },
-  defaults: {
-    defaultMarkup: 15,
-    defaultBreakoutStyle: "category",
-    defaultQuoteType: "Firm",
-  },
-  users: [
-    {
-      id: "default-user",
-      name: "Default Estimator",
-      email: "estimator@company.com",
-      role: "Admin",
-      active: true,
-    },
-  ],
-  integrations: {
-    openaiApiKey: "",
-    anthropicApiKey: "",
-    openrouterApiKey: "",
-    geminiApiKey: "",
-    lmstudioBaseUrl: "http://localhost:1234/v1",
-    llmProvider: "anthropic",
-    llmModel: "claude-sonnet-4-20250514",
-    azureDiEndpoint: "",
-    azureDiKey: "",
-  },
-  termsAndConditions: "",
-};
-
-const GROUPS: { key: SettingsGroup; label: string; icon: typeof Building2 }[] = [
-  { key: "organization", label: "Organization", icon: Building2 },
-  { key: "data", label: "Data Management", icon: Layers },
-  { key: "integrations", label: "Integrations", icon: Zap },
-  { key: "users", label: "Users & Access", icon: Users },
-];
-
-const TIMEZONES = [
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "America/Anchorage",
-  "Pacific/Honolulu",
-  "America/Toronto",
-  "America/Vancouver",
-  "America/Edmonton",
-  "America/Winnipeg",
-  "America/Halifax",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Australia/Sydney",
-  "Australia/Melbourne",
-  "Asia/Tokyo",
-  "Asia/Shanghai",
-  "UTC",
-];
-
-const CURRENCIES = ["USD", "CAD", "EUR", "GBP", "AUD", "NZD", "CHF", "JPY"];
-const DATE_FORMATS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
-
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-
-const CALCULATION_TYPES: { value: CalculationType; label: string }[] = [
-  { value: "auto_labour", label: "Auto Labour" },
-  { value: "auto_equipment", label: "Auto Equipment" },
-  { value: "auto_stock", label: "Auto Stock" },
-  { value: "auto_consumable", label: "Auto Consumable" },
-  { value: "auto_subcontract", label: "Auto Subcontract" },
-  { value: "direct_price", label: "Direct Price" },
-  { value: "manual", label: "Manual" },
-  { value: "formula", label: "Formula" },
-];
-
-const VALID_UOMS = ["EA", "LF", "SF", "SY", "CY", "TON", "LB", "GAL", "HR", "DAY", "WK", "MO", "LS", "MH", "CF", "BF", "PC", "SET", "BAG", "BOX", "ROLL"];
-
-const PROVIDER_CONFIG: Record<string, { label: string; keyField: keyof IntegrationSettings; placeholder: string; keyLabel: string }> = {
-  anthropic: { label: "Anthropic", keyField: "anthropicApiKey", placeholder: "sk-ant-***", keyLabel: "Anthropic API Key" },
-  openai: { label: "OpenAI", keyField: "openaiApiKey", placeholder: "sk-***", keyLabel: "OpenAI API Key" },
-  openrouter: { label: "OpenRouter", keyField: "openrouterApiKey", placeholder: "sk-or-***", keyLabel: "OpenRouter API Key" },
-  gemini: { label: "Google Gemini", keyField: "geminiApiKey", placeholder: "AI***", keyLabel: "Gemini API Key" },
-  lmstudio: { label: "LM Studio (Local)", keyField: "lmstudioBaseUrl", placeholder: "http://localhost:1234/v1", keyLabel: "LM Studio Base URL" },
-};
-
-// ── Searchable Model Selector ────────────────────────────────────────────────
-
-function SearchableModelSelect({
-  value,
-  onChange,
-  models,
-  loading,
-  placeholder = "Select a model...",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  models: { id: string; name: string }[];
-  loading: boolean;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
-
-  const filtered = useMemo(
-    () =>
-      models.filter(
-        (m) =>
-          m.id.toLowerCase().includes(search.toLowerCase()) ||
-          m.name.toLowerCase().includes(search.toLowerCase()),
-      ),
-    [models, search],
-  );
-
-  const selected = models.find((m) => m.id === value);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => { setOpen(!open); setTimeout(() => inputRef.current?.focus(), 0); }}
-        className={cn(
-          "w-full flex items-center justify-between rounded-lg border border-line bg-panel px-3 py-2 text-xs text-fg transition-colors hover:border-accent focus:outline-none focus:ring-1 focus:ring-accent",
-          open && "border-accent ring-1 ring-accent",
-        )}
-      >
-        <span className={selected ? "text-fg" : "text-fg/40"}>
-          {loading ? "Loading models..." : selected ? selected.name : placeholder}
-        </span>
-        <ChevronDown className={cn("h-3 w-3 text-fg/40 transition-transform", open && "rotate-180")} />
-      </button>
-      {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-lg border border-line bg-panel shadow-lg">
-          <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-            <Search className="h-3 w-3 text-fg/40 shrink-0" />
-            <input
-              ref={inputRef}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search models..."
-              className="flex-1 bg-transparent text-xs text-fg outline-none placeholder:text-fg/30"
-            />
-          </div>
-          <div className="max-h-56 overflow-y-auto overscroll-contain">
-            {loading ? (
-              <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-fg/40">
-                <Loader2 className="h-3 w-3 animate-spin" /> Fetching models...
-              </div>
-            ) : filtered.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-fg/40">
-                {models.length === 0 ? "Enter an API key and test connection to load models" : "No models match your search"}
-              </div>
-            ) : (
-              filtered.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => { onChange(m.id); setOpen(false); setSearch(""); }}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-accent/10",
-                    m.id === value && "bg-accent/5 text-accent",
-                  )}
-                >
-                  {m.id === value && <Check className="h-3 w-3 shrink-0 text-accent" />}
-                  <div className={m.id === value ? "" : "pl-5"}>
-                    <div className="font-medium">{m.name}</div>
-                    {m.name !== m.id && <div className="text-[10px] text-fg/30">{m.id}</div>}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const ITEM_SOURCE_OPTIONS: { value: EntityCategory["itemSource"]; label: string; description: string }[] = [
-  { value: "freeform", label: "Freeform", description: "User types item name directly" },
-  { value: "rate_schedule", label: "Rate Schedule", description: "Items come from rate schedules" },
-  { value: "catalog", label: "Catalog", description: "Items come from a catalog" },
-];
-
-const EDITABLE_FIELD_KEYS: { key: keyof EntityCategory["editableFields"]; label: string }[] = [
-  { key: "quantity", label: "Quantity" },
-  { key: "cost", label: "Cost" },
-  { key: "markup", label: "Markup" },
-  { key: "price", label: "Price" },
-  { key: "unit1", label: "Unit 1" },
-  { key: "unit2", label: "Unit 2" },
-  { key: "unit3", label: "Unit 3" },
-];
-
-const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
-  name: "",
-  entityType: "",
-  shortform: "",
-  defaultUom: "EA",
-  validUoms: ["EA"],
-  editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false },
-  unitLabels: { unit1: "Unit 1", unit2: "Unit 2", unit3: "Unit 3" },
-  calculationType: "manual",
-  calcFormula: "",
-  itemSource: "freeform",
-  catalogId: null,
-  color: "#6366f1",
-  order: 999,
-  isBuiltIn: false,
-  enabled: true,
-};
-
-function maskKey(value: string) {
-  if (!value || value.length < 8) return value ? "****" : "";
-  return value.slice(0, 4) + "****" + value.slice(-4);
-}
-
-// ── Tag Input Helper ─────────────────────────────────────────────────────────
-
-function TagInput({ values, onChange, placeholder }: { values: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
-  const [input, setInput] = useState("");
-  const add = () => {
-    const trimmed = input.trim();
-    if (trimmed && !values.includes(trimmed)) {
-      onChange([...values, trimmed]);
-    }
-    setInput("");
-  };
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
-        {values.map((v, i) => (
-          <span key={i} className="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent">
-            {v}
-            <button onClick={() => onChange(values.filter((_, j) => j !== i))} className="hover:text-danger">
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
-          placeholder={placeholder}
-          className="flex-1"
-        />
-        <Button variant="secondary" size="sm" onClick={add} disabled={!input.trim()}>
-          <Plus className="h-3 w-3" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── Color Swatch ─────────────────────────────────────────────────────────────
-
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <div>
-      <Label>{label}</Label>
-      <div className="flex items-center gap-2">
-        <input
-          type="color"
-          value={value || "#000000"}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-8 w-8 cursor-pointer rounded border border-line"
-        />
-        <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="#000000" className="flex-1" />
-      </div>
-    </div>
-  );
-}
 
 // ── Main Component ───────────────────────────────────────────────────────────
 
@@ -2636,186 +2278,5 @@ export function SettingsPage({
       )}
 
     </div>
-  );
-}
-
-// ─── Agent Runtime Settings Component ────────────────────────────────────
-
-function AgentRuntimeSettings({
-  settings,
-  onUpdate,
-  onUpdateDefaults,
-}: {
-  settings: { integrations: IntegrationSettings & Record<string, any>; defaults: DefaultSettings & Record<string, any> };
-  onUpdate: (patch: Record<string, any>) => void;
-  onUpdateDefaults: (patch: Partial<DefaultSettings>) => void;
-}) {
-  const [cliStatus, setCliStatus] = useState<{
-    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
-    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
-    configured: { runtime: string | null; model: string | null };
-  } | null>(null);
-  const [detecting, setDetecting] = useState(true);
-
-  useEffect(() => {
-    setDetecting(true);
-    detectCli()
-      .then((result) => setCliStatus(result as any))
-      .catch(() => setCliStatus(null))
-      .finally(() => setDetecting(false));
-  }, []);
-
-  const currentRuntime = settings.integrations.agentRuntime || cliStatus?.configured?.runtime || "";
-  const currentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Agent Runtime</CardTitle>
-      </CardHeader>
-      <CardBody className="space-y-4">
-
-      {/* CLI Detection Status */}
-      <div className="rounded-lg border border-line p-4 space-y-3">
-        <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">Detected CLIs</h4>
-        {detecting ? (
-          <div className="text-xs text-fg/40">Detecting installed CLIs...</div>
-        ) : (
-          <div className="space-y-2">
-            {/* Claude Code */}
-            <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
-              <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${cliStatus?.claude?.available ? "bg-success" : "bg-fg/20"}`} />
-                <span className="text-sm font-medium">Claude Code</span>
-                {cliStatus?.claude?.version && (
-                  <span className="text-[10px] text-fg/30">{cliStatus.claude.version}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {cliStatus?.claude?.available ? (
-                  <>
-                    <span className="text-[10px] text-fg/40">{cliStatus.claude.path}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.claude.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                      {cliStatus.claude.auth?.authenticated ? `Auth: ${cliStatus.claude.auth.method}` : "Not authenticated"}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-[10px] text-fg/30">Not installed — run: npm i -g @anthropic-ai/claude-code</span>
-                )}
-              </div>
-            </div>
-
-            {/* Codex */}
-            <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
-              <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${cliStatus?.codex?.available ? "bg-success" : "bg-fg/20"}`} />
-                <span className="text-sm font-medium">Codex CLI</span>
-                {cliStatus?.codex?.version && (
-                  <span className="text-[10px] text-fg/30">{cliStatus.codex.version}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {cliStatus?.codex?.available ? (
-                  <>
-                    <span className="text-[10px] text-fg/40">{cliStatus.codex.path}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.codex.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                      {cliStatus.codex.auth?.authenticated ? `Auth: ${cliStatus.codex.auth.method}` : "Not authenticated"}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-[10px] text-fg/30">Not installed — see openai.com/codex</span>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Runtime Selection */}
-      <div>
-        <Label>Preferred Runtime</Label>
-        <Select
-          value={currentRuntime}
-          onChange={(e) => onUpdate({ agentRuntime: e.target.value || null })}
-        >
-          <option value="">Auto-detect (best available)</option>
-          <option value="claude-code" disabled={!cliStatus?.claude?.available}>
-            Claude Code CLI {!cliStatus?.claude?.available ? "(not installed)" : ""}
-          </option>
-          <option value="codex" disabled={!cliStatus?.codex?.available}>
-            Codex CLI {!cliStatus?.codex?.available ? "(not installed)" : ""}
-          </option>
-        </Select>
-      </div>
-
-      {/* Model Selection */}
-      <div>
-        <Label>Model</Label>
-        {(() => {
-          const models = currentRuntime === "codex"
-            ? (cliStatus?.codex?.models || [])
-            : currentRuntime === "claude-code"
-            ? (cliStatus?.claude?.models || [])
-            : [...(cliStatus?.claude?.models || []), ...(cliStatus?.codex?.models || [])];
-          // Only show alias models (short IDs), not full ID duplicates
-          const filtered = models.filter(m => !m.id.startsWith("claude-") && !m.id.startsWith("gpt-5."));
-          const displayModels = filtered.length > 0 ? filtered : models;
-          return (
-            <Select
-              value={currentModel}
-              onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
-            >
-              <option value="">Default</option>
-              {displayModels.map((m) => (
-                <option key={m.id} value={m.id}>{m.name} — {m.description}</option>
-              ))}
-            </Select>
-          );
-        })()}
-        <p className="text-[10px] text-fg/30 mt-1.5">Models detected from installed CLI runtimes. Change runtime above to see different models.</p>
-      </div>
-
-      {/* CLI Path Override */}
-      <div>
-        <Label>CLI Path Override (optional)</Label>
-        <Input
-          type="text"
-          placeholder={currentRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
-          value={currentRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
-          onChange={(e) => {
-            if (currentRuntime === "codex") {
-              onUpdate({ codexPath: e.target.value || null });
-            } else {
-              onUpdate({ claudeCodePath: e.target.value || null });
-            }
-          }}
-        />
-        <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
-      </div>
-
-      {/* Max Iterations */}
-      <div>
-        <Label>Max Agent Iterations</Label>
-        <Input
-          type="number"
-          value={(settings.defaults as any).maxAgentIterations ?? 200}
-          onChange={(e) => onUpdateDefaults({ maxAgentIterations: parseInt(e.target.value) || 200 } as any)}
-          placeholder="200"
-          min={10}
-          max={1000}
-        />
-        <p className="mt-1 text-[11px] text-fg/40">Maximum tool call iterations for AI estimating runs</p>
-      </div>
-
-      {/* Auth Note */}
-      <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
-        <p className="font-medium text-fg/50">Authentication</p>
-        <p>Claude Code uses your <code className="text-fg/50">ANTHROPIC_API_KEY</code> environment variable or OAuth login (run <code className="text-fg/50">claude</code> in terminal and type <code className="text-fg/50">/login</code>).</p>
-        <p>Codex uses your <code className="text-fg/50">OPENAI_API_KEY</code> environment variable or OAuth login.</p>
-        <p>API keys configured in the API Keys tab are also passed to the CLI automatically.</p>
-      </div>
-
-      </CardBody>
-    </Card>
   );
 }

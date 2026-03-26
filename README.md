@@ -6,7 +6,7 @@ AI-first construction estimating platform. Manage project bids, quotes, and esti
 
 - **Frontend:** Next.js 16, React 19, Tailwind CSS, Radix UI
 - **API:** Fastify 5
-- **Database:** SQLite (dev) via Prisma ORM
+- **Database:** PostgreSQL + pgvector via Prisma ORM
 - **AI:** OpenAI, Anthropic SDKs — multi-provider LLM support
 - **Monorepo:** pnpm workspaces + Turborepo
 - **Language:** TypeScript (strict) with Zod runtime validation
@@ -46,6 +46,9 @@ pnpm install
 cp .env.example .env
 # Fill in your API keys in .env
 
+# Start local infrastructure
+docker compose up -d postgres redis
+
 # Generate Prisma client & sync schema
 pnpm db:generate
 pnpm db:push
@@ -57,7 +60,8 @@ pnpm db:seed
 ### Environment Variables
 
 ```
-DATABASE_URL="file:./packages/db/dev.db"
+DATABASE_URL="postgresql://bidwright:bidwright@localhost:5432/bidwright"
+REDIS_URL="redis://localhost:6379"
 OPENAI_API_KEY=""
 OPENAI_MODEL="gpt-5"
 OPENAI_EMBEDDING_MODEL="text-embedding-3-large"
@@ -67,14 +71,16 @@ NEXT_PUBLIC_API_BASE_URL="http://localhost:4001"
 
 ### Development
 
+`pnpm dev` starts Postgres/Redis/Ollama, pushes the Prisma schema, and launches web, API, and worker.
+
 ```bash
-# Run all services (web + api + worker)
+# Run all services (web + api + worker + local infra)
 pnpm dev
 
-# Or individually
-pnpm dev:web      # Next.js → localhost:3000
-pnpm dev:api      # Fastify API → localhost:4001
-pnpm dev:worker   # Background worker
+# Or run app processes individually after infra is up
+pnpm dev:web
+pnpm dev:api
+pnpm dev:worker
 ```
 
 ### Build & Checks
@@ -97,7 +103,7 @@ pnpm lint         # Linting
 
 ## Database
 
-SQLite in development with Prisma ORM. Key models:
+PostgreSQL in development with Prisma ORM. Key models:
 
 `Project` → `Quote` → `Revision` → `Worksheet` → `WorksheetItem`
 

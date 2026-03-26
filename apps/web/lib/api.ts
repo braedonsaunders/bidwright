@@ -1,52 +1,8 @@
-const DEFAULT_API_BASE_URL = "http://localhost:4001";
+export { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
+export * from "./api/settings";
+export * from "./api/auth";
 
-export const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL;
-
-function resolveApiUrl(path: string) {
-  return new URL(path, apiBaseUrl).toString();
-}
-
-function getAuthToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("bw_token");
-}
-
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(init?.headers as Record<string, string> ?? {}),
-  };
-  if (token && !headers["Authorization"]) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const { headers: _discardHeaders, ...restInit } = init ?? {};
-  const response = await fetch(resolveApiUrl(path), {
-    cache: "no-store",
-    ...restInit,
-    headers,
-  });
-
-  if (response.status === 401) {
-    // Clear auth state and redirect to login
-    if (typeof window !== "undefined" && !path.includes("/auth/")) {
-      localStorage.removeItem("bw_token");
-      localStorage.removeItem("bw_user");
-      localStorage.removeItem("bw_org");
-      window.location.href = "/login";
-    }
-  }
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
-    throw new Error(
-      `API request failed for ${path} (${response.status} ${response.statusText})${errorBody ? `: ${errorBody}` : ""}`
-    );
-  }
-
-  return (await response.json()) as T;
-}
+import { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 
 export interface ProjectListItem {
   id: string;
@@ -1177,9 +1133,7 @@ export async function clearScheduleBaseline(projectId: string) {
 }
 
 export function getSchedulePdfUrl(projectId: string) {
-  const token = getAuthToken();
-  const url = resolveApiUrl(`/projects/${projectId}/pdf/schedule`);
-  return token ? `${url}?token=${token}` : url;
+  return resolveApiUrl(`/projects/${projectId}/pdf/schedule`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1700,9 +1654,8 @@ export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "ma
   if (layoutOptions) {
     url += `?layout=${encodeURIComponent(JSON.stringify(layoutOptions))}`;
   }
-  const token = getAuthToken();
   const res = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include",
   });
   if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
   const blob = await res.blob();
@@ -1846,19 +1799,12 @@ export async function submitPackageIngest(input: PackageIngestInput) {
 
   const path = input.projectId ? `/projects/${input.projectId}/packages/upload` : "/ingestion/package";
 
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-  };
-  const token = getAuthToken();
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const response = await fetch(resolveApiUrl(path), {
     method: "POST",
     body: formData,
-    headers,
+    headers: { Accept: "application/json" },
     cache: "no-store",
+    credentials: "include",
   });
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -1919,6 +1865,7 @@ export async function importPreview(projectId: string, file: File) {
       Accept: "application/json",
     },
     cache: "no-store",
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -2131,11 +2078,9 @@ export async function uploadFile(
     body: formData,
     headers: {
       Accept: "application/json",
-      ...(typeof window !== "undefined" && getAuthToken()
-        ? { Authorization: `Bearer ${getAuthToken()}` }
-        : {}),
     },
     cache: "no-store",
+    credentials: "include",
   });
 
   if (!response.ok) {
@@ -2147,17 +2092,11 @@ export async function uploadFile(
 }
 
 export function getFileDownloadUrl(projectId: string, nodeId: string, inline = false): string {
-  const token = getAuthToken();
-  const url = resolveApiUrl(`/projects/${projectId}/files/${nodeId}/download${inline ? "?inline=1" : ""}`);
-  if (!token) return url;
-  return url + (inline ? "&" : "?") + `token=${token}`;
+  return resolveApiUrl(`/projects/${projectId}/files/${nodeId}/download${inline ? "?inline=1" : ""}`);
 }
 
 export function getDocumentDownloadUrl(projectId: string, docId: string, inline = false): string {
-  const token = getAuthToken();
-  const url = resolveApiUrl(`/projects/${projectId}/documents/${docId}/download${inline ? "?inline=1" : ""}`);
-  if (!token) return url;
-  return url + (inline ? "&" : "?") + `token=${token}`;
+  return resolveApiUrl(`/projects/${projectId}/documents/${docId}/download${inline ? "?inline=1" : ""}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2295,391 +2234,6 @@ export async function pluginFetch(pluginId: string, request: PluginFetchRequest)
 }
 
 // ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
-
-export interface BrandProfile {
-  companyName: string;
-  tagline: string;
-  industry: string;
-  description: string;
-  services: string[];
-  targetMarkets: string[];
-  brandVoice: string;
-  colors: { primary: string; secondary: string; accent: string };
-  logoUrl: string;
-  socialLinks: Record<string, string>;
-  websiteUrl: string;
-  lastCapturedAt: string | null;
-}
-
-export interface AppSettingsRecord {
-  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
-  email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
-  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string };
-  brand: BrandProfile;
-  termsAndConditions?: string;
-}
-
-export async function getSettings() {
-  return apiRequest<AppSettingsRecord>("/settings");
-}
-
-export async function testEmailConnection() {
-  return apiRequest<{ success: boolean; message: string }>("/settings/test-email", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-export async function testProviderKey(provider: string, apiKey: string, baseUrl?: string) {
-  return apiRequest<{ success: boolean; message: string }>("/settings/integrations/test-key", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, apiKey, baseUrl }),
-  });
-}
-
-export async function fetchProviderModels(provider: string, apiKey: string, baseUrl?: string) {
-  return apiRequest<{ models: { id: string; name: string }[] }>("/settings/integrations/models", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, apiKey, baseUrl }),
-  });
-}
-
-export async function searchTools(query: string) {
-  const params = new URLSearchParams({ search: query });
-  return apiRequest<Array<{ id: string; name: string; description: string; pluginId: string }>>(`/api/tools?${params.toString()}`);
-}
-
-export async function updateSettings(patch: Partial<AppSettingsRecord>) {
-  return apiRequest<AppSettingsRecord>("/settings", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function getBrand() {
-  return apiRequest<BrandProfile>("/settings/brand");
-}
-
-export async function updateBrand(patch: Partial<BrandProfile>) {
-  return apiRequest<BrandProfile>("/settings/brand", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function captureBrand(websiteUrl: string) {
-  return apiRequest<BrandProfile>("/settings/brand/capture", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ websiteUrl }),
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
-
-export interface AuthUser {
-  id: string;
-  email: string;
-  name: string;
-  role: "admin" | "estimator" | "viewer";
-  active: boolean;
-  organizationId?: string;
-  lastLoginAt?: string | null;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface OrgInfo {
-  id: string;
-  name: string;
-  slug: string;
-}
-
-export interface LoginResponse {
-  token: string;
-  user: AuthUser;
-  organization: OrgInfo | null;
-  isSuperAdmin?: boolean;
-}
-
-export interface MeResponse {
-  user: AuthUser;
-  organization: OrgInfo | null;
-  isSuperAdmin: boolean;
-  impersonating: boolean;
-}
-
-export interface SignupRequest {
-  orgName: string;
-  orgSlug: string;
-  email: string;
-  name: string;
-  password: string;
-}
-
-export interface SignupResponse {
-  token: string;
-  user: AuthUser;
-  organization: OrgInfo;
-}
-
-export interface SetupStatusResponse {
-  initialized: boolean;
-  hasOrganizations: boolean;
-  superAdminCount: number;
-  organizationCount: number;
-}
-
-export async function login(email: string, password: string, orgSlug?: string): Promise<LoginResponse> {
-  return apiRequest<LoginResponse>("/api/auth/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password, orgSlug }),
-  });
-}
-
-export async function signup(data: SignupRequest): Promise<SignupResponse> {
-  return apiRequest<SignupResponse>("/api/auth/signup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-}
-
-export async function superLogin(email: string, password: string): Promise<{ token: string; superAdmin: { id: string; email: string; name: string } }> {
-  return apiRequest("/api/auth/super-login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-}
-
-export async function logout(): Promise<{ ok: boolean }> {
-  return apiRequest<{ ok: boolean }>("/api/auth/logout", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-export async function getCurrentUser(): Promise<MeResponse> {
-  return apiRequest<MeResponse>("/api/auth/me");
-}
-
-export async function getSetupStatus(): Promise<SetupStatusResponse> {
-  return apiRequest<SetupStatusResponse>("/api/setup/status");
-}
-
-export async function initSetup(data: {
-  email: string;
-  name: string;
-  password: string;
-  orgName?: string;
-  orgSlug?: string;
-}): Promise<{ token: string; superAdmin: { id: string; email: string; name: string }; organization: OrgInfo | null }> {
-  return apiRequest("/api/setup/init", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-}
-
-export async function seedSampleData(organizationId: string): Promise<{ ok: boolean; message: string }> {
-  return apiRequest("/api/setup/seed", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
-export async function seedEssentials(organizationId: string): Promise<{ ok: boolean }> {
-  return apiRequest("/api/setup/seed-essentials", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
-// ── Admin API ─────────────────────────────────────────────────────────
-
-export interface OrgLimits {
-  maxUsers: number;
-  maxProjects: number;
-  maxStorage: number;
-  maxKnowledgeBooks: number;
-}
-
-export interface AdminOrg {
-  id: string;
-  name: string;
-  slug: string;
-  createdAt: string;
-  updatedAt: string;
-  userCount: number;
-  projectCount: number;
-  knowledgeBookCount: number;
-  limits: OrgLimits;
-}
-
-export async function adminListOrganizations(): Promise<AdminOrg[]> {
-  return apiRequest<AdminOrg[]>("/api/admin/organizations");
-}
-
-export async function adminCreateOrganization(data: {
-  name: string;
-  slug?: string;
-  adminEmail?: string;
-  adminName?: string;
-  adminPassword?: string;
-}): Promise<{ organization: OrgInfo; adminUser: { id: string; email: string; name: string } | null }> {
-  return apiRequest("/api/admin/organizations", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-}
-
-export async function adminDeleteOrganization(orgId: string): Promise<{ ok: boolean }> {
-  return apiRequest(`/api/admin/organizations/${orgId}`, { method: "DELETE" });
-}
-
-export async function adminListOrgUsers(orgId: string): Promise<AuthUser[]> {
-  return apiRequest<AuthUser[]>(`/api/admin/organizations/${orgId}/users`);
-}
-
-export async function adminImpersonate(organizationId: string): Promise<{ token: string; organization: OrgInfo }> {
-  return apiRequest("/api/admin/impersonate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
-export async function adminStopImpersonation(): Promise<{ ok: boolean }> {
-  return apiRequest("/api/admin/stop-impersonation", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-export async function adminUpdateOrgLimits(orgId: string, limits: Partial<OrgLimits>): Promise<OrgLimits> {
-  return apiRequest(`/api/admin/organizations/${orgId}/limits`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(limits),
-  });
-}
-
-export async function adminCreateOrgUser(orgId: string, data: {
-  email: string;
-  name: string;
-  role?: string;
-  password?: string;
-}): Promise<AuthUser> {
-  return apiRequest(`/api/admin/organizations/${orgId}/users`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-}
-
-export async function adminUpdateUser(userId: string, patch: Partial<{
-  name: string;
-  email: string;
-  role: string;
-  active: boolean;
-  password: string;
-}>): Promise<AuthUser> {
-  return apiRequest(`/api/admin/users/${userId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function adminDeleteUser(userId: string): Promise<{ ok: boolean }> {
-  return apiRequest(`/api/admin/users/${userId}`, { method: "DELETE" });
-}
-
-export async function adminMoveUser(userId: string, organizationId: string): Promise<AuthUser> {
-  return apiRequest(`/api/admin/users/${userId}/move`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
-export async function adminGetMyMemberships(): Promise<{ organizationIds: string[] }> {
-  return apiRequest("/api/admin/my-memberships");
-}
-
-export async function listUsers(): Promise<AuthUser[]> {
-  return apiRequest<AuthUser[]>("/users");
-}
-
-export async function createUser(input: { email: string; name: string; role: "admin" | "estimator" | "viewer"; password?: string }): Promise<AuthUser> {
-  return apiRequest<AuthUser>("/users", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateUser(userId: string, patch: Partial<{ email: string; name: string; role: "admin" | "estimator" | "viewer"; active: boolean; password: string }>): Promise<AuthUser> {
-  return apiRequest<AuthUser>(`/users/${userId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function deleteUser(userId: string): Promise<AuthUser> {
-  return apiRequest<AuthUser>(`/users/${userId}`, {
-    method: "DELETE",
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Profile & Org Switching
-// ---------------------------------------------------------------------------
-
-export async function updateProfile(data: { name?: string; currentPassword?: string; newPassword?: string }) {
-  return apiRequest<{ id: string; email: string; name: string }>("/api/auth/profile", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-}
-
-export interface UserOrganization {
-  organizationId: string;
-  name: string;
-  slug: string;
-  role: string;
-  current: boolean;
-}
-
-export async function listMyOrganizations(): Promise<UserOrganization[]> {
-  return apiRequest<UserOrganization[]>("/api/auth/organizations");
-}
-
-export async function switchOrganization(organizationId: string): Promise<LoginResponse> {
-  return apiRequest<LoginResponse>("/api/auth/switch-org", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Knowledge Books
 // ---------------------------------------------------------------------------
 
@@ -2747,14 +2301,11 @@ export async function ingestKnowledgeFile(input: {
   if (input.scope) form.append("scope", input.scope);
   if (input.projectId) form.append("projectId", input.projectId);
 
-  const token = getAuthToken();
-  const headers: Record<string, string> = { Accept: "application/json" };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
   const response = await fetch(resolveApiUrl("/knowledge/ingest-file"), {
     method: "POST",
-    headers,
+    headers: { Accept: "application/json" },
     body: form,
+    credentials: "include",
   });
   if (!response.ok) {
     const err = await response.json().catch(() => ({ message: response.statusText }));
@@ -2778,15 +2329,11 @@ export async function deleteKnowledgeBook(bookId: string) {
 }
 
 export function getBookFileUrl(bookId: string) {
-  const token = getAuthToken();
-  const url = resolveApiUrl(`/knowledge/books/${bookId}/file?inline=1`);
-  return token ? `${url}&token=${token}` : url;
+  return resolveApiUrl(`/knowledge/books/${bookId}/file?inline=1`);
 }
 
 export function getBookThumbnailUrl(bookId: string) {
-  const token = getAuthToken();
-  const base = resolveApiUrl(`/knowledge/books/${bookId}/thumbnail`);
-  return token ? `${base}?token=${token}` : base;
+  return resolveApiUrl(`/knowledge/books/${bookId}/thumbnail`);
 }
 
 export async function searchBookChunks(bookId: string, query: string, limit = 20) {
@@ -3315,10 +2862,8 @@ export async function deletePersona(id: string): Promise<void> {
 }
 
 export function connectCliStream(projectId: string): EventSource {
-  const token = typeof window !== "undefined" ? localStorage.getItem("bw_token") : null;
   const url = new URL(`/api/cli/${projectId}/stream`, apiBaseUrl);
-  if (token) url.searchParams.set("token", token);
-  return new EventSource(url.toString());
+  return new EventSource(url.toString(), { withCredentials: true });
 }
 
 export async function stopCliSession(projectId: string) {
