@@ -314,6 +314,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [docsExpanded, setDocsExpanded] = useState(false);
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
   const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
+  const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
@@ -332,8 +333,9 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         const integ = s?.integrations as Record<string, any> | undefined;
         if (integ?.llmProvider) setProvider(integ.llmProvider);
         if (integ?.llmModel) setModel(integ.llmModel);
-        // Use configured runtime if set
+        // Use configured runtime and model if set
         if (integ?.agentRuntime) setCliRuntime(integ.agentRuntime);
+        if (integ?.agentModel) setCliAgentModel(integ.agentModel);
       }).catch(() => {}),
       detectCli().then((result) => {
         setCliAvailable({ claude: result.claude.available, codex: result.codex.available });
@@ -595,8 +597,8 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
       if (cliRuntime) {
         // CLI-based intake (preferred)
-        // Use the agent-specific model, not the legacy LLM model setting
-        const cliModel = cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4";
+        // Use the agent model from org settings, falling back to sensible defaults
+        const cliModel = cliAgentModel || (cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4");
         const result = await startCliSession({ projectId, runtime: cliRuntime, model: cliModel, personaId: selectedPersonaId || undefined });
         setIntakeSessionId(result.sessionId);
         setIntakeStatus({
