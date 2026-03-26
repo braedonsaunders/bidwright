@@ -1508,8 +1508,8 @@ export async function deleteRateScheduleTier(scheduleId: string, tierId: string)
 }
 
 export async function addRateScheduleItem(scheduleId: string, input: {
-  name: string; code?: string; unit?: string; rates?: Record<string, number>; costRates?: Record<string, number>;
-  burden?: number; perDiem?: number; catalogItemId?: string; sortOrder?: number;
+  name: string; code?: string; unit?: string; rates?: Record<string, number>;
+  catalogItemId?: string; sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items`, {
     method: "POST",
@@ -1519,8 +1519,8 @@ export async function addRateScheduleItem(scheduleId: string, input: {
 }
 
 export async function updateRateScheduleItem(scheduleId: string, itemId: string, patch: {
-  name?: string; code?: string; unit?: string; rates?: Record<string, number>; costRates?: Record<string, number>;
-  burden?: number; perDiem?: number; sortOrder?: number;
+  name?: string; code?: string; unit?: string; rates?: Record<string, number>;
+  sortOrder?: number; travelPolicyId?: string;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items/${itemId}`, {
     method: "PATCH",
@@ -1567,7 +1567,7 @@ export async function deleteProjectRateSchedule(projectId: string, id: string): 
 }
 
 export async function updateProjectRateScheduleItem(projectId: string, scheduleId: string, itemId: string, patch: {
-  rates?: Record<string, number>; costRates?: Record<string, number>; burden?: number; perDiem?: number;
+  rates?: Record<string, number>;
 }): Promise<WorkspaceResponse> {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${scheduleId}/items/${itemId}`, {
     method: "PATCH",

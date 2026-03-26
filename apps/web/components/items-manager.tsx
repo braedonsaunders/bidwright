@@ -140,6 +140,7 @@ function CatalogItemDrawer({
         category: form.category,
       } as Partial<CatalogItem> & { category?: string });
       onSave(updated);
+      onClose();
     } catch (err) {
       console.error("Failed to update item:", err);
     } finally {
