@@ -218,8 +218,18 @@ You decide your own workflow. Here's the MANDATORY sequence:
    - **Vendor/supplier responsibilities** — "All valves and instrumentation will be supplied by others"
    Do NOT write a paragraph summary. Write a detailed, section-by-section breakdown that an estimator would present to a client.
 3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
-4. **Search the knowledge base** — Now that you understand the scope, call \`searchBooks\` and \`listDatasets\` to find reference data relevant to THIS project (man-hour tables, production rates, historical pricing, trade handbooks). Write the available knowledge sources and their relevance to memory so you can refer back to them repeatedly.
-4b. **Follow the Estimation Protocol** — Steps 1-10 above are MANDATORY for all labour hour estimates. Do not skip any step.
+4. **MANDATORY KNOWLEDGE GATE — DO NOT SKIP THIS STEP.**
+   You MUST call ALL of the following BEFORE creating ANY worksheets or items:
+   a. \`searchBooks\` — at least 3 different queries relevant to the scope (e.g. "carbon steel pipe welding hours", "valve installation man-hours", "equipment setting productivity")
+   b. \`listDatasets\` — review all available datasets
+   c. \`queryDataset\` — query at least 2 relevant datasets for production rates
+   d. \`WebSearch\` — search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
+
+   **Write the results to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count — you must query fresh from knowledge/datasets every time.
+
+   **This gate is enforced: if you create worksheets without having called searchBooks + listDatasets + queryDataset first, the estimate is invalid.**
+
+4b. **Follow the Estimation Protocol** — Steps 1-10 below are MANDATORY for all labour hour estimates. Do not skip any step.
 5. **IMPORT RATE SCHEDULES** — If getItemConfig shows categories with itemSource="rate_schedule":
    a. Call \`listRateSchedules\` to see all available org schedules
    b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed.
