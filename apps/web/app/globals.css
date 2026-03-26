@@ -75,18 +75,18 @@ body {
   background: hsla(var(--accent), 0.2);
 }
 
-/* Neutralize Next.js devtools overlay that blocks text selection globally.
-   The devtools inject a position:fixed inset:0 element with userSelect:none
-   and data-base-ui-inert attribute that covers the entire viewport. */
-[data-base-ui-inert] {
-  user-select: auto !important;
-  -webkit-user-select: auto !important;
-  pointer-events: none !important;
-}
-
-input, textarea, [contenteditable="true"], [role="textbox"] {
+/* Force text selection everywhere — Next.js devtools overlay injects
+   a fixed element with inline userSelect:none that blocks selection.
+   This nuclear override ensures selection always works. */
+*:not(.select-none) {
   -webkit-user-select: text !important;
   user-select: text !important;
+}
+
+/* Re-apply select-none only where explicitly used (table headers, etc) */
+.select-none {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 a {
