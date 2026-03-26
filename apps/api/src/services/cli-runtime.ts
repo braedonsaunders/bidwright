@@ -228,7 +228,6 @@ export async function spawnSession(opts: {
       "--verbose",
       "--max-turns", "200", // Prevent infinite loops
       "--mcp-config", mcpConfigPath, // Pass MCP config file path
-      "--no-session-persistence", // Don't save/resume sessions — each run starts fresh
     ];
     if (model) cliArgs.push("--model", model);
     // Auth: pass API key if provided. On bare metal (dev), the CLI uses
