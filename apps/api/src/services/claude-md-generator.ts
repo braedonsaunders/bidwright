@@ -297,6 +297,18 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Use Sub-agents (Agent tool) to process multiple worksheets in parallel when beneficial
 - Save progress to memory frequently so you can resume if stopped
 
+## COMPLETION CRITERIA — DO NOT STOP EARLY
+
+**Your job is NOT done until ALL of the following are true:**
+1. ✅ updateQuote called with project name, description, client
+2. ✅ Rate schedules imported for all required categories
+3. ✅ ALL worksheets created (every major scope area has a worksheet)
+4. ✅ ALL line items created in EVERY worksheet with quantities, rates, and sourceNotes
+5. ✅ Assumption log written to memory
+
+**If you have only done steps 1-2 (research/setup) you are LESS THAN HALFWAY DONE.**
+The bulk of the work is creating granular line items in every worksheet. Do NOT stop after importing rate schedules and querying knowledge. That is just preparation. KEEP GOING until every worksheet is fully populated.
+
 ## Estimation Protocol (MANDATORY)
 
 You MUST follow this protocol for every estimate. Skipping steps is NOT allowed.

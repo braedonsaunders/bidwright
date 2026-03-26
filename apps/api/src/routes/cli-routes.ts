@@ -145,7 +145,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const integrations = (settings as any)?.integrations || {};
 
     // Spawn CLI
-    const initialPrompt = prompt || "Start the intake estimation. Read the main specification document, understand the scope, then build out the complete estimate with worksheets and line items.";
+    const initialPrompt = prompt || "Start the intake estimation. Read CLAUDE.md, then read the main specification document and understand the full scope. Follow the Estimation Protocol (all 10 steps). You MUST create ALL worksheets AND populate them with granular line items — do NOT stop after research/setup. The job is not done until every worksheet has items with hours, rates, and sourceNotes. Keep going until the full estimate is built out.";
 
     try {
       const session = await spawnSession({
