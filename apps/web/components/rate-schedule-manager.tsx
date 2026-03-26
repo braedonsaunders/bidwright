@@ -490,18 +490,28 @@ export function RateScheduleManager({
             {/* Drawer header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
               {editingHeader ? (
-                <div className="flex-1 space-y-2">
-                  <div className="flex gap-2">
-                    <Input className="text-sm font-medium flex-1" value={headerForm.name} onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })} />
-                    <Select className="w-32" value={headerForm.category} onChange={(e) => setHeaderForm({ ...headerForm, category: e.target.value })}>
-                      {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                    </Select>
+                <div className="flex-1 space-y-3">
+                  <div>
+                    <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
+                    <Input className="mt-1 text-sm font-medium" value={headerForm.name} onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })} />
                   </div>
-                  <div className="flex gap-2">
-                    <Input className="flex-1 text-xs" value={headerForm.description} onChange={(e) => setHeaderForm({ ...headerForm, description: e.target.value })} placeholder="Description" />
-                    <Input className="w-24 text-xs" type="number" step="0.1" value={headerForm.defaultMarkup} onChange={(e) => setHeaderForm({ ...headerForm, defaultMarkup: Number(e.target.value) || 0 })} placeholder="Markup %" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
+                      <Select className="mt-1" value={headerForm.category} onChange={(e) => setHeaderForm({ ...headerForm, category: e.target.value })}>
+                        {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Default Markup %</label>
+                      <Input className="mt-1" type="number" step="0.1" value={headerForm.defaultMarkup} onChange={(e) => setHeaderForm({ ...headerForm, defaultMarkup: Number(e.target.value) || 0 })} />
+                    </div>
                   </div>
-                  <div className="flex gap-2 justify-end">
+                  <div>
+                    <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Description</label>
+                    <Input className="mt-1 text-xs" value={headerForm.description} onChange={(e) => setHeaderForm({ ...headerForm, description: e.target.value })} placeholder="Optional description" />
+                  </div>
+                  <div className="flex gap-2 justify-end pt-1">
                     <Button size="xs" variant="ghost" onClick={() => setEditingHeader(false)}>Cancel</Button>
                     <Button size="xs" onClick={handleUpdateHeader}>Save</Button>
                   </div>
@@ -576,8 +586,45 @@ export function RateScheduleManager({
                     )}
                   </div>
 
+                  {/* Items & Rates */}
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
+                      <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
+                    </div>
+                    <AnimatePresence>
+                      {showAddItem && (
+                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
+                          <div className="flex items-end gap-2 mb-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
+                            <div className="flex-1 min-w-0">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
+                              <div className="mt-1">
+                                {loadedCatalogs.length > 0 ? (
+                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items..." />
+                                ) : (
+                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
+                                )}
+                              </div>
+                            </div>
+                            <div className="w-20">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
+                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
+                            </div>
+                            <div className="w-16">
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
+                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
+                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
+                              </Select>
+                            </div>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
+                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
                   {detail.items.length === 0 ? (
-                    <EmptyState>No items yet. Add rate items to this schedule.</EmptyState>
+                    <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">
@@ -646,6 +693,7 @@ export function RateScheduleManager({
                         </table>
                       </div>
                     )}
+                  </div>
                 </>
               )}
             </div>
