@@ -177,8 +177,14 @@ export async function spawnSession(opts: {
     BIDWRIGHT_QUOTE_ID: quoteId || "",
   };
 
-  // Write .claude/settings.json for Claude Code MCP discovery
+  // Clear stale Claude session data, then write fresh .claude/settings.json
   const claudeSettingsDir = join(projectDir, ".claude");
+  try {
+    const { rm } = await import("node:fs/promises");
+    await rm(claudeSettingsDir, { recursive: true, force: true });
+  } catch {
+    // Ignore — directory may not exist
+  }
   await mkdir(claudeSettingsDir, { recursive: true });
   await writeFile(join(claudeSettingsDir, "settings.json"), JSON.stringify({
     permissions: {
@@ -255,24 +261,19 @@ export async function spawnSession(opts: {
     }
   }
 
-  // Clear stale Claude session data so the CLI starts fresh (not resuming old context)
-  const claudeSessionDir = join(projectDir, ".claude");
-  try {
-    const { rm } = await import("node:fs/promises");
-    await rm(claudeSessionDir, { recursive: true, force: true });
-  } catch {
-    // Ignore — directory may not exist
-  }
+  // Note: .claude/ directory was already cleaned and recreated with settings.json above
 
   // Spawn the CLI process — use "ignore" for stdin since we pass prompt via -p flag
   // On Windows, shell:true is required to execute .cmd wrappers (e.g. claude.cmd)
   // MCP config is passed as a file path (not inline JSON) so shell escaping is safe
+  console.log(`[cli:spawn] cmd=${cliCmd} cwd=${projectDir} args=${JSON.stringify(cliArgs.slice(0, 6))}...`);
   const child = spawn(cliCmd, cliArgs, {
     cwd: projectDir,
     env: { ...process.env, ...cliEnv },
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
   });
+  console.log(`[cli:spawn] pid=${child.pid} killed=${child.killed}`);
 
   const events = new EventEmitter();
   const session: CliSession = {
