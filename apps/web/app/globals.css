@@ -72,8 +72,8 @@ body {
 }
 
 ::selection {
-  background: hsla(var(--accent), 0.4);
-  color: hsl(var(--fg));
+  background: hsl(210 100% 85%);
+  color: hsl(220 20% 12%);
 }
 
 
