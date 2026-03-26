@@ -162,7 +162,20 @@ export function registerCliRoutes(app: FastifyInstance) {
     const integrations = (settings as any)?.integrations || {};
 
     // Spawn CLI
-    const initialPrompt = prompt || "Start the intake estimation. Read CLAUDE.md carefully — follow EVERY step in order. Read the spec, updateQuote, getItemConfig, then MANDATORY: searchBooks (3+ queries), listDatasets, queryDataset (2+ queries), and WebSearch for referenced specs/codes BEFORE creating any worksheets. Prior memory does NOT substitute for fresh knowledge queries. Then follow the full Estimation Protocol (all 10 steps), create ALL worksheets, populate every one with granular line items with sourceNotes citing knowledge data. Run the Final QA Review at the end. Do NOT stop until every worksheet is fully populated and reviewed.";
+    const initialPrompt = prompt || `Read CLAUDE.md now. Then execute the FULL estimation workflow:
+
+1. Read the main spec document (use Read tool on documents/ folder)
+2. Call updateQuote with project name, description, client name
+3. Call getItemConfig to learn categories and rate schedules
+4. Read knowledge books in knowledge/ folder — read table of contents then relevant chapters
+5. listDatasets + queryDataset for production rates
+6. importRateSchedule for each needed trade category
+7. createWorksheet for each major scope section
+8. createWorksheetItem for EVERY line item in EVERY worksheet — this is the BULK of your work
+9. createCondition for exclusions and clarifications
+10. Call getWorkspace at the end to verify worksheets have items
+
+CRITICAL: You are NOT done until you have called createWorksheetItem multiple times to populate EVERY worksheet with real line items. Reading documents and writing a scope summary is only step 1-2 of 10. The MAJORITY of your work is steps 7-8: creating worksheets and populating them with dozens of line items each. If getWorkspace shows empty worksheets or zero items, you are NOT done. Keep going.`;
 
     try {
       const session = await spawnSession({

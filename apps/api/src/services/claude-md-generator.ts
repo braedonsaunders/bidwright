@@ -363,16 +363,22 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 
 ## COMPLETION CRITERIA — DO NOT STOP EARLY
 
+⚠️ **THIS IS THE MOST IMPORTANT SECTION. READ IT CAREFULLY.**
+
 **Your job is NOT done until ALL of the following are true:**
 1. ✅ updateQuote called with project name, description, client
 2. ✅ Rate schedules imported for all required categories
 3. ✅ ALL worksheets created (every major scope area has a worksheet)
 4. ✅ ALL line items created in EVERY worksheet with quantities, rates, and sourceNotes
 5. ✅ Assumption log written to memory
-6. ✅ **Final QA review completed** (see below)
+6. ✅ **Final QA: call getWorkspace and verify every worksheet has items**
 
-**If you have only done steps 1-2 (research/setup) you are LESS THAN HALFWAY DONE.**
-The bulk of the work is creating granular line items in every worksheet. Do NOT stop after importing rate schedules and querying knowledge. That is just preparation. KEEP GOING until every worksheet is fully populated.
+**COMMON FAILURE MODE: You read the documents, write a scope summary, and stop.** This is WRONG. Reading documents and writing a summary is step 1 of 10. You have not created ANY value until you call createWorksheet and createWorksheetItem.
+
+**Self-check before stopping:** Call getWorkspace. Count the worksheets and items. If you have 0 worksheets or 0 items, YOU ARE NOT DONE. You have only completed the research phase. The entire point of your job is to CREATE worksheets full of line items. KEEP GOING.
+
+**If you have only done research/setup, you are LESS THAN 20% DONE.**
+The bulk of the work is steps 7-8: creating worksheets and populating them with dozens of granular line items each. Do NOT stop after importing rate schedules and querying knowledge. That is just preparation. KEEP GOING until every worksheet is fully populated.
 
 ## Final QA Review (MANDATORY — run AFTER all worksheets are populated)
 
