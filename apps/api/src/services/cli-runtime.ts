@@ -300,7 +300,7 @@ export async function spawnSession(opts: {
     session._spawnOpts = opts;
     session._recoveryCount = 0;
     sessions.set(projectId, session);
-    wireChildProcess(child, session, events);
+    wireChildProcess(child, session, runtime, events);
     return session;
   }
 
@@ -454,7 +454,7 @@ function wireChildProcess(
     const rl = createInterface({ input: child.stderr });
     rl.on("line", (line) => {
       if (line.trim()) {
-        console.error(`[cli:stderr:${projectId}]`, line.trim());
+        console.error(`[cli:stderr:${session.projectId}]`, line.trim());
         events.emit("event", { type: "error", data: { message: line.trim() } });
       }
     });
