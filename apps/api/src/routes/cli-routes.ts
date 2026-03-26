@@ -434,10 +434,10 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
         `${cliCmd} ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`,
         {
           cwd: resolveProjectDir(projectId),
-          env,
+          env: env as NodeJS.ProcessEnv,
           timeout: 60_000,
           encoding: "utf-8",
-          shell: true,
+          shell: true as any,
         }
       );
 
