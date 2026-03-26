@@ -4839,19 +4839,17 @@ export class PrismaApiStore {
   async createTakeoffAnnotation(projectId: string, input: CreateTakeoffAnnotationInput) {
     await this.requireProject(projectId);
     if (!input.documentId) throw new Error("documentId is required");
-    // Accept both 'annotationType' and 'type' for backwards compatibility
-    const annotationType = input.annotationType || (input as any).type;
-    if (!annotationType) throw new Error("annotationType is required");
+    if (!input.annotationType) throw new Error("annotationType is required");
     const annotation = await this.db.takeoffAnnotation.create({
       data: {
         id: createId("takeoff"),
         projectId,
         documentId: input.documentId,
-        pageNumber: input.pageNumber ?? (input as any).page ?? 1,
-        annotationType,
+        pageNumber: input.pageNumber ?? 1,
+        annotationType: input.annotationType,
         label: input.label ?? "",
         color: input.color ?? "#3b82f6",
-        lineThickness: input.lineThickness ?? (input as any).thickness ?? 4,
+        lineThickness: input.lineThickness ?? 4,
         visible: input.visible ?? true,
         groupName: input.groupName ?? "",
         points: (input.points ?? []) as any,
