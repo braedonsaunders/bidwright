@@ -27,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
-      <body>
+      <body className="select-text">
         <AuthProvider>
           <ImpersonationBanner />
           {children}
