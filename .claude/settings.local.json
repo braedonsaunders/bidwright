@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "Bash(curl -s http://localhost:3000/settings)",
+      "Bash(curl -s http://localhost:3000/_next/static/chunks/%5Broot-of-the-server%5D__0zqsnay._.css)",
+      "Bash(curl -s http://localhost:3000/_next/static/chunks/apps_web_0rqeker._.js)"
+    ]
+  }
+}
