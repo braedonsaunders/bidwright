@@ -145,7 +145,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const integrations = (settings as any)?.integrations || {};
 
     // Spawn CLI
-    const initialPrompt = prompt || "Start the intake estimation. Read CLAUDE.md, then read the main specification document and understand the full scope. Follow the Estimation Protocol (all 10 steps). You MUST create ALL worksheets AND populate them with granular line items — do NOT stop after research/setup. The job is not done until every worksheet has items with hours, rates, and sourceNotes. Keep going until the full estimate is built out.";
+    const initialPrompt = prompt || "Start the intake estimation. Read CLAUDE.md carefully — follow EVERY step in order. Read the spec, updateQuote, getItemConfig, then MANDATORY: searchBooks (3+ queries), listDatasets, queryDataset (2+ queries), and WebSearch for referenced specs/codes BEFORE creating any worksheets. Prior memory does NOT substitute for fresh knowledge queries. Then follow the full Estimation Protocol (all 10 steps), create ALL worksheets, populate every one with granular line items with sourceNotes citing knowledge data. Run the Final QA Review at the end. Do NOT stop until every worksheet is fully populated and reviewed.";
 
     try {
       const session = await spawnSession({
