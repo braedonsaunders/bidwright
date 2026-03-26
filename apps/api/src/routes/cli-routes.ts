@@ -96,7 +96,19 @@ export function registerCliRoutes(app: FastifyInstance) {
 
     const projectDir = resolveProjectDir(projectId);
 
-    // Generate CLAUDE.md / codex.md
+    // Symlink global knowledge books FIRST so CLAUDE.md can reference them
+    const knowledgeBooks = await store.listKnowledgeBooks() || [];
+    const globalBooks = knowledgeBooks.filter((b: any) => b.scope === "global" && b.storagePath);
+    let linkedBookNames: string[] = [];
+    if (globalBooks.length > 0) {
+      linkedBookNames = await symlinkKnowledgeBooks(
+        projectDir,
+        apiDataRoot,
+        globalBooks.map((b: any) => ({ bookId: b.id, fileName: b.sourceFileName || b.name, storagePath: b.storagePath }))
+      );
+    }
+
+    // Generate CLAUDE.md / codex.md (includes knowledge book file list)
     const params = {
       projectDir,
       projectName: project.name || "Untitled Project",
@@ -106,6 +118,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       quoteNumber: quote.quoteNumber || "",
       dataRoot: apiDataRoot,
       documents,
+      knowledgeBookFiles: linkedBookNames,
       persona: persona ? await (async () => {
         const bookIds: string[] = Array.isArray(persona.knowledgeBookIds) ? persona.knowledgeBookIds : JSON.parse(persona.knowledgeBookIds as string || "[]");
         const datasetTags: string[] = Array.isArray(persona.datasetTags) ? persona.datasetTags : JSON.parse(persona.datasetTags as string || "[]");
@@ -129,17 +142,6 @@ export function registerCliRoutes(app: FastifyInstance) {
       await generateClaudeMd(params);
     } else {
       await generateCodexMd(params);
-    }
-
-    // Symlink global knowledge books
-    const knowledgeBooks = await store.listKnowledgeBooks() || [];
-    const globalBooks = knowledgeBooks.filter((b: any) => b.scope === "global" && b.storagePath);
-    if (globalBooks.length > 0) {
-      await symlinkKnowledgeBooks(
-        projectDir,
-        resolveKnowledgeDir(),
-        globalBooks.map((b: any) => ({ bookId: b.id, fileName: b.sourceFileName || b.name, storagePath: b.storagePath }))
-      );
     }
 
     // Create AiRun record
