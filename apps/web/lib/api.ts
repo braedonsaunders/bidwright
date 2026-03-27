@@ -1463,7 +1463,7 @@ export async function deleteRateScheduleTier(scheduleId: string, tierId: string)
 
 export async function addRateScheduleItem(scheduleId: string, input: {
   name: string; code?: string; unit?: string; rates?: Record<string, number>;
-  catalogItemId?: string; sortOrder?: number;
+  costRates?: Record<string, number>; catalogItemId?: string; sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items`, {
     method: "POST",

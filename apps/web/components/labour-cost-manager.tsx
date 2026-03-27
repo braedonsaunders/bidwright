@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  Calculator,
   ChevronDown,
   ChevronRight,
   DollarSign,
@@ -229,6 +230,31 @@ export function LabourCostManager() {
     setEditingField(null);
   }, [detail, editFieldValue]);
 
+  const handleAutoCalculate = useCallback(async () => {
+    if (!detail) return;
+    for (const entry of detail.entries) {
+      const base = entry.costRates.regular ?? 0;
+      if (base === 0) continue;
+      const newRates = {
+        regular: base,
+        ot: Math.round(base * 1.5 * 100) / 100,
+        dt: Math.round(base * 2.0 * 100) / 100,
+      };
+      // Skip if already correct
+      if (entry.costRates.ot === newRates.ot && entry.costRates.dt === newRates.dt) continue;
+      try {
+        await updateLabourCostEntry(detail.id, entry.id, { costRates: newRates });
+      } catch (err) {
+        console.error(`Failed to auto-calc entry ${entry.name}:`, err);
+      }
+    }
+    // Reload to show updated values
+    try {
+      const full = await getLabourCostTable(detail.id);
+      setDetail(full);
+    } catch { /* ignore */ }
+  }, [detail]);
+
   /* ─── Render ─── */
 
   if (loading) {
@@ -417,9 +443,12 @@ export function LabourCostManager() {
                               <option key={g} value={g}>{g}</option>
                             ))}
                           </Select>
+                          <Button variant="ghost" size="xs" onClick={handleAutoCalculate} title="Calculate OT/DT from Regular (1.5× / 2.0×)">
+                            <Calculator className="h-3 w-3" /> Auto-Calc
+                          </Button>
                           <Button variant="accent" size="xs" onClick={() => setShowAddEntry(true)}>
                             <Plus className="h-3 w-3" />
-                            Add Entry
+                            Add
                           </Button>
                         </div>
 
@@ -482,7 +511,7 @@ export function LabourCostManager() {
                                 <th className="text-left px-3 py-2 font-medium text-fg/60">Name</th>
                                 <th className="text-left px-3 py-2 font-medium text-fg/60">Group</th>
                                 {RATE_KEYS.map((k) => (
-                                  <th key={k} className="text-right px-3 py-2 font-medium text-fg/60">{RATE_LABELS[k]} Cost</th>
+                                  <th key={k} className="text-right px-3 py-2 font-medium text-fg/60">{RATE_LABELS[k]}</th>
                                 ))}
                                 <th className="w-8" />
                               </tr>
@@ -491,7 +520,7 @@ export function LabourCostManager() {
                               {filteredEntries.length === 0 && (
                                 <tr>
                                   <td colSpan={6} className="px-3 py-6 text-center text-fg/40">
-                                    No entries yet. Click &quot;Add Entry&quot; to add labour classifications.
+                                    No entries yet. Click &quot;Add&quot; to add labour classifications.
                                   </td>
                                 </tr>
                               )}

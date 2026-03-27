@@ -9,6 +9,7 @@ import {
   ArrowUpDown,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronUp,
   Clipboard,
@@ -531,6 +532,8 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   const [inlineRenameWsId, setInlineRenameWsId] = useState<string | null>(null);
   const [inlineRenameName, setInlineRenameName] = useState("");
   const inlineRenameRef = useRef<HTMLInputElement | null>(null);
+  const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  const [tabOverflow, setTabOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
 
   // ─── NEW STATE: Detail Drawer ───
   const [detailItem, setDetailItem] = useState<WorkspaceWorksheetItem | null>(null);
@@ -1902,78 +1905,142 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     );
   }
 
+  // ─── Tab scroll helpers ───
+  const checkTabOverflow = useCallback(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    setTabOverflow({
+      left: el.scrollLeft > 2,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 2,
+    });
+  }, []);
+
+  useEffect(() => {
+    checkTabOverflow();
+    const el = tabScrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(checkTabOverflow);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [checkTabOverflow, workspace.worksheets]);
+
+  const scrollTabs = useCallback((dir: "left" | "right") => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir === "left" ? -200 : 200, behavior: "smooth" });
+  }, []);
+
   // ─── Render ───
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
       {/* ─── Worksheet Tabs ─── */}
-      <div className="flex items-center gap-0.5 border-b border-line overflow-x-auto shrink-0">
+      <div className="flex items-center border-b border-line shrink-0">
+        {/* Left scroll arrow */}
         <button
-          onClick={() => setActiveTab("all")}
+          onClick={() => scrollTabs("left")}
           className={cn(
-            "px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
-            activeTab === "all"
-              ? "border-accent text-accent bg-accent/5"
-              : "border-transparent text-fg/40 hover:text-fg/60"
+            "shrink-0 p-1 transition-opacity",
+            tabOverflow.left ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
           )}
+          aria-label="Scroll tabs left"
         >
-          All
+          <ChevronLeft className="h-3.5 w-3.5" />
         </button>
 
-        {(workspace.worksheets ?? []).map((ws) => (
+        {/* Scrollable tab strip */}
+        <div
+          ref={tabScrollRef}
+          onScroll={checkTabOverflow}
+          onWheel={(e) => {
+            if (!tabScrollRef.current) return;
+            // Convert vertical scroll to horizontal
+            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+              e.preventDefault();
+              tabScrollRef.current.scrollLeft += e.deltaY;
+              checkTabOverflow();
+            }
+          }}
+          className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0"
+        >
           <button
-            key={ws.id}
-            onClick={() => setActiveTab(ws.id)}
-            onDoubleClick={() => {
-              setInlineRenameWsId(ws.id);
-              setInlineRenameName(ws.name);
-            }}
-            onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
+            onClick={() => setActiveTab("all")}
             className={cn(
-              "group px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
-              activeTab === ws.id
+              "px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
+              activeTab === "all"
                 ? "border-accent text-accent bg-accent/5"
                 : "border-transparent text-fg/40 hover:text-fg/60"
             )}
           >
-            {inlineRenameWsId === ws.id ? (
-              <input
-                ref={inlineRenameRef}
-                type="text"
-                className="w-24 h-5 bg-bg border border-accent/50 rounded px-1 text-xs outline-none"
-                value={inlineRenameName}
-                onChange={(e) => setInlineRenameName(e.target.value)}
-                onBlur={handleInlineRenameCommit}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    handleInlineRenameCommit();
-                  } else if (e.key === "Escape") {
-                    setInlineRenameWsId(null);
-                  }
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <>
-                {ws.name}
-                <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
-              </>
-            )}
+            All
           </button>
-        ))}
 
+          {(workspace.worksheets ?? []).map((ws) => (
+            <button
+              key={ws.id}
+              onClick={() => setActiveTab(ws.id)}
+              onDoubleClick={() => {
+                setInlineRenameWsId(ws.id);
+                setInlineRenameName(ws.name);
+              }}
+              onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
+              className={cn(
+                "group px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
+                activeTab === ws.id
+                  ? "border-accent text-accent bg-accent/5"
+                  : "border-transparent text-fg/40 hover:text-fg/60"
+              )}
+            >
+              {inlineRenameWsId === ws.id ? (
+                <input
+                  ref={inlineRenameRef}
+                  type="text"
+                  className="w-24 h-5 bg-bg border border-accent/50 rounded px-1 text-xs outline-none"
+                  value={inlineRenameName}
+                  onChange={(e) => setInlineRenameName(e.target.value)}
+                  onBlur={handleInlineRenameCommit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleInlineRenameCommit();
+                    } else if (e.key === "Escape") {
+                      setInlineRenameWsId(null);
+                    }
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <>
+                  {ws.name}
+                  <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
+                </>
+              )}
+            </button>
+          ))}
+
+          <button
+            onClick={() => {
+              setNewWsName("");
+              setShowNewWsModal(true);
+            }}
+            className="ml-1 p-1.5 text-fg/30 hover:text-fg/60 transition-colors shrink-0"
+            title="Add worksheet"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* Right scroll arrow */}
         <button
-          onClick={() => {
-            setNewWsName("");
-            setShowNewWsModal(true);
-          }}
-          className="ml-1 p-1.5 text-fg/30 hover:text-fg/60 transition-colors"
-          title="Add worksheet"
+          onClick={() => scrollTabs("right")}
+          className={cn(
+            "shrink-0 p-1 transition-opacity",
+            tabOverflow.right ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
+          )}
+          aria-label="Scroll tabs right"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <ChevronRight className="h-3.5 w-3.5" />
         </button>
-
       </div>
 
       {/* ─── Toolbar ─── */}

@@ -298,10 +298,10 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
     if (rateItems.length > 0) {
       // Build tier examples from the first rate item
       const exampleItem = rateItems[0];
-      const tierExample = exampleItem.tiers.map((t: any) => `"${t.id}": <hours>`).join(", ");
+      const tierExample = exampleItem.tiers.map((t: any) => `"${t.name}": <hours>`).join(", ");
       instructions += `RATE SCHEDULE CATEGORIES [${names}]: These categories REQUIRE:\n`;
       instructions += `  1. rateScheduleItemId — pick from the rateScheduleItems list below\n`;
-      instructions += `  2. tierUnits — map hours to tier IDs. Each rate item has tiers (see tiers array). Set tierUnits like: {${tierExample}}. This is how cost/price gets calculated.\n`;
+      instructions += `  2. tierUnits — map hours to tier NAMES (not IDs). Each rate item has tiers (see tiers array). Set tierUnits like: {${tierExample}}. The server resolves names to IDs automatically. This is how cost/price gets calculated.\n`;
       instructions += `  3. entityName — use ONLY the rate item name (e.g. the "name" field). Put task details in description.\n`;
       instructions += `  Do NOT invent items. If no suitable rate exists, use the closest match.\n`;
     } else {
