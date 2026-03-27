@@ -273,7 +273,7 @@ You decide your own workflow. Here's the MANDATORY sequence:
    c. Call \`importRateSchedule\` for each selected schedule
    d. Every item in a rate_schedule category MUST have:
       - \`rateScheduleItemId\` — the rate item ID
-      - \`tierUnits\` — hours mapped to tier IDs, e.g. \`{"tier-abc": 40, "tier-def": 8}\` for 40 regular + 8 OT hours. Get tier IDs from getItemConfig (each rate item has a \`tiers\` array with id/name/multiplier). This is how cost/price is calculated.
+      - \`tierUnits\` — hours mapped to tier NAMES, e.g. \`{"Regular": 40, "Overtime": 8}\` for 40 regular + 8 OT hours. Use the tier NAME (not ID). The server resolves names to IDs automatically. Get tier names from getItemConfig (each rate item has a \`tiers\` array).
       - \`entityName\` — just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
    e. If no suitable schedule exists, note "NO RATE SCHEDULE — needs setup" and set estimated costs
 6. **Create phases** — create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs — you need these to assign line items to phases via phaseId.
@@ -326,7 +326,7 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
     3. Use getItemConfig to see the imported rate items with their tier IDs
     4. When creating items, set:
        - \`rateScheduleItemId\` — the rate item ID
-       - \`tierUnits\` — a JSON object mapping tier IDs to hours, e.g. \`{"tier-id-regular": 40, "tier-id-ot": 8}\`. Get the tier IDs from the \`tiers\` array on each rate item. Without tierUnits, cost/price will be $0.
+       - \`tierUnits\` — a JSON object mapping tier NAMES to hours, e.g. \`{"Regular": 40, "Overtime": 8}\`. Use the tier NAME from the \`tiers\` array. The server resolves names to IDs automatically. Without tierUnits, cost/price will be $0.
        - \`entityName\` — the rate item name only (e.g. "Trade Labour"). Task details go in \`description\`.
     5. Do NOT invent items. If no exact match, use the CLOSEST and note it.
   - **catalog**: Items MUST come from the item catalog. Set \`itemId\` to link to a catalog item. Do NOT fabricate catalog items.
@@ -359,7 +359,7 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
    - The correction factors identified in the main agent's research (material, elevation, congestion, etc.)
    - Instruction to populate sourceNotes with the actual knowledge reference used
 
-3. **DO NOT do this:** "tierUnits: {tier-abc: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
+3. **DO NOT do this:** "tierUnits: {Regular: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
 
 4. **Sub-agents have access to ALL tools** including the Read tool for knowledge/ PDFs, queryDataset, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
 5. **Tell sub-agents which knowledge book pages to read.** Example: "Read knowledge/Estimators-Piping-Man-Hour.pdf pages 42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
@@ -391,6 +391,16 @@ After all sub-agents complete and every worksheet has line items, you MUST perfo
 
 1. **Call getWorkspace** to pull the complete quote with all worksheets and items
 2. **Cross-check against scope:** Walk through the original spec/RFQ section by section. Flag any scope items that have NO corresponding line item (omissions)
+   **SCOPE COMPLETENESS CHECKLIST** — Verify these are covered (if applicable to the project):
+   - [ ] Every P&ID has been reviewed and all equipment/piping accounted for
+   - [ ] Tank trim / vessel trim for all tanks
+   - [ ] Pipe labelling and identification
+   - [ ] Equipment tagging (per P&ID references)
+   - [ ] Grounding and bonding
+   - [ ] Painting/coating per spec
+   - [ ] Pressure testing / leak testing per spec
+   - [ ] General conditions worksheet (site facilities, rentals, supervision, consumables)
+   - [ ] Mob/demob for crew AND equipment
 3. **Sanity-check hours/quantities:** For each worksheet, verify:
    - Total hours are reasonable for the scope (compare against knowledge base benchmarks)
    - No items have zero hours or zero quantity that shouldn't
@@ -431,6 +441,11 @@ Before estimating labour, you MUST ask these questions in a single batch:
 - Any site-specific access restrictions or working conditions?
 Collect ALL answers before creating labour line items. Log each answer as a working assumption.
 
+**SUBCONTRACTOR IDENTIFICATION** — If the estimator persona defines typical subcontracted activities, follow those. Otherwise, determine which scope items are typically subcontracted for this trade:
+- For subcontracted items, use the "Subcontractors" category (or equivalent freeform category) with estimated lump sums
+- Search the web for regional subcontractor pricing benchmarks when cost is unknown
+- Note: the persona's system prompt may override these defaults with trade-specific guidance
+
 ### Step 3: Knowledge Deep-Read
 For EVERY type of work you're estimating:
 1. Call searchBooks for relevant productivity data (man-hour tables, production rates)
@@ -462,6 +477,12 @@ Break work down to the smallest countable/trackable unit:
 - Calculate both ways: (crew size × days = total MH) AND (count × rate = total MH)
 - If the two methods disagree by >20%, investigate and reconcile
 
+**WORKSHEET ORGANIZATION** — When the project has multiple systems (identified by separate P&IDs):
+- Create worksheets per major system AND/OR per activity, depending on project complexity
+- If the spec has distinct chemical/process systems (e.g., "ISO piping", "Pentane piping"), create separate worksheets per system
+- This provides cost visibility per system and helps identify which systems drive the most cost
+- Cross-reference: every P&ID should map to at least one worksheet
+
 ### Step 6: Correction Factors
 For every base rate from knowledge books, evaluate and apply ALL applicable factors:
 - **Elevation:** ground=1.0, 10-20ft=1.10, 20-40ft=1.25, >40ft=1.40
@@ -482,14 +503,29 @@ Use WebSearch ROUTINELY throughout the estimate:
 - Search for any unfamiliar product or material mentioned in specs
 Do NOT assume you know what a spec requires — VERIFY through search.
 
-### Step 8: Supervision & Support Hours
-Apply realistic supervision and support ratios:
+### Step 8: Supervision, Support Hours & General Conditions
+
+**LABOUR PAIRING RULE** — For EVERY worksheet containing trade labour:
+- Add a **Foreman** line covering the same period (1 foreman per 4-6 trades)
+- These are separate line items — the foreman line covers the same scope/duration as the trade labour it supervises
+- Do NOT create trade labour without foreman coverage. This is industry standard.
+
+**Supervision ratios:**
 - **Superintendent:** full-time (40 hrs/week) for projects with >4 workers and >4 weeks duration
 - **Foreman:** 1 per 4-8 trade workers (ratio depends on work complexity, 1:4 for complex, 1:8 for repetitive)
 - **General foreman:** add if total crew exceeds 20 workers
 - **QC/inspection support:** hours for testing documentation, witness points, NDT coordination
 - **Safety watch:** where required by confined space, hot work, elevated work permits
 - **ISO drawing/layout:** dedicated hours for translating P&IDs into fabrication drawings and red-line documentation
+
+**MANDATORY GENERAL CONDITIONS** — EVERY project MUST include a "General Conditions" or "Site Overhead" worksheet. Estimate the overall project duration first (in weeks/months), then include:
+- **Site facilities:** office trailer, lunch/break room trailer, washrooms, hand wash stations — multiply monthly rental rate × project months
+- **Equipment rentals:** boom lifts, scissor lifts, forklifts, cranes — multiply daily/weekly rate × usage period. Use the Equipment rate schedule items if available, with appropriate duration tiers (daily/weekly/monthly).
+- **Consumables allowance:** welding consumables, safety supplies, PPE, signage, barriers — as a lump sum or percentage of total labour
+- **Full-duration supervision:** superintendent and foreman for the ENTIRE project duration (not just task-by-task), in ADDITION to per-worksheet foreman coverage
+- **Regulatory costs:** TSSA, permits, inspections, submittals if applicable
+- **Mob/demob:** separate lines for crew mobilization AND equipment mobilization
+- Always note assumed project duration in line item descriptions
 
 ### Step 9: Assumption Log
 Track EVERY assumption you make throughout the estimate:

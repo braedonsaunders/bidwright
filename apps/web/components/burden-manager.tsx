@@ -180,7 +180,7 @@ export function BurdenManager() {
             </Select>
             <Button variant="accent" size="xs" onClick={() => setShowAdd(true)}>
               <Plus className="h-3 w-3" />
-              Add Period
+              Add
             </Button>
           </div>
         </CardHeader>
@@ -275,7 +275,7 @@ export function BurdenManager() {
               {filtered.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-fg/40">
-                    No burden periods configured. Click &quot;Add Period&quot; to get started.
+                    No burden periods configured. Click &quot;Add&quot; to get started.
                   </td>
                 </tr>
               )}

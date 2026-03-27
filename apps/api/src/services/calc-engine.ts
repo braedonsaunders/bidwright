@@ -138,6 +138,17 @@ function findActiveBurden(
   return exact?.percentage ?? candidates[0]?.percentage ?? 0;
 }
 
+/**
+ * Resolve a tier ID that may be truncated (e.g., "rst-f6d2116a" instead of full UUID)
+ * by prefix-matching against a map of valid keys.
+ */
+function resolveTierId(tierId: string, validKeys: string[]): string {
+  if (validKeys.includes(tierId)) return tierId;
+  // Prefix match: the AI agent sometimes truncates UUIDs
+  const match = validKeys.find((k) => k.startsWith(tierId));
+  return match ?? tierId;
+}
+
 function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | null {
   const match = findRateScheduleItem(item, ctx);
   if (!match) return null;
@@ -169,14 +180,21 @@ function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult
     }
   }
 
+  // Collect valid tier IDs for prefix matching
+  const validRateKeys = Object.keys(rsItem.rates);
+  const validCostKeys = Object.keys(effectiveCostRates);
+
   let totalPrice = 0;
   let totalCost = 0;
   let totalHours = 0;
 
-  for (const [tierId, hours] of Object.entries(tierUnits)) {
+  for (const [rawTierId, hours] of Object.entries(tierUnits)) {
     const h = Number(hours) || 0;
-    totalPrice += (rsItem.rates[tierId] ?? 0) * h;
-    totalCost += (effectiveCostRates[tierId] ?? 0) * h;
+    // Resolve potentially truncated tier IDs
+    const priceKey = resolveTierId(rawTierId, validRateKeys);
+    const costKey = resolveTierId(rawTierId, validCostKeys);
+    totalPrice += (rsItem.rates[priceKey] ?? 0) * h;
+    totalCost += (effectiveCostRates[costKey] ?? 0) * h;
     totalHours += h;
   }
 

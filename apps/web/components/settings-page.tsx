@@ -5,7 +5,9 @@ import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import {
   Building2,
+  AlertTriangle,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Globe,
@@ -139,8 +141,14 @@ import {
   exportAllDataManagement,
   parseExportFile,
   importAllDataManagement,
+  defaultImportOptions,
+  IMPORT_SECTION_ORDER,
+  IMPORT_SECTION_LABELS,
   type ImportSummary,
   type ImportProgress,
+  type ImportResult,
+  type ImportOptions,
+  type ImportSectionKey,
 } from "@/lib/data-export-import";
 
 // ── Main Component ───────────────────────────────────────────────────────────
@@ -221,7 +229,10 @@ export function SettingsPage({
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importConfirm, setImportConfirm] = useState<{ data: any; summary: ImportSummary; fileName: string } | null>(null);
+  const [importOptions, setImportOptions] = useState<ImportOptions | null>(null);
   const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
 
   // Rate schedules (for embedding)
@@ -248,30 +259,38 @@ export function SettingsPage({
     try {
       const { data, summary } = await parseExportFile(file);
       setImportConfirm({ data, summary, fileName: file.name });
+      setImportOptions(defaultImportOptions(summary));
     } catch (err: any) {
       alert(err.message || "Failed to parse import file");
     }
   }, []);
 
   const handleImportConfirm = useCallback(async () => {
-    if (!importConfirm) return;
-    setImportConfirm(null);
+    if (!importConfirm || !importOptions) return;
+    const opts = importOptions;
     setImporting(true);
     setImportProgress(null);
+    setImportResult(null);
+    setImportError(null);
     try {
-      const result = await importAllDataManagement(importConfirm.data, (p) => setImportProgress({ ...p }));
-      const total = Object.values(result.created).reduce((a, b) => a + b, 0);
-      const msg = `Import complete: ${total} items created.${result.errors.length > 0 ? ` ${result.errors.length} errors.` : ""}`;
-      alert(msg);
-      // Refresh all data by reloading the page
-      window.location.reload();
+      const result = await importAllDataManagement(importConfirm.data, (p) => setImportProgress({ ...p }), opts);
+      setImportResult(result);
     } catch (err: any) {
-      alert("Import failed: " + (err.message || "Unknown error"));
+      setImportError(err.message || "Unknown error");
     } finally {
       setImporting(false);
-      setImportProgress(null);
     }
-  }, [importConfirm]);
+  }, [importConfirm, importOptions]);
+
+  const handleImportDismiss = useCallback(() => {
+    const hadResult = !!importResult;
+    setImportConfirm(null);
+    setImportOptions(null);
+    setImportProgress(null);
+    setImportResult(null);
+    setImportError(null);
+    if (hadResult) window.location.reload();
+  }, [importResult]);
 
   // Fetch rate schedules if initial prop is empty (e.g., auth timing issue)
   useEffect(() => {
@@ -1395,7 +1414,6 @@ export function SettingsPage({
                     <span className="font-medium text-fg truncate">{cat.name || "Untitled"}</span>
                     <Badge className="text-[10px] shrink-0">{cat.shortform || "—"}</Badge>
                     <Badge tone="default" className="text-[10px] shrink-0">{(cat.itemSource || "freeform").replace(/_/g, " ")}</Badge>
-                    {cat.isBuiltIn && <Lock className="h-3 w-3 text-fg/30 shrink-0" />}
                     <span className="flex-1" />
                     <span onClick={(e) => e.stopPropagation()}>
                       <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
@@ -1424,8 +1442,7 @@ export function SettingsPage({
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: edited.color || "#888" }} />
                             <span className="text-sm font-semibold truncate">{edited.name || "New Category"}</span>
-                            {cat.isBuiltIn && <Lock className="h-3 w-3 text-fg/30 shrink-0" />}
-                          </div>
+                                  </div>
                           <div className="flex items-center gap-1">
                             {!cat.isBuiltIn && (
                               <button
@@ -2241,37 +2258,230 @@ export function SettingsPage({
         </FadeIn>
 
       {/* ── Import Confirmation Dialog ─── */}
-      {importConfirm && typeof document !== "undefined" && createPortal(
+      {importConfirm && importOptions && typeof document !== "undefined" && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-panel border border-line rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto">
+          <div className="bg-panel border border-line rounded-xl shadow-2xl w-[460px] max-h-[80vh] overflow-y-auto">
             <div className="px-5 py-4 border-b border-line">
               <h3 className="text-sm font-semibold">Import Data</h3>
               <p className="text-xs text-fg/40 mt-1">{importConfirm.fileName}</p>
             </div>
-            <div className="px-5 py-4 space-y-2 text-xs">
-              <p className="text-fg/60 mb-3">The following items will be added to your existing data:</p>
-              {([
-                ["Entity Categories", importConfirm.summary.entityCategories],
-                ["Catalogs", importConfirm.summary.catalogs],
-                ["Catalog Items", importConfirm.summary.catalogItems],
-                ["Rate Schedules", importConfirm.summary.rateSchedules],
-                ["Labour Cost Tables", importConfirm.summary.labourCostTables],
-                ["Burden Periods", importConfirm.summary.burdenPeriods],
-                ["Travel Policies", importConfirm.summary.travelPolicies],
-                ["Customers", importConfirm.summary.customers],
-                ["Inclusions & Exclusions", importConfirm.summary.conditionLibrary],
-              ] as [string, number][]).filter(([, n]) => n > 0).map(([label, count]) => (
-                <div key={label} className="flex items-center justify-between py-1">
-                  <span className="text-fg/60">{label}</span>
-                  <Badge tone="default">{count}</Badge>
+
+            {/* ── State: Importing (progress) ── */}
+            {importing && (
+              <div className="px-5 py-6 text-xs">
+                <div className="flex items-center gap-2.5 mb-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                  <span className="text-fg/60 font-medium">
+                    {importProgress ? importProgress.currentSection : "Starting import..."}
+                  </span>
                 </div>
-              ))}
-              <p className="text-fg/30 mt-3 pt-3 border-t border-line">Existing data will not be deleted or modified.</p>
-            </div>
-            <div className="px-5 py-3 border-t border-line flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" onClick={() => setImportConfirm(null)}>Cancel</Button>
-              <Button variant="accent" size="sm" onClick={handleImportConfirm}>Import</Button>
-            </div>
+                {importProgress && (
+                  <>
+                    <div className="w-full bg-bg rounded-full h-1.5 mb-2">
+                      <div
+                        className="bg-accent h-1.5 rounded-full transition-all duration-300"
+                        style={{ width: `${Math.round((importProgress.sectionsComplete / importProgress.totalSections) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-fg/30 text-[10px]">{importProgress.sectionsComplete} of {importProgress.totalSections} sections complete</p>
+                    {importProgress.errors.length > 0 && (
+                      <p className="text-amber-400/70 text-[10px] mt-1">{importProgress.errors.length} error{importProgress.errors.length !== 1 ? "s" : ""} so far</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── State: Fatal error ── */}
+            {!importing && importError && (
+              <>
+                <div className="px-5 py-5 text-xs">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 text-danger shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-danger mb-1">Import Failed</p>
+                      <p className="text-fg/50">{importError}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="px-5 py-3 border-t border-line flex items-center justify-end">
+                  <Button variant="secondary" size="sm" onClick={handleImportDismiss}>Close</Button>
+                </div>
+              </>
+            )}
+
+            {/* ── State: Complete (results) ── */}
+            {!importing && importResult && (() => {
+              const totalCreated = Object.values(importResult.created).reduce((a, b) => a + b, 0);
+              const totalUpdated = Object.values(importResult.updated).reduce((a, b) => a + b, 0);
+              const totalDeleted = Object.values(importResult.deleted).reduce((a, b) => a + b, 0);
+              const hasErrors = importResult.errors.length > 0;
+              return (
+                <>
+                  <div className="px-5 py-4 space-y-3 text-xs">
+                    <div className="flex items-start gap-2.5">
+                      {hasErrors ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <p className="font-medium text-fg mb-1">{hasErrors ? "Import Completed with Errors" : "Import Complete"}</p>
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-fg/50">
+                          {totalCreated > 0 && <span><span className="text-emerald-400 font-medium">{totalCreated}</span> created</span>}
+                          {totalUpdated > 0 && <span><span className="text-blue-400 font-medium">{totalUpdated}</span> updated</span>}
+                          {totalDeleted > 0 && <span><span className="text-fg/40 font-medium">{totalDeleted}</span> removed</span>}
+                          {totalCreated === 0 && totalUpdated === 0 && totalDeleted === 0 && <span>No changes</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Per-section breakdown */}
+                    <div className="space-y-0.5 pt-2 border-t border-line">
+                      {IMPORT_SECTION_ORDER.map((key) => {
+                        const c = importResult.created[key] ?? 0;
+                        const u = importResult.updated[key] ?? 0;
+                        const ci = key === "catalogs" ? (importResult.created.catalogItems ?? 0) : 0;
+                        const ui = key === "catalogs" ? (importResult.updated.catalogItems ?? 0) : 0;
+                        if (c === 0 && u === 0 && ci === 0 && ui === 0) return null;
+                        const parts: string[] = [];
+                        if (c > 0) parts.push(`${c} created`);
+                        if (u > 0) parts.push(`${u} updated`);
+                        if (ci > 0) parts.push(`${ci} items created`);
+                        if (ui > 0) parts.push(`${ui} items updated`);
+                        return (
+                          <div key={key} className="flex items-center justify-between py-1 px-2">
+                            <span className="text-fg/50">{IMPORT_SECTION_LABELS[key]}</span>
+                            <span className="text-fg/30">{parts.join(", ")}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Errors list */}
+                    {hasErrors && (
+                      <div className="pt-2 border-t border-line">
+                        <p className="text-amber-400/80 font-medium mb-1.5">{importResult.errors.length} Error{importResult.errors.length !== 1 ? "s" : ""}</p>
+                        <div className="max-h-[140px] overflow-y-auto space-y-1 bg-bg/60 rounded-md p-2">
+                          {importResult.errors.map((err, i) => (
+                            <p key={i} className="text-fg/40 text-[10px] leading-snug">{err}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="px-5 py-3 border-t border-line flex items-center justify-end">
+                    <Button variant="accent" size="sm" onClick={handleImportDismiss}>Done</Button>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* ── State: Configuration (initial) ── */}
+            {!importing && !importResult && !importError && (
+              <>
+                <div className="px-5 py-4 space-y-3 text-xs">
+                  {/* Import mode selector */}
+                  <div>
+                    <p className="text-fg/60 font-medium mb-2">Import Mode</p>
+                    <div className="flex gap-1 p-0.5 bg-bg rounded-lg border border-line">
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
+                          importOptions.mode === "add" ? "bg-panel text-fg shadow-sm" : "text-fg/40 hover:text-fg/60",
+                        )}
+                        onClick={() => setImportOptions((o) => o ? { ...o, mode: "add" } : o)}
+                      >
+                        Add / Update
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors",
+                          importOptions.mode === "overwrite" ? "bg-panel text-fg shadow-sm" : "text-fg/40 hover:text-fg/60",
+                        )}
+                        onClick={() => setImportOptions((o) => o ? { ...o, mode: "overwrite" } : o)}
+                      >
+                        Overwrite
+                      </button>
+                    </div>
+                    <p className="text-fg/30 mt-1.5">
+                      {importOptions.mode === "add"
+                        ? "New items will be created. Existing items (matched by name) will be updated."
+                        : "All existing data in selected categories will be deleted and replaced."}
+                    </p>
+                  </div>
+                  {/* Section toggles */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-fg/60 font-medium">Data to Import</p>
+                      <button
+                        type="button"
+                        className="text-[10px] text-accent hover:text-accent/80"
+                        onClick={() => {
+                          const allEnabled = IMPORT_SECTION_ORDER.every((k) => {
+                            const count = importConfirm.summary[k] ?? 0;
+                            return count === 0 || importOptions.enabledSections[k];
+                          });
+                          setImportOptions((o) => {
+                            if (!o) return o;
+                            const next = { ...o.enabledSections };
+                            for (const k of IMPORT_SECTION_ORDER) {
+                              const count = importConfirm.summary[k] ?? 0;
+                              if (count > 0) next[k] = !allEnabled;
+                            }
+                            return { ...o, enabledSections: next };
+                          });
+                        }}
+                      >
+                        {IMPORT_SECTION_ORDER.every((k) => (importConfirm.summary[k] ?? 0) === 0 || importOptions.enabledSections[k]) ? "Deselect All" : "Select All"}
+                      </button>
+                    </div>
+                    <div className="space-y-0.5">
+                      {IMPORT_SECTION_ORDER.map((key) => {
+                        const label = IMPORT_SECTION_LABELS[key];
+                        const count = importConfirm.summary[key] ?? 0;
+                        const itemCount = key === "catalogs" ? importConfirm.summary.catalogItems : 0;
+                        if (count === 0) return null;
+                        return (
+                          <div key={key} className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-bg/60">
+                            <label className="flex items-center gap-2.5 cursor-pointer flex-1">
+                              <Toggle
+                                checked={importOptions.enabledSections[key]}
+                                onChange={(val) => setImportOptions((o) => o ? { ...o, enabledSections: { ...o.enabledSections, [key]: val } } : o)}
+                              />
+                              <span className={cn("text-fg/60", !importOptions.enabledSections[key] && "text-fg/25")}>{label}</span>
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                              {itemCount > 0 && <span className={cn("text-fg/25 text-[10px]", !importOptions.enabledSections[key] && "opacity-40")}>{itemCount} items</span>}
+                              <Badge tone="default" className={cn(!importOptions.enabledSections[key] && "opacity-30")}>{count}</Badge>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {importOptions.mode === "overwrite" && (
+                    <p className="text-amber-400/80 mt-2 pt-2 border-t border-line">Warning: Overwrite will permanently delete existing data in selected categories before importing.</p>
+                  )}
+                  {importOptions.mode === "add" && (
+                    <p className="text-fg/30 mt-2 pt-2 border-t border-line">Existing data not in the import file will be preserved.</p>
+                  )}
+                </div>
+                <div className="px-5 py-3 border-t border-line flex items-center justify-end gap-2">
+                  <Button variant="secondary" size="sm" onClick={handleImportDismiss}>Cancel</Button>
+                  <Button
+                    variant={importOptions.mode === "overwrite" ? "danger" : "accent"}
+                    size="sm"
+                    onClick={handleImportConfirm}
+                    disabled={!IMPORT_SECTION_ORDER.some((k) => importOptions.enabledSections[k])}
+                  >
+                    {importOptions.mode === "overwrite" ? "Overwrite & Import" : "Import"}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </div>,
         document.body

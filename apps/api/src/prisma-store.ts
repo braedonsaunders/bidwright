@@ -141,6 +141,47 @@ import {
 } from "./store/mappers.js";
 import type { IngestionJobRecord, StoredPackageRecord, WorkspaceStateRecord } from "./store/types.js";
 
+/**
+ * Resolve tierUnit keys to full tier IDs.
+ * Handles three formats:
+ *   1. Exact tier ID match (e.g. "rst-f6d2116a-d6e4-4303-9d0b-ec68381795e5")
+ *   2. Tier NAME match (e.g. "Regular", "Overtime") — resolved to the tier's ID
+ *   3. Truncated ID prefix match (e.g. "rst-f6d2116a") — resolved to the full ID
+ */
+function resolveTierUnitKeys(
+  tierUnits: Record<string, number>,
+  schedules: any[],
+): Record<string, number> {
+  const allTiers = schedules.flatMap((s) => (s.tiers ?? []).map((t: any) => ({ id: t.id as string, name: (t.name as string) ?? "" })));
+  const tierById = new Map(allTiers.map((t) => [t.id, t]));
+  const tierByNameLower = new Map(allTiers.map((t) => [t.name.toLowerCase(), t]));
+
+  const resolved: Record<string, number> = {};
+  for (const [key, val] of Object.entries(tierUnits)) {
+    const numVal = Number(val) || 0;
+    // 1. Exact ID match
+    if (tierById.has(key)) {
+      resolved[key] = numVal;
+      continue;
+    }
+    // 2. Name match (case-insensitive)
+    const byName = tierByNameLower.get(key.toLowerCase());
+    if (byName) {
+      resolved[byName.id] = numVal;
+      continue;
+    }
+    // 3. Prefix match for truncated IDs
+    const prefixMatch = allTiers.find((t) => t.id.startsWith(key));
+    if (prefixMatch) {
+      resolved[prefixMatch.id] = numVal;
+      continue;
+    }
+    // Fallback — keep the key as-is (will be ignored by calc engine)
+    resolved[key] = numVal;
+  }
+  return resolved;
+}
+
 // ── Re-exported Interfaces ────────────────────────────────────────────────────
 // These interfaces are re-exported so that existing consumers (server.ts, routes)
 // continue to work unchanged.
@@ -1186,7 +1227,6 @@ export class PrismaApiStore {
       where: { id, organizationId: this.organizationId },
     });
     if (!existing) throw new Error(`Entity category ${id} not found`);
-    if (existing.isBuiltIn) throw new Error("Cannot delete built-in entity category");
 
     await this.db.entityCategory.delete({ where: { id } });
     return { deleted: true };
@@ -1607,6 +1647,12 @@ export class PrismaApiStore {
       }
     }
 
+    // ── Resolve tierUnit keys to full tier IDs ────────────
+    // Handles: exact IDs, tier names (e.g. "Regular"), and truncated ID prefixes
+    if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
+      item.tierUnits = resolveTierUnitKeys(item.tierUnits, revisionSchedules);
+    }
+
     const labourCostCtx = await this.getLabourCostContext();
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
@@ -1766,6 +1812,11 @@ export class PrismaApiStore {
       if (!catalogItem) {
         throw new Error(`Invalid itemId "${domainItem.itemId}" — no matching catalog item found.`);
       }
+    }
+
+    // ── Resolve tierUnit keys to full tier IDs ────────────
+    if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
+      domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionSchedules);
     }
 
     const updateLabourCostCtx = await this.getLabourCostContext();
