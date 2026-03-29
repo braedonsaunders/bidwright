@@ -1,113 +1,170 @@
-# Bidwright
+<p align="center">
+  <img src="./bidwright-social.png" alt="Bidwright AI-driven construction estimating platform" width="100%" />
+</p>
 
-AI-first construction estimating platform. Manage project bids, quotes, and estimates with AI-powered analysis and automation.
+<h1 align="center">Bidwright</h1>
 
-## Tech Stack
+<p align="center">
+  <strong>Construction estimating software that connects intake, knowledge, takeoff, pricing, scheduling, and quote delivery in one AI-native workspace.</strong>
+</p>
 
-- **Frontend:** Next.js 16, React 19, Tailwind CSS, Radix UI
-- **API:** Fastify 5
-- **Database:** PostgreSQL + pgvector via Prisma ORM
-- **AI:** OpenAI, Anthropic SDKs — multi-provider LLM support
-- **Monorepo:** pnpm workspaces + Turborepo
-- **Language:** TypeScript (strict) with Zod runtime validation
+<p align="center">
+  Upload the bid package. Search the spec. Mark up the drawing. Build the estimate. Generate the branded PDF. Send the quote.
+</p>
 
-## Project Structure
+> Bidwright is under active development. This README is intentionally written around capabilities already present in the repo today, while the most ambitious autonomous agent flows are still evolving.
 
+## Why Bidwright
+
+Estimating deserves better than PDF gymnastics, spreadsheet archaeology, and AI chats with no context.
+
+Bidwright brings the full workflow into one system so teams can move from raw bid package to client-ready quote without bouncing between disconnected tools. It combines document intake, searchable knowledge, drawing takeoff, pricing systems, scheduling, quote packaging, and tool-backed AI in a single platform.
+
+## What Bidwright Can Do Today
+
+| Area | Live capabilities in this repo |
+| --- | --- |
+| Package intake | Upload bid packages, unzip archives, classify files, extract text from PDFs, spreadsheets, and text-based files, and preserve structured tables and key-value data for downstream use. |
+| Knowledge and datasets | Upload estimating books, manage global or project-scoped knowledge, chunk and index content, run hybrid search, browse book pages, and build structured datasets manually or from source books. |
+| Estimating workspace | Manage projects, quotes, revisions, worksheets, line items, phases, modifiers, conditions, summary rows, notes, lead letters, report sections, activity history, and cross-project performance views. |
+| Takeoff and drawing review | Open drawing PDFs, calibrate scale, create count, linear, and area annotations, export markups, run symbol detection, count across pages, and use "Ask AI" on selected regions. |
+| Scheduling | Build project schedules with tasks, milestones, dependencies, progress tracking, and Gantt-style views tied back to estimate phases and revisions. |
+| Pricing systems | Maintain catalogs, tiered rate schedules, labour cost tables, burden periods, travel policies, entity categories, customers, departments, and reusable condition libraries. |
+| Quote output | Compare revisions, preview quote packages, generate branded PDFs with configurable layouts and sections, and send quotes by email. |
+| AI and extensibility | Rewrite descriptions and notes, suggest phases and equipment, run tool-backed agent sessions, create plugins, manage dynamic tools, and expose estimating tools through an MCP server. |
+| Multi-tenant operations | Support organizations, users, super-admin setup, org switching, brand profiles and brand capture, estimator personas, data import/export, and admin-level management flows. |
+
+## What Makes It Different
+
+- Bidwright does not stop at chat. The AI layer has access to the estimating workspace, knowledge, schedules, rate schedules, datasets, plugins, and project files.
+- Drawings, documents, structured knowledge, and estimate math live in the same system instead of being split across five separate tools.
+- The platform is designed for real estimator operations, including travel policy logic, burden periods, branded quote output, customer management, and trade-specific personas.
+- Extensibility is built in from the start through plugins, dynamic tool definitions, MCP support, and optional Claude Code or Codex runtime sessions.
+
+## AI, Agents, And Automation
+
+Bidwright already includes a serious AI foundation, not just a prompt box.
+
+- Multi-provider model support in the agent layer, including Anthropic, OpenAI, OpenRouter, Gemini, and LM Studio.
+- Local embedding support through Ollama, plus `pgvector`-backed retrieval for knowledge search.
+- Tool registries for quote operations, knowledge workflows, project files, datasets, schedules, pricing, rate schedules, web-assisted tasks, and plugin management.
+- A worker runtime for ingestion, summarization, phase drafting, worksheet drafting, equipment inference, and quote QA scaffolding.
+- An MCP server package so Bidwright tools can be used from external coding and agent runtimes.
+- CLI runtime support for launching Claude Code or Codex sessions against a project workspace with project context, documents, and knowledge symlinked in.
+
+## Inside The Monorepo
+
+```text
+apps/
+  api/      Fastify API, auth, quote logic, PDF/email services, AI routes, vision routes
+  web/      Next.js app for intake, estimating, takeoff, knowledge, performance, settings
+  worker/   BullMQ-oriented orchestration for ingestion and reviewable AI workflows
+
+packages/
+  agent/       Tool-backed agent runtime and provider adapters
+  ai/          Prompt contracts and typed AI helpers
+  db/          Prisma schema, seeders, templates, and database utilities
+  domain/      Shared business models and quote logic
+  ingestion/   Package extraction, document classification, chunking, and parsing
+  mcp-server/  MCP bridge for Bidwright tools
+  vector/      Embeddings and pgvector search
+  vision/      PDF rendering plus Python/OpenCV-assisted drawing analysis
 ```
-bidwright/
-├── apps/
-│   ├── api/            # Fastify REST API
-│   ├── web/            # Next.js web app
-│   └── worker/         # Background job processor
-├── packages/
-│   ├── agent/          # Agentic AI runtime & tool registry
-│   ├── ai/             # LLM integration layer
-│   ├── db/             # Prisma schema & migrations
-│   ├── domain/         # Core business logic & types
-│   ├── ingestion/      # Document processing pipeline
-│   ├── vector/         # Vector embeddings & search
-│   └── vision/         # Document vision/OCR pipeline
-```
 
-## Getting Started
+## Run It Locally
 
 ### Prerequisites
 
 - Node.js 20+
 - pnpm 10+
+- Docker Desktop
+- Optional: OpenAI and/or Anthropic API keys for AI features
 
-### Setup
+### Fastest dev path
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Copy environment variables
 cp .env.example .env
-# Fill in your API keys in .env
-
-# Start local infrastructure
-docker compose up -d postgres redis
-
-# Generate Prisma client & sync schema
-pnpm db:generate
-pnpm db:push
-
-# Seed sample data
-pnpm db:seed
+pnpm dev
 ```
 
-### Environment Variables
+`pnpm dev` does more than start the apps. It brings up Postgres, Redis, and Ollama in Docker, generates Prisma client code, pushes the schema, sets up `pgvector`, and launches the web app, API, and worker together.
 
-```
-DATABASE_URL="postgresql://bidwright:bidwright@localhost:5432/bidwright"
-REDIS_URL="redis://localhost:6379"
-OPENAI_API_KEY=""
-OPENAI_MODEL="gpt-5"
-OPENAI_EMBEDDING_MODEL="text-embedding-3-large"
-API_PORT="4001"
-NEXT_PUBLIC_API_BASE_URL="http://localhost:4001"
-```
+After startup:
 
-### Development
+- Web: `http://localhost:3000`
+- API: `http://localhost:4001`
+- If no super admin exists yet, Bidwright will open the first-run setup wizard.
+- From setup, you can create your organization and optionally load sample data.
 
-`pnpm dev` starts Postgres/Redis/Ollama, pushes the Prisma schema, and launches web, API, and worker.
+### Useful commands
 
 ```bash
-# Run all services (web + api + worker + local infra)
-pnpm dev
-
-# Or run app processes individually after infra is up
 pnpm dev:web
 pnpm dev:api
 pnpm dev:worker
+pnpm build
+pnpm typecheck
+pnpm lint
+pnpm db:generate
+pnpm db:push
+pnpm db:seed
 ```
 
-### Build & Checks
+### Docker-style run
+
+For a fuller containerized run:
 
 ```bash
-pnpm build        # Build all packages
-pnpm typecheck    # TypeScript validation
-pnpm lint         # Linting
+docker compose -f docker-compose.prod.yml up --build
 ```
 
-## Features
+On macOS, `./start.command` wraps that flow and opens the app once it is ready.
 
-- **Project Management** — Create and track construction projects through bid stages
-- **Quote Builder** — Revisions, worksheets, line items with cost/markup/pricing
-- **Document Ingestion** — Process ZIP packages of specs, drawings, and RFQs
-- **AI Analysis** — Phase drafting, equipment suggestions, quote QA
-- **PDF Generation** — Export quotes and reports
-- **Agentic AI** — Tool registry with 70+ specialized operations (in progress)
-- **Vector Search** — RAG over project documents via embeddings (in progress)
+## Core Environment Variables
 
-## Database
+```bash
+DATABASE_URL="postgresql://bidwright:bidwright@localhost:5432/bidwright"
+REDIS_URL="redis://localhost:6379"
+DATA_DIR="./data/bidwright-api"
+API_PORT="4001"
+NEXT_PUBLIC_API_BASE_URL="http://localhost:4001"
 
-PostgreSQL in development with Prisma ORM. Key models:
+OPENAI_API_KEY=""
+OPENAI_MODEL="gpt-5"
+OPENAI_EMBEDDING_MODEL="text-embedding-3-large"
 
-`Project` → `Quote` → `Revision` → `Worksheet` → `WorksheetItem`
+ANTHROPIC_API_KEY=""
+LLM_PROVIDER="anthropic"
+LLM_MODEL="claude-sonnet-4-20250514"
 
-Supporting models: `Phase`, `Modifier`, `Condition`, `ReportSection`, `AIRun`, `SourceDocument`
+EMBEDDING_PROVIDER="local"
+EMBEDDING_BASE_URL="http://localhost:11434/v1"
+EMBEDDING_MODEL="snowflake-arctic-embed"
+EMBEDDING_DIMENSIONS="1024"
+
+SMTP_HOST=""
+SMTP_PORT="587"
+SMTP_USER=""
+SMTP_PASS=""
+SMTP_FROM=""
+SMTP_FROM_NAME="Bidwright"
+```
+
+## Tech Stack
+
+- Frontend: Next.js 16, React 19, Tailwind CSS, Radix UI
+- API: Fastify 5
+- Worker orchestration: BullMQ
+- Database: PostgreSQL, Prisma, `pgvector`
+- AI: Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Ollama embeddings
+- Vision: Playwright, Python, OpenCV-style symbol analysis pipeline
+- Monorepo: pnpm workspaces + Turborepo
+- Language: TypeScript with Zod validation
+
+## Status
+
+Bidwright already contains a broad working platform for AI-assisted construction estimating. Core estimating, takeoff, knowledge, pricing, scheduling, branding, admin, and plugin workflows are present in the codebase today. The platform is still moving fast, especially around deeper agent autonomy and advanced automation.
 
 ## License
 
