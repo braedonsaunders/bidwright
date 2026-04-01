@@ -33,6 +33,7 @@ import {
   createCondition,
   createConditionLibraryEntry,
   createCustomer,
+  createCustomerContact,
   deleteCondition,
   deleteConditionLibraryEntry,
   deleteProjectRateSchedule,
@@ -343,6 +344,9 @@ function GeneralSubTab({
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddName, setQuickAddName] = useState("");
   const [quickAddSaving, setQuickAddSaving] = useState(false);
+  const [contactQuickAddOpen, setContactQuickAddOpen] = useState(false);
+  const [contactQuickAddName, setContactQuickAddName] = useState("");
+  const [contactQuickAddSaving, setContactQuickAddSaving] = useState(false);
   const [departmentId, setDepartmentId] = useState(quote.departmentId ?? "");
   const [quoteType, setQuoteType] = useState<"Firm" | "Budget" | "BudgetDNE">(rev.type ?? "Firm");
   const [dateQuote, setDateQuote] = useState(toDateInput(rev.dateQuote));
@@ -414,6 +418,23 @@ function GeneralSubTab({
       /* ignore */
     } finally {
       setQuickAddSaving(false);
+    }
+  }
+
+  async function handleContactQuickAdd() {
+    if (!contactQuickAddName.trim() || !customerId) return;
+    setContactQuickAddSaving(true);
+    try {
+      const created = await createCustomerContact(customerId, { name: contactQuickAddName.trim(), active: true });
+      setContactOptions((prev) => [...prev, created]);
+      setCustomerContactId(created.id);
+      setContactQuickAddName("");
+      setContactQuickAddOpen(false);
+      setTimeout(() => doSave(), 0);
+    } catch {
+      /* ignore */
+    } finally {
+      setContactQuickAddSaving(false);
     }
   }
 
@@ -491,19 +512,43 @@ function GeneralSubTab({
             </div>
             <div>
               <Label>Contact</Label>
-              <Select
-                value={customerContactId}
-                onChange={(e) => {
-                  setCustomerContactId(e.target.value);
-                  setTimeout(() => doSave(), 0);
-                }}
-                disabled={!customerId}
-              >
-                <option value="">Select contact...</option>
-                {contactOptions.filter((c) => c.active).map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}{c.email ? ` (${c.email})` : ""}</option>
-                ))}
-              </Select>
+              {contactQuickAddOpen ? (
+                <div className="flex gap-1.5">
+                  <Input
+                    placeholder="New contact name"
+                    value={contactQuickAddName}
+                    onChange={(e) => setContactQuickAddName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleContactQuickAdd())}
+                    autoFocus
+                  />
+                  <Button type="button" size="xs" variant="accent" onClick={handleContactQuickAdd} disabled={contactQuickAddSaving || !contactQuickAddName.trim()}>
+                    {contactQuickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  </Button>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => { setContactQuickAddOpen(false); setContactQuickAddName(""); }}>
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-1.5">
+                  <Select
+                    value={customerContactId}
+                    onChange={(e) => {
+                      setCustomerContactId(e.target.value);
+                      setTimeout(() => doSave(), 0);
+                    }}
+                    disabled={!customerId}
+                    className="flex-1"
+                  >
+                    <option value="">Select contact...</option>
+                    {contactOptions.filter((c) => c.active).map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}{c.email ? ` (${c.email})` : ""}</option>
+                    ))}
+                  </Select>
+                  <Button type="button" size="xs" variant="secondary" onClick={() => setContactQuickAddOpen(true)} title="Add new contact" disabled={!customerId}>
+                    <Plus className="h-3 w-3" />
+                  </Button>
+                </div>
+              )}
               {!customerId && <p className="mt-1 text-[11px] text-fg/40">Select a client first</p>}
             </div>
           </div>

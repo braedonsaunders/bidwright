@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import {
+  Download,
   Plus,
   Puzzle,
   Search,
+  Upload,
   X,
   Pencil,
   Play,
@@ -37,6 +39,7 @@ import type {
 import {
   updatePlugin as apiUpdatePlugin,
   executePlugin as apiExecutePlugin,
+  createPlugin as apiCreatePlugin,
 } from "@/lib/api";
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
@@ -127,6 +130,80 @@ export function PluginsPage({
     }
   }, [executionModal, projectId, revisionId]);
 
+  // ── Plugin Export / Import ──────────────────────────────────────────
+
+  const importFileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleExportPlugins = useCallback(() => {
+    const exportData = {
+      bidwright_plugins: { version: 1, exportedAt: new Date().toISOString(), count: plugins.length },
+      plugins: plugins.map((p) => ({
+        name: p.name,
+        slug: p.slug,
+        icon: p.icon,
+        category: p.category,
+        description: p.description,
+        llmDescription: p.llmDescription,
+        version: p.version,
+        author: p.author,
+        enabled: p.enabled,
+        config: p.config,
+        configSchema: p.configSchema,
+        toolDefinitions: p.toolDefinitions,
+        defaultOutputType: p.defaultOutputType,
+        supportedCategories: p.supportedCategories,
+        tags: p.tags,
+        documentation: p.documentation,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bidwright-plugins-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [plugins]);
+
+  const handleImportPlugins = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed.bidwright_plugins || !Array.isArray(parsed.plugins)) {
+        throw new Error("Invalid plugin export file");
+      }
+      const existingSlugs = new Set(plugins.map((p) => p.slug));
+      let created = 0;
+      let skipped = 0;
+      for (const pluginData of parsed.plugins) {
+        if (existingSlugs.has(pluginData.slug)) {
+          skipped++;
+          continue;
+        }
+        try {
+          const newPlugin = await apiCreatePlugin(pluginData);
+          setPlugins((prev) => [...prev, newPlugin]);
+          existingSlugs.add(newPlugin.slug);
+          created++;
+        } catch {
+          skipped++;
+        }
+      }
+      alert(`Imported ${created} plugin${created !== 1 ? "s" : ""}${skipped > 0 ? `, ${skipped} skipped (already exist or failed)` : ""}.`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to parse import file");
+    } finally {
+      setImporting(false);
+    }
+  }, [plugins]);
+
   const categories = useMemo(
     () => ["all", ...Array.from(new Set(plugins.map((p) => p.category)))],
     [plugins]
@@ -170,6 +247,13 @@ export function PluginsPage({
               <span className="text-fg/20">|</span>
               <span>{totalTools} tools</span>
             </div>
+            <Button size="sm" variant="ghost" onClick={handleExportPlugins} title="Export plugins">
+              <Download className="h-3 w-3" /> Export
+            </Button>
+            <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportPlugins} />
+            <Button size="sm" variant="ghost" onClick={() => importFileRef.current?.click()} disabled={importing} title="Import plugins">
+              <Upload className="h-3 w-3" /> {importing ? "Importing..." : "Import"}
+            </Button>
             <Button size="sm" variant="accent" onClick={() => setShowCreateModal(true)}>
               <Plus className="h-3 w-3" /> Create Plugin
             </Button>

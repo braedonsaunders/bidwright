@@ -322,6 +322,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const inputRef = useRef<HTMLInputElement>(null);
   const lastRefreshToolCount = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const sseReconnectCount = useRef(0);
 
   // Load default provider/model from org settings + detect CLIs
   useEffect(() => {
@@ -641,6 +642,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     const es = connectCliStream(pid);
     eventSourceRef.current = es;
     setSseConnected(true);
+    sseReconnectCount.current = 0; // Reset backoff on successful connection
 
     let toolCount = 0;
     let msgCount = 0;
@@ -734,29 +736,56 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
     es.onerror = () => {
       setSseConnected(false);
-      // EventSource auto-reconnect may have failed (readyState === CLOSED)
-      // If so, attempt manual reconnect after a delay
-      setTimeout(() => {
-        if (es.readyState === EventSource.CLOSED && eventSourceRef.current === es) {
-          // Use setState callback to read current status without stale closure
-          setIntakeStatus((current) => {
-            const isRunning = current?.status === "running";
-            if (isRunning) {
-              // Session still active — reconnect SSE
-              es.close();
-              eventSourceRef.current = null;
-              connectToSseStream(pid);
-            } else if (current) {
-              // Session finished — clean up
-              es.close();
-              eventSourceRef.current = null;
-            }
-            return current;
-          });
-        } else if (es.readyState === EventSource.OPEN) {
-          setSseConnected(true);
+      if (es.readyState !== EventSource.CLOSED || eventSourceRef.current !== es) {
+        // EventSource may auto-recover — check on next tick
+        if (es.readyState === EventSource.OPEN) setSseConnected(true);
+        return;
+      }
+
+      // Connection fully closed — check actual backend status before reconnecting
+      const attempt = sseReconnectCount.current;
+      const MAX_SSE_RECONNECTS = 8;
+      if (attempt >= MAX_SSE_RECONNECTS) {
+        console.warn("[sse] Max reconnect attempts reached, giving up");
+        es.close();
+        eventSourceRef.current = null;
+        setSessionError("Lost connection to agent session. Refresh the page to check status.");
+        return;
+      }
+
+      // Exponential backoff: 3s, 6s, 12s, 24s … capped at 30s
+      const delay = Math.min(3000 * Math.pow(2, attempt), 30_000);
+      sseReconnectCount.current = attempt + 1;
+
+      setTimeout(async () => {
+        // Poll backend for actual session status before reconnecting
+        try {
+          const data = await getCliStatus(pid);
+          if (data.status !== "running") {
+            // Session already finished — update state and stop reconnecting
+            es.close();
+            eventSourceRef.current = null;
+            sseReconnectCount.current = 0;
+            setIntakeStatus((prev) => prev ? { ...prev, status: data.status as any } : prev);
+            onWorkspaceMutated?.();
+            return;
+          }
+        } catch {
+          // 404 or network error — session is gone
+          es.close();
+          eventSourceRef.current = null;
+          sseReconnectCount.current = 0;
+          setIntakeStatus((prev) => prev ? { ...prev, status: "failed" } : prev);
+          setSessionError("Agent session ended unexpectedly.");
+          onWorkspaceMutated?.();
+          return;
         }
-      }, 3000);
+
+        // Session still running — reconnect SSE
+        es.close();
+        eventSourceRef.current = null;
+        connectToSseStream(pid);
+      }, delay);
     };
   }
 
@@ -821,9 +850,24 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
         if (data.status !== "running") {
           setIntakeStatus((prev) => prev ? { ...prev, status: data.status as any } : prev);
+          // Session ended — close SSE if still open
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+            setSseConnected(false);
+          }
           onWorkspaceMutated?.();
         }
-      } catch {}
+      } catch {
+        // Session gone (404) — mark as failed and clean up SSE
+        setIntakeStatus((prev) => prev ? { ...prev, status: "failed" } : prev);
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+          setSseConnected(false);
+        }
+        onWorkspaceMutated?.();
+      }
     };
 
     const interval = setInterval(poll, 5000);
