@@ -1884,6 +1884,21 @@ export function buildServer() {
     return request.store!.listActivities(projectId);
   });
 
+  app.post("/projects/:projectId/activity/:activityId/revert", async (request, reply) => {
+    const { projectId, activityId } = request.params as { projectId: string; activityId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    try {
+      const result = await request.store!.revertActivity(projectId, activityId);
+      return result;
+    } catch (err: any) {
+      const code = err.statusCode ?? (err.message?.includes("cannot be reverted") ? 400 : err.message?.includes("no longer exists") ? 409 : 500);
+      return reply.code(code).send({ message: err.message });
+    }
+  });
+
   // ── Report Section routes ──────────────────────────────────────────
 
   app.get("/projects/:projectId/report-sections", async (request, reply) => {

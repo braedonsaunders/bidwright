@@ -142,6 +142,18 @@ import {
 } from "./store/mappers.js";
 import type { IngestionJobRecord, StoredPackageRecord, WorkspaceStateRecord } from "./store/types.js";
 
+const NON_REVERTIBLE_ACTIVITY_TYPES = new Set([
+  "quote_sent", "ai_phases_accepted", "ai_equipment_accepted",
+]);
+
+function isActivityRevertible(activity: { type: string; data: any }): boolean {
+  if (activity.type.startsWith("revert:")) return false;
+  if (NON_REVERTIBLE_ACTIVITY_TYPES.has(activity.type)) return false;
+  const d = (activity.data as Record<string, unknown>) ?? {};
+  if (!d.before && !d.after) return false;
+  return true;
+}
+
 /**
  * Resolve tierUnit keys to full tier IDs.
  * Handles three formats:
@@ -603,6 +615,9 @@ async function sha256File(filePath: string) {
 
 export class PrismaApiStore {
   private importCache = new Map<string, { headers: string[]; rows: string[][] }>();
+  private _userId: string | null = null;
+
+  setUserId(id: string) { this._userId = id; }
 
   constructor(
     private readonly db: PrismaClient,
@@ -762,6 +777,14 @@ export class PrismaApiStore {
     return { quote, revision };
   }
 
+  // ── Private: pick helper for snapshots ──────────────────────────────────
+
+  private pick(obj: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const k of keys) if (k in obj) result[k] = obj[k];
+    return result;
+  }
+
   // ── Private: push activity ──────────────────────────────────────────────
 
   private async pushActivity(projectId: string, revisionId: string | null, type: string, data: Record<string, unknown>) {
@@ -772,6 +795,7 @@ export class PrismaApiStore {
         revisionId,
         type,
         data: data as any,
+        userId: this._userId,
         createdAt: new Date(),
       },
     });
@@ -1576,12 +1600,16 @@ export class PrismaApiStore {
     if (patch.calculatedCategoryTotals !== undefined) data.calculatedCategoryTotals = patch.calculatedCategoryTotals as any;
     if (patch.pdfPreferences !== undefined) data.pdfPreferences = patch.pdfPreferences as any;
 
+    const changedKeys = Object.keys(patch);
+    const beforeSnap = this.pick(revision as any, changedKeys);
+
     const updated = await this.db.quoteRevision.update({
       where: { id: revisionId },
       data,
     });
 
-    await this.pushActivity(projectId, revisionId, "revision_updated", { fields: Object.keys(patch) });
+    const afterSnap = this.pick(updated as any, changedKeys);
+    await this.pushActivity(projectId, revisionId, "revision_updated", { fields: changedKeys, before: beforeSnap, after: afterSnap });
     await this.syncProjectEstimate(projectId);
 
     return mapRevision(updated);
@@ -1705,7 +1733,7 @@ export class PrismaApiStore {
       },
     });
 
-    await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category });
+    await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category, before: null, after: mapWorksheetItem(created) });
     await this.syncProjectEstimate(projectId);
 
     return mapWorksheetItem(created);
@@ -1871,7 +1899,10 @@ export class PrismaApiStore {
       },
     });
 
-    await this.pushActivity(projectId, revision.id, "item_updated", { itemId, entityName: domainItem.entityName, patch: Object.keys(patch) });
+    const patchKeys = Object.keys(patch);
+    const itemBefore = this.pick(mapWorksheetItem(item) as any, patchKeys);
+    const itemAfter = this.pick(mapWorksheetItem(updated) as any, patchKeys);
+    await this.pushActivity(projectId, revision.id, "item_updated", { itemId, entityName: domainItem.entityName, patch: patchKeys, before: itemBefore, after: itemAfter });
     await this.syncProjectEstimate(projectId);
 
     return mapWorksheetItem(updated);
@@ -1978,7 +2009,7 @@ export class PrismaApiStore {
       });
 
       created.push(item);
-      await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category });
+      await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category, before: null, after: { ...item } });
     }
 
     await this.syncProjectEstimate(projectId);
@@ -1997,7 +2028,7 @@ export class PrismaApiStore {
     }
 
     await this.db.worksheetItem.delete({ where: { id: itemId } });
-    await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName });
+    await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName, before: mapWorksheetItem(item), after: null });
     await this.syncProjectEstimate(projectId);
 
     return mapWorksheetItem(item);
@@ -2512,7 +2543,7 @@ export class PrismaApiStore {
       },
     });
 
-    await this.pushActivity(projectId, revisionId, "phase_created", { phaseId: phase.id, name: phase.name });
+    await this.pushActivity(projectId, revisionId, "phase_created", { phaseId: phase.id, name: phase.name, before: null, after: mapPhase(phase) });
     await this.syncProjectEstimate(projectId);
     return mapPhase(phase);
   }
@@ -2531,7 +2562,11 @@ export class PrismaApiStore {
     if (patch.endDate !== undefined) data.endDate = patch.endDate;
     if (typeof patch.color === "string") data.color = patch.color;
 
+    const phasePatchKeys = Object.keys(data);
+    const phaseBefore = this.pick(phase as any, phasePatchKeys);
     const updated = await this.db.phase.update({ where: { id: phaseId }, data });
+    const phaseAfter = this.pick(updated as any, phasePatchKeys);
+    await this.pushActivity(projectId, phase.revisionId, "phase_updated", { phaseId, name: updated.name, patch: phasePatchKeys, before: phaseBefore, after: phaseAfter });
     await this.syncProjectEstimate(projectId);
     return mapPhase(updated);
   }
@@ -2548,7 +2583,7 @@ export class PrismaApiStore {
     });
 
     await this.db.phase.delete({ where: { id: phaseId } });
-    await this.pushActivity(projectId, phase.revisionId, "phase_deleted", { phaseId, name: phase.name });
+    await this.pushActivity(projectId, phase.revisionId, "phase_deleted", { phaseId, name: phase.name, before: mapPhase(phase), after: null });
     await this.syncProjectEstimate(projectId);
     return mapPhase(phase);
   }
@@ -2591,7 +2626,7 @@ export class PrismaApiStore {
         order,
       },
     });
-    await this.pushActivity(projectId, revisionId, "schedule_task_created", { taskId: task.id, name: task.name });
+    await this.pushActivity(projectId, revisionId, "schedule_task_created", { taskId: task.id, name: task.name, before: null, after: mapScheduleTask(task) });
     return mapScheduleTask(task);
   }
 
@@ -2613,7 +2648,11 @@ export class PrismaApiStore {
     if (typeof patch.assignee === "string") data.assignee = patch.assignee;
     if (typeof patch.order === "number") data.order = patch.order;
 
+    const taskPatchKeys = Object.keys(data);
+    const taskBefore = this.pick(task as any, taskPatchKeys);
     const updated = await this.db.scheduleTask.update({ where: { id: taskId }, data });
+    const taskAfter = this.pick(updated as any, taskPatchKeys);
+    await this.pushActivity(projectId, task.revisionId, "schedule_task_updated", { taskId, name: updated.name, patch: taskPatchKeys, before: taskBefore, after: taskAfter });
     return mapScheduleTask(updated);
   }
 
@@ -2637,7 +2676,7 @@ export class PrismaApiStore {
       where: { OR: [{ predecessorId: taskId }, { successorId: taskId }] },
     });
     await this.db.scheduleTask.delete({ where: { id: taskId } });
-    await this.pushActivity(projectId, task.revisionId, "schedule_task_deleted", { taskId, name: task.name });
+    await this.pushActivity(projectId, task.revisionId, "schedule_task_deleted", { taskId, name: task.name, before: mapScheduleTask(task), after: null });
     return mapScheduleTask(task);
   }
 
@@ -3875,6 +3914,7 @@ export class PrismaApiStore {
         revisionId,
         type,
         data: data as any,
+        userId: this._userId,
         createdAt: new Date(),
       },
     });
@@ -3885,8 +3925,120 @@ export class PrismaApiStore {
     const activities = await this.db.activity.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
+      include: { user: { select: { name: true } } },
     });
-    return activities.map(mapActivity);
+    return activities.map((a) => ({
+      ...mapActivity(a),
+      userName: (a as any).user?.name ?? null,
+      revertible: isActivityRevertible(a),
+    }));
+  }
+
+  async revertActivity(projectId: string, activityId: string) {
+    await this.requireProject(projectId);
+    const activity = await this.db.activity.findFirst({ where: { id: activityId, projectId } });
+    if (!activity) throw Object.assign(new Error("Activity not found"), { statusCode: 404 });
+
+    const type = activity.type;
+    const data = (activity.data as Record<string, unknown>) ?? {};
+
+    if (NON_REVERTIBLE_ACTIVITY_TYPES.has(type)) {
+      throw Object.assign(new Error("This action cannot be reverted"), { statusCode: 400 });
+    }
+    if (type.startsWith("revert:")) {
+      throw Object.assign(new Error("Revert actions cannot themselves be reverted"), { statusCode: 400 });
+    }
+    if (!data.before && !data.after) {
+      throw Object.assign(new Error("This activity does not contain snapshot data and cannot be reverted"), { statusCode: 400 });
+    }
+
+    const before = data.before as Record<string, unknown> | null;
+    const after = data.after as Record<string, unknown> | null;
+    const revisionId = activity.revisionId;
+
+    let revertBefore: Record<string, unknown> | null = null;
+    let revertAfter: Record<string, unknown> | null = null;
+
+    if (type === "item_created") {
+      // Revert: delete the created item
+      const itemId = (after?.id ?? data.itemId) as string;
+      const item = await this.db.worksheetItem.findFirst({ where: { id: itemId } });
+      if (!item) throw Object.assign(new Error("Cannot revert — the item no longer exists"), { statusCode: 409 });
+      revertBefore = mapWorksheetItem(item) as any;
+      revertAfter = null;
+      await this.db.worksheetItem.delete({ where: { id: itemId } });
+    } else if (type === "item_updated") {
+      const itemId = data.itemId as string;
+      const item = await this.db.worksheetItem.findFirst({ where: { id: itemId } });
+      if (!item) throw Object.assign(new Error("Cannot revert — the item no longer exists"), { statusCode: 409 });
+      revertBefore = this.pick(item as any, Object.keys(before!));
+      await this.db.worksheetItem.update({ where: { id: itemId }, data: before as any });
+      revertAfter = before;
+    } else if (type === "item_deleted") {
+      // Revert: recreate the item from the before snapshot
+      const snapshot = before!;
+      revertBefore = null;
+      await this.db.worksheetItem.create({ data: snapshot as any });
+      revertAfter = snapshot;
+    } else if (type === "revision_updated") {
+      const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId! } });
+      if (!revision) throw Object.assign(new Error("Cannot revert — the revision no longer exists"), { statusCode: 409 });
+      revertBefore = this.pick(revision as any, Object.keys(before!));
+      await this.db.quoteRevision.update({ where: { id: revisionId! }, data: before as any });
+      revertAfter = before;
+    } else if (type === "phase_created") {
+      const phaseId = (after?.id ?? data.phaseId) as string;
+      const phase = await this.db.phase.findFirst({ where: { id: phaseId } });
+      if (!phase) throw Object.assign(new Error("Cannot revert — the phase no longer exists"), { statusCode: 409 });
+      revertBefore = mapPhase(phase) as any;
+      revertAfter = null;
+      await this.db.worksheetItem.updateMany({ where: { phaseId }, data: { phaseId: null } });
+      await this.db.phase.delete({ where: { id: phaseId } });
+    } else if (type === "phase_updated") {
+      const phaseId = data.phaseId as string;
+      const phase = await this.db.phase.findFirst({ where: { id: phaseId } });
+      if (!phase) throw Object.assign(new Error("Cannot revert — the phase no longer exists"), { statusCode: 409 });
+      revertBefore = this.pick(phase as any, Object.keys(before!));
+      await this.db.phase.update({ where: { id: phaseId }, data: before as any });
+      revertAfter = before;
+    } else if (type === "phase_deleted") {
+      const snapshot = before!;
+      revertBefore = null;
+      await this.db.phase.create({ data: { id: snapshot.id as string, revisionId: snapshot.revisionId as string, number: snapshot.number as string, name: snapshot.name as string, description: (snapshot.description as string) ?? "", order: (snapshot.order as number) ?? 0, startDate: (snapshot.startDate as string) ?? null, endDate: (snapshot.endDate as string) ?? null, color: (snapshot.color as string) ?? "" } });
+      revertAfter = snapshot;
+    } else if (type === "schedule_task_created") {
+      const taskId = (after?.id ?? data.taskId) as string;
+      const task = await this.db.scheduleTask.findFirst({ where: { id: taskId } });
+      if (!task) throw Object.assign(new Error("Cannot revert — the task no longer exists"), { statusCode: 409 });
+      revertBefore = mapScheduleTask(task) as any;
+      revertAfter = null;
+      await this.db.scheduleDependency.deleteMany({ where: { OR: [{ predecessorId: taskId }, { successorId: taskId }] } });
+      await this.db.scheduleTask.delete({ where: { id: taskId } });
+    } else if (type === "schedule_task_updated") {
+      const taskId = data.taskId as string;
+      const task = await this.db.scheduleTask.findFirst({ where: { id: taskId, projectId } });
+      if (!task) throw Object.assign(new Error("Cannot revert — the task no longer exists"), { statusCode: 409 });
+      revertBefore = this.pick(task as any, Object.keys(before!));
+      await this.db.scheduleTask.update({ where: { id: taskId }, data: before as any });
+      revertAfter = before;
+    } else if (type === "schedule_task_deleted") {
+      const snapshot = before!;
+      revertBefore = null;
+      await this.db.scheduleTask.create({ data: { id: snapshot.id as string, projectId, revisionId: snapshot.revisionId as string, phaseId: (snapshot.phaseId as string) ?? null, name: (snapshot.name as string) ?? "", description: (snapshot.description as string) ?? "", taskType: (snapshot.taskType as string) ?? "task", status: (snapshot.status as string) ?? "not_started", startDate: (snapshot.startDate as string) ?? null, endDate: (snapshot.endDate as string) ?? null, duration: (snapshot.duration as number) ?? 0, progress: (snapshot.progress as number) ?? 0, assignee: (snapshot.assignee as string) ?? "", order: (snapshot.order as number) ?? 0 } });
+      revertAfter = snapshot;
+    } else {
+      throw Object.assign(new Error(`Unknown activity type "${type}" cannot be reverted`), { statusCode: 400 });
+    }
+
+    // Log the revert as its own activity
+    await this.pushActivity(projectId, revisionId, `revert:${type}`, {
+      originalActivityId: activityId,
+      before: revertBefore,
+      after: revertAfter,
+    });
+
+    await this.syncProjectEstimate(projectId);
+    return this.getWorkspace(projectId);
   }
 
   // ── Report Sections ────────────────────────────────────────────────────

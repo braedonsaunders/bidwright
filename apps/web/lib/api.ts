@@ -261,6 +261,8 @@ export interface Activity {
   type: string;
   data: Record<string, unknown>;
   userId: string | null;
+  userName: string | null;
+  revertible: boolean;
   createdAt: string;
 }
 
@@ -1565,7 +1567,11 @@ export async function autoCalculateProjectRateSchedule(projectId: string, id: st
 // ---------------------------------------------------------------------------
 
 export async function getActivities(projectId: string) {
-  return apiRequest<Activity[]>(`/projects/${projectId}/activities`);
+  return apiRequest<Activity[]>(`/projects/${projectId}/activity`);
+}
+
+export async function revertActivity(projectId: string, activityId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/activity/${activityId}/revert`, { method: "POST" });
 }
 
 // ---------------------------------------------------------------------------

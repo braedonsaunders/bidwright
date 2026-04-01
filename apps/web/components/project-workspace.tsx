@@ -20,16 +20,13 @@ import {
   Trash2,
 } from "lucide-react";
 import type {
-  Activity,
   CreateWorksheetItemInput,
-  JobRecord,
   PackageRecord,
   ProjectWorkspaceData,
   RevisionPatchInput,
   WorkspaceResponse,
   WorkspaceWorksheet,
   WorkspaceWorksheetItem,
-  WorkspaceStateRecord,
 } from "@/lib/api";
 import {
   activateRevision,
@@ -64,13 +61,13 @@ import {
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
 import { AgentChat } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
-import { AIReviewQueue } from "@/components/ai-review-queue";
 import { SetupTab } from "@/components/workspace/setup-tab";
 import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
 import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";
 import { ReviewTab } from "@/components/workspace/review-tab";
+import { AuditTrailTab } from "@/components/workspace/audit-trail";
 import { RevisionCompare } from "@/components/workspace/revision-compare";
 import {
   ConfirmModal,
@@ -97,7 +94,6 @@ import {
   EmptyState,
   Input,
   Label,
-  Progress,
   Select,
   Separator,
   Textarea,
@@ -704,7 +700,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           )}
           {tab === "activity" && (
             <motion.div key="activity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <ActivityTab workspace={workspace} jobs={data.jobs} workspaceState={data.workspaceState} />
+              <AuditTrailTab workspace={workspace} onApply={apply} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -1177,40 +1173,3 @@ function EstimateTab({
   );
 }
 
-/* ─── Activity Tab ─── */
-function ActivityTab({ workspace, jobs, workspaceState }: { workspace: ProjectWorkspaceData; jobs: JobRecord[]; workspaceState: WorkspaceStateRecord | null }) {
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card>
-          <CardHeader><div className="flex items-center justify-between"><CardTitle>Jobs</CardTitle><Badge>{jobs.length}</Badge></div></CardHeader>
-          <CardBody className="space-y-2">
-            {jobs.length === 0 ? <EmptyState>No jobs</EmptyState> : jobs.map((job) => (
-              <div key={job.id} className="rounded-lg border border-line bg-panel2/40 p-3">
-                <div className="flex items-center justify-between"><span className="text-sm font-medium">{job.kind.replaceAll("_", " ")}</span><Badge tone={statusTone(job.status)}>{job.status}</Badge></div>
-                <Progress value={Math.round(job.progress * 100)} className="mt-2" />
-                <div className="mt-1 text-[11px] text-fg/30">{formatDateTime(job.updatedAt)}</div>
-                {job.error && <div className="mt-1 text-[11px] text-danger">{job.error}</div>}
-              </div>
-            ))}
-          </CardBody>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Workspace state</CardTitle></CardHeader>
-          <CardBody className="space-y-3">
-            <div className="grid grid-cols-2 gap-2">
-              <Stat label="Revision" value={`Rev ${workspace.currentRevision.revisionNumber}`} />
-              <Stat label="Updated" value={formatDateTime(workspace.currentRevision.updatedAt)} />
-            </div>
-          </CardBody>
-        </Card>
-      </div>
-      <AIReviewQueue runs={workspace.aiRuns} citations={workspace.citations} />
-    </div>
-  );
-}
-
-/* ─── Shared ─── */
-function Stat({ label, value }: { label: string; value: string }) {
-  return (<div className="rounded-lg bg-panel2/40 px-3 py-2"><div className="text-[11px] text-fg/35">{label}</div><div className="mt-0.5 text-sm font-medium">{value}</div></div>);
-}
