@@ -926,7 +926,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div>
                 <div className="text-sm font-semibold">Bidwright AI</div>
                 <div className="text-[10px] text-fg/35">
-                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI` : `${provider} / ${model.split("/").pop()}`}
+                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI · ${cliAgentModel || "sonnet"}` : `${provider} / ${model.split("/").pop()}`}
                   {sseConnected && <span className="ml-1 text-success">connected</span>}
                 </div>
               </div>
@@ -991,6 +991,23 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                         {personas.find(p => p.id === selectedPersonaId)?.description || "Custom estimation persona"}
                       </div>
                     )}
+                  </div>
+                )}
+                {/* Model selection */}
+                {cliRuntime === "claude-code" && (
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                      Model
+                    </label>
+                    <Select
+                      className="h-8 text-xs"
+                      value={cliAgentModel || "sonnet"}
+                      onChange={(e) => setCliAgentModel(e.target.value)}
+                    >
+                      <option value="sonnet">Claude Sonnet 4.6 (Recommended)</option>
+                      <option value="opus">Claude Opus 4.6</option>
+                      <option value="haiku">Claude Haiku 4.5</option>
+                    </Select>
                   </div>
                 )}
                 <button

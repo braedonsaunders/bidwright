@@ -90,8 +90,6 @@ export const mockStore: BidwrightStore = {
       notes:
         "Review shutdown window, crane access, and phasing assumptions before release.",
       breakoutStyle: "phase_detail",
-      phaseWorksheetEnabled: true,
-      useCalculatedTotal: true,
       type: "Budget",
       scratchpad: "",
       leadLetter: "",
@@ -111,7 +109,6 @@ export const mockStore: BidwrightStore = {
       printEmptyNotesColumn: false,
       printCategory: [],
       printPhaseTotalOnly: false,
-      showOvertimeDoubletime: false,
       grandTotal: 1239854,
       regHours: 2584,
       overHours: 0,
@@ -1499,4 +1496,5 @@ export const mockStore: BidwrightStore = {
   rateSchedules: [],
   rateScheduleTiers: [],
   rateScheduleItems: [],
+  takeoffLinks: [],
 };

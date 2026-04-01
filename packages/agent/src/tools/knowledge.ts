@@ -859,6 +859,47 @@ export const extractStructuredTool = createKnowledgeTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 25. knowledge.readSpreadsheet
+// ──────────────────────────────────────────────────────────────
+export const readSpreadsheetTool = createKnowledgeTool({
+  id: "knowledge.readSpreadsheet",
+  name: "Read Spreadsheet",
+  description:
+    "Read an xlsx/xls/csv spreadsheet document and return its contents as markdown tables. " +
+    "Use this for ANY spreadsheet file — xlsx is binary and cannot be read with the Read tool. " +
+    "Returns all sheets (or a specific sheet) as readable markdown tables with headers. " +
+    "Pass the document ID from the CLAUDE.md document manifest.",
+  inputSchema: z.object({
+    documentId: z.string().describe("SourceDocument ID of the spreadsheet (from the [docId: ...] in the document manifest)"),
+    sheet: z.string().optional().describe("Specific sheet name to read. If omitted, returns ALL sheets."),
+  }),
+  tags: ["knowledge", "document", "spreadsheet", "xlsx", "csv", "read"],
+}, async (ctx, input) => {
+  const params = input.sheet ? `?sheet=${encodeURIComponent(input.sheet as string)}` : "";
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/knowledge/read-spreadsheet/${input.documentId}${params}`, {
+    method: "GET",
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    return { success: false, error: `Failed to read spreadsheet (${res.status}): ${errBody}` };
+  }
+
+  const result = await res.json() as any;
+
+  // Build readable output
+  let output = `Spreadsheet: ${result.fileName}\n`;
+  output += `Sheets: ${result.allSheetNames.join(", ")} (${result.sheetCount} total)\n\n`;
+
+  for (const s of result.sheets) {
+    output += `## Sheet: ${s.name} (${s.rowCount} rows)\n\n`;
+    output += s.markdown + "\n\n";
+  }
+
+  return { success: true, data: output };
+});
+
+// ──────────────────────────────────────────────────────────────
 // Export all tools as array
 // ──────────────────────────────────────────────────────────────
 export const knowledgeTools: Tool[] = [
@@ -887,4 +928,5 @@ export const knowledgeTools: Tool[] = [
   viewBookTool,
   viewBookPageTool,
   extractStructuredTool,
+  readSpreadsheetTool,
 ];

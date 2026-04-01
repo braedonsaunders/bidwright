@@ -318,6 +318,20 @@ export function AgentRuntimeSettings({
           <p className="mt-1 text-[11px] text-fg/40">Maximum tool call iterations for AI estimating runs</p>
         </div>
 
+        <div>
+          <Label>Max Concurrent Sub-Agents</Label>
+          <Select
+            value={String(settings.integrations.maxConcurrentSubAgents ?? 2)}
+            onChange={(e) => onUpdate({ maxConcurrentSubAgents: parseInt(e.target.value) })}
+          >
+            <option value="1">1 — Sequential (safest, slowest)</option>
+            <option value="2">2 — Recommended</option>
+            <option value="3">3 — Faster, higher rate limit risk</option>
+            <option value="5">5 — Aggressive (may hit API rate limits)</option>
+          </Select>
+          <p className="mt-1 text-[11px] text-fg/40">How many worksheet sub-agents the AI runs in parallel. Lower values avoid Anthropic API rate limit errors; higher values finish faster.</p>
+        </div>
+
         <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
           <p className="font-medium text-fg/50">Authentication</p>
           <p>Claude Code uses your <code className="text-fg/50">ANTHROPIC_API_KEY</code> environment variable or OAuth login (run <code className="text-fg/50">claude</code> in terminal and type <code className="text-fg/50">/login</code>).</p>

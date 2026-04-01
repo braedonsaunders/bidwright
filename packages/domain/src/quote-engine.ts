@@ -136,8 +136,7 @@ function groupItemsForBreakout(
   breakoutStyle: QuoteRevision["breakoutStyle"],
   worksheets: Array<Worksheet & { items: WorksheetItem[] }>,
   phases: BidwrightStore["phases"],
-  lineItems: WorksheetItem[],
-  phaseWorksheetEnabled: boolean
+  lineItems: WorksheetItem[]
 ) {
   if (breakoutStyle === "labour_material_equipment") {
     return [
@@ -191,19 +190,11 @@ function groupItemsForBreakout(
     }));
   }
 
-  const groupSource = phaseWorksheetEnabled
-    ? worksheets.map((worksheet) => ({
-        key: worksheet.id,
-        name: worksheet.name,
-        items: worksheet.items
-      }))
-    : phases.map((phase) => ({
-        key: phase.id,
-        name: phase.name,
-        items: lineItems.filter((item) => item.phaseId === phase.id)
-      }));
-
-  return groupSource;
+  return phases.map((phase) => ({
+    key: phase.id,
+    name: phase.name,
+    items: lineItems.filter((item) => item.phaseId === phase.id)
+  }));
 }
 
 function distributeHiddenModifier(
@@ -211,8 +202,7 @@ function distributeHiddenModifier(
   modifierAmount: number,
   appliesTo: string,
   lineItems: WorksheetItem[],
-  breakoutStyle: QuoteRevision["breakoutStyle"],
-  phaseWorksheetEnabled: boolean
+  breakoutStyle: QuoteRevision["breakoutStyle"]
 ) {
   if (modifierAmount === 0) {
     return breakout;
@@ -260,9 +250,7 @@ function distributeHiddenModifier(
       };
     }
 
-    const scopedItems = phaseWorksheetEnabled
-      ? lineItems.filter((item) => item.worksheetId === entry.entityId)
-      : lineItems.filter((item) => item.phaseId === entry.entityId);
+    const scopedItems = lineItems.filter((item) => item.phaseId === entry.entityId);
     const phaseScoped = appliesTo === "All"
       ? scopedItems
       : scopedItems.filter((item) => normalizeCategoryName(item.category) === appliesTo);
@@ -324,8 +312,7 @@ export function calculateTotals(
     revision.breakoutStyle,
     worksheets,
     phases,
-    lineItems,
-    revision.phaseWorksheetEnabled ?? false
+    lineItems
   )
     .filter((group) => group.name)
     .map((group) => {
@@ -385,8 +372,7 @@ export function calculateTotals(
         modifierAmount,
         target,
         lineItems,
-        revision.breakoutStyle,
-        revision.phaseWorksheetEnabled ?? false
+        revision.breakoutStyle
       );
 
       categoryTotals = categoryTotals.map((entry) => {
@@ -631,6 +617,7 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
       const taskIds = new Set((store.scheduleTasks || []).filter((t) => t.projectId === projectId && t.revisionId === revision.id).map((t) => t.id));
       return taskIds.has(d.predecessorId) || taskIds.has(d.successorId);
     }),
+    takeoffLinks: (store.takeoffLinks || []).filter((l) => l.projectId === projectId),
     estimate: {
       revisionId: revision.id,
       totals,

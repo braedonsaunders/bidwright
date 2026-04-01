@@ -58,7 +58,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
   defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
-  integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "" },
+  integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "", agentRuntime: undefined, agentModel: undefined, maxConcurrentSubAgents: 2 },
   brand: DEFAULT_BRAND,
   termsAndConditions: "",
 };
@@ -166,8 +166,6 @@ export function mapRevision(r: any): QuoteRevision {
     description: r.description,
     notes: r.notes,
     breakoutStyle: r.breakoutStyle as QuoteRevision["breakoutStyle"],
-    phaseWorksheetEnabled: r.phaseWorksheetEnabled,
-    useCalculatedTotal: r.useCalculatedTotal,
     type: r.type as QuoteRevision["type"],
     scratchpad: r.scratchpad,
     leadLetter: r.leadLetter,
@@ -187,7 +185,6 @@ export function mapRevision(r: any): QuoteRevision {
     printEmptyNotesColumn: r.printEmptyNotesColumn,
     printCategory: r.printCategory ?? [],
     printPhaseTotalOnly: r.printPhaseTotalOnly,
-    showOvertimeDoubletime: r.showOvertimeDoubletime,
     grandTotal: r.grandTotal,
     regHours: r.regHours,
     overHours: r.overHours,
@@ -441,6 +438,20 @@ export function mapTakeoffAnnotation(a: any) {
     createdBy: a.createdBy ?? undefined,
     createdAt: toISO(a.createdAt),
     updatedAt: toISO(a.updatedAt),
+  };
+}
+
+export function mapTakeoffLink(l: any) {
+  return {
+    id: l.id,
+    projectId: l.projectId,
+    annotationId: l.annotationId,
+    worksheetItemId: l.worksheetItemId,
+    quantityField: l.quantityField ?? "value",
+    multiplier: l.multiplier ?? 1.0,
+    derivedQuantity: l.derivedQuantity ?? 0,
+    createdAt: toISO(l.createdAt),
+    updatedAt: toISO(l.updatedAt),
   };
 }
 

@@ -48,7 +48,7 @@ export function PdfCanvasViewer({
           pdfDocRef.current = null;
         }
 
-        const loadingTask = pdfjs.getDocument(documentUrl);
+        const loadingTask = pdfjs.getDocument({ url: documentUrl, withCredentials: true });
         const doc = await loadingTask.promise;
 
         if (cancelled) {

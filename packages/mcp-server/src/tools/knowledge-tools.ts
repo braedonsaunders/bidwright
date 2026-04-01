@@ -218,6 +218,39 @@ export function registerKnowledgeTools(server: McpServer) {
     }
   );
 
+  // ── readSpreadsheet ─────────────────────────────────────
+  server.tool(
+    "readSpreadsheet",
+    "Read an xlsx/xls/csv spreadsheet and return its contents as markdown tables. Use this for ANY spreadsheet document — Claude Code cannot natively parse binary xlsx files. Returns all sheets (or a specific sheet) as readable markdown tables with headers.",
+    {
+      documentId: z.string().describe("SourceDocument ID of the spreadsheet file (from the document manifest in CLAUDE.md)"),
+      sheet: z.string().optional().describe("Optional sheet name to read. If omitted, returns all sheets."),
+    },
+    async ({ documentId, sheet }) => {
+      try {
+        const params = sheet ? `?sheet=${encodeURIComponent(sheet)}` : "";
+        const data = await apiGet(`/api/knowledge/read-spreadsheet/${documentId}${params}`);
+        const result = data as any;
+
+        // Build a readable text output
+        let output = `📊 Spreadsheet: ${result.fileName}\n`;
+        output += `Sheets: ${result.allSheetNames.join(", ")} (${result.sheetCount} total)\n\n`;
+
+        for (const s of result.sheets) {
+          output += `## Sheet: ${s.name} (${s.rowCount} rows)\n\n`;
+          output += s.markdown + "\n\n";
+        }
+
+        return { content: [{ type: "text" as const, text: output }] };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text" as const, text: `ERROR reading spreadsheet: ${err?.message || String(err)}. This may not be a spreadsheet file, or the document ID may be wrong. Check the document manifest for the correct ID.` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   // ── getBookPage ──────────────────────────────────────────
   server.tool(
     "getBookPage",

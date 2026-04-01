@@ -25,7 +25,7 @@ export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "costs", label: "Labour Costs" },
   { id: "travel", label: "Travel Policies" },
   { id: "clients", label: "Clients" },
-  { id: "conditions", label: "Inclusions & Exclusions" },
+  { id: "conditions", label: "Conditions" },
 ];
 
 export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
@@ -75,6 +75,11 @@ export interface IntegrationSettings {
   llmModel: string;
   azureDiEndpoint: string;
   azureDiKey: string;
+  agentRuntime?: string | null;
+  agentModel?: string | null;
+  claudeCodePath?: string | null;
+  codexPath?: string | null;
+  maxConcurrentSubAgents?: number;
 }
 
 export interface AllSettings {

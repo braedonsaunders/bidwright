@@ -54,4 +54,53 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
     }
   });
+
+  // ── Takeoff Links (Annotation ↔ Line Item) ────────────────────────────
+
+  // ── GET /api/takeoff/:projectId/links ─────────────────────────────────
+  app.get("/api/takeoff/:projectId/links", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const query = request.query as { annotationId?: string; worksheetItemId?: string };
+    try {
+      return await request.store!.listTakeoffLinks(projectId, query.annotationId, query.worksheetItemId);
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
+
+  // ── POST /api/takeoff/:projectId/links ────────────────────────────────
+  app.post("/api/takeoff/:projectId/links", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = request.body as Record<string, unknown>;
+    try {
+      const link = await request.store!.createTakeoffLink(projectId, body as any);
+      reply.code(201);
+      return link;
+    } catch (error) {
+      console.error("[takeoff-link:create] Failed:", error instanceof Error ? error.message : error);
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Bad request" });
+    }
+  });
+
+  // ── PATCH /api/takeoff/:projectId/links/:linkId ───────────────────────
+  app.patch("/api/takeoff/:projectId/links/:linkId", async (request, reply) => {
+    const { linkId } = request.params as { projectId: string; linkId: string };
+    const body = request.body as Record<string, unknown>;
+    try {
+      return await request.store!.updateTakeoffLink(linkId, body as any);
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
+
+  // ── DELETE /api/takeoff/:projectId/links/:linkId ──────────────────────
+  app.delete("/api/takeoff/:projectId/links/:linkId", async (request, reply) => {
+    const { linkId } = request.params as { projectId: string; linkId: string };
+    try {
+      await request.store!.deleteTakeoffLink(linkId);
+      return { deleted: true };
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
 }

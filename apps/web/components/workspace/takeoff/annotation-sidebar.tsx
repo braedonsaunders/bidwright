@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Eye, EyeOff, Pencil, Trash2, ChevronDown, ChevronRight, Check, X } from "lucide-react";
+import { useState, useMemo } from "react";
+import { Eye, EyeOff, Pencil, Trash2, ChevronDown, ChevronRight, Check, X, Link2, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Button,
@@ -14,6 +14,7 @@ import {
   Separator,
 } from "@/components/ui";
 import type { TakeoffAnnotation } from "./annotation-canvas";
+import type { TakeoffLinkRecord } from "@/lib/api";
 
 const EDIT_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
@@ -26,6 +27,14 @@ interface AnnotationSidebarProps {
   onSelectAnnotation: (id: string) => void;
   selectedAnnotationId: string | null;
   editingAnnotationId?: string | null;
+  /** Takeoff links for showing link badges */
+  takeoffLinks?: TakeoffLinkRecord[];
+  /** Called to open the link-to-line-item modal for an annotation */
+  onLinkToLineItem?: (annotationId: string) => void;
+  /** Called to send annotation measurement directly as a new line item */
+  onSendToEstimate?: (annotationId: string) => void;
+  /** When true, renders without the outer Card wrapper (for embedding in a unified card layout) */
+  embedded?: boolean;
 }
 
 /* Group annotations by groupName or type */
@@ -128,9 +137,22 @@ export function AnnotationSidebar({
   onSelectAnnotation,
   selectedAnnotationId,
   editingAnnotationId,
+  takeoffLinks,
+  onLinkToLineItem,
+  onSendToEstimate,
+  embedded,
 }: AnnotationSidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const groups = groupAnnotations(annotations);
+
+  /* Link count per annotation */
+  const linkCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const link of takeoffLinks ?? []) {
+      map.set(link.annotationId, (map.get(link.annotationId) ?? 0) + 1);
+    }
+    return map;
+  }, [takeoffLinks]);
 
   function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
@@ -145,24 +167,17 @@ export function AnnotationSidebar({
   const totalCount = annotations.length;
   const visibleCount = annotations.filter((a) => a.visible).length;
 
-  return (
-    <Card className="flex h-full w-72 shrink-0 flex-col overflow-hidden">
-      <CardHeader className="py-3">
-        <CardTitle>Annotations</CardTitle>
-        <p className="mt-0.5 text-[11px] text-fg/40">
-          {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
-        </p>
-      </CardHeader>
-      <CardBody className="flex flex-1 flex-col gap-1 overflow-auto py-2 px-2">
-        {totalCount === 0 ? (
-          <EmptyState className="py-6 border-none">
-            <p className="text-xs">No annotations yet</p>
-            <p className="mt-1 text-[11px] text-fg/30">
-              Select a tool and click on the drawing to start measuring
-            </p>
-          </EmptyState>
-        ) : (
-          Array.from(groups.entries()).map(([groupKey, items]) => {
+  const content = (
+    <>
+      {totalCount === 0 ? (
+        <EmptyState className="py-6 border-none">
+          <p className="text-xs">No annotations yet</p>
+          <p className="mt-1 text-[11px] text-fg/30">
+            Select a tool and click on the drawing to start measuring
+          </p>
+        </EmptyState>
+      ) : (
+        Array.from(groups.entries()).map(([groupKey, items]) => {
             const collapsed = collapsedGroups.has(groupKey);
             const groupLabel = TYPE_LABELS[groupKey] ?? groupKey;
 
@@ -212,9 +227,17 @@ export function AnnotationSidebar({
 
                           {/* Label and measurement */}
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-xs font-medium text-fg/80">
-                              {ann.label || `${TYPE_LABELS[ann.type] ?? ann.type}`}
-                            </p>
+                            <div className="flex items-center gap-1">
+                              <p className="truncate text-xs font-medium text-fg/80">
+                                {ann.label || `${TYPE_LABELS[ann.type] ?? ann.type}`}
+                              </p>
+                              {(linkCountMap.get(ann.id) ?? 0) > 0 && (
+                                <span className="inline-flex items-center gap-0.5 rounded-full bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                                  <Link2 className="h-2.5 w-2.5" />
+                                  {linkCountMap.get(ann.id)}
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[11px] text-fg/40">
                               {formatMeasurement(ann)}
                             </p>
@@ -222,6 +245,30 @@ export function AnnotationSidebar({
 
                           {/* Action buttons (show on hover) */}
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            {onSendToEstimate && ann.measurement && ann.measurement.value > 0 && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSendToEstimate(ann.id);
+                                }}
+                                className="rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent"
+                                title="Send to Estimate"
+                              >
+                                <ArrowRight className="h-3 w-3" />
+                              </button>
+                            )}
+                            {onLinkToLineItem && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onLinkToLineItem(ann.id);
+                                }}
+                                className="rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent"
+                                title="Link to Line Item"
+                              >
+                                <Link2 className="h-3 w-3" />
+                              </button>
+                            )}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -278,6 +325,35 @@ export function AnnotationSidebar({
             </div>
           </>
         )}
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="flex h-full flex-col overflow-hidden">
+        <div className="shrink-0 border-b border-line px-4 py-3">
+          <p className="text-sm font-semibold text-fg">Annotations</p>
+          <p className="mt-0.5 text-[11px] text-fg/40">
+            {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
+          </p>
+        </div>
+        <div className="flex flex-1 flex-col gap-1 overflow-auto py-2 px-2">
+          {content}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Card className="flex h-full w-72 shrink-0 flex-col overflow-hidden">
+      <CardHeader className="py-3">
+        <CardTitle>Annotations</CardTitle>
+        <p className="mt-0.5 text-[11px] text-fg/40">
+          {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
+        </p>
+      </CardHeader>
+      <CardBody className="flex flex-1 flex-col gap-1 overflow-auto py-2 px-2">
+        {content}
       </CardBody>
     </Card>
   );

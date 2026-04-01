@@ -154,11 +154,44 @@ function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult
   if (!match) return null;
 
   const { schedule, rsItem } = match;
-  const tierUnits = item.tierUnits ?? {};
+  let tierUnits = item.tierUnits ?? {};
 
-  // If no tier hours set, check if legacy labor hours can be mapped
+  // If no tier hours set, fall back to unit1/unit2/unit3 mapped to schedule tiers.
+  // The LLM populates the data; Bidwright calculates the pricing.
+  // unit1 → Regular (multiplier 1.0), unit2 → Overtime (1.5), unit3 → DoubleTime (2.0)
   const hasTierHours = Object.keys(tierUnits).length > 0;
-  if (!hasTierHours) return null;
+  if (!hasTierHours) {
+    const hasLegacyUnits = (item.unit1 || 0) > 0 || (item.unit2 || 0) > 0 || (item.unit3 || 0) > 0;
+    if (!hasLegacyUnits) return null;
+
+    // Map unit1/unit2/unit3 to the corresponding tier IDs by multiplier
+    const sortedTiers = [...schedule.tiers].sort((a, b) => a.multiplier - b.multiplier);
+    const regularTier = sortedTiers.find((t) => t.multiplier === 1 || t.multiplier === 1.0);
+    const overtimeTier = sortedTiers.find((t) => t.multiplier === 1.5);
+    const doubletimeTier = sortedTiers.find((t) => t.multiplier === 2 || t.multiplier === 2.0);
+
+    tierUnits = {};
+    if ((item.unit1 || 0) > 0 && regularTier) tierUnits[regularTier.id] = item.unit1;
+    if ((item.unit2 || 0) > 0 && overtimeTier) tierUnits[overtimeTier.id] = item.unit2;
+    if ((item.unit3 || 0) > 0 && doubletimeTier) tierUnits[doubletimeTier.id] = item.unit3;
+
+    // For equipment, unit3 may represent monthly duration — try matching by tier name patterns
+    if (Object.keys(tierUnits).length === 0) {
+      // Try matching tiers by name convention (Daily/Weekly/Monthly) for equipment
+      for (const tier of schedule.tiers) {
+        const lowerName = tier.name.toLowerCase();
+        if ((item.unit1 || 0) > 0 && (lowerName.includes("daily") || lowerName.includes("day"))) {
+          tierUnits[tier.id] = item.unit1;
+        } else if ((item.unit2 || 0) > 0 && (lowerName.includes("weekly") || lowerName.includes("week"))) {
+          tierUnits[tier.id] = item.unit2;
+        } else if ((item.unit3 || 0) > 0 && (lowerName.includes("monthly") || lowerName.includes("month"))) {
+          tierUnits[tier.id] = item.unit3;
+        }
+      }
+    }
+
+    if (Object.keys(tierUnits).length === 0) return null;
+  }
 
   // Determine cost rates: prefer global LabourCostContext over per-item costRates
   let effectiveCostRates = rsItem.costRates;

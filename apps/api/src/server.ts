@@ -65,6 +65,7 @@ import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { intakeRoutes } from "./routes/intake-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
+import { registerReviewRoutes } from "./routes/review-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
 import { labourCostRoutes } from "./routes/labour-cost-routes.js";
 import { burdenRoutes } from "./routes/burden-routes.js";
@@ -97,8 +98,6 @@ const revisionPatchSchema = z.object({
   description: z.string().optional(),
   notes: z.string().optional(),
   breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail", "labour_material_equipment"]).optional(),
-  phaseWorksheetEnabled: z.boolean().optional(),
-  useCalculatedTotal: z.boolean().optional(),
   type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional(),
   scratchpad: z.string().optional(),
   leadLetter: z.string().optional(),
@@ -118,7 +117,6 @@ const revisionPatchSchema = z.object({
   printEmptyNotesColumn: z.boolean().optional(),
   printCategory: z.array(z.string()).optional(),
   printPhaseTotalOnly: z.boolean().optional(),
-  showOvertimeDoubletime: z.boolean().optional(),
   grandTotal: z.number().finite().optional(),
   regHours: z.number().finite().optional(),
   overHours: z.number().finite().optional(),
@@ -810,7 +808,24 @@ export function buildServer() {
     dataRoot: resolveApiPath()
   }));
 
-  app.get("/projects", async (request) => request.store!.listProjectsWithState());
+  app.get("/projects", async (request) => {
+    const store = request.store!;
+    const projects = await store.listProjectsWithState();
+    // Include org users + departments for filter dropdowns
+    const [users, departments] = await Promise.all([
+      prisma.user.findMany({
+        where: { organizationId: store.organizationId, active: true },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: "asc" },
+      }),
+      prisma.department.findMany({
+        where: { organizationId: store.organizationId, active: true },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      }),
+    ]);
+    return { projects, users, departments };
+  });
 
   app.post("/projects", async (request, reply) => {
     const parsed = createProjectSchema.safeParse(request.body);
@@ -3564,6 +3579,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(intakeRoutes);
   app.register(catalogRoutes);
   registerCliRoutes(app);
+  registerReviewRoutes(app);
 
   app.addHook("onReady", async () => {
     await cleanExpiredSessions(prisma);
