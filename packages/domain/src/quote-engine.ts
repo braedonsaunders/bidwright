@@ -666,6 +666,19 @@ export function computeSummaryRows(
     phaseAgg.set(key, existing);
   }
 
+  // Build per-phase-per-category aggregation (for phase_x_category rows)
+  // Key: "phaseId::category"
+  const phaseCatAgg = new Map<string, { value: number; cost: number }>();
+  for (const item of lineItems) {
+    const phaseKey = item.phaseId ?? "__unphased__";
+    const cat = normalizeCategoryName(item.category);
+    const key = `${phaseKey}::${cat}`;
+    const existing = phaseCatAgg.get(key) ?? { value: 0, cost: 0 };
+    existing.value += item.price;
+    existing.cost += computeItemCost(item);
+    phaseCatAgg.set(key, existing);
+  }
+
   // Map phase name → phase ID for lookup
   const phaseNameToId = new Map(phases.map((p) => [p.name, p.id]));
 
@@ -676,7 +689,14 @@ export function computeSummaryRows(
   for (const row of computed) {
     switch (row.type) {
       case "auto_category": {
-        const agg = categoryAgg.get(row.sourceCategory ?? "") ?? { value: 0, cost: 0 };
+        let agg: { value: number; cost: number };
+        if (row.sourcePhase) {
+          // Phase × Category intersection: aggregate items matching both phase and category
+          const phaseId = phaseNameToId.get(row.sourcePhase) ?? "";
+          agg = phaseCatAgg.get(`${phaseId}::${row.sourceCategory ?? ""}`) ?? { value: 0, cost: 0 };
+        } else {
+          agg = categoryAgg.get(row.sourceCategory ?? "") ?? { value: 0, cost: 0 };
+        }
         // Override takes precedence over aggregation when set
         row.computedValue = roundMoney(row.overrideValue ?? agg.value);
         row.computedCost = roundMoney(row.overrideCost ?? agg.cost);
@@ -699,14 +719,26 @@ export function computeSummaryRows(
       }
       case "subtotal": {
         // Sum all preceding visible non-modifier, non-subtotal, non-separator rows
+        // Skip indented detail rows to avoid double-counting (e.g. phase_x_category
+        // has phase totals + indented category breakdowns — only sum the phase rows)
         let sumValue = 0;
         let sumCost = 0;
+        let hasPrecedingDataRows = false;
         for (const prev of computed) {
           if (prev.id === row.id) break;
           if (!prev.visible) continue;
           if (prev.type === "subtotal" || prev.type === "separator") continue;
+          if (prev.style === "indent") continue;
+          hasPrecedingDataRows = true;
           sumValue += prev.computedValue;
           sumCost += prev.computedCost;
+        }
+        // If no preceding data rows (e.g. quick_total), sum all line items directly
+        if (!hasPrecedingDataRows) {
+          for (const item of lineItems) {
+            sumValue += item.price;
+            sumCost += computeItemCost(item);
+          }
         }
         row.computedValue = roundMoney(sumValue);
         row.computedCost = roundMoney(sumCost);
@@ -800,29 +832,8 @@ export function generateSummaryPreset(
       ];
 
     case "phase_x_category":
-      // Each phase with category detail — flat list
-      const rows: Array<Omit<SummaryRow, "id" | "revisionId" | "computedValue" | "computedCost" | "computedMargin">> = [];
-      let order = 0;
-      for (const phase of phaseNames) {
-        rows.push({
-          type: "auto_phase",
-          label: phase,
-          order: order++,
-          visible: true,
-          style: "bold",
-          sourcePhase: phase,
-          appliesTo: [],
-        });
-      }
-      rows.push({
-        type: "subtotal",
-        label: "Subtotal",
-        order: order,
-        visible: true,
-        style: "bold",
-        appliesTo: [],
-      });
-      return rows;
+      // Pivot table rendered client-side — no summary rows needed, return empty
+      return [];
 
     case "custom":
     default:

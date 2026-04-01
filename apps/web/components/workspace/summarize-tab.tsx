@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
-  Download,
   Eye,
   EyeOff,
   GripVertical,
@@ -32,7 +31,6 @@ import {
   deleteAdditionalLineItem,
   deleteModifier,
   deleteSummaryRow,
-  fetchQuotePdfBlobUrl,
   reorderSummaryRows,
   updateAdditionalLineItem,
   updateModifier,
@@ -43,13 +41,8 @@ import { formatMoney, formatPercent } from "@/lib/format";
 import {
   Badge,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
-  ModalBackdrop,
   Select,
   Toggle,
 } from "@/components/ui";
@@ -133,10 +126,8 @@ interface SummarizeTabProps {
 export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [pdfModalOpen, setPdfModalOpen] = useState(false);
-  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<SummaryPreset | null>(null);
 
   const projectId = workspace.project.id;
   const revisionId = workspace.currentRevision.id;
@@ -153,42 +144,6 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
     breakout: [],
   };
 
-  /* ── PDF helpers ── */
-
-  const loadPdf = useCallback(async () => {
-    setPdfLoading(true);
-    try {
-      const url = await fetchQuotePdfBlobUrl(projectId);
-      setPdfBlobUrl(url);
-    } catch {
-      setError("Failed to load PDF preview.");
-    } finally {
-      setPdfLoading(false);
-    }
-  }, [projectId]);
-
-  function openPdfModal() {
-    setPdfModalOpen(true);
-    if (!pdfBlobUrl) loadPdf();
-  }
-
-  function downloadPdf() {
-    if (pdfBlobUrl) {
-      const a = document.createElement("a");
-      a.href = pdfBlobUrl;
-      a.download = `${workspace.quote.quoteNumber ?? "quote"}.pdf`;
-      a.click();
-    } else {
-      loadPdf();
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
-    };
-  }, [pdfBlobUrl]);
-
   function handleError(e: unknown) {
     setError(e instanceof Error ? e.message : "Operation failed.");
   }
@@ -196,15 +151,37 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
   function apply(next: WorkspaceResponse) {
     onApply(next);
     setError(null);
-    if (pdfBlobUrl) {
-      URL.revokeObjectURL(pdfBlobUrl);
-      setPdfBlobUrl(null);
-    }
   }
+
+  /* ── Detect active preset from current rows ── */
+  const activePreset = useMemo((): SummaryPreset | null => {
+    // phase_x_category is tracked via local state (no summary rows)
+    if (selectedPreset === "phase_x_category") return "phase_x_category";
+
+    if (!hasSummaryRows) return null;
+    const types = summaryRows.map((r) => r.type);
+    const nonSubtotal = summaryRows.filter((r) => r.type !== "subtotal");
+
+    // quick_total: single subtotal row only
+    if (summaryRows.length === 1 && types[0] === "subtotal") return "quick_total";
+
+    // by_category: all non-subtotal rows are auto_category + trailing subtotal
+    if (nonSubtotal.length > 0 && nonSubtotal.every((r) => r.type === "auto_category") && types[types.length - 1] === "subtotal") {
+      return "by_category";
+    }
+
+    // by_phase: all non-subtotal rows are auto_phase + trailing subtotal
+    if (nonSubtotal.length > 0 && nonSubtotal.every((r) => r.type === "auto_phase") && types[types.length - 1] === "subtotal") {
+      return "by_phase";
+    }
+
+    return null;
+  }, [summaryRows, hasSummaryRows, selectedPreset]);
 
   /* ── Summary Row Actions ── */
 
   function handleApplyPreset(preset: SummaryPreset) {
+    setSelectedPreset(preset);
     startTransition(async () => {
       try {
         apply(await applySummaryPreset(projectId, preset));
@@ -354,12 +331,19 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
   /* ── Computed totals from summary rows ── */
   const summaryTotals = useMemo(() => {
     if (!hasSummaryRows) return null;
+    // Prefer the subtotal row's computed value if one exists (already handles double-counting)
+    const subtotalRow = summaryRows.find((r) => r.type === "subtotal" && r.visible);
+    if (subtotalRow) {
+      const profit = subtotalRow.computedValue - subtotalRow.computedCost;
+      const margin = subtotalRow.computedValue === 0 ? 0 : profit / subtotalRow.computedValue;
+      return { totalValue: subtotalRow.computedValue, totalCost: subtotalRow.computedCost, profit, margin };
+    }
     let totalValue = 0;
     let totalCost = 0;
     for (const row of summaryRows) {
       if (!row.visible) continue;
-      if (row.type === "separator") continue;
-      // Only count top-level rows for grand total (skip modifiers, they're additive)
+      if (row.type === "separator" || row.type === "subtotal") continue;
+      if (row.style === "indent") continue; // Skip detail rows to avoid double-counting
       totalValue += row.computedValue;
       totalCost += row.computedCost;
     }
@@ -367,6 +351,71 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
     const margin = totalValue === 0 ? 0 : profit / totalValue;
     return { totalValue, totalCost, profit, margin };
   }, [summaryRows, hasSummaryRows]);
+
+  /* ── Pivot table data (phase × category) ── */
+  const pivotData = useMemo(() => {
+    if (activePreset !== "phase_x_category") return null;
+
+    const items = workspace.worksheets.flatMap((w) => w.items);
+    const phases = workspace.phases ?? [];
+    const phaseMap = new Map(phases.map((p) => [p.id, p.name]));
+
+    // Collect unique categories
+    const categorySet = new Set<string>();
+    for (const item of items) {
+      if (item.category) categorySet.add(item.category);
+    }
+    const categories = Array.from(categorySet).sort();
+
+    // Build aggregation: phaseId → category → { value, cost }
+    const agg = new Map<string, Map<string, { value: number; cost: number }>>();
+    for (const item of items) {
+      const phaseKey = item.phaseId ?? "__unphased__";
+      if (!agg.has(phaseKey)) agg.set(phaseKey, new Map());
+      const catMap = agg.get(phaseKey)!;
+      const existing = catMap.get(item.category) ?? { value: 0, cost: 0 };
+      existing.value += item.price;
+      existing.cost += item.quantity * item.cost;
+      catMap.set(item.category, existing);
+    }
+
+    // Build rows: one per phase
+    const rows: Array<{ phaseId: string; phaseName: string; cells: Map<string, { value: number; cost: number }>; total: { value: number; cost: number } }> = [];
+    for (const phase of phases) {
+      const catMap = agg.get(phase.id) ?? new Map();
+      let totalValue = 0;
+      let totalCost = 0;
+      for (const [, v] of catMap) { totalValue += v.value; totalCost += v.cost; }
+      rows.push({ phaseId: phase.id, phaseName: phase.name, cells: catMap, total: { value: totalValue, cost: totalCost } });
+    }
+
+    // Unphased items
+    const unphasedCats = agg.get("__unphased__");
+    if (unphasedCats && unphasedCats.size > 0) {
+      let totalValue = 0;
+      let totalCost = 0;
+      for (const [, v] of unphasedCats) { totalValue += v.value; totalCost += v.cost; }
+      rows.push({ phaseId: "__unphased__", phaseName: "Unphased", cells: unphasedCats, total: { value: totalValue, cost: totalCost } });
+    }
+
+    // Column totals
+    const colTotals = new Map<string, { value: number; cost: number }>();
+    let grandValue = 0;
+    let grandCost = 0;
+    for (const row of rows) {
+      for (const cat of categories) {
+        const cell = row.cells.get(cat) ?? { value: 0, cost: 0 };
+        const existing = colTotals.get(cat) ?? { value: 0, cost: 0 };
+        existing.value += cell.value;
+        existing.cost += cell.cost;
+        colTotals.set(cat, existing);
+      }
+      grandValue += row.total.value;
+      grandCost += row.total.cost;
+    }
+
+    return { categories, rows, colTotals, grandTotal: { value: grandValue, cost: grandCost } };
+  }, [activePreset, workspace.worksheets, workspace.phases]);
 
   return (
     <div className="flex flex-col h-full min-h-0 pb-1">
@@ -382,7 +431,9 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
               title={p.description}
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition-colors whitespace-nowrap",
-                "bg-panel2 text-fg/60 hover:bg-panel2/80 hover:text-fg"
+                activePreset === p.id
+                  ? "bg-accent text-white shadow-sm"
+                  : "bg-panel2 text-fg/60 hover:bg-panel2/80 hover:text-fg"
               )}
             >
               {p.label}
@@ -390,7 +441,8 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
           ))}
         </div>
 
-        {/* Right: actions */}
+        {/* Right: actions (hidden in pivot mode) */}
+        {activePreset !== "phase_x_category" && (
         <div className="flex items-center gap-2 shrink-0">
           {/* Add Row dropdown */}
           <div className="relative">
@@ -447,12 +499,8 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
               </Button>
             </>
           )}
-
-          <Button size="xs" variant="ghost" onClick={openPdfModal}>
-            <Eye className="h-3 w-3" />
-            PDF Preview
-          </Button>
         </div>
+        )}
       </div>
 
       {error && (
@@ -463,7 +511,70 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
 
       {/* ── Main table ── */}
       <div className="flex-1 min-h-0 overflow-auto rounded-lg border border-line">
-        {hasSummaryRows ? (
+        {pivotData ? (
+          /* ═══ Phase × Category Pivot Table ═══ */
+          <table className="w-full text-sm">
+            <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
+              <tr>
+                <th className="border-b border-line px-4 py-2 text-left min-w-[160px]">Phase</th>
+                {pivotData.categories.map((cat) => (
+                  <th key={cat} className="border-b border-line px-4 py-2 text-right min-w-[100px]">{cat}</th>
+                ))}
+                <th className="border-b border-line px-4 py-2 text-right min-w-[110px] font-semibold">Total</th>
+                <th className="border-b border-line px-4 py-2 text-right min-w-[80px]">Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pivotData.rows.map((row) => {
+                const margin = row.total.value === 0 ? 0 : (row.total.value - row.total.cost) / row.total.value;
+                return (
+                  <tr key={row.phaseId} className="border-b border-line/50 hover:bg-panel2/30">
+                    <td className="px-4 py-2 font-medium">{row.phaseName}</td>
+                    {pivotData.categories.map((cat) => {
+                      const cell = row.cells.get(cat);
+                      return (
+                        <td key={cat} className="px-4 py-2 text-right tabular-nums">
+                          {cell && cell.value !== 0 ? formatMoney(cell.value) : <span className="text-fg/20">—</span>}
+                        </td>
+                      );
+                    })}
+                    <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatMoney(row.total.value)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">
+                      <span className={cn("text-xs", margin >= 0 ? "text-success" : "text-danger")}>
+                        {formatPercent(margin, 1)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot className="bg-panel2 text-xs font-medium sticky bottom-0">
+              <tr className="border-t border-line">
+                <td className="px-4 py-2.5 text-fg/50 font-semibold">Total</td>
+                {pivotData.categories.map((cat) => {
+                  const col = pivotData.colTotals.get(cat) ?? { value: 0, cost: 0 };
+                  return (
+                    <td key={cat} className="px-4 py-2.5 text-right tabular-nums font-semibold">
+                      {col.value !== 0 ? formatMoney(col.value) : <span className="text-fg/20">—</span>}
+                    </td>
+                  );
+                })}
+                <td className="px-4 py-2.5 text-right tabular-nums font-bold">{formatMoney(pivotData.grandTotal.value)}</td>
+                <td className="px-4 py-2.5 text-right tabular-nums">
+                  <span className={cn(
+                    "font-medium",
+                    (pivotData.grandTotal.value - pivotData.grandTotal.cost) >= 0 ? "text-success" : "text-danger"
+                  )}>
+                    {formatPercent(
+                      pivotData.grandTotal.value === 0 ? 0 : (pivotData.grandTotal.value - pivotData.grandTotal.cost) / pivotData.grandTotal.value,
+                      1
+                    )}
+                  </span>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        ) : hasSummaryRows ? (
           /* ═══ New Summary Rows Table ═══ */
           <table className="w-full text-sm">
             <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
@@ -605,44 +716,6 @@ export function SummarizeTab({ workspace, onApply }: SummarizeTabProps) {
         )}
       </div>
 
-      {/* ── PDF Preview Modal ── */}
-      <ModalBackdrop open={pdfModalOpen} onClose={() => setPdfModalOpen(false)} size="xl">
-        <Card className="flex h-[90vh] w-full flex-col shadow-xl">
-          <CardHeader className="flex shrink-0 items-center justify-between border-b border-line">
-            <CardTitle>PDF Preview</CardTitle>
-            <div className="flex items-center gap-2">
-              <Button size="xs" variant="secondary" onClick={downloadPdf}>
-                <Download className="h-3 w-3" />
-                Download
-              </Button>
-              <button
-                type="button"
-                onClick={() => setPdfModalOpen(false)}
-                className="rounded-md p-1 text-fg/40 hover:text-fg transition-colors"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </CardHeader>
-          <CardBody className="flex-1 overflow-hidden p-0">
-            {pdfLoading ? (
-              <div className="flex h-full items-center justify-center text-sm text-fg/40">
-                Loading PDF...
-              </div>
-            ) : pdfBlobUrl ? (
-              <iframe
-                src={pdfBlobUrl}
-                className="h-full w-full border-0 bg-white"
-                title="PDF Full Preview"
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-fg/40">
-                Failed to load PDF.
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      </ModalBackdrop>
     </div>
   );
 }
