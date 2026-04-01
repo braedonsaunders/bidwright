@@ -494,6 +494,8 @@ export interface Activity {
   type: string;
   data: Record<string, unknown>;
   userId: string | null;
+  userName: string | null;
+  revertible: boolean;
   createdAt: string;
 }
 

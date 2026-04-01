@@ -101,6 +101,7 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
         impersonating: false,
       };
       request.store = createApiStore(user.organizationId);
+      request.store.setUserId(user.id);
     } else if (superAdmin && session.organizationId) {
       // Super admin impersonating an org
       request.user = {
@@ -113,6 +114,7 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
         impersonating: true,
       };
       request.store = createApiStore(session.organizationId);
+      request.store.setUserId(superAdmin.id);
     } else if (superAdmin) {
       // Super admin without org context (admin dashboard only)
       request.user = {

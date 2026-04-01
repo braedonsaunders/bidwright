@@ -377,7 +377,7 @@ export function mapTravelPolicy(t: any): TravelPolicy {
 }
 
 export function mapActivity(a: any): Activity {
-  return { id: a.id, projectId: a.projectId, revisionId: a.revisionId ?? null, type: a.type, data: (a.data as Record<string, unknown>) ?? {}, userId: a.userId ?? null, createdAt: toISO(a.createdAt) };
+  return { id: a.id, projectId: a.projectId, revisionId: a.revisionId ?? null, type: a.type, data: (a.data as Record<string, unknown>) ?? {}, userId: a.userId ?? null, userName: a.user?.name ?? null, revertible: false, createdAt: toISO(a.createdAt) };
 }
 
 export function mapReportSection(s: any): ReportSection {
