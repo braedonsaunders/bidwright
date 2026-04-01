@@ -37,13 +37,7 @@ export function TotalsBar({ workspace }: TotalsBarProps) {
   const totals = workspace.estimate?.totals ?? { subtotal: 0, cost: 0, estimatedProfit: 0, estimatedMargin: 0, breakout: [] };
   const breakout = totals.breakout ?? [];
   const { subtotal, cost, estimatedProfit, estimatedMargin } = totals;
-  const { regHours, overHours, doubleHours, useCalculatedTotal, calculatedTotal } =
-    rev;
-
-  const showCalculated =
-    useCalculatedTotal &&
-    calculatedTotal != null &&
-    Math.abs((calculatedTotal ?? 0) - (subtotal ?? 0)) > 0.005;
+  const { regHours, overHours, doubleHours } = rev;
 
   return (
     <div className="sticky bottom-0 z-30 border-t border-line bg-panel/95 backdrop-blur-md">
@@ -116,16 +110,6 @@ export function TotalsBar({ workspace }: TotalsBarProps) {
               {fmt(subtotal)}
             </span>
           </div>
-          {showCalculated && (
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium uppercase tracking-wider text-fg/40">
-                Calculated
-              </span>
-              <span className="font-mono text-sm text-fg/60">
-                {fmt(calculatedTotal)}
-              </span>
-            </div>
-          )}
           <div className="flex items-center gap-4 text-xs text-fg/50">
             <span>
               <span className="font-medium text-fg/40">REG</span>{" "}

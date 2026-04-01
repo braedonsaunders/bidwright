@@ -24,6 +24,7 @@ import {
   Search,
   Trash2,
   X,
+  Link2,
 } from "lucide-react";
 import type {
   CatalogItem,
@@ -519,8 +520,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   const [renameWsId, setRenameWsId] = useState<string | null>(null);
   const [renameWsName, setRenameWsName] = useState("");
 
-  // Description popup
-  const [descPopup, setDescPopup] = useState<{ rowId: string; value: string } | null>(null);
 
   // Selected row
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
@@ -1482,25 +1481,12 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     setTabMenu({ wsId, x: e.clientX, y: e.clientY });
   }
 
-  // ─── Description popup ───
+  // ─── Description click → open detail drawer ───
 
-  function handleDescDoubleClick(rowId: string, currentDesc: string) {
-    setDescPopup({ rowId, value: currentDesc });
-  }
-
-  function saveDescPopup() {
-    if (!descPopup) return;
-    startTransition(async () => {
-      try {
-        const next = await updateWorksheetItem(workspace.project.id, descPopup.rowId, {
-          description: descPopup.value,
-        });
-        onApply(next);
-        setDescPopup(null);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Save failed.");
-      }
-    });
+  function handleDescClick(rowId: string) {
+    const allItems = (workspace.worksheets ?? []).flatMap((w: { items: WorkspaceWorksheetItem[] }) => w.items);
+    const item = allItems.find((i: WorkspaceWorksheetItem) => i.id === rowId);
+    if (item) setDetailItem(item);
   }
 
   // ─── Category group toggle ───
@@ -1576,7 +1562,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       }
       if (disabled) {
         return (
-          <span key={field} className="tabular-nums text-xs text-fg/30 italic px-1" title={label}>
+          <span key={field} className="tabular-nums text-xs text-fg/30 italic px-1" title={label}
+            onClick={(e) => e.stopPropagation()}
+          >
             {value || "–"}
           </span>
         );
@@ -1605,7 +1593,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     };
 
     return (
-      <td className="border-b border-line px-1 py-0.5">
+      <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-center gap-0">
           {renderUnitSlot("unit1", row.unit1, "Unit 1")}
           {hasAutoLabour && (
@@ -1886,7 +1874,8 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
             : "cursor-pointer hover:bg-accent/5",
           className
         )}
-        onClick={() => {
+        onClick={(e) => {
+          e.stopPropagation();
           if (!disabled) {
             const raw = row[column as keyof WorkspaceWorksheetItem];
             startEditing(row.id, column, raw as string | number);
@@ -2229,7 +2218,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                       </th>
                     )}
                     {isColVisible("entityName") && (
-                      <th className="border-b border-line px-2 py-2 text-left min-w-[200px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
+                      <th className="border-b border-line px-2 py-2 text-left min-w-[140px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
                         <span className="flex items-center gap-1">Entity Name {renderSortIcon("entityName")}</span>
                       </th>
                     )}
@@ -2305,7 +2294,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                         selectedRowId={selectedRowId}
                         onSelectRow={setSelectedRowId}
                         onContextMenu={handleContextMenu}
-                        onDescDoubleClick={handleDescDoubleClick}
+                        onDescDoubleClick={handleDescClick}
                         renderEditableCell={renderEditableCell}
                         renderUnitsCell={renderUnitsCell}
                         entityCategories={entityCategories}
@@ -2515,29 +2504,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
         </ModalBackdrop>
       )}
 
-      {/* ─── Description popup ─── */}
-      {descPopup && (
-        <ModalBackdrop open={!!descPopup} onClose={() => setDescPopup(null)}>
-          <div className="w-96">
-            <h4 className="text-sm font-semibold mb-3">Edit Description</h4>
-            <textarea
-              autoFocus
-              rows={5}
-              className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent/50 resize-y"
-              value={descPopup.value}
-              onChange={(e) => setDescPopup({ ...descPopup, value: e.target.value })}
-            />
-            <div className="flex justify-end gap-2 mt-3">
-              <Button size="sm" variant="ghost" onClick={() => setDescPopup(null)}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={saveDescPopup} disabled={isPending}>
-                Save
-              </Button>
-            </div>
-          </div>
-        </ModalBackdrop>
-      )}
 
       {/* ─── Catalog Quick-Add Modal ─── */}
       {showCatalogPicker && (
@@ -2737,7 +2703,7 @@ function GroupRows({
   selectedRowId: string | null;
   onSelectRow: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, rowId: string) => void;
-  onDescDoubleClick: (rowId: string, desc: string) => void;
+  onDescDoubleClick: (rowId: string) => void;
   renderEditableCell: (
     row: WorkspaceWorksheetItem,
     column: EditableColumn,
@@ -2762,6 +2728,15 @@ function GroupRows({
   const regLabel = catDef ? catDef.unitLabels.unit1 : "";
   const overLabel = catDef ? catDef.unitLabels.unit2 : "";
   const doubleLabel = catDef ? catDef.unitLabels.unit3 : "";
+
+  /* Set of item IDs that have takeoff links */
+  const linkedItemIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const link of (workspace as any).takeoffLinks ?? []) {
+      ids.add(link.worksheetItemId);
+    }
+    return ids;
+  }, [(workspace as any).takeoffLinks]);
 
   return (
     <>
@@ -2915,7 +2890,7 @@ function GroupRows({
               {isColVisible("description") && (
                 <td
                   className="border-b border-line px-2 py-2 text-xs cursor-pointer hover:bg-accent/5 min-w-[160px] max-w-[200px] truncate"
-                  onClick={() => onDescDoubleClick(row.id, row.description)}
+                  onClick={() => onDescDoubleClick(row.id)}
                   title={row.description}
                 >
                   {row.description || <span className="text-fg/20 italic">Add description...</span>}
@@ -2927,7 +2902,14 @@ function GroupRows({
                 renderEditableCell(
                   row,
                   "quantity",
-                  <span className="tabular-nums">{row.quantity}</span>,
+                  <span className="tabular-nums inline-flex items-center gap-1">
+                    {linkedItemIds.has(row.id) && (
+                      <span title="Linked to takeoff annotation">
+                        <Link2 className="h-3 w-3 text-accent/60 shrink-0" />
+                      </span>
+                    )}
+                    {row.quantity}
+                  </span>,
                   "text-right"
                 )}
 

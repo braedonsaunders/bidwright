@@ -79,8 +79,6 @@ type RevisionDraft = {
   description: string;
   notes: string;
   breakoutStyle: string;
-  phaseWorksheetEnabled: boolean;
-  useCalculatedTotal: boolean;
 };
 
 export interface SetupTabProps {
@@ -97,7 +95,7 @@ export interface SetupTabProps {
 
 const subTabs: Array<{ id: SetupSubTab; label: string }> = [
   { id: "general", label: "General" },
-  { id: "conditions", label: "Inclusions & Exclusions" },
+  { id: "conditions", label: "Conditions" },
   { id: "notes", label: "Notes" },
   { id: "rates", label: "Rates" },
   { id: "other", label: "Other" },
@@ -206,8 +204,6 @@ export function SetupTab({
     if (dirty.has("description")) payload.description = revDraft.description;
     if (dirty.has("notes")) payload.notes = revDraft.notes;
     if (dirty.has("breakoutStyle")) payload.breakoutStyle = revDraft.breakoutStyle;
-    if (dirty.has("phaseWorksheetEnabled")) payload.phaseWorksheetEnabled = revDraft.phaseWorksheetEnabled;
-    if (dirty.has("useCalculatedTotal")) payload.useCalculatedTotal = revDraft.useCalculatedTotal;
     Object.assign(payload, patch);
 
     // Nothing to save
@@ -619,12 +615,16 @@ function ConditionsSubTab({
   const exclusions = [...(workspace.conditions ?? []).filter((c) => c.type === "exclusion")].sort(
     (a, b) => a.order - b.order
   );
+  const clarifications = [...(workspace.conditions ?? []).filter((c) => c.type === "clarification")].sort(
+    (a, b) => a.order - b.order
+  );
 
   const inclusionLibrary = library.filter((l) => l.type === "inclusion" || l.type === "Inclusion");
   const exclusionLibrary = library.filter((l) => l.type === "exclusion" || l.type === "Exclusion");
+  const clarificationLibrary = library.filter((l) => l.type === "clarification" || l.type === "Clarification");
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-0">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
       <ConditionList
         title="Inclusions"
         type="inclusion"
@@ -644,6 +644,18 @@ function ConditionsSubTab({
         allConditions={workspace.conditions ?? []}
         projectId={workspace.project.id}
         libraryEntries={exclusionLibrary}
+        onApply={onApply}
+        onError={onError}
+        loading={loading}
+        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
+      />
+      <ConditionList
+        title="Clarifications"
+        type="clarification"
+        conditions={clarifications}
+        allConditions={workspace.conditions ?? []}
+        projectId={workspace.project.id}
+        libraryEntries={clarificationLibrary}
         onApply={onApply}
         onError={onError}
         loading={loading}
@@ -1550,66 +1562,9 @@ function SettingsSubTab({
   const rev = workspace.currentRevision;
 
   const [defaultMarkup, setDefaultMarkup] = useState(String(rev.defaultMarkup ?? 0));
-  const [showOvertimeDoubletime, setShowOvertimeDoubletime] = useState(rev.showOvertimeDoubletime ?? false);
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
-      {/* Estimate Behavior */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Estimate Behavior</CardTitle>
-        </CardHeader>
-        <CardBody className="space-y-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium text-fg">Use Calculated Total</div>
-              <div className="text-xs text-fg/40">
-                Derive quote total from line items instead of manual entry
-              </div>
-            </div>
-            <Toggle
-              checked={revDraft.useCalculatedTotal}
-              onChange={(checked) => {
-                setRevDraft((d) => ({ ...d, useCalculatedTotal: checked }));
-                saveRevision({ useCalculatedTotal: checked });
-              }}
-            />
-          </div>
-
-          <Separator />
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium text-fg">Phase Worksheet Mode</div>
-              <div className="text-xs text-fg/40">Organize line items into phases for structured takeoff</div>
-            </div>
-            <Toggle
-              checked={revDraft.phaseWorksheetEnabled}
-              onChange={(checked) => {
-                setRevDraft((d) => ({ ...d, phaseWorksheetEnabled: checked }));
-                saveRevision({ phaseWorksheetEnabled: checked });
-              }}
-            />
-          </div>
-
-          <Separator />
-
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm font-medium text-fg">Show Overtime / Doubletime</div>
-              <div className="text-xs text-fg/40">Display OT and DT labor columns in the estimate grid</div>
-            </div>
-            <Toggle
-              checked={showOvertimeDoubletime}
-              onChange={(checked) => {
-                setShowOvertimeDoubletime(checked);
-                saveRevision({ showOvertimeDoubletime: checked });
-              }}
-            />
-          </div>
-        </CardBody>
-      </Card>
-
       {/* Pricing */}
       <Card>
         <CardHeader>

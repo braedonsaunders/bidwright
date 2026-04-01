@@ -4,12 +4,27 @@
  * Endpoints for detecting, authenticating, and managing CLI agent runtimes.
  */
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
+import { getSessionCookieToken } from "../services/session-cookie.js";
+
+/** Extract session token from Authorization header, cookie, or query param */
+function extractAuthToken(request: FastifyRequest): string {
+  // 1. Bearer token from Authorization header
+  const authHeader = request.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice(7);
+  }
+  // 2. Session cookie (how the web frontend authenticates)
+  const cookieToken = getSessionCookieToken(request);
+  if (cookieToken) return cookieToken;
+  // 3. Query param fallback (for SSE streams etc.)
+  return (request.query as any)?.token || "";
+}
 
 export function registerCliRoutes(app: FastifyInstance) {
 
@@ -108,6 +123,10 @@ export function registerCliRoutes(app: FastifyInstance) {
       );
     }
 
+    // Fetch settings early so we can pass integrations into CLAUDE.md params
+    const settingsEarly = await store.getSettings();
+    const integrationsEarly = (settingsEarly as any)?.integrations || {};
+
     // Generate CLAUDE.md / codex.md (includes knowledge book file list)
     const params = {
       projectDir,
@@ -119,6 +138,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       dataRoot: apiDataRoot,
       documents,
       knowledgeBookFiles: linkedBookNames,
+      maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
       persona: persona ? await (async () => {
         const bookIds: string[] = Array.isArray(persona.knowledgeBookIds) ? persona.knowledgeBookIds : JSON.parse(persona.knowledgeBookIds as string || "[]");
         const datasetTags: string[] = Array.isArray(persona.datasetTags) ? persona.datasetTags : JSON.parse(persona.datasetTags as string || "[]");
@@ -184,7 +204,7 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
         prompt: initialPrompt,
         runtime,
         model,
-        authToken: (request.headers.authorization?.replace("Bearer ", "") || (request.query as any)?.token || ""),
+        authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: revision.id,
         quoteId: quote.id,
@@ -366,7 +386,7 @@ CRITICAL: You are NOT done until you have called createWorksheetItem multiple ti
         prompt: message,
         runtime: "claude-code",
         model: "sonnet",
-        authToken: request.headers.authorization?.replace("Bearer ", "") || "",
+        authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
       });
@@ -604,7 +624,7 @@ Merge tables that span multiple pages. Skip non-data pages.
     await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
 
     // Spawn CLI session — spawnSession handles MCP config + auth token internally
-    const token = request.headers.authorization?.replace("Bearer ", "") || (request.query as any)?.token || "";
+    const token = extractAuthToken(request);
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,

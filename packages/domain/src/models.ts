@@ -125,8 +125,6 @@ export interface QuoteRevision {
   description: string;
   notes: string;
   breakoutStyle: "grand_total" | "category" | "phase" | "phase_detail" | "labour_material_equipment";
-  phaseWorksheetEnabled?: boolean;
-  useCalculatedTotal: boolean;
   type: "Firm" | "Budget" | "BudgetDNE";
   scratchpad: string;
   leadLetter: string;
@@ -146,7 +144,6 @@ export interface QuoteRevision {
   printEmptyNotesColumn: boolean;
   printCategory: string[];
   printPhaseTotalOnly: boolean;
-  showOvertimeDoubletime: boolean;
   grandTotal: number;
   regHours: number;
   overHours: number;
@@ -575,6 +572,22 @@ export interface TakeoffAnnotation {
   updatedAt: string;
 }
 
+// ── Takeoff Links ────────────────────────────────────────────────────────
+
+export type TakeoffLinkQuantityField = "value" | "area" | "volume" | "count";
+
+export interface TakeoffLink {
+  id: string;
+  projectId: string;
+  annotationId: string;
+  worksheetItemId: string;
+  quantityField: TakeoffLinkQuantityField;
+  multiplier: number;
+  derivedQuantity: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ── Plugin UI Schema ──────────────────────────────────────────────────────
 // Declarative schema system for rendering complex interactive plugin UIs.
 // LLMs can read, populate, and invoke these schemas directly.
@@ -948,7 +961,7 @@ export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number; maxAgentIterations?: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string; agentModel?: string; maxConcurrentSubAgents?: number };
   brand: BrandProfile;
   termsAndConditions: string;
 }
@@ -1098,6 +1111,7 @@ export interface BidwrightStore {
   rateSchedules: RateSchedule[];
   rateScheduleTiers: RateScheduleTier[];
   rateScheduleItems: RateScheduleItem[];
+  takeoffLinks: TakeoffLink[];
 }
 
 export interface BreakoutEntry {
@@ -1149,6 +1163,7 @@ export interface ProjectWorkspace {
   citations: Citation[];
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
+  takeoffLinks: TakeoffLink[];
   estimate: {
     revisionId: string;
     totals: RevisionTotals;

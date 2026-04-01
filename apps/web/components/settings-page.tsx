@@ -223,6 +223,7 @@ export function SettingsPage({
   const [conditionLibrary, setConditionLibrary] = useState<ConditionLibraryEntry[]>([]);
   const [newInclusion, setNewInclusion] = useState("");
   const [newExclusion, setNewExclusion] = useState("");
+  const [newClarification, setNewClarification] = useState("");
   const [conditionSaving, setConditionSaving] = useState(false);
 
   // Data Management import/export
@@ -339,11 +340,14 @@ export function SettingsPage({
             anthropicApiKey: apiSettings.integrations.anthropicKey || prev.integrations.anthropicApiKey,
             openrouterApiKey: apiSettings.integrations.openrouterKey || prev.integrations.openrouterApiKey,
             geminiApiKey: apiSettings.integrations.geminiKey || prev.integrations.geminiApiKey,
-            lmstudioBaseUrl: (apiSettings.integrations as Record<string, string>).lmstudioBaseUrl || prev.integrations.lmstudioBaseUrl,
+            lmstudioBaseUrl: (apiSettings.integrations as any).lmstudioBaseUrl || prev.integrations.lmstudioBaseUrl,
             llmProvider: apiSettings.integrations.llmProvider || prev.integrations.llmProvider,
             llmModel: apiSettings.integrations.llmModel || prev.integrations.llmModel,
             azureDiEndpoint: (apiSettings.integrations as any).azureDiEndpoint || prev.integrations.azureDiEndpoint,
             azureDiKey: (apiSettings.integrations as any).azureDiKey || prev.integrations.azureDiKey,
+            agentRuntime: (apiSettings.integrations as any).agentRuntime || prev.integrations.agentRuntime,
+            agentModel: (apiSettings.integrations as any).agentModel || prev.integrations.agentModel,
+            maxConcurrentSubAgents: (apiSettings.integrations as any).maxConcurrentSubAgents ?? prev.integrations.maxConcurrentSubAgents,
           },
           termsAndConditions: (apiSettings as any).termsAndConditions ?? prev.termsAndConditions,
         }));
@@ -412,6 +416,8 @@ export function SettingsPage({
       const entry = await apiCreateConditionLibraryEntry({ type, value: value.trim() });
       setConditionLibrary((prev) => [...prev, entry]);
       if (type === "inclusion") setNewInclusion("");
+      else if (type === "exclusion") setNewExclusion("");
+      else if (type === "clarification") setNewClarification("");
       else setNewExclusion("");
     } catch {}
     setConditionSaving(false);
@@ -733,6 +739,9 @@ export function SettingsPage({
         llmModel: settings.integrations.llmModel,
         azureDiEndpoint: settings.integrations.azureDiEndpoint,
         azureDiKey: settings.integrations.azureDiKey,
+        agentRuntime: (settings.integrations as any).agentRuntime ?? null,
+        agentModel: (settings.integrations as any).agentModel ?? null,
+        maxConcurrentSubAgents: (settings.integrations as any).maxConcurrentSubAgents ?? null,
       },
       termsAndConditions: settings.termsAndConditions,
     };
@@ -2149,26 +2158,34 @@ export function SettingsPage({
           {activeGroup === "data" && dataSubTab === "conditions" && (
             <Card>
               <CardHeader>
-                <CardTitle>Inclusions &amp; Exclusions Library</CardTitle>
+                <CardTitle>Conditions Library</CardTitle>
               </CardHeader>
               <div className="px-5 pb-5">
-                <p className="text-xs text-fg/50 mb-4">Manage your organization&apos;s standard inclusion and exclusion clauses. These are available to quickly add when setting up project quotes.</p>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <p className="text-xs text-fg/50 mb-4">
+                  Manage your organization&apos;s standard clause library. These are available to quickly add when setting up project quotes.
+                </p>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
                   {/* Inclusions */}
-                  <div>
-                    <h3 className="text-sm font-medium text-fg mb-3">Inclusions</h3>
-                    <div className="space-y-1.5 mb-3">
+                  <div className="flex flex-col">
+                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
+                      Inclusions
+                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
+                        {conditionLibrary.filter((e) => e.type === "inclusion" || e.type === "Inclusion").length}
+                      </span>
+                    </h3>
+                    <div className="space-y-1.5 mb-3 flex-1">
                       {conditionLibrary.filter((e) => e.type === "inclusion" || e.type === "Inclusion").length === 0 && (
                         <p className="text-xs text-fg/40 italic py-2">No inclusions yet</p>
                       )}
                       {conditionLibrary
                         .filter((e) => e.type === "inclusion" || e.type === "Inclusion")
                         .map((entry) => (
-                          <div key={entry.id} className="group flex items-center gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                            <span className="flex-1 text-xs text-fg">{entry.value}</span>
+                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
+                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
                             <button
                               onClick={() => removeConditionLibraryEntry(entry.id)}
-                              className="rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
+                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
                               title="Remove"
                             >
                               <Trash2 className="h-3 w-3" />
@@ -2192,20 +2209,25 @@ export function SettingsPage({
                   </div>
 
                   {/* Exclusions */}
-                  <div>
-                    <h3 className="text-sm font-medium text-fg mb-3">Exclusions</h3>
-                    <div className="space-y-1.5 mb-3">
+                  <div className="flex flex-col">
+                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
+                      Exclusions
+                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
+                        {conditionLibrary.filter((e) => e.type === "exclusion" || e.type === "Exclusion").length}
+                      </span>
+                    </h3>
+                    <div className="space-y-1.5 mb-3 flex-1">
                       {conditionLibrary.filter((e) => e.type === "exclusion" || e.type === "Exclusion").length === 0 && (
                         <p className="text-xs text-fg/40 italic py-2">No exclusions yet</p>
                       )}
                       {conditionLibrary
                         .filter((e) => e.type === "exclusion" || e.type === "Exclusion")
                         .map((entry) => (
-                          <div key={entry.id} className="group flex items-center gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                            <span className="flex-1 text-xs text-fg">{entry.value}</span>
+                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
+                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
                             <button
                               onClick={() => removeConditionLibraryEntry(entry.id)}
-                              className="rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
+                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
                               title="Remove"
                             >
                               <Trash2 className="h-3 w-3" />
@@ -2227,6 +2249,49 @@ export function SettingsPage({
                       </Button>
                     </div>
                   </div>
+
+                  {/* Clarifications */}
+                  <div className="flex flex-col">
+                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
+                      Clarifications
+                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
+                        {conditionLibrary.filter((e) => e.type === "clarification" || e.type === "Clarification").length}
+                      </span>
+                    </h3>
+                    <div className="space-y-1.5 mb-3 flex-1">
+                      {conditionLibrary.filter((e) => e.type === "clarification" || e.type === "Clarification").length === 0 && (
+                        <p className="text-xs text-fg/40 italic py-2">No clarifications yet</p>
+                      )}
+                      {conditionLibrary
+                        .filter((e) => e.type === "clarification" || e.type === "Clarification")
+                        .map((entry) => (
+                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
+                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
+                            <button
+                              onClick={() => removeConditionLibraryEntry(entry.id)}
+                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
+                              title="Remove"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        value={newClarification}
+                        onChange={(e) => setNewClarification(e.target.value)}
+                        placeholder="Add clarification clause..."
+                        className="flex-1"
+                        onKeyDown={(e) => e.key === "Enter" && addConditionLibraryEntry("clarification", newClarification)}
+                      />
+                      <Button variant="secondary" size="sm" onClick={() => addConditionLibraryEntry("clarification", newClarification)} disabled={conditionSaving || !newClarification.trim()}>
+                        <Plus className="h-3.5 w-3.5" />
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+
                 </div>
               </div>
             </Card>

@@ -4,6 +4,7 @@ import { createPdfParser } from "@bidwright/ingestion";
 import { prisma } from "@bidwright/db";
 import { resolveApiPath } from "../paths.js";
 import { readFile } from "node:fs/promises";
+import * as XLSX from "xlsx";
 
 /**
  * Knowledge API routes — Fastify plugin.
@@ -440,6 +441,103 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       request.log.error(err, "Structured extraction failed");
       return reply.code(500).send({
         message: "Structured extraction failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── GET /api/knowledge/read-spreadsheet/:documentId ─────────────────
+  // Read an xlsx/xls/csv file and return its contents as markdown tables.
+  // Used by CLI agent tools to read spreadsheet documents that Claude Code
+  // cannot natively parse (xlsx is binary).
+  app.get("/api/knowledge/read-spreadsheet/:documentId", async (request, reply) => {
+    try {
+      const { documentId } = request.params as { documentId: string };
+      const sheetName = (request.query as any)?.sheet as string | undefined;
+
+      // Find the document (project SourceDocument or KnowledgeBook)
+      let fileBuffer: Buffer | undefined;
+      let fileName = "spreadsheet.xlsx";
+
+      const sourceDoc = await prisma.sourceDocument.findUnique({ where: { id: documentId } });
+      if (sourceDoc?.storagePath) {
+        const absPath = resolveApiPath(sourceDoc.storagePath);
+        fileBuffer = await readFile(absPath);
+        fileName = sourceDoc.fileName ?? fileName;
+      }
+
+      if (!fileBuffer) {
+        const book = await prisma.knowledgeBook.findUnique({ where: { id: documentId } });
+        if (book?.storagePath) {
+          const absPath = resolveApiPath(book.storagePath);
+          fileBuffer = await readFile(absPath);
+          fileName = book.sourceFileName ?? fileName;
+        }
+      }
+
+      if (!fileBuffer) {
+        return reply.code(404).send({ message: "Document file not found on disk" });
+      }
+
+      // Parse the spreadsheet
+      const workbook = XLSX.read(fileBuffer, { type: "buffer" });
+      const sheetNames = workbook.SheetNames;
+
+      // If a specific sheet is requested, return just that one
+      const sheetsToProcess = sheetName
+        ? sheetNames.filter(s => s.toLowerCase() === sheetName.toLowerCase())
+        : sheetNames;
+
+      if (sheetName && sheetsToProcess.length === 0) {
+        return reply.code(404).send({
+          message: `Sheet "${sheetName}" not found. Available sheets: ${sheetNames.join(", ")}`,
+        });
+      }
+
+      // Convert each sheet to markdown table
+      const sheets: Array<{ name: string; rowCount: number; markdown: string }> = [];
+      for (const name of sheetsToProcess) {
+        const ws = workbook.Sheets[name];
+        if (!ws) continue;
+
+        // Get as array of arrays for markdown conversion
+        const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+        if (rows.length === 0) {
+          sheets.push({ name, rowCount: 0, markdown: "(empty sheet)" });
+          continue;
+        }
+
+        // Build markdown table
+        const header = rows[0].map((c: any) => String(c ?? "").trim());
+        const separator = header.map(() => "---");
+        const dataRows = rows.slice(1).map(row =>
+          row.map((c: any) => String(c ?? "").trim())
+        );
+
+        // Pad rows to header length
+        const colCount = header.length;
+        const mdRows = [
+          `| ${header.join(" | ")} |`,
+          `| ${separator.join(" | ")} |`,
+          ...dataRows.map(r => {
+            while (r.length < colCount) r.push("");
+            return `| ${r.slice(0, colCount).join(" | ")} |`;
+          }),
+        ];
+
+        sheets.push({ name, rowCount: dataRows.length, markdown: mdRows.join("\n") });
+      }
+
+      return {
+        fileName,
+        sheetCount: sheetNames.length,
+        allSheetNames: sheetNames,
+        sheets,
+      };
+    } catch (err) {
+      request.log.error(err, "Spreadsheet reading failed");
+      return reply.code(500).send({
+        message: "Spreadsheet reading failed",
         error: err instanceof Error ? err.message : String(err),
       });
     }

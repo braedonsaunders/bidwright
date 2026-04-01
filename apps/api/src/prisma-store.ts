@@ -133,6 +133,7 @@ import {
   mapStoredPackage,
   mapSummaryRow,
   mapTakeoffAnnotation,
+  mapTakeoffLink,
   mapTravelPolicy,
   mapUser,
   mapWorksheet,
@@ -234,8 +235,6 @@ export interface RevisionPatchInput {
   description?: string;
   notes?: string;
   breakoutStyle?: QuoteRevision["breakoutStyle"];
-  phaseWorksheetEnabled?: boolean;
-  useCalculatedTotal?: boolean;
   type?: QuoteRevision["type"];
   scratchpad?: string;
   leadLetter?: string;
@@ -255,7 +254,6 @@ export interface RevisionPatchInput {
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
   printPhaseTotalOnly?: boolean;
-  showOvertimeDoubletime?: boolean;
   grandTotal?: number;
   regHours?: number;
   overHours?: number;
@@ -537,6 +535,18 @@ export interface TakeoffAnnotationPatchInput {
   metadata?: Record<string, unknown>;
 }
 
+export interface CreateTakeoffLinkInput {
+  annotationId: string;
+  worksheetItemId: string;
+  quantityField?: string;  // defaults to "value"
+  multiplier?: number;     // defaults to 1.0
+}
+
+export interface UpdateTakeoffLinkInput {
+  quantityField?: string;
+  multiplier?: number;
+}
+
 export interface ImportPreviewResult {
   headers: string[];
   sampleRows: string[][];
@@ -596,7 +606,7 @@ export class PrismaApiStore {
 
   constructor(
     private readonly db: PrismaClient,
-    private readonly organizationId: string,
+    public readonly organizationId: string,
   ) {}
 
   // ── Org-scoped project guard ────────────────────────────────────────────
@@ -638,6 +648,7 @@ export class PrismaApiStore {
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
+    const takeoffLinks = await this.db.takeoffLink.findMany({ where: { projectId } });
     const scheduleTasks = await this.db.scheduleTask.findMany({ where: { projectId } });
     const scheduleTaskIds = scheduleTasks.map((t) => t.id);
     const scheduleDependencies = scheduleTaskIds.length > 0
@@ -700,6 +711,7 @@ export class PrismaApiStore {
       rateSchedules: rateSchedules.map(mapRateSchedule),
       rateScheduleTiers: rateSchedules.flatMap((s) => (s.tiers ?? []).map(mapRateScheduleTier)),
       rateScheduleItems: rateSchedules.flatMap((s) => (s.items ?? []).map(mapRateScheduleItem)),
+      takeoffLinks: takeoffLinks.map(mapTakeoffLink),
     };
   }
 
@@ -853,6 +865,13 @@ export class PrismaApiStore {
       },
     });
 
+    // Fetch org settings to inherit defaultMarkup
+    const orgSettings = await this.db.organizationSettings.findUnique({
+      where: { organizationId: this.organizationId },
+    });
+    const orgDefaults = (orgSettings?.defaults as any) ?? {};
+    const defaultMarkup = typeof orgDefaults.defaultMarkup === "number" ? orgDefaults.defaultMarkup / 100 : 0.2;
+
     await this.db.quoteRevision.create({
       data: {
         id: revisionId,
@@ -862,11 +881,9 @@ export class PrismaApiStore {
         description: "Seeded estimate shell for the uploaded customer package.",
         notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
         breakoutStyle: "phase_detail",
-        phaseWorksheetEnabled: true,
-        useCalculatedTotal: true,
         type: "Firm",
         status: "Open",
-        defaultMarkup: 0.2,
+        defaultMarkup,
         necaDifficulty: "Normal",
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -904,14 +921,15 @@ export class PrismaApiStore {
     });
 
     const projectIds = projects.map((p) => p.id);
-    const [packages, jobs, workspaceStates, quotes, revisions] = await Promise.all([
+    const [packages, jobs, workspaceStates, quotes, revisions, users] = await Promise.all([
       this.db.storedPackage.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.ingestionJob.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.workspaceState.findMany({ where: { projectId: { in: projectIds } } }),
-      this.db.quote.findMany({ where: { projectId: { in: projectIds } } }),
+      this.db.quote.findMany({ where: { projectId: { in: projectIds } }, include: { department: true } }),
       this.db.quoteRevision.findMany({
         where: { quote: { projectId: { in: projectIds } } },
       }),
+      this.db.user.findMany({ where: { organizationId: this.organizationId, active: true }, select: { id: true, name: true, email: true } }),
     ]);
 
     return projects.map((p) => {
@@ -935,6 +953,10 @@ export class PrismaApiStore {
           title: quote.title,
           status: quote.status,
           currentRevisionId: quote.currentRevisionId,
+          userId: quote.userId || null,
+          userName: quote.userId ? users.find((u) => u.id === quote.userId)?.name || null : null,
+          departmentId: quote.departmentId || null,
+          departmentName: (quote as any).department?.name || null,
         } : null,
         latestRevision: revision ? {
           id: revision.id,
@@ -1989,6 +2011,13 @@ export class PrismaApiStore {
     const projectId = createId("project");
     const packageName = input.packageName ?? input.name;
 
+    // Fetch org settings to inherit defaultMarkup
+    const orgSettings = await this.db.organizationSettings.findUnique({
+      where: { organizationId: this.organizationId },
+    });
+    const orgDefaults = (orgSettings?.defaults as any) ?? {};
+    const defaultMarkup = typeof orgDefaults.defaultMarkup === "number" ? orgDefaults.defaultMarkup / 100 : 0.2;
+
     return await this.db.$transaction(async (tx) => {
       const project = await tx.project.create({
         data: {
@@ -2035,11 +2064,9 @@ export class PrismaApiStore {
           description: `Estimate for ${input.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
           notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
           breakoutStyle: "phase_detail",
-          phaseWorksheetEnabled: true,
-          useCalculatedTotal: true,
           type: "Firm",
           status: "Open",
-          defaultMarkup: 0.2,
+          defaultMarkup,
           necaDifficulty: "Normal",
           createdAt: now,
           updatedAt: now,
@@ -3374,8 +3401,6 @@ export class PrismaApiStore {
           description: revData.description,
           notes: revData.notes,
           breakoutStyle: revData.breakoutStyle,
-          phaseWorksheetEnabled: revData.phaseWorksheetEnabled ?? false,
-          useCalculatedTotal: revData.useCalculatedTotal,
           type: revData.type,
           scratchpad: revData.scratchpad,
           leadLetter: revData.leadLetter,
@@ -3395,7 +3420,6 @@ export class PrismaApiStore {
           printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory,
           printPhaseTotalOnly: revData.printPhaseTotalOnly,
-          showOvertimeDoubletime: revData.showOvertimeDoubletime,
           grandTotal: revData.grandTotal,
           regHours: revData.regHours,
           overHours: revData.overHours,
@@ -3671,8 +3695,7 @@ export class PrismaApiStore {
           quoteId: newQuoteId,
           revisionNumber: 0,
           title: revData.title, description: revData.description, notes: revData.notes,
-          breakoutStyle: revData.breakoutStyle, phaseWorksheetEnabled: revData.phaseWorksheetEnabled ?? false,
-          useCalculatedTotal: revData.useCalculatedTotal, type: revData.type,
+          breakoutStyle: revData.breakoutStyle, type: revData.type,
           scratchpad: revData.scratchpad, leadLetter: revData.leadLetter,
           dateEstimatedShip: revData.dateEstimatedShip, dateQuote: revData.dateQuote,
           dateDue: revData.dateDue, dateWalkdown: revData.dateWalkdown,
@@ -3682,7 +3705,6 @@ export class PrismaApiStore {
           defaultMarkup: revData.defaultMarkup, necaDifficulty: revData.necaDifficulty,
           followUpNote: revData.followUpNote, printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory, printPhaseTotalOnly: revData.printPhaseTotalOnly,
-          showOvertimeDoubletime: revData.showOvertimeDoubletime,
           grandTotal: revData.grandTotal, regHours: revData.regHours, overHours: revData.overHours, doubleHours: revData.doubleHours,
           subtotal: revData.subtotal, cost: revData.cost, estimatedProfit: revData.estimatedProfit, estimatedMargin: revData.estimatedMargin,
           calculatedTotal: revData.calculatedTotal ?? 0, totalHours: revData.totalHours,
@@ -4271,14 +4293,214 @@ export class PrismaApiStore {
     if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
 
     const updated = await this.db.takeoffAnnotation.update({ where: { id: annotationId }, data });
+
+    // Live sync: if measurement/points/calibration changed, cascade to linked line items
+    if (patch.measurement !== undefined || patch.points !== undefined || patch.calibration !== undefined) {
+      await this.syncAnnotationLinks(annotation.projectId, annotationId);
+    }
+
     return mapTakeoffAnnotation(updated);
   }
 
   async deleteTakeoffAnnotation(annotationId: string) {
     const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
     if (!annotation) throw new Error(`Takeoff annotation ${annotationId} not found`);
+
+    // Collect affected line items BEFORE cascade delete removes the links
+    const links = await this.db.takeoffLink.findMany({ where: { annotationId } });
+    const affectedItemIds = [...new Set(links.map((l) => l.worksheetItemId))];
+
     await this.db.takeoffAnnotation.delete({ where: { id: annotationId } });
+
+    // Recalculate each affected line item (links are now cascade-deleted)
+    for (const itemId of affectedItemIds) {
+      await this.recalcLinkedItemQuantity(itemId, annotation.projectId);
+    }
+
     return { deleted: true };
+  }
+
+  // ── Takeoff Links ─────────────────────────────────────────────────────────
+
+  async listTakeoffLinks(projectId: string, annotationId?: string, worksheetItemId?: string) {
+    await this.requireProject(projectId);
+    const where: any = { projectId };
+    if (annotationId) where.annotationId = annotationId;
+    if (worksheetItemId) where.worksheetItemId = worksheetItemId;
+    const rows = await this.db.takeoffLink.findMany({
+      where,
+      include: { annotation: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r: any) => ({
+      ...mapTakeoffLink(r),
+      annotation: r.annotation ? mapTakeoffAnnotation(r.annotation) : undefined,
+    }));
+  }
+
+  async createTakeoffLink(projectId: string, input: CreateTakeoffLinkInput) {
+    await this.requireProject(projectId);
+
+    if (!input.annotationId) throw new Error("annotationId is required");
+    if (!input.worksheetItemId) throw new Error("worksheetItemId is required");
+
+    // Validate annotation exists and belongs to project
+    const annotation = await this.db.takeoffAnnotation.findFirst({
+      where: { id: input.annotationId, projectId },
+    });
+    if (!annotation) throw new Error(`Takeoff annotation ${input.annotationId} not found in project`);
+
+    // Validate worksheet item exists and belongs to project's current revision
+    const item = await this.db.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+    if (!item) throw new Error(`Worksheet item ${input.worksheetItemId} not found`);
+
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (revision) {
+      const worksheet = await this.db.worksheet.findFirst({ where: { id: item.worksheetId } });
+      if (!worksheet || worksheet.revisionId !== revision.id) {
+        throw new Error(`Worksheet item ${input.worksheetItemId} not in current revision`);
+      }
+    }
+
+    const quantityField = input.quantityField ?? "value";
+    const multiplier = input.multiplier ?? 1.0;
+
+    // Extract measurement value
+    const measurement = (annotation.measurement as Record<string, unknown>) ?? {};
+    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
+    const derivedQuantity = rawValue * multiplier;
+
+    const link = await this.db.takeoffLink.create({
+      data: {
+        id: createId("tlink"),
+        projectId,
+        annotationId: input.annotationId,
+        worksheetItemId: input.worksheetItemId,
+        quantityField,
+        multiplier,
+        derivedQuantity,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    await this.recalcLinkedItemQuantity(input.worksheetItemId, projectId);
+
+    return mapTakeoffLink(link);
+  }
+
+  async updateTakeoffLink(linkId: string, patch: UpdateTakeoffLinkInput) {
+    const link = await this.db.takeoffLink.findFirst({ where: { id: linkId } });
+    if (!link) throw new Error(`Takeoff link ${linkId} not found`);
+
+    const quantityField = patch.quantityField ?? link.quantityField;
+    const multiplier = patch.multiplier ?? link.multiplier;
+
+    // Re-fetch annotation to get current measurement
+    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: link.annotationId } });
+    const measurement = (annotation?.measurement as Record<string, unknown>) ?? {};
+    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
+    const derivedQuantity = rawValue * multiplier;
+
+    const updated = await this.db.takeoffLink.update({
+      where: { id: linkId },
+      data: {
+        quantityField,
+        multiplier,
+        derivedQuantity,
+        updatedAt: new Date(),
+      },
+    });
+
+    await this.recalcLinkedItemQuantity(link.worksheetItemId, link.projectId);
+
+    return mapTakeoffLink(updated);
+  }
+
+  async deleteTakeoffLink(linkId: string) {
+    const link = await this.db.takeoffLink.findFirst({ where: { id: linkId } });
+    if (!link) throw new Error(`Takeoff link ${linkId} not found`);
+
+    const { worksheetItemId, projectId } = link;
+    await this.db.takeoffLink.delete({ where: { id: linkId } });
+
+    // Recalculate item quantity from remaining links
+    await this.recalcLinkedItemQuantity(worksheetItemId, projectId);
+
+    return { deleted: true };
+  }
+
+  /** Recompute all TakeoffLinks for an annotation and cascade to affected line items */
+  private async syncAnnotationLinks(projectId: string, annotationId: string) {
+    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
+    if (!annotation) return;
+
+    const links = await this.db.takeoffLink.findMany({ where: { annotationId } });
+    if (links.length === 0) return;
+
+    const measurement = (annotation.measurement as Record<string, unknown>) ?? {};
+    const affectedItemIds = new Set<string>();
+
+    for (const link of links) {
+      const rawValue = Number(measurement[link.quantityField] ?? measurement.value ?? 0) || 0;
+      const derivedQuantity = rawValue * link.multiplier;
+      await this.db.takeoffLink.update({
+        where: { id: link.id },
+        data: { derivedQuantity, updatedAt: new Date() },
+      });
+      affectedItemIds.add(link.worksheetItemId);
+    }
+
+    for (const itemId of affectedItemIds) {
+      await this.recalcLinkedItemQuantity(itemId, projectId);
+    }
+  }
+
+  /** Sum all TakeoffLink.derivedQuantity for a WorksheetItem and recalculate its cost/price */
+  private async recalcLinkedItemQuantity(worksheetItemId: string, projectId: string) {
+    const links = await this.db.takeoffLink.findMany({ where: { worksheetItemId } });
+    const totalQuantity = links.reduce((sum, l) => sum + l.derivedQuantity, 0);
+
+    const item = await this.db.worksheetItem.findFirst({ where: { id: worksheetItemId } });
+    if (!item) return;
+
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return;
+
+    const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
+    const catDef = entityCats.find((c) => c.name === item.category);
+
+    const revisionSchedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const rateScheduleCtx = revisionSchedules.map((s) => ({
+      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
+      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
+    }));
+
+    const labourCostCtx = await this.getLabourCostContext();
+    const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+
+    const domainItem = mapWorksheetItem(item);
+    domainItem.quantity = totalQuantity;
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
+    Object.assign(domainItem, calculated);
+
+    await this.db.worksheetItem.update({
+      where: { id: worksheetItemId },
+      data: {
+        quantity: domainItem.quantity,
+        cost: domainItem.cost,
+        markup: domainItem.markup,
+        price: domainItem.price,
+        unit1: domainItem.unit1,
+        unit2: domainItem.unit2,
+        unit3: domainItem.unit3,
+      },
+    });
+
+    await this.syncProjectEstimate(projectId);
   }
 
   async listAllJobs() {

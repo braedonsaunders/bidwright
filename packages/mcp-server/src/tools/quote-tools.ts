@@ -181,6 +181,7 @@ export function registerQuoteTools(server: McpServer) {
         validUoms: ec.validUoms,
         calculationType: ec.calculationType,
         editableFields: ec.editableFields,
+        unitLabels: ec.unitLabels ?? {},
         itemSource: ec.itemSource ?? "freeform",
         catalogId: ec.catalogId ?? null,
         usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
@@ -260,6 +261,40 @@ export function registerQuoteTools(server: McpServer) {
           `IMPORTANT: Use the correct category for each item. Do NOT put labour under Material.`;
       }
 
+      // UOM validation instructions
+      if (entityCategories.length > 0) {
+        instructions += `\n\nUOM RULES: Each category has a validUoms list. You MUST use one of those UOMs — the server will REJECT invalid UOMs. `;
+        for (const c of entityCategories) {
+          if (c.validUoms?.length > 0) {
+            instructions += `${c.name}: ${c.validUoms.join(", ")}. `;
+          }
+        }
+      }
+
+      // Markup instructions
+      const rev = ws.currentRevision || {};
+      const revisionDefaultMarkup: number = rev.defaultMarkup ?? 0;
+      const markupPct = revisionDefaultMarkup > 1 ? revisionDefaultMarkup : revisionDefaultMarkup * 100;
+      const markupCats = entityCategories.filter((c: any) => c.editableFields?.markup);
+      if (markupCats.length > 0 && revisionDefaultMarkup > 0) {
+        const noMarkupCats = entityCategories.filter((c: any) => !c.editableFields?.markup).map((c: any) => c.name);
+        instructions += `\n\nMARKUP: The revision default markup is ${markupPct.toFixed(1)}%. Apply this to categories with editable markup: ${markupCats.map((c: any) => c.name).join(", ")}. Set markup=${markupPct} (e.g. 15 for 15%) on items in these categories unless you have a specific reason not to.`;
+        if (noMarkupCats.length > 0) {
+          instructions += ` Categories WITHOUT markup (pricing set by rate/catalog/direct entry): ${noMarkupCats.join(", ")}.`;
+        }
+      }
+
+      // Quantity × units clarification — derive from actual category configs
+      const rateSchedCatNames = rateScheduleCats.map((c: any) => c.name);
+      if (rateSchedCatNames.length > 0) {
+        instructions += `\n\nQUANTITY × UNITS (CRITICAL for rate_schedule categories: ${rateSchedCatNames.join(", ")}): `;
+        instructions += `For these categories, quantity is a MULTIPLIER on the unit values. tierUnits/unit1/unit2/unit3 = units PER quantity. `;
+        instructions += `The calc engine computes: total = Σ(units × rate) × quantity. `;
+        instructions += `Check each category's unitLabels to understand what the unit fields represent (e.g. hours, days, duration). `;
+        instructions += `Do NOT confuse quantity with total units — quantity × units must make logical sense for the item. `;
+        instructions += `Example: if a category's unitLabels are {unit1: "Reg Hrs", unit2: "OT Hrs"} and you need 1 person for 80 regular hours → quantity=1, unit1=80. If you need 4 people for 200 regular hours each → quantity=4, unit1=200.`;
+      }
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
           categories: entityCategories.length > 0 ? entityCategories : [
@@ -271,6 +306,7 @@ export function registerQuoteTools(server: McpServer) {
           rateScheduleItems: rateItems,
           availableOrgSchedules: orgSchedules.length > 0 && rateItems.length === 0 ? orgSchedules : undefined,
           catalogItems: catalogItems.slice(0, 50),
+          defaultMarkup: revisionDefaultMarkup,
           instructions,
         }, null, 2) }],
       };
@@ -299,20 +335,20 @@ export function registerQuoteTools(server: McpServer) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. For rate_schedule categories (Labour, Equipment), set rateScheduleItemId and use the rate item name as entityName (e.g. "Trade Labour", "Foreman"). Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly.`,
+    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. For rate_schedule categories (itemSource=rate_schedule), set rateScheduleItemId and use the rate item name as entityName. Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly. UOM must be from the category's validUoms list.`,
     {
       worksheetId: z.string().describe("ID of the worksheet"),
       entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
       category: z.string().describe("Category name — MUST match exactly from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use the correct category for each item type."),
       description: z.string().default("").describe("Description with document reference and assumptions"),
-      quantity: z.number().default(1).describe("Quantity"),
-      uom: z.string().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
+      quantity: z.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
+      uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
       cost: z.number().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
-      markup: z.number().default(0).describe("Markup percentage"),
-      tierUnits: z.record(z.number()).optional().describe("Hours per rate tier. Keys are tier IDs from getItemConfig (e.g. {\"rst-abc\": 40, \"rst-def\": 8}). REQUIRED for rate_schedule categories — this is how cost/price gets calculated from the rate."),
-      unit1: z.number().default(0).describe("Regular hours (fallback if tierUnits not set)"),
-      unit2: z.number().default(0).describe("Overtime hours (fallback if tierUnits not set)"),
-      unit3: z.number().default(0).describe("Double-time hours (fallback if tierUnits not set)"),
+      markup: z.number().default(0).describe("Markup percentage. For markup-eligible categories, apply the revision defaultMarkup from getItemConfig."),
+      tierUnits: z.record(z.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
+      unit1: z.number().default(0).describe("Unit 1 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
+      unit2: z.number().default(0).describe("Unit 2 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
+      unit3: z.number().default(0).describe("Unit 3 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       phaseId: z.string().optional().describe("Phase ID"),
@@ -339,6 +375,19 @@ export function registerQuoteTools(server: McpServer) {
         if (catConfig) {
           const src = catConfig.itemSource || "freeform";
           const calcType = catConfig.calculationType || "manual";
+
+          // Validate UOM against category's validUoms
+          const validUoms: string[] = catConfig.validUoms || [];
+          if (validUoms.length > 0) {
+            if (!rest.uom || rest.uom === "EA") {
+              // Auto-correct to category default if UOM was omitted or left as generic default
+              if (!validUoms.includes(rest.uom || "EA")) {
+                rest.uom = catConfig.defaultUom || validUoms[0];
+              }
+            } else if (!validUoms.includes(rest.uom)) {
+              return { content: [{ type: "text" as const, text: `ERROR: UOM "${rest.uom}" is not valid for category "${cat}". Valid UOMs: ${validUoms.join(", ")}. Use one of these or omit uom to use the default (${catConfig.defaultUom}).` }], isError: true };
+            }
+          }
 
           // Validate itemSource requirements
           if (src === "rate_schedule" && !rest.rateScheduleItemId) {
@@ -376,12 +425,25 @@ export function registerQuoteTools(server: McpServer) {
           if (calcType === "auto_labour" && !rest.unit1 && !rest.unit2 && !rest.unit3) {
             return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — unit values are required. Set unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
           }
+
+          // Auto-apply default markup for markup-eligible categories when not explicitly set
+          if (catConfig.editableFields?.markup && (rest.markup === 0 || rest.markup === undefined)) {
+            const rev = ws.currentRevision || {};
+            const revMarkup: number = rev.defaultMarkup ?? 0;
+            if (revMarkup > 0) {
+              // Revision stores markup as decimal (0.15 for 15%) — pass through directly
+              rest.markup = revMarkup > 1 ? revMarkup / 100 : revMarkup;
+            }
+          }
         }
       } catch {
         // Workspace not available — let API-level validation handle it
       }
 
-      const price = (rest.cost || 0) * (1 + (rest.markup || 0) / 100);
+      // Normalize markup to decimal: agent may send 15 for 15%, DB stores 0.15
+      const normalizedMarkup = (rest.markup || 0) > 1 ? (rest.markup || 0) / 100 : (rest.markup || 0);
+      rest.markup = normalizedMarkup;
+      const price = (rest.cost || 0) * (1 + normalizedMarkup);
       const body = { ...rest, category: cat, entityType: cat, price };
       try {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
@@ -416,6 +478,10 @@ export function registerQuoteTools(server: McpServer) {
     },
     async ({ itemId, catalogItemId, ...patch }) => {
       if (catalogItemId) (patch as any).itemId = catalogItemId;
+      // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
+      if ((patch as any).markup !== undefined && (patch as any).markup > 1) {
+        (patch as any).markup = (patch as any).markup / 100;
+      }
       const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
       return { content: [{ type: "text" as const, text: `Updated item ${itemId}` }] };
     }
@@ -823,11 +889,9 @@ export function registerQuoteTools(server: McpServer) {
       shippingMethod: z.string().optional(),
       shippingTerms: z.string().optional(),
       leadLetter: z.string().optional().describe("Cover letter / lead-in text for the quote"),
-      useCalculatedTotal: z.boolean().optional().describe("Use calculated total vs manual grandTotal"),
-      grandTotal: z.number().optional().describe("Manual grand total override (when useCalculatedTotal=false)"),
+      grandTotal: z.number().optional().describe("Manual grand total"),
       printEmptyNotesColumn: z.boolean().optional(),
       printPhaseTotalOnly: z.boolean().optional().describe("Show only phase totals, hide individual items"),
-      showOvertimeDoubletime: z.boolean().optional(),
     },
     async (input) => {
       const wsData = await apiGet(projectPath("/workspace"));

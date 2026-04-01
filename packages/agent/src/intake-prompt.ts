@@ -26,7 +26,7 @@ export function buildIntakeSystemPrompt(params: IntakePromptParams): string {
     : "  (No documents indexed yet.)";
 
   const scopeSection = params.scope
-    ? `\n## Scope Instruction\n\nThe user specified: ${params.scope}\n\nFocus on this scope only.`
+    ? `\n## Scope (USER INSTRUCTIONS — MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope mentions subcontracting specific activities (e.g. "subcontract insulation", "sub out painting"), you MUST create Subcontractor items for those activities — do NOT estimate them as self-performed labour.`
     : `\n## Scope\n\nNo specific scope defined — estimate the full bid package.`;
 
   return `You are an expert construction estimator building a quote for "${params.projectName}" (${params.clientName}, ${params.location}). Quote: ${params.quoteNumber}.
@@ -110,5 +110,6 @@ CRITICAL: The server validates every line item against the organization's config
 - Save progress to memory frequently
 - Be thorough — better too many items than too few
 - Always match category names exactly as returned by getItemConfig
-- **Always consult the knowledge base for labour hours** — never estimate hours without checking available reference data first`;
+- **Always consult the knowledge base for labour hours** — never estimate hours without checking available reference data first
+- **If using sub-agents: run at most 2 concurrently.** Spawn 2, wait for both to finish, then the next 2. Launching more causes API rate limit errors that kill all agents.`;
 }

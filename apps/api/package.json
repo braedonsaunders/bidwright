@@ -26,6 +26,7 @@
     "jszip": "^3.10.1",
     "nodemailer": "^6.9.16",
     "playwright": "^1.58.2",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

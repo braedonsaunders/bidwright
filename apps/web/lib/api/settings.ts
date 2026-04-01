@@ -19,7 +19,7 @@ export interface AppSettingsRecord {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string };
   defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string };
+  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string; agentModel?: string; maxConcurrentSubAgents?: number };
   brand: BrandProfile;
   termsAndConditions?: string;
 }

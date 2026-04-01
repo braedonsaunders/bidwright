@@ -390,7 +390,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
           ).toString();
         }
 
-        const loadingTask = pdfjs.getDocument(url);
+        const loadingTask = pdfjs.getDocument({ url, withCredentials: true });
         const doc = await loadingTask.promise;
 
         if (cancelled) {

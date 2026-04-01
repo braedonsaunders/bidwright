@@ -5,7 +5,10 @@
       "mcp__plugin_playwright_playwright__browser_navigate",
       "Bash(curl -s http://localhost:3000/settings)",
       "Bash(curl -s http://localhost:3000/_next/static/chunks/%5Broot-of-the-server%5D__0zqsnay._.css)",
-      "Bash(curl -s http://localhost:3000/_next/static/chunks/apps_web_0rqeker._.js)"
+      "Bash(curl -s http://localhost:3000/_next/static/chunks/apps_web_0rqeker._.js)",
+      "Bash(grep -r \"parseExportFile\\\\|importAllDataManagement\\\\|DataImport\" /c/Users/bsaunders/Documents/bidwright/apps --include=*.tsx --include=*.ts)",
+      "Bash(xargs grep:*)",
+      "Bash(find /c/Users/bsaunders/Documents/bidwright -type f -name *.prisma -o -name schema.prisma)"
     ]
   }
 }

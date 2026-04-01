@@ -155,7 +155,9 @@ model Project {
   workspaceState     WorkspaceState?
   pluginExecutions   PluginExecution[]
   takeoffAnnotations TakeoffAnnotation[]
+  takeoffLinks       TakeoffLink[]
   scheduleTasks      ScheduleTask[]
+  quoteReviews       QuoteReview[]
 
   @@index([organizationId])
 }
@@ -220,8 +222,6 @@ model QuoteRevision {
   description           String   @default("")
   notes                 String   @default("")
   breakoutStyle         String   @default("grand_total")
-  phaseWorksheetEnabled Boolean  @default(false)
-  useCalculatedTotal    Boolean  @default(false)
   type                  String   @default("Firm")
   scratchpad            String   @default("")
   leadLetter            String   @default("")
@@ -241,7 +241,6 @@ model QuoteRevision {
   printEmptyNotesColumn Boolean  @default(false)
   printCategory         String[] @default([])
   printPhaseTotalOnly   Boolean  @default(false)
-  showOvertimeDoubletime Boolean @default(false)
   grandTotal            Float    @default(0)
   regHours              Float    @default(0)
   overHours             Float    @default(0)
@@ -308,6 +307,8 @@ model WorksheetItem {
   itemId              String?  // FK to CatalogItem (for catalog-backed categories)
   tierUnits           Json     @default("{}")
   sourceNotes         String   @default("")
+
+  takeoffLinks TakeoffLink[]
 
   @@index([worksheetId])
   @@index([phaseId])
@@ -692,8 +693,32 @@ model TakeoffAnnotation {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  takeoffLinks TakeoffLink[]
+
   @@index([projectId])
   @@index([documentId])
+}
+
+// ── Takeoff Links (M:N junction: Annotation ↔ WorksheetItem) ────────────
+
+model TakeoffLink {
+  id              String            @id @default(cuid())
+  projectId       String
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  annotationId    String
+  annotation      TakeoffAnnotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  worksheetItemId String
+  worksheetItem   WorksheetItem     @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
+  quantityField   String            @default("value")   // "value" | "area" | "volume" | "count"
+  multiplier      Float             @default(1.0)        // 1.1 = 10% waste
+  derivedQuantity Float             @default(0)          // cached: measurement[quantityField] * multiplier
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([annotationId, worksheetItemId])
+  @@index([annotationId])
+  @@index([worksheetItemId])
+  @@index([projectId])
 }
 
 // ── AI Runs ───────────────────────────────────────────────────────────────
@@ -713,6 +738,27 @@ model AiRun {
   updatedAt     DateTime @updatedAt
 
   @@index([projectId])
+}
+
+// ── Quote Reviews ─────────────────────────────────────────────────────────
+
+model QuoteReview {
+  id              String   @id @default(cuid())
+  projectId       String
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId      String
+  aiRunId         String?
+  status          String   @default("running") // running | completed | failed
+  summary         Json     @default("{}")
+  coverage        Json     @default("[]")
+  findings        Json     @default("[]")
+  competitiveness Json     @default("{}")
+  recommendations Json     @default("[]")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([revisionId])
 }
 
 // ── Citations ─────────────────────────────────────────────────────────────

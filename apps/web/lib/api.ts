@@ -21,6 +21,10 @@ export interface ProjectListItem {
     title: string;
     status: string;
     currentRevisionId: string;
+    userId?: string | null;
+    userName?: string | null;
+    departmentId?: string | null;
+    departmentName?: string | null;
   } | null;
   latestRevision: {
     id: string;
@@ -65,8 +69,6 @@ export interface QuoteRevision {
   description: string;
   notes: string;
   breakoutStyle: string;
-  phaseWorksheetEnabled?: boolean;
-  useCalculatedTotal: boolean;
   type: "Firm" | "Budget" | "BudgetDNE";
   scratchpad: string;
   leadLetter: string;
@@ -86,7 +88,6 @@ export interface QuoteRevision {
   printEmptyNotesColumn: boolean;
   printCategory: string[];
   printPhaseTotalOnly: boolean;
-  showOvertimeDoubletime: boolean;
   grandTotal: number;
   regHours: number;
   overHours: number;
@@ -421,6 +422,7 @@ export interface ProjectWorkspaceData {
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
   estimate: EstimateData;
+  takeoffLinks?: TakeoffLinkRecord[];
 }
 
 export interface PackageRecord {
@@ -707,8 +709,33 @@ export async function deleteDepartment(id: string) {
 // Read-only queries
 // ---------------------------------------------------------------------------
 
-export async function getProjects() {
-  return apiRequest<ProjectListItem[]>("/projects");
+export interface OrgUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface OrgDepartment {
+  id: string;
+  name: string;
+}
+
+export interface ProjectsResponse {
+  projects: ProjectListItem[];
+  users: OrgUser[];
+  departments: OrgDepartment[];
+}
+
+export async function getProjects(): Promise<ProjectListItem[]> {
+  const res = await apiRequest<ProjectListItem[] | ProjectsResponse>("/projects");
+  // Handle both old (array) and new (object with users/departments) response shapes
+  return Array.isArray(res) ? res : res.projects;
+}
+
+export async function getProjectsWithFilters(): Promise<ProjectsResponse> {
+  const res = await apiRequest<ProjectListItem[] | ProjectsResponse>("/projects");
+  if (Array.isArray(res)) return { projects: res, users: [], departments: [] };
+  return res;
 }
 
 export async function getProject(projectId: string) {
@@ -741,8 +768,6 @@ export interface RevisionPatchInput {
   description?: string;
   notes?: string;
   breakoutStyle?: string;
-  phaseWorksheetEnabled?: boolean;
-  useCalculatedTotal?: boolean;
   type?: "Firm" | "Budget" | "BudgetDNE";
   scratchpad?: string;
   leadLetter?: string;
@@ -762,7 +787,6 @@ export interface RevisionPatchInput {
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
   printPhaseTotalOnly?: boolean;
-  showOvertimeDoubletime?: boolean;
   grandTotal?: number;
   regHours?: number;
   overHours?: number;
@@ -2614,6 +2638,62 @@ export async function deleteTakeoffAnnotation(projectId: string, annotationId: s
   });
 }
 
+// ── Takeoff Links (Annotation ↔ Line Item) ──────────────────────────────
+
+export interface TakeoffLinkRecord {
+  id: string;
+  projectId: string;
+  annotationId: string;
+  worksheetItemId: string;
+  quantityField: string;
+  multiplier: number;
+  derivedQuantity: number;
+  annotation?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listTakeoffLinks(
+  projectId: string,
+  annotationId?: string,
+  worksheetItemId?: string,
+) {
+  const params = new URLSearchParams();
+  if (annotationId) params.set("annotationId", annotationId);
+  if (worksheetItemId) params.set("worksheetItemId", worksheetItemId);
+  const qs = params.toString();
+  return apiRequest<TakeoffLinkRecord[]>(`/api/takeoff/${projectId}/links${qs ? `?${qs}` : ""}`);
+}
+
+export async function createTakeoffLink(
+  projectId: string,
+  data: { annotationId: string; worksheetItemId: string; quantityField?: string; multiplier?: number },
+) {
+  return apiRequest<TakeoffLinkRecord>(`/api/takeoff/${projectId}/links`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function updateTakeoffLink(
+  projectId: string,
+  linkId: string,
+  data: { quantityField?: string; multiplier?: number },
+) {
+  return apiRequest<TakeoffLinkRecord>(`/api/takeoff/${projectId}/links/${linkId}`, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function deleteTakeoffLink(projectId: string, linkId: string) {
+  return apiRequest<void>(`/api/takeoff/${projectId}/links/${linkId}`, {
+    method: "DELETE",
+  });
+}
+
 // ── Vision / Auto-Count ──────────────────────────────────────────────────
 
 export interface VisionBoundingBox {
@@ -2904,6 +2984,144 @@ export async function getCliStatus(projectId: string) {
     source?: "live" | "db";
     events?: any[];
   }>(`/api/cli/${projectId}/status`);
+}
+
+// ── Quote Review ────────────────────────────────────────────────────────
+
+export interface ReviewCoverageItem {
+  specRef: string;
+  requirement: string;
+  status: "YES" | "VERIFY" | "NO";
+  worksheetName?: string;
+  notes?: string;
+}
+
+export interface ReviewFinding {
+  id: string;
+  severity: "CRITICAL" | "WARNING" | "INFO";
+  title: string;
+  description: string;
+  specRef?: string;
+  estimatedImpact?: string;
+}
+
+export interface ReviewOverestimate {
+  id: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  area: string;
+  analysis: string;
+  currentValue?: string;
+  benchmarkValue?: string;
+  savingsRange: string;
+}
+
+export interface ReviewBenchmarkStream {
+  name: string;
+  footage?: number;
+  hours: number;
+  productionRate?: number;
+  unit?: string;
+  fmTlRatio?: number;
+  assessment: string;
+}
+
+export interface ReviewCompetitiveness {
+  overestimates?: ReviewOverestimate[];
+  underestimates?: Array<{
+    id: string;
+    impact: "HIGH" | "MEDIUM" | "LOW";
+    area: string;
+    analysis: string;
+    riskRange: string;
+  }>;
+  benchmarking?: {
+    description?: string;
+    streams: ReviewBenchmarkStream[];
+  };
+  totalSavingsRange?: string;
+}
+
+export interface ReviewRecommendation {
+  id: string;
+  title: string;
+  description: string;
+  priority: "HIGH" | "MEDIUM" | "LOW";
+  impact: string;
+  category?: string;
+  status: "open" | "resolved" | "dismissed";
+  resolution: {
+    summary: string;
+    actions: Array<{
+      action: "createItem" | "updateItem" | "deleteItem" | "addCondition";
+      worksheetId?: string;
+      worksheetName?: string;
+      itemId?: string;
+      itemName?: string;
+      item?: Record<string, unknown>;
+      changes?: Record<string, unknown>;
+      type?: string;
+      value?: string;
+    }>;
+  };
+}
+
+export interface ReviewSummary {
+  quoteTotal: number;
+  worksheetCount: number;
+  itemCount: number;
+  totalHours?: number;
+  coverageScore: string;
+  riskCount: { critical: number; warning: number; info: number };
+  potentialSavings?: string;
+  keyFindings: string[];
+  overallAssessment: string;
+}
+
+export interface QuoteReview {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  aiRunId?: string;
+  status: "running" | "completed" | "failed";
+  summary: ReviewSummary;
+  coverage: ReviewCoverageItem[];
+  findings: ReviewFinding[];
+  competitiveness: ReviewCompetitiveness;
+  recommendations: ReviewRecommendation[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function startReview(projectId: string, options?: { runtime?: string; model?: string }) {
+  return apiRequest<{ sessionId: string; reviewId: string; projectId: string; status: string }>(
+    `/api/review/${projectId}/start`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(options || {}) }
+  );
+}
+
+export async function getLatestReview(projectId: string) {
+  return apiRequest<{ review: QuoteReview | null }>(`/api/review/${projectId}/latest`);
+}
+
+export async function resolveRecommendation(projectId: string, recId: string) {
+  return apiRequest<WorkspaceResponse>(`/api/review/${projectId}/resolve/${recId}`, { method: "POST" });
+}
+
+export async function dismissRecommendation(projectId: string, recId: string) {
+  return apiRequest<{ ok: boolean }>(`/api/review/${projectId}/dismiss/${recId}`, { method: "POST" });
+}
+
+export async function stopReview(projectId: string) {
+  return apiRequest<{ stopped: boolean }>(`/api/review/${projectId}/stop`, { method: "POST" });
+}
+
+export function connectReviewStream(projectId: string): EventSource {
+  const url = new URL(`/api/review/${projectId}/stream`, apiBaseUrl);
+  return new EventSource(url.toString(), { withCredentials: true });
+}
+
+export async function getReviewStatus(projectId: string) {
+  return apiRequest<{ status: string; sessionId?: string; events?: any[] }>(`/api/review/${projectId}/status`);
 }
 
 // ── Labour Cost Tables ──────────────────────────────────────────────────

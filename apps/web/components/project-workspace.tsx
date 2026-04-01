@@ -14,6 +14,7 @@ import {
   Plus,
   Save,
   Settings2,
+  SearchCheck,
   Sparkles,
   Puzzle,
   Trash2,
@@ -69,6 +70,7 @@ import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
 import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";
+import { ReviewTab } from "@/components/workspace/review-tab";
 import { RevisionCompare } from "@/components/workspace/revision-compare";
 import {
   ConfirmModal,
@@ -105,7 +107,7 @@ import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
-type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "activity";
+type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "review" | "activity";
 type EstimateSubTab = "worksheets" | "phases" | "takeoff" | "schedule";
 
 type ItemDraft = {
@@ -168,6 +170,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
   { id: "estimate", label: "Estimate", icon: Layers3 },
   { id: "summarize", label: "Summarize", icon: ClipboardList },
   { id: "documents", label: "Documents", icon: FileText },
+  { id: "review", label: "Review", icon: SearchCheck },
   { id: "activity", label: "Activity", icon: MessageSquareText },
 ];
 
@@ -602,6 +605,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       <div className="flex items-center gap-1 border-b border-line pb-px overflow-x-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
+          const conditionCount = t.id === "setup" ? (workspace.conditions?.length ?? 0) : 0;
           return (
             <button
               key={t.id}
@@ -613,6 +617,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             >
               <Icon className="h-3.5 w-3.5" />
               {t.label}
+              {conditionCount > 0 && (
+                <span className={cn(
+                  "ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none",
+                  tab === t.id ? "bg-accent/20 text-accent" : "bg-fg/10 text-fg/50"
+                )}>
+                  {conditionCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -645,6 +657,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   </button>
                 ))}
               </div>
+
 
               <AnimatePresence mode="wait">
                 {estimateSubTab === "worksheets" && (
@@ -682,6 +695,11 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           {tab === "documents" && (
             <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
               <DocumentationTab workspace={workspace} apply={apply} packages={data.packages} highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined} />
+            </motion.div>
+          )}
+          {tab === "review" && (
+            <motion.div key="review" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+              <ReviewTab workspace={workspace} onApply={apply} onError={setError} />
             </motion.div>
           )}
           {tab === "activity" && (
@@ -868,8 +886,7 @@ function buildRevDraftFromWs(workspace: ProjectWorkspaceData) {
   const r = workspace.currentRevision;
   return {
     title: r.title, description: r.description, notes: r.notes,
-    breakoutStyle: r.breakoutStyle, phaseWorksheetEnabled: r.phaseWorksheetEnabled ?? false,
-    useCalculatedTotal: r.useCalculatedTotal,
+    breakoutStyle: r.breakoutStyle,
   };
 }
 

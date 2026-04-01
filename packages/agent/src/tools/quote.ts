@@ -215,12 +215,14 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
   });
   let rateSchedules: any[] = [];
   let entityCategories: any[] = [];
+  let revisionDefaultMarkup = 0;
   if (wsRes.ok) {
     const wsData = await wsRes.json() as any;
     // workspace response nests data under .workspace
     const ws = wsData.workspace || wsData;
     rateSchedules = ws.rateSchedules || [];
     entityCategories = ws.entityCategories || [];
+    revisionDefaultMarkup = ws.currentRevision?.defaultMarkup ?? 0;
   }
 
   // Fetch catalogs
@@ -241,6 +243,7 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
     validUoms: ec.validUoms,
     calculationType: ec.calculationType,
     editableFields: ec.editableFields,
+    unitLabels: ec.unitLabels ?? {},
     itemSource: ec.itemSource, // "rate_schedule", "catalog", or "freeform"
     catalogId: ec.catalogId ?? null,
     // Derive whether this category needs rate schedule linking
@@ -304,6 +307,16 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
       instructions += `  2. tierUnits — map hours to tier NAMES (not IDs). Each rate item has tiers (see tiers array). Set tierUnits like: {${tierExample}}. The server resolves names to IDs automatically. This is how cost/price gets calculated.\n`;
       instructions += `  3. entityName — use ONLY the rate item name (e.g. the "name" field). Put task details in description.\n`;
       instructions += `  Do NOT invent items. If no suitable rate exists, use the closest match.\n`;
+      instructions += `  ⚠️ WITHOUT tierUnits, rate schedule items will calculate to $0. ALWAYS set tierUnits.\n`;
+      // Check if there's an equipment schedule with duration-based tiers
+      const equipmentSchedules = rateSchedules.filter((rs: any) => rs.category === "equipment");
+      if (equipmentSchedules.length > 0) {
+        const eqTiers = equipmentSchedules[0].tiers || [];
+        if (eqTiers.some((t: any) => t.name.toLowerCase().includes("month") || t.name.toLowerCase().includes("week") || t.name.toLowerCase().includes("day"))) {
+          const eqTierExample = eqTiers.map((t: any) => `"${t.name}": <duration>`).join(", ");
+          instructions += `  EQUIPMENT RENTALS: Equipment rate schedule has duration-based tiers. Set tierUnits to the rental duration, e.g. {${eqTierExample}}. For a forklift rented 4 months: {"Monthly": 4}.\n`;
+        }
+      }
     } else {
       instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. You MUST import rate schedules using rateSchedule.import before creating items in these categories. `;
     }
@@ -330,12 +343,44 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
     }
   }
 
+  // UOM validation instructions
+  instructions += `\n\nUOM RULES: Each category has a validUoms list. You MUST use one of those UOMs — the server will REJECT invalid UOMs. `;
+  for (const c of categoryConfig) {
+    if (c.validUoms?.length > 0) {
+      instructions += `${c.name}: ${c.validUoms.join(", ")}. `;
+    }
+  }
+
+  // Markup instructions
+  const markupPct = revisionDefaultMarkup > 1 ? revisionDefaultMarkup : revisionDefaultMarkup * 100;
+  const markupCats = categoryConfig.filter((c: any) => c.editableFields?.markup);
+  if (markupCats.length > 0 && revisionDefaultMarkup > 0) {
+    const noMarkupCats = categoryConfig.filter((c: any) => !c.editableFields?.markup).map((c: any) => c.name);
+    instructions += `\n\nMARKUP: The revision default markup is ${markupPct.toFixed(1)}%. Apply this to categories with editable markup: ${markupCats.map((c: any) => c.name).join(", ")}. Set markup=${markupPct} (e.g. 15 for 15%) on items in these categories unless you have a specific reason not to.`;
+    if (noMarkupCats.length > 0) {
+      instructions += ` Categories WITHOUT markup (pricing set by rate/catalog/direct entry): ${noMarkupCats.join(", ")}.`;
+    }
+  }
+
+  // Quantity × units clarification — derive from actual category configs
+  const rateSchedCats = categoryConfig.filter((c: any) => c.usesRateSchedule);
+  if (rateSchedCats.length > 0) {
+    const rateSchedCatNames = rateSchedCats.map((c: any) => c.name);
+    instructions += `\n\nQUANTITY × UNITS (CRITICAL for rate_schedule categories: ${rateSchedCatNames.join(", ")}): `;
+    instructions += `For these categories, quantity is a MULTIPLIER on the unit values. tierUnits/unit1/unit2/unit3 = units PER quantity. `;
+    instructions += `The calc engine computes: total = Σ(units × rate) × quantity. `;
+    instructions += `Check each category's unitLabels to understand what the unit fields represent (e.g. hours, days, duration). `;
+    instructions += `Do NOT confuse quantity with total units — quantity × units must make logical sense for the item. `;
+    instructions += `Example: if a category's unitLabels are {unit1: "Reg Hrs", unit2: "OT Hrs"} and you need 1 person for 80 regular hours → quantity=1, unit1=80. If you need 4 people for 200 regular hours each → quantity=4, unit1=200.`;
+  }
+
   return {
     success: true,
     data: {
       categories: categoryConfig,
       rateScheduleItems: rateItems,
       catalogItems: catalogItems.slice(0, 50),
+      defaultMarkup: revisionDefaultMarkup,
       instructions,
     },
     duration_ms: 0,
@@ -360,14 +405,14 @@ If the server rejects your item, read the error message — it will tell you wha
     category: z.string().describe("Item category — MUST match a category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables', 'Rental Equipment', 'Subcontractors'). Use the correct category for each item type."),
     entityName: z.string().describe("Name of the line item"),
     description: z.string().optional().default("").describe("Detailed description with document reference and assumptions"),
-    quantity: z.number().optional().default(1).describe("Quantity of the item"),
-    uom: z.string().optional().default("EA").describe("Unit of measure: EA, LF, SF, HR, LS, DAY, etc."),
+    quantity: z.number().optional().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
+    uom: z.string().optional().default("EA").describe("Unit of measure — MUST be from the category's validUoms list in getItemConfig. The server will reject invalid UOMs and auto-correct to the category default."),
     cost: z.number().optional().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
-    markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%)"),
-    tierUnits: z.record(z.number()).optional().describe("Hours per rate tier — keys are tier IDs from getItemConfig, values are hours. E.g. {\"rst-abc\": 40, \"rst-def\": 8} for 40 regular + 8 overtime hours. REQUIRED for rate_schedule categories to calculate cost/price."),
-    unit1: z.number().optional().default(0).describe("Regular hours (fallback if tierUnits not set)"),
-    unit2: z.number().optional().default(0).describe("Overtime hours (fallback if tierUnits not set)"),
-    unit3: z.number().optional().default(0).describe("Double-time hours (fallback if tierUnits not set)"),
+    markup: z.number().optional().default(0).describe("Markup percentage (e.g. 15 for 15%). For categories with editableFields.markup=true, use the revision's defaultMarkup unless you have a specific reason not to."),
+    tierUnits: z.record(z.number()).optional().describe("Units per rate tier — keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
+    unit1: z.number().optional().default(0).describe("Unit 1 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
+    unit2: z.number().optional().default(0).describe("Overtime — unit 2 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
+    unit3: z.number().optional().default(0).describe("Doubletime — unit 3 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
     rateScheduleItemId: z.string().optional().describe("Rate schedule item ID — REQUIRED for rate_schedule categories."),
     phaseId: z.string().optional().describe("Phase ID to associate this item with"),
     sourceNotes: z.string().optional().default("").describe(
@@ -378,8 +423,14 @@ If the server rejects your item, read the error message — it will tell you wha
 }, async (ctx, input) => {
   const { worksheetId, category, ...rest } = input;
   const cost = Number(rest.cost ?? 0);
-  const markup = Number(rest.markup ?? 0);
-  const price = cost * (1 + markup / 100);
+  const rawMarkup = Number(rest.markup ?? 0);
+  // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
+  const markup = rawMarkup > 1 ? rawMarkup / 100 : rawMarkup;
+  // For rate-schedule items (Labour, Equipment), the server calculates price
+  // from rate schedule rates × tierUnits. Don't pre-calculate to $0 here.
+  // For freeform items, pre-calculate as before.
+  const hasRateSchedule = !!rest.rateScheduleItemId;
+  const price = hasRateSchedule ? 0 : cost * (1 + markup);
   const cat = category;
   const body: Record<string, unknown> = {
     ...rest,
@@ -429,6 +480,10 @@ export const updateWorksheetItemTool = createQuoteTool({
   tags: ["item", "update", "write"],
 }, async (ctx, input) => {
   const { itemId, ...body } = input;
+  // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
+  if (typeof body.markup === "number" && body.markup > 1) {
+    (body as any).markup = body.markup / 100;
+  }
   return apiPatch(ctx, `/items/${itemId}`, body, "Updated line item");
 });
 

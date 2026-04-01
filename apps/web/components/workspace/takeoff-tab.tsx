@@ -8,6 +8,10 @@ import {
   ChevronRight,
   Download,
   Maximize2,
+  Maximize,
+  Minimize2,
+  ExternalLink,
+  Scan,
   Minus,
   MousePointer2,
   Plus,
@@ -36,7 +40,7 @@ import {
   MoveRight,
   Highlighter,
 } from "lucide-react";
-import type { ProjectWorkspaceData, KnowledgeBookRecord, VisionMatch, VisionBoundingBox } from "@/lib/api";
+import type { ProjectWorkspaceData, KnowledgeBookRecord, VisionMatch, VisionBoundingBox, TakeoffLinkRecord } from "@/lib/api";
 import {
   listTakeoffAnnotations,
   createTakeoffAnnotation,
@@ -50,6 +54,9 @@ import {
   runVisionCountAllPages,
   saveVisionCrop,
   askAi,
+  listTakeoffLinks,
+  createTakeoffLink,
+  createWorksheetItem,
 } from "@/lib/api";
 import {
   Badge,
@@ -77,6 +84,7 @@ import {
   type TakeoffAnnotation,
 } from "./takeoff/annotation-canvas";
 import { AnnotationSidebar } from "./takeoff/annotation-sidebar";
+import { LinkToLineItemModal } from "./takeoff/link-to-item-modal";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
   CreateAnnotationModal,
@@ -334,6 +342,10 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
 
+  /* ─── Takeoff Link state ─── */
+  const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
+  const [linkModalAnnotationId, setLinkModalAnnotationId] = useState<string | null>(null);
+
   /* Calibration state */
   const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [calibrationPromptOpen, setCalibrationPromptOpen] = useState(false);
@@ -395,6 +407,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
   const viewerContainerRef = useRef<HTMLDivElement>(null);
 
+  /* Unified card / fullscreen / detach */
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  /** True on first render of a new document so we auto-fit to page */
+  const fitOnLoadRef = useRef(true);
+  const broadcastRef = useRef<BroadcastChannel | null>(null);
+
   const selectedDoc = drawings.find((d) => d.id === selectedDocId);
   const isCadDocument = selectedDoc ? isCadFile(selectedDoc.fileName) : false;
 
@@ -429,6 +448,21 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     loadAnnotations();
   }, [loadAnnotations]);
 
+  /* ─── Load takeoff links ─── */
+  const loadTakeoffLinks = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const links = await listTakeoffLinks(projectId);
+      if (Array.isArray(links)) setTakeoffLinks(links);
+    } catch {
+      /* ignore */
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    loadTakeoffLinks();
+  }, [loadTakeoffLinks]);
+
   /* ─── PDF page count callback ─── */
 
   const handlePageCount = useCallback((count: number) => {
@@ -437,6 +471,20 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
   const handleCanvasResize = useCallback((w: number, h: number) => {
     setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+    /* Auto-fit to page the first time a document renders */
+    if (fitOnLoadRef.current && w > 0 && h > 0) {
+      fitOnLoadRef.current = false;
+      requestAnimationFrame(() => {
+        const container = viewerContainerRef.current;
+        if (!container) return;
+        const cw = container.clientWidth - 32;
+        const ch = container.clientHeight - 32;
+        if (cw <= 0 || ch <= 0) return;
+        /* w/h are base dimensions (canvas renders at zoom=1 after doc change resets zoom) */
+        const fitZ = Math.round(Math.min(cw / w, ch / h) * 100) / 100;
+        setZoom(Math.max(0.25, Math.min(fitZ, 5)));
+      });
+    }
   }, []);
 
   /* Close export dropdown on outside click */
@@ -457,6 +505,43 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     const t = setTimeout(() => setToastMessage(null), 4000);
     return () => clearTimeout(t);
   }, [toastMessage]);
+
+  /* Fullscreen change tracking */
+  useEffect(() => {
+    function onFullscreenChange() {
+      setIsFullscreen(!!document.fullscreenElement);
+    }
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, []);
+
+  /* BroadcastChannel sync — broadcast annotation/page changes to detached window */
+  useEffect(() => {
+    if (!broadcastRef.current || !selectedDocId) return;
+    broadcastRef.current.postMessage({
+      type: "annotation-update",
+      projectId,
+      docId: selectedDocId,
+      annotations,
+    });
+  }, [annotations, selectedDocId, projectId]);
+
+  useEffect(() => {
+    if (!broadcastRef.current || !selectedDocId) return;
+    broadcastRef.current.postMessage({
+      type: "page-change",
+      projectId,
+      docId: selectedDocId,
+      page,
+    });
+  }, [page, selectedDocId, projectId]);
+
+  /* BroadcastChannel cleanup */
+  useEffect(() => {
+    return () => {
+      broadcastRef.current?.close();
+    };
+  }, []);
 
   /* Escape key: cancel drawing and return to Select */
   useEffect(() => {
@@ -556,6 +641,41 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     setZoom(Math.max(0.25, Math.min(fitZoom, 5)));
     /* Scroll to top-left after fitting */
     container.scrollTo({ top: 0, left: 0 });
+  }
+
+  function handleFitToPage() {
+    const container = viewerContainerRef.current;
+    const canvas = pdfCanvasRef.current;
+    if (!container || !canvas || canvas.width === 0) {
+      setZoom(1);
+      return;
+    }
+    const containerWidth = container.clientWidth - 32;
+    const containerHeight = container.clientHeight - 32;
+    const baseWidth = canvas.width / zoom;
+    const baseHeight = canvas.height / zoom;
+    const fitZoom = Math.round(Math.min(containerWidth / baseWidth, containerHeight / baseHeight) * 100) / 100;
+    setZoom(Math.max(0.25, Math.min(fitZoom, 5)));
+    container.scrollTo({ top: 0, left: 0 });
+  }
+
+  function handleFullscreen() {
+    if (!document.fullscreenElement) {
+      cardRef.current?.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  }
+
+  function handleDetach() {
+    if (!selectedDocId || !projectId) return;
+    const src = selectedDoc?.source ?? "project";
+    const url = `/takeoff-viewer?projectId=${projectId}&docId=${selectedDocId}&source=${src}&page=${page}`;
+    window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");
+    /* Set up broadcast channel for annotation sync */
+    if (!broadcastRef.current) {
+      broadcastRef.current = new BroadcastChannel("bw-takeoff");
+    }
   }
 
   function handleToolSelect(tool: ToolId) {
@@ -1014,6 +1134,77 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
     setAnnotations([]);
   }
 
+  /* ─── Takeoff Link handlers ─── */
+
+  function handleLinkToLineItem(annotationId: string) {
+    setLinkModalAnnotationId(annotationId);
+  }
+
+  async function handleLinkConfirm(data: { worksheetItemId: string; quantityField: string; multiplier: number }) {
+    if (!linkModalAnnotationId) return;
+    try {
+      await createTakeoffLink(projectId, {
+        annotationId: linkModalAnnotationId,
+        worksheetItemId: data.worksheetItemId,
+        quantityField: data.quantityField,
+        multiplier: data.multiplier,
+      });
+      await loadTakeoffLinks();
+    } catch (err) {
+      console.error("[takeoff-link] Failed to create link:", err);
+    }
+    setLinkModalAnnotationId(null);
+  }
+
+  async function handleSendToEstimate(annotationId: string) {
+    const ann = annotations.find((a) => a.id === annotationId);
+    if (!ann?.measurement) return;
+
+    const targetWs = workspace.worksheets[0];
+    if (!targetWs) return;
+
+    try {
+      // Determine UOM from annotation measurement
+      const unit = ann.measurement.unit ?? "EA";
+      const uomMap: Record<string, string> = { ft: "LF", "ft\u00B2": "SF", "ft\u00B3": "CF", m: "M", "m\u00B2": "SM", count: "EA" };
+      const uom = uomMap[unit] ?? unit;
+
+      const qty = ann.measurement.value ?? 0;
+      const result = await createWorksheetItem(projectId, targetWs.id, {
+        category: "Material",
+        entityType: "Material",
+        entityName: ann.label || `${ann.type} Measurement`,
+        description: "",
+        quantity: qty,
+        uom,
+        cost: 0,
+        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        sourceNotes: `From takeoff: ${ann.label || ann.type}`,
+      });
+
+      // Extract new item ID from workspace response and create link
+      const newItems = result?.workspace?.worksheets
+        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
+      const newItem = newItems.find((i: { id: string }) =>
+        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id)
+      );
+
+      if (newItem) {
+        await createTakeoffLink(projectId, {
+          annotationId,
+          worksheetItemId: newItem.id,
+        });
+        await loadTakeoffLinks();
+      }
+    } catch (err) {
+      console.error("[takeoff] Failed to send to estimate:", err);
+    }
+  }
+
   /* Build document URL */
   const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
 
@@ -1027,9 +1218,9 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   /* ─── Render ─── */
 
   return (
-    <div className="flex h-full flex-1 min-h-0 flex-col gap-3">
+    <div ref={cardRef} className="relative flex h-full flex-1 min-h-0 flex-col rounded-lg border border-line bg-panel overflow-hidden">
       {/* ─── Top Toolbar ─── */}
-      <div className="flex items-center gap-3 rounded-lg border border-line bg-panel px-3 py-2">
+      <div className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2 shrink-0">
         {/* Document selector */}
         <div className="flex items-center gap-2">
           <label className="text-xs font-medium text-fg/50">Drawing:</label>
@@ -1038,6 +1229,8 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
             onValueChange={(v) => {
               setSelectedDocId(v);
               setPage(1);
+              setZoom(1);
+              fitOnLoadRef.current = true;
               setAnnotations([]);
               setAutoCountResults(null);
               setAutoCountSnippet(null);
@@ -1224,11 +1417,43 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
             </div>
           )}
         </div>
+
+        {/* ─── Fullscreen / Detach ─── */}
+        <Separator className="!h-6 !w-px" />
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={handleFitToPage}
+          title="Fit to page"
+        >
+          <Scan className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={handleFullscreen}
+          title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+        >
+          {isFullscreen ? (
+            <Minimize2 className="h-3.5 w-3.5" />
+          ) : (
+            <Maximize className="h-3.5 w-3.5" />
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={handleDetach}
+          title="Open in new window"
+          disabled={!selectedDocId}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </Button>
       </div>
 
       {/* ─── Auto-Count Banner ─── */}
       {isAutoCountActive && (
-        <div className="flex items-center gap-3 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5">
+        <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
             <p className="text-xs font-medium text-fg/80">
@@ -1278,7 +1503,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
       {/* ─── Auto Count Results Panel (unified: this page + all pages + all docs) ─── */}
       {autoCountResults && !isAutoCountActive && (
-        <div className="rounded-lg border border-green-500/30 bg-green-500/5 px-4 py-2.5 space-y-2">
+        <div className="border-b border-green-500/30 bg-green-500/5 px-4 py-2.5 space-y-2 shrink-0">
           {/* Header row */}
           <div className="flex items-center gap-3">
             {autoCountSnippet && (
@@ -1380,7 +1605,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
       {/* ─── Ask AI Banner ─── */}
       {isAskAiActive && (
-        <div className="flex items-center gap-3 rounded-lg border border-violet-500/30 bg-violet-500/5 px-4 py-2.5">
+        <div className="flex items-center gap-3 border-b border-violet-500/30 bg-violet-500/5 px-4 py-2.5 shrink-0">
           <BrainCircuit className="h-4 w-4 text-violet-500 shrink-0" />
           <div className="flex-1">
             <p className="text-xs font-medium text-fg/80">
@@ -1409,9 +1634,9 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       )}
 
       {/* ─── Main Area ─── */}
-      <div className="flex flex-1 gap-3 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Left: Tool palette */}
-        <div className="flex w-12 flex-col gap-0.5 rounded-lg border border-line bg-panel p-1.5 overflow-y-auto">
+        <div className="flex w-12 flex-col gap-0.5 border-r border-line bg-panel p-1.5 overflow-y-auto shrink-0">
           {TOOL_GROUPS.map((group) => {
             const groupTools = TOOLS.filter((t) => t.group === group.key);
             return (
@@ -1440,7 +1665,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         </div>
 
         {/* Center: Document viewer area */}
-        <div ref={viewerContainerRef} className="flex flex-1 items-start justify-center overflow-auto rounded-lg border border-line bg-bg/50">
+        <div ref={viewerContainerRef} className="flex flex-1 items-start justify-center overflow-auto bg-bg/50">
           {!selectedDoc ? (
             <div className="flex flex-1 items-center justify-center h-full">
               <EmptyState className="border-none">
@@ -1521,17 +1746,23 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
           )}
         </div>
 
-        {/* Right: Annotation sidebar */}
-        <AnnotationSidebar
-          annotations={annotations}
-          onToggleVisibility={handleToggleVisibility}
-          onDelete={handleDeleteAnnotation}
-          onEdit={handleEditAnnotation}
-          onSaveEdit={handleSaveAnnotationEdit}
-          onSelectAnnotation={setSelectedAnnotationId}
-          selectedAnnotationId={selectedAnnotationId}
-          editingAnnotationId={editingAnnotationId}
-        />
+        {/* Right: Annotation sidebar (embedded — border provided by wrapper) */}
+        <div className="flex w-72 shrink-0 flex-col border-l border-line overflow-hidden">
+          <AnnotationSidebar
+            embedded
+            annotations={annotations}
+            onToggleVisibility={handleToggleVisibility}
+            onDelete={handleDeleteAnnotation}
+            onEdit={handleEditAnnotation}
+            onSaveEdit={handleSaveAnnotationEdit}
+            onSelectAnnotation={setSelectedAnnotationId}
+            selectedAnnotationId={selectedAnnotationId}
+            editingAnnotationId={editingAnnotationId}
+            takeoffLinks={takeoffLinks}
+            onLinkToLineItem={handleLinkToLineItem}
+            onSendToEstimate={handleSendToEstimate}
+          />
+        </div>
       </div>
 
       {/* ─── Create Annotation Modal ─── */}
@@ -1543,6 +1774,19 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         }}
         onConfirm={handleAnnotationConfigConfirm}
         initialType={activeTool}
+      />
+
+      {/* ─── Link to Line Item Modal ─── */}
+      <LinkToLineItemModal
+        open={linkModalAnnotationId !== null}
+        onClose={() => setLinkModalAnnotationId(null)}
+        onConfirm={handleLinkConfirm}
+        measurement={
+          linkModalAnnotationId
+            ? annotations.find((a) => a.id === linkModalAnnotationId)?.measurement
+            : undefined
+        }
+        worksheets={workspace.worksheets}
       />
 
       {/* ─── Calibration Prompt ─── */}
@@ -1750,7 +1994,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
       )}
 
       {/* ─── Status Bar ─── */}
-      <div className="flex items-center gap-3 rounded-lg border border-line bg-panel px-3 py-1.5">
+      <div className="flex items-center gap-3 border-t border-line bg-panel px-3 py-1.5 shrink-0">
         <p className="text-[11px] text-fg/40">
           {TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>
