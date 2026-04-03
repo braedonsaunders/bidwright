@@ -56,6 +56,7 @@ import {
   CardBody,
   CardHeader,
   CardTitle,
+  Combobox,
   EmptyState,
   Input,
   Label,
@@ -73,7 +74,7 @@ import { listUsers } from "@/lib/api";
 
 /* ─── Types ─── */
 
-type SetupSubTab = "general" | "conditions" | "notes" | "rates" | "other" | "settings";
+type SetupSubTab = "general" | "conditions" | "notes" | "rates" | "other";
 
 type RevisionDraft = {
   title: string;
@@ -100,7 +101,6 @@ const subTabs: Array<{ id: SetupSubTab; label: string }> = [
   { id: "notes", label: "Notes" },
   { id: "rates", label: "Rates" },
   { id: "other", label: "Other" },
-  { id: "settings", label: "Settings" },
 ];
 
 /* ─── Helpers ─── */
@@ -300,16 +300,6 @@ export function SetupTab({
             busy={busy}
           />
         )}
-        {subTab === "settings" && (
-          <SettingsSubTab
-            workspace={workspace}
-            revDraft={revDraft}
-            setRevDraft={setRevDraft}
-            saveRevision={saveRevision}
-            busy={busy}
-            markDirty={markDirty}
-          />
-        )}
       </div>
     </div>
   );
@@ -490,20 +480,20 @@ function GeneralSubTab({
                 </div>
               ) : (
                 <div className="flex gap-1.5">
-                  <Select
+                  <Combobox
                     value={customerId}
-                    onChange={(e) => {
-                      setCustomerId(e.target.value);
+                    onChange={(v) => {
+                      setCustomerId(v);
                       setCustomerContactId("");
                       setTimeout(() => doSave(), 0);
                     }}
+                    options={customerOptions.filter((c) => c.active).map((c) => ({
+                      value: c.id,
+                      label: c.name + (c.shortName ? ` (${c.shortName})` : ""),
+                    }))}
+                    placeholder="Select client..."
                     className="flex-1"
-                  >
-                    <option value="">Select client...</option>
-                    {customerOptions.filter((c) => c.active).map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</option>
-                    ))}
-                  </Select>
+                  />
                   <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
                     <Plus className="h-3 w-3" />
                   </Button>
@@ -530,20 +520,20 @@ function GeneralSubTab({
                 </div>
               ) : (
                 <div className="flex gap-1.5">
-                  <Select
+                  <Combobox
                     value={customerContactId}
-                    onChange={(e) => {
-                      setCustomerContactId(e.target.value);
+                    onChange={(v) => {
+                      setCustomerContactId(v);
                       setTimeout(() => doSave(), 0);
                     }}
+                    options={contactOptions.filter((c) => c.active).map((c) => ({
+                      value: c.id,
+                      label: c.name + (c.email ? ` (${c.email})` : ""),
+                    }))}
+                    placeholder="Select contact..."
                     disabled={!customerId}
                     className="flex-1"
-                  >
-                    <option value="">Select contact...</option>
-                    {contactOptions.filter((c) => c.active).map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}{c.email ? ` (${c.email})` : ""}</option>
-                    ))}
-                  </Select>
+                  />
                   <Button type="button" size="xs" variant="secondary" onClick={() => setContactQuickAddOpen(true)} title="Add new contact" disabled={!customerId}>
                     <Plus className="h-3 w-3" />
                   </Button>
@@ -557,32 +547,34 @@ function GeneralSubTab({
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label>Department</Label>
-              <Select
+              <Combobox
                 value={departmentId}
-                onChange={(e) => {
-                  setDepartmentId(e.target.value);
+                onChange={(v) => {
+                  setDepartmentId(v);
                   setTimeout(() => doSave(), 0);
                 }}
-              >
-                <option value="">— Select a department —</option>
-                {departmentOptions.filter((d) => d.active).map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.code ? ` (${d.code})` : ""}</option>
-                ))}
-              </Select>
+                options={departmentOptions.filter((d) => d.active).map((d) => ({
+                  value: d.id,
+                  label: d.name + (d.code ? ` (${d.code})` : ""),
+                }))}
+                placeholder="Select department..."
+              />
             </div>
             <div>
               <Label>Type</Label>
-              <Select
+              <Combobox
                 value={quoteType}
-                onChange={(e) => {
-                  setQuoteType(e.target.value as "Firm" | "Budget" | "BudgetDNE");
+                onChange={(v) => {
+                  setQuoteType(v as "Firm" | "Budget" | "BudgetDNE");
                   setTimeout(() => doSave(), 0);
                 }}
-              >
-                <option value="Firm">Firm</option>
-                <option value="Budget">Budget</option>
-                <option value="BudgetDNE">Budget DNE</option>
-              </Select>
+                options={[
+                  { value: "Firm", label: "Firm" },
+                  { value: "Budget", label: "Budget" },
+                  { value: "BudgetDNE", label: "Budget DNE" },
+                ]}
+                placeholder="Select type..."
+              />
             </div>
           </div>
 
@@ -1585,68 +1577,3 @@ function OtherSubTab({
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Settings Sub-Tab
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-function SettingsSubTab({
-  workspace,
-  revDraft,
-  setRevDraft,
-  saveRevision,
-  busy,
-  markDirty,
-}: {
-  workspace: ProjectWorkspaceData;
-  revDraft: RevisionDraft;
-  setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
-  saveRevision: (patch?: Partial<RevisionPatchInput>) => void;
-  busy: boolean;
-  markDirty: (field: string) => void;
-}) {
-  const rev = workspace.currentRevision;
-
-  const [defaultMarkup, setDefaultMarkup] = useState(String(rev.defaultMarkup ?? 0));
-
-  return (
-    <div className="flex-1 min-h-0 overflow-y-auto space-y-5">
-      {/* Pricing */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Pricing</CardTitle>
-        </CardHeader>
-        <CardBody className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <Label>Default Markup (%)</Label>
-              <Input
-                type="number"
-                step="0.1"
-                value={defaultMarkup}
-                onChange={(e) => setDefaultMarkup(e.target.value)}
-                onBlur={() => saveRevision({ defaultMarkup: parseNum(defaultMarkup) })}
-                placeholder="0"
-              />
-              <p className="mt-1 text-[11px] text-fg/40">Applied to new line items added to this estimate</p>
-            </div>
-            <div>
-              <Label>Breakout Style</Label>
-              <Select
-                value={revDraft.breakoutStyle}
-                onChange={(e) => {
-                  setRevDraft((d) => ({ ...d, breakoutStyle: e.target.value }));
-                  saveRevision({ breakoutStyle: e.target.value });
-                }}
-              >
-                <option value="category">By Category</option>
-                <option value="phase">By Phase</option>
-                <option value="flat">Flat (No Breakout)</option>
-              </Select>
-              <p className="mt-1 text-[11px] text-fg/40">How line items are grouped in the estimate view</p>
-            </div>
-          </div>
-        </CardBody>
-      </Card>
-    </div>
-  );
-}

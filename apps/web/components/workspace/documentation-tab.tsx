@@ -671,19 +671,19 @@ function LeadLetterTab({
   setError: (e: string | null) => void;
 }) {
   const [pending, startTransition] = useTransition();
-  const [value, setValue] = useState(workspace.currentRevision.description);
+  const [value, setValue] = useState(workspace.currentRevision.leadLetter);
   const projectId = workspace.project.id;
   const revisionId = workspace.currentRevision.id;
 
   // Sync when workspace changes externally
   useEffect(() => {
-    setValue(workspace.currentRevision.description);
-  }, [workspace.currentRevision.description]);
+    setValue(workspace.currentRevision.leadLetter);
+  }, [workspace.currentRevision.leadLetter]);
 
   function save() {
     startTransition(async () => {
       try {
-        apply(await updateRevision(projectId, revisionId, { description: value }));
+        apply(await updateRevision(projectId, revisionId, { leadLetter: value }));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to save lead letter.");
       }
@@ -725,18 +725,18 @@ function ScratchpadTab({
   setError: (e: string | null) => void;
 }) {
   const [pending, startTransition] = useTransition();
-  const [value, setValue] = useState(workspace.currentRevision.notes);
+  const [value, setValue] = useState(workspace.currentRevision.scratchpad);
   const projectId = workspace.project.id;
   const revisionId = workspace.currentRevision.id;
 
   useEffect(() => {
-    setValue(workspace.currentRevision.notes);
-  }, [workspace.currentRevision.notes]);
+    setValue(workspace.currentRevision.scratchpad);
+  }, [workspace.currentRevision.scratchpad]);
 
   function save() {
     startTransition(async () => {
       try {
-        apply(await updateRevision(projectId, revisionId, { notes: value }));
+        apply(await updateRevision(projectId, revisionId, { scratchpad: value }));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to save scratchpad.");
       }

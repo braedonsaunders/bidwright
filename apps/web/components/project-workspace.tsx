@@ -601,7 +601,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       <div className="flex items-center gap-1 border-b border-line pb-px overflow-x-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
-          const conditionCount = t.id === "setup" ? (workspace.conditions?.length ?? 0) : 0;
           return (
             <button
               key={t.id}
@@ -613,14 +612,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             >
               <Icon className="h-3.5 w-3.5" />
               {t.label}
-              {conditionCount > 0 && (
-                <span className={cn(
-                  "ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none",
-                  tab === t.id ? "bg-accent/20 text-accent" : "bg-fg/10 text-fg/50"
-                )}>
-                  {conditionCount}
-                </span>
-              )}
             </button>
           );
         })}

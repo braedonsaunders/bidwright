@@ -28,6 +28,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
+    "mssql": "^12.2.1",
+    "pg": "^8.20.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

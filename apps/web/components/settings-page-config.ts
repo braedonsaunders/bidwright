@@ -49,6 +49,10 @@ export interface EmailSettings {
   smtpPassword: string;
   fromAddress: string;
   fromName: string;
+  authMethod: "smtp" | "oauth2";
+  oauth2TenantId: string;
+  oauth2ClientId: string;
+  oauth2ClientSecret: string;
 }
 
 export interface DefaultSettings {
@@ -120,6 +124,10 @@ export const DEFAULT_SETTINGS: AllSettings = {
     smtpPassword: "",
     fromAddress: "",
     fromName: "",
+    authMethod: "smtp",
+    oauth2TenantId: "",
+    oauth2ClientId: "",
+    oauth2ClientSecret: "",
   },
   defaults: {
     defaultMarkup: 15,

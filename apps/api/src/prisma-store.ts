@@ -788,17 +788,22 @@ export class PrismaApiStore {
   // ── Private: push activity ──────────────────────────────────────────────
 
   private async pushActivity(projectId: string, revisionId: string | null, type: string, data: Record<string, unknown>) {
-    await this.db.activity.create({
-      data: {
-        id: createId("activity"),
-        projectId,
-        revisionId,
-        type,
-        data: data as any,
-        userId: this._userId,
-        createdAt: new Date(),
-      },
-    });
+    try {
+      await this.db.activity.create({
+        data: {
+          id: createId("activity"),
+          projectId,
+          revisionId,
+          type,
+          data: data as any,
+          userId: this._userId || null,
+          createdAt: new Date(),
+        },
+      });
+    } catch (err) {
+      // Activity logging is non-critical — don't fail the main operation
+      console.warn(`[pushActivity] Failed to log activity (type=${type}, userId=${this._userId}):`, (err as Error).message);
+    }
   }
 
   // ── Private: save file artifacts for package ────────────────────────────

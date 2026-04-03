@@ -62,6 +62,7 @@ export function XlsxViewer({ url, fileName }: XlsxViewerProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [WorkbookComponent, setWorkbookComponent] = useState<any>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,7 +73,7 @@ export function XlsxViewer({ url, fileName }: XlsxViewerProps) {
 
       try {
         const [response, fortuneSheet] = await Promise.all([
-          fetch(url),
+          fetch(url, { credentials: "include" }),
           import("@fortune-sheet/react"),
         ]);
 
@@ -98,14 +99,14 @@ export function XlsxViewer({ url, fileName }: XlsxViewerProps) {
 
     loadSpreadsheet();
     return () => { cancelled = true; };
-  }, [url]);
+  }, [url, retryCount]);
 
   if (error) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
         <AlertTriangle className="h-10 w-10 text-yellow-500" />
         <p className="text-sm text-text-secondary">{error}</p>
-        <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
+        <Button variant="secondary" size="sm" onClick={() => setRetryCount((c) => c + 1)}>
           Retry
         </Button>
       </div>

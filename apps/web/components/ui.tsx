@@ -338,6 +338,139 @@ export function SlideIn({
   );
 }
 
+/* ─────────────────────── Combobox (searchable single-select) ─── */
+
+export interface ComboboxOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export function Combobox({
+  options,
+  value,
+  onChange,
+  placeholder = "Select...",
+  disabled = false,
+  className,
+}: {
+  options: ComboboxOption[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const searchRef = React.useRef<HTMLInputElement>(null);
+
+  const filtered = React.useMemo(() => {
+    if (!search) return options;
+    const q = search.toLowerCase();
+    return options.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        (o.description ?? "").toLowerCase().includes(q),
+    );
+  }, [options, search]);
+
+  const selectedLabel = options.find((o) => o.value === value)?.label;
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setSearch("");
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            "flex h-9 w-full items-center justify-between rounded-lg border border-line bg-bg/50 px-3 text-left text-sm outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
+            className,
+          )}
+        >
+          {selectedLabel ? (
+            <span className="truncate text-fg">{selectedLabel}</span>
+          ) : (
+            <span className="text-fg/30">{placeholder}</span>
+          )}
+          <svg className="ml-2 h-3 w-3 shrink-0 text-fg/40" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M3 4.5L6 7.5L9 4.5" />
+          </svg>
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="z-50 w-[var(--radix-popover-trigger-width)] rounded-lg border border-line bg-panel shadow-xl"
+          sideOffset={4}
+          align="start"
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            searchRef.current?.focus();
+          }}
+        >
+          <div className="p-2">
+            <input
+              ref={searchRef}
+              type="text"
+              className="w-full rounded border border-line bg-bg px-2.5 py-1.5 text-xs text-fg outline-none placeholder:text-fg/30 focus:border-accent/50"
+              placeholder="Search..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="max-h-[240px] overflow-y-auto px-1 pb-1">
+            {filtered.length === 0 && (
+              <div className="px-2.5 py-3 text-center text-xs text-fg/30">
+                No matches
+              </div>
+            )}
+            {filtered.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                  setSearch("");
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-panel2",
+                  opt.value === value && "bg-accent/5",
+                )}
+              >
+                <span
+                  className={cn(
+                    "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full transition-colors",
+                    opt.value === value
+                      ? "text-accent"
+                      : "text-transparent",
+                  )}
+                >
+                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
+                <div className="min-w-0">
+                  <div className="font-medium text-fg truncate">{opt.label}</div>
+                  {opt.description && (
+                    <div className="text-[10px] text-fg/40 truncate mt-0.5">{opt.description}</div>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 /* ─────────────────────── MultiSelect ─────────────────────── */
 
 export interface MultiSelectOption {

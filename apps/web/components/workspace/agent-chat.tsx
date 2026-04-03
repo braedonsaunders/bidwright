@@ -5,8 +5,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, ArrowDown, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
 import { Badge, Button, Select } from "@/components/ui";
 import {
-  startIntake, getIntakeStatus, stopIntake, getSettings, type IntakeStatusResult,
+  startIntake, getIntakeStatus, stopIntake, answerIntake, getSettings, type IntakeStatusResult,
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
+  getCliPendingQuestion, answerCliQuestion,
   listPersonas, type EstimatorPersona,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -312,6 +313,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
   const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
+  const [cliPendingQuestion, setCliPendingQuestion] = useState<{ question: string; options?: string[]; context?: string } | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
@@ -848,8 +850,19 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           }
         }
 
+        // Poll for pending questions from the askUser MCP tool
+        try {
+          const q = await getCliPendingQuestion(projectId);
+          if (q.pending && q.question) {
+            setCliPendingQuestion({ question: q.question, options: q.options, context: q.context });
+          } else {
+            setCliPendingQuestion(null);
+          }
+        } catch { /* ignore question poll failures */ }
+
         if (data.status !== "running") {
           setIntakeStatus((prev) => prev ? { ...prev, status: data.status as any } : prev);
+          setCliPendingQuestion(null);
           // Session ended — close SSE if still open
           if (eventSourceRef.current) {
             eventSourceRef.current.close();
@@ -892,7 +905,8 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
   // Poll intake status with live tool call accumulation (legacy agent mode only — CLI uses SSE)
   useEffect(() => {
-    if (!intakeSessionId || intakeStatus?.status !== "running") return;
+    const st = intakeStatus?.status;
+    if (!intakeSessionId || (st !== "running" && st !== "waiting_for_user")) return;
     // When using CLI runtime, the SSE stream handles all updates — skip polling
     if (cliRuntime) return;
     const interval = setInterval(async () => {
@@ -930,7 +944,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           }
         }
 
-        if (status.status !== "running") {
+        if (status.status !== "running" && status.status !== "waiting_for_user") {
           clearInterval(interval);
           // Final refresh to catch any last mutations
           onWorkspaceMutated?.();
@@ -947,9 +961,10 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     return () => clearInterval(interval);
   }, [intakeSessionId, intakeStatus?.status, projectId]);
 
-  const isIntakeRunning = intakeStatus?.status === "running";
+  const isIntakeRunning = intakeStatus?.status === "running" || intakeStatus?.status === "waiting_for_user";
   const isIntakeComplete = intakeStatus?.status === "completed";
   const isIntakeFailed = intakeStatus?.status === "failed";
+  const isWaitingForUser = intakeStatus?.status === "waiting_for_user";
 
   return (
     <AnimatePresence>
@@ -1116,12 +1131,14 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 isIntakeComplete ? "border-success/30 bg-success/5" :
                 "border-danger/30 bg-danger/5"
               )}>
-                {isIntakeRunning && <Loader2 className="h-3 w-3 animate-spin text-accent shrink-0" />}
+                {isWaitingForUser && <AlertTriangle className="h-3 w-3 text-warning shrink-0" />}
+                {isIntakeRunning && !isWaitingForUser && <Loader2 className="h-3 w-3 animate-spin text-accent shrink-0" />}
                 {isIntakeComplete && <CheckCircle2 className="h-3 w-3 text-success shrink-0" />}
                 {isIntakeFailed && <XCircle className="h-3 w-3 text-danger shrink-0" />}
                 {intakeStatus.status === "stopped" && <Square className="h-3 w-3 text-fg/40 shrink-0" />}
                 <span className="font-medium">
-                  {isIntakeRunning ? "AI Estimating..." :
+                  {isWaitingForUser ? "Waiting for your input..." :
+                   isIntakeRunning ? "AI Estimating..." :
                    isIntakeComplete ? "AI Estimating complete" :
                    intakeStatus.status === "stopped" ? "AI Estimating stopped" :
                    "AI Estimating failed"}
@@ -1167,6 +1184,137 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     <RefreshCw className="h-3.5 w-3.5" />
                   </button>
                 )}
+              </div>
+            )}
+
+            {/* Pending question from agent */}
+            {isWaitingForUser && intakeStatus?.pendingQuestion && (
+              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
+                {intakeStatus.pendingQuestion.context && (
+                  <p className="text-xs text-fg/50">{intakeStatus.pendingQuestion.context}</p>
+                )}
+                <p className="text-sm font-medium whitespace-pre-wrap">{intakeStatus.pendingQuestion.question}</p>
+                {intakeStatus.pendingQuestion.options && intakeStatus.pendingQuestion.options.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {intakeStatus.pendingQuestion.options.map((opt, i) => (
+                      <button
+                        key={i}
+                        onClick={async () => {
+                          if (!intakeSessionId) return;
+                          try {
+                            await answerIntake(intakeSessionId, opt);
+                            setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
+                          } catch {}
+                        }}
+                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Type your answer..."
+                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter" && intakeSessionId) {
+                        const input = e.currentTarget;
+                        const val = input.value.trim();
+                        if (!val) return;
+                        try {
+                          await answerIntake(intakeSessionId, val);
+                          input.value = "";
+                          setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
+                        } catch {}
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={async () => {
+                      const input = document.querySelector<HTMLInputElement>("[placeholder='Type your answer...']");
+                      if (!input || !intakeSessionId) return;
+                      const val = input.value.trim();
+                      if (!val) return;
+                      try {
+                        await answerIntake(intakeSessionId, val);
+                        input.value = "";
+                        setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
+                      } catch {}
+                    }}
+                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
+                  >
+                    <Send className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Pending question from CLI agent (askUser MCP tool) */}
+            {cliRuntime && cliPendingQuestion && (
+              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
+                <div className="flex items-center gap-2 text-xs font-medium text-warning">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Agent needs your input
+                </div>
+                {cliPendingQuestion.context && (
+                  <p className="text-xs text-fg/50">{cliPendingQuestion.context}</p>
+                )}
+                <p className="text-sm whitespace-pre-wrap">{cliPendingQuestion.question}</p>
+                {cliPendingQuestion.options && cliPendingQuestion.options.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {cliPendingQuestion.options.map((opt, i) => (
+                      <button
+                        key={i}
+                        onClick={async () => {
+                          try {
+                            await answerCliQuestion(projectId, opt);
+                            setCliPendingQuestion(null);
+                          } catch {}
+                        }}
+                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Type your answer..."
+                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
+                    id="cli-question-input"
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") {
+                        const val = e.currentTarget.value.trim();
+                        if (!val) return;
+                        try {
+                          await answerCliQuestion(projectId, val);
+                          e.currentTarget.value = "";
+                          setCliPendingQuestion(null);
+                        } catch {}
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={async () => {
+                      const input = document.getElementById("cli-question-input") as HTMLInputElement;
+                      if (!input) return;
+                      const val = input.value.trim();
+                      if (!val) return;
+                      try {
+                        await answerCliQuestion(projectId, val);
+                        input.value = "";
+                        setCliPendingQuestion(null);
+                      } catch {}
+                    }}
+                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
+                  >
+                    <Send className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
             )}
 

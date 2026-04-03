@@ -7,7 +7,53 @@ import { join } from "node:path";
 // Agent memory lives in the project directory (CWD of the CLI)
 const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
 
+// Timeout for waiting for user answer (5 minutes)
+const ASK_USER_TIMEOUT_MS = 5 * 60 * 1000;
+
 export function registerSystemTools(server: McpServer) {
+
+  // ── askUser — block until the user responds ──────────────
+  server.tool(
+    "askUser",
+    "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
+    {
+      question: z.string().describe("The question to ask. Bundle multiple related questions into one call."),
+      options: z.array(z.string()).optional().describe("Optional suggested answer choices the user can click"),
+      context: z.string().optional().describe("Brief context explaining why you need this information"),
+    },
+    async ({ question, options, context }) => {
+      const projectId = process.env.BIDWRIGHT_PROJECT_ID || "";
+      if (!projectId) {
+        return { content: [{ type: "text" as const, text: "Error: No project ID configured" }] };
+      }
+
+      try {
+        // POST the question to the API — this will long-poll until the user answers
+        const resp = await fetch(`${process.env.BIDWRIGHT_API_URL || "http://localhost:4001"}/api/cli/${projectId}/question`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(process.env.BIDWRIGHT_AUTH_TOKEN ? { "Authorization": `Bearer ${process.env.BIDWRIGHT_AUTH_TOKEN}` } : {}),
+          },
+          body: JSON.stringify({ question, options, context }),
+          signal: AbortSignal.timeout(ASK_USER_TIMEOUT_MS),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          return { content: [{ type: "text" as const, text: `Error asking user: ${resp.status} ${text}` }] };
+        }
+
+        const data = await resp.json() as { answer: string };
+        return { content: [{ type: "text" as const, text: `User answered: ${data.answer}` }] };
+      } catch (err: any) {
+        if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+          return { content: [{ type: "text" as const, text: "User did not respond within 5 minutes. Proceed with your best judgment and note assumptions." }] };
+        }
+        return { content: [{ type: "text" as const, text: `Error: ${err?.message || "Failed to ask user"}` }] };
+      }
+    }
+  );
 
   // ── readMemory ────────────────────────────────────────────
   server.tool(

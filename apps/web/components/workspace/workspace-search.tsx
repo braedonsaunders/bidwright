@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Search, X, FileText, Settings2, Layers3, Hash, SlidersHorizontal, ListChecks, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -79,18 +80,23 @@ function highlightMatch(text: string, query: string): React.ReactNode[] {
 
 /* ─── Search index builder ─── */
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
+}
+
 function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchResult, "context"> & { searchText: string; rawText: string }> {
   const entries: Array<Omit<SearchResult, "context"> & { searchText: string; rawText: string }> = [];
-  const rev = workspace.currentRevision;
+  const rev = workspace?.currentRevision;
+  if (!rev) return entries;
 
-  // Setup fields
+  // Setup fields — strip HTML from rich-text fields
   const setupFields: Array<{ field: string; label: string; value: string }> = [
-    { field: "title", label: "Title", value: rev.title },
-    { field: "description", label: "Description", value: rev.description },
-    { field: "notes", label: "Notes", value: rev.notes },
-    { field: "scratchpad", label: "Scratchpad", value: rev.scratchpad },
-    { field: "leadLetter", label: "Lead Letter", value: rev.leadLetter },
-    { field: "followUpNote", label: "Follow-up Note", value: rev.followUpNote },
+    { field: "title", label: "Title", value: rev.title ?? "" },
+    { field: "description", label: "Description", value: stripHtml(rev.description ?? "") },
+    { field: "notes", label: "Notes", value: stripHtml(rev.notes ?? "") },
+    { field: "scratchpad", label: "Scratchpad", value: stripHtml(rev.scratchpad ?? "") },
+    { field: "leadLetter", label: "Lead Letter", value: stripHtml(rev.leadLetter ?? "") },
+    { field: "followUpNote", label: "Follow-up Note", value: stripHtml(rev.followUpNote ?? "") },
   ];
   for (const sf of setupFields) {
     if (!sf.value) continue;
@@ -107,8 +113,8 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
 
   // Customer
   const customerFields = [
-    { label: "Customer", value: workspace.quote.customerString },
-    { label: "Contact", value: workspace.quote.customerContactString },
+    { label: "Customer", value: workspace.quote?.customerString ?? "" },
+    { label: "Contact", value: workspace.quote?.customerContactString ?? "" },
   ];
   for (const cf of customerFields) {
     if (!cf.value) continue;
@@ -124,8 +130,8 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
   }
 
   // Line items
-  for (const ws of workspace.worksheets) {
-    for (const item of ws.items) {
+  for (const ws of (workspace.worksheets ?? [])) {
+    for (const item of (ws.items ?? [])) {
       const text = [item.entityName, item.description, item.category, item.vendor || ""].join(" ");
       entries.push({
         id: `item-${item.id}`,
@@ -140,7 +146,7 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
   }
 
   // Phases
-  for (const phase of workspace.phases) {
+  for (const phase of (workspace.phases ?? [])) {
     const text = [phase.name, phase.description].join(" ");
     entries.push({
       id: `phase-${phase.id}`,
@@ -154,7 +160,7 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
   }
 
   // Modifiers
-  for (const mod of workspace.modifiers) {
+  for (const mod of (workspace.modifiers ?? [])) {
     const text = [mod.name, mod.type].join(" ");
     entries.push({
       id: `mod-${mod.id}`,
@@ -167,14 +173,14 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
     });
   }
 
-  // Conditions
-  for (const cond of workspace.conditions) {
+  // Conditions (inclusions, exclusions, etc.)
+  for (const cond of (workspace.conditions ?? [])) {
     const text = [cond.type, cond.value].join(" ");
     entries.push({
       id: `cond-${cond.id}`,
       category: "Conditions",
       icon: ListChecks,
-      label: cond.value,
+      label: `${cond.type}: ${cond.value}`,
       searchText: text.toLowerCase(),
       rawText: text,
       target: { tab: "setup" },
@@ -182,7 +188,7 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
   }
 
   // Additional line items
-  for (const ali of workspace.additionalLineItems) {
+  for (const ali of (workspace.additionalLineItems ?? [])) {
     const text = [ali.name, ali.description || ""].join(" ");
     entries.push({
       id: `ali-${ali.id}`,
@@ -195,8 +201,8 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
     });
   }
 
-  // Documents
-  for (const doc of workspace.sourceDocuments) {
+  // Documents (file names + extracted text)
+  for (const doc of (workspace.sourceDocuments ?? [])) {
     const extracted = (doc.extractedText || "").slice(0, EXTRACTED_TEXT_CAP);
     const text = [doc.fileName, extracted].join(" ");
     entries.push({
@@ -343,12 +349,19 @@ export function WorkspaceSearch({ workspace, onNavigate }: WorkspaceSearchProps)
     }
   }, [isOpen]);
 
-  // Close on click outside
+  // Refs for click-outside and dropdown positioning
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close on click outside (checks both trigger and portal dropdown)
   useEffect(() => {
     if (!isOpen) return;
     function onClick(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current && !containerRef.current.contains(target) &&
+        dropdownRef.current && !dropdownRef.current.contains(target)
+      ) {
         setIsOpen(false);
         setQuery("");
       }
@@ -356,6 +369,17 @@ export function WorkspaceSearch({ workspace, onNavigate }: WorkspaceSearchProps)
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [isOpen]);
+
+  // Compute dropdown position from trigger rect
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null);
+  useEffect(() => {
+    if (!isOpen || !containerRef.current) { setDropdownPos(null); return; }
+    const rect = containerRef.current.getBoundingClientRect();
+    setDropdownPos({
+      top: rect.bottom + 6,
+      right: window.innerWidth - rect.right,
+    });
+  }, [isOpen, debouncedQuery]);
 
   const showResults = isOpen && debouncedQuery.length > 0;
   let flatIndex = -1;
@@ -419,72 +443,69 @@ export function WorkspaceSearch({ workspace, onNavigate }: WorkspaceSearchProps)
         </AnimatePresence>
       </div>
 
-      {/* Results dropdown — absolutely positioned below */}
-      <AnimatePresence>
-        {showResults && (
-          <motion.div
-            initial={{ opacity: 0, y: 4, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 4, scale: 0.98 }}
-            transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute right-0 top-full mt-1.5 w-[380px] rounded-xl border border-line bg-panel shadow-2xl z-50"
-          >
-            <div ref={listRef} className="max-h-[360px] overflow-y-auto">
-              {groupedResults.length === 0 && (
-                <div className="py-8 text-center text-xs text-fg/35">
-                  No results for &ldquo;{debouncedQuery}&rdquo;
-                </div>
-              )}
-
-              {groupedResults.map((group) => (
-                <div key={group.category}>
-                  <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg/35 bg-panel2/30 sticky top-0 flex items-center gap-1.5">
-                    {(() => { const Icon = group.icon; return <Icon className="h-3 w-3" />; })()}
-                    {group.category}
-                    <span className="text-fg/20 font-normal">{group.results.length}</span>
-                  </div>
-                  {group.results.map((result) => {
-                    flatIndex++;
-                    const idx = flatIndex;
-                    return (
-                      <button
-                        key={result.id}
-                        data-result-index={idx}
-                        className={cn(
-                          "w-full text-left px-3 py-2 text-xs transition-colors flex flex-col gap-0.5",
-                          idx === activeIndex
-                            ? "bg-accent/10 text-fg"
-                            : "hover:bg-panel2/50 text-fg/80"
-                        )}
-                        onClick={() => handleSelect(result)}
-                        onMouseEnter={() => setActiveIndex(idx)}
-                      >
-                        <span className="font-medium truncate">
-                          {highlightMatch(result.label, debouncedQuery)}
-                        </span>
-                        {result.context !== result.label && (
-                          <span className="text-[11px] text-fg/40 truncate leading-relaxed">
-                            {highlightMatch(result.context, debouncedQuery)}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
-
-            {/* Footer with hint */}
-            {flatResults.length > 0 && (
-              <div className="flex items-center justify-between px-3 py-1.5 border-t border-line text-[10px] text-fg/25">
-                <span>↑↓ navigate</span>
-                <span>↵ select</span>
-                <span>esc close</span>
+      {/* Results dropdown — portaled to body to escape overflow-x-auto clipping */}
+      {showResults && dropdownPos && ReactDOM.createPortal(
+        <div
+          ref={dropdownRef}
+          className="fixed w-[380px] rounded-xl border border-line bg-panel shadow-2xl z-[200]"
+          style={{ top: dropdownPos.top, right: dropdownPos.right }}
+        >
+          <div ref={listRef} className="max-h-[360px] overflow-y-auto">
+            {groupedResults.length === 0 && (
+              <div className="py-8 text-center text-xs text-fg/35">
+                No results for &ldquo;{debouncedQuery}&rdquo;
               </div>
             )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+
+            {groupedResults.map((group) => (
+              <div key={group.category}>
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg/35 bg-panel2/30 sticky top-0 flex items-center gap-1.5">
+                  {(() => { const Icon = group.icon; return <Icon className="h-3 w-3" />; })()}
+                  {group.category}
+                  <span className="text-fg/20 font-normal">{group.results.length}</span>
+                </div>
+                {group.results.map((result) => {
+                  flatIndex++;
+                  const idx = flatIndex;
+                  return (
+                    <button
+                      key={result.id}
+                      data-result-index={idx}
+                      className={cn(
+                        "w-full text-left px-3 py-2 text-xs transition-colors flex flex-col gap-0.5",
+                        idx === activeIndex
+                          ? "bg-accent/10 text-fg"
+                          : "hover:bg-panel2/50 text-fg/80"
+                      )}
+                      onClick={() => handleSelect(result)}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                    >
+                      <span className="font-medium truncate">
+                        {highlightMatch(result.label, debouncedQuery)}
+                      </span>
+                      {result.context !== result.label && (
+                        <span className="text-[11px] text-fg/40 truncate leading-relaxed">
+                          {highlightMatch(result.context, debouncedQuery)}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          {/* Footer with hint */}
+          {flatResults.length > 0 && (
+            <div className="flex items-center justify-between px-3 py-1.5 border-t border-line text-[10px] text-fg/25">
+              <span>↑↓ navigate</span>
+              <span>↵ select</span>
+              <span>esc close</span>
+            </div>
+          )}
+        </div>,
+        document.body
+      )}
     </div>
   );
 }

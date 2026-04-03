@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { readFile as readFileFs } from "node:fs/promises";
+import { z } from "zod";
 import { resolveApiPath } from "../paths.js";
 import {
   ToolRegistry,
@@ -26,12 +27,16 @@ const intakeSessions = new Map<string, AgentSession & {
   organizationId?: string;
   projectId: string;
   scope: string;
-  intakeStatus: "running" | "completed" | "failed" | "stopped";
+  intakeStatus: "running" | "completed" | "failed" | "stopped" | "waiting_for_user";
   summary?: string;
+  pendingQuestion?: { question: string; options?: string[]; context?: string };
 }>();
 
 // Abort controllers for running sessions
 const intakeAbortControllers = new Map<string, AbortController>();
+
+// Resolvers for user answers (unblocks the paused pipeline)
+const userAnswerResolvers = new Map<string, (answer: string) => void>();
 
 // Helper to build sorted events from a session
 function buildEventsFromSession(s: { toolCalls: any[]; messages: any[]; updatedAt: string }) {
@@ -177,7 +182,7 @@ export async function intakeRoutes(app: FastifyInstance) {
       output: { events: [], summary: null } as any,
     });
 
-    const session: AgentSession & { organizationId?: string; projectId: string; scope: string; intakeStatus: "running" | "completed" | "failed" | "stopped"; summary?: string } = {
+    const session: AgentSession & { organizationId?: string; projectId: string; scope: string; intakeStatus: "running" | "completed" | "failed" | "stopped" | "waiting_for_user"; summary?: string; pendingQuestion?: { question: string; options?: string[]; context?: string } } = {
       id: sessionId,
       projectId: body.projectId,
       revisionId: workspace.currentRevision?.id ?? "",
@@ -223,6 +228,51 @@ export async function intakeRoutes(app: FastifyInstance) {
     const abortController = new AbortController();
     intakeAbortControllers.set(sessionId, abortController);
 
+    // ── Blocking askUser tool — pauses pipeline until user responds ──
+    const blockingAskUserTool: import("@bidwright/agent").Tool = {
+      definition: {
+        id: "system.askUser",
+        name: "Ask User",
+        category: "system",
+        description: "Pause execution and ask the user a clarifying question. Use this BEFORE making assumptions about scope, subcontracting, scheduling, labour rates, or any ambiguous detail. The user will see the question in the UI and can respond.",
+        parameters: [],
+        inputSchema: z.object({
+          question: z.string().describe("The question to ask the user"),
+          options: z.array(z.string()).optional().describe("Optional suggested answers"),
+          context: z.string().optional().describe("Why you are asking"),
+        }),
+        requiresConfirmation: false,
+        mutates: false,
+        tags: ["user", "interaction", "pause"],
+      },
+      async execute(input: any) {
+        const s = intakeSessions.get(sessionId);
+        if (s) {
+          s.intakeStatus = "waiting_for_user";
+          s.pendingQuestion = { question: input.question, options: input.options, context: input.context };
+          s.updatedAt = new Date().toISOString();
+        }
+        persistToDb();
+        onMessage({ role: "assistant", content: `[Waiting for user] ${input.question}` });
+
+        // Block until user answers via the /answer endpoint
+        const answer = await new Promise<string>((resolve) => {
+          userAnswerResolvers.set(sessionId, resolve);
+        });
+
+        // Resume
+        if (s) {
+          s.intakeStatus = "running";
+          s.pendingQuestion = undefined;
+          s.updatedAt = new Date().toISOString();
+        }
+        userAnswerResolvers.delete(sessionId);
+        onMessage({ role: "user", content: answer });
+
+        return { success: true, data: { answer }, duration_ms: 0 };
+      },
+    };
+
     // ── Tool registries for different phases ──
     const planningTools = new ToolRegistry();
     const itemTools = new ToolRegistry();
@@ -234,6 +284,7 @@ export async function intakeRoutes(app: FastifyInstance) {
       "quote.createWorksheet", "quote.updateQuote", "quote.createCondition", "quote.createPhase",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) planningTools.register(t); }
+    planningTools.register(blockingAskUserTool);
 
     for (const id of [
       "project.readFile", "project.searchFiles", "knowledge.queryProjectDocs",
@@ -295,7 +346,7 @@ export async function intakeRoutes(app: FastifyInstance) {
         const planLoop = new AgentLoop({
           llm: adapter, maxIterations: Math.min(30, Math.floor(maxIterations * 0.15)),
           maxTokens: 4096, temperature: 0, abortSignal: abortController.signal,
-          systemPrompt: systemPrompt + `\n\n## CURRENT PHASE: Scope & Worksheets\n\nYou are in Phase 1. Your job is to:\n1. Read the key documents (RFQ, main spec, quotation details)\n2. Write a detailed scope summary to memory section "scope_plan"\n3. Update the quote description with quote.updateQuote\n4. Create ALL worksheets needed (one per trade/system)\n5. Write worksheet IDs to memory section "worksheets_created"\n\nDo NOT create line items yet — that happens in Phase 2.\nFocus on understanding the full scope and creating the right worksheet structure.`,
+          systemPrompt: systemPrompt + `\n\n## CURRENT PHASE: Scope & Worksheets\n\nYou are in Phase 1. Your job is to:\n1. Read the key documents (RFQ, main spec, quotation details)\n2. Write a detailed scope summary to memory section "scope_plan"\n3. **MANDATORY: Call system.askUser** to ask the user clarifying questions BEFORE creating worksheets. You MUST use the system.askUser tool — do NOT just write questions as text. Bundle all questions into ONE system.askUser call. Questions should cover: subcontracting decisions, labour basis (union/open shop), overtime/shift, schedule, access equipment, site conditions, and any ambiguous scope items. WAIT for the user's answer before proceeding.\n4. Update the quote description with quote.updateQuote\n5. Create ALL worksheets needed (one per trade/system)\n6. Write worksheet IDs to memory section "worksheets_created"\n\n**CRITICAL**: Step 3 is MANDATORY. You have the system.askUser tool available. You MUST call it as a tool, not print questions as text. The tool will pause execution and show the question to the user in a proper UI. Do NOT skip this step. Do NOT assume answers.\n\nDo NOT create line items yet — that happens in Phase 2.\nFocus on understanding the full scope and creating the right worksheet structure.`,
           onToolCall, onMessage,
         }, planningTools);
 
@@ -474,6 +525,7 @@ Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
       projectId: session.projectId,
       scope: session.scope,
       status: session.intakeStatus,
+      pendingQuestion: session.pendingQuestion ?? null,
       toolCallCount: session.toolCalls.length,
       messageCount: session.messages.length,
       summary: session.summary ?? null,
@@ -545,19 +597,52 @@ Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
       return reply.code(404).send({ message: "Intake session not found" });
     }
 
-    if (session.intakeStatus !== "running") {
+    if (session.intakeStatus !== "running" && session.intakeStatus !== "waiting_for_user") {
       return { message: "Session is not running", status: session.intakeStatus };
+    }
+
+    // If waiting for user, reject the pending question so the promise resolves
+    const pendingResolver = userAnswerResolvers.get(sessionId);
+    if (pendingResolver) {
+      pendingResolver("User stopped the session.");
+      userAnswerResolvers.delete(sessionId);
     }
 
     const controller = intakeAbortControllers.get(sessionId);
     if (controller) {
       controller.abort();
       session.intakeStatus = "stopped";
+      session.pendingQuestion = undefined;
       session.updatedAt = new Date().toISOString();
       session.messages.push({ role: "assistant", content: "[Stopped by user]" });
     }
 
     return { message: "Session stopped", status: "stopped" };
+  });
+
+  // ──────────────────────────────────────────────────────────────
+  // POST /api/intake/:sessionId/answer — Answer a pending question
+  // ──────────────────────────────────────────────────────────────
+  app.post("/api/intake/:sessionId/answer", async (request, reply) => {
+    const { sessionId } = request.params as { sessionId: string };
+    const { answer } = request.body as { answer: string };
+    const session = intakeSessions.get(sessionId);
+
+    if (!session) {
+      return reply.code(404).send({ message: "Intake session not found" });
+    }
+
+    if (session.intakeStatus !== "waiting_for_user") {
+      return reply.code(400).send({ message: "Session is not waiting for user input", status: session.intakeStatus });
+    }
+
+    const resolver = userAnswerResolvers.get(sessionId);
+    if (!resolver) {
+      return reply.code(400).send({ message: "No pending question resolver found" });
+    }
+
+    resolver(answer || "No answer provided, use your best judgment.");
+    return { message: "Answer submitted", status: "running" };
   });
 
   // ──────────────────────────────────────────────────────────────

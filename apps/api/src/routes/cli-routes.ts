@@ -655,4 +655,94 @@ Merge tables that span multiple pages. Skip non-data pages.
     // For now, just acknowledge
     return { ok: true };
   });
+
+  // ── askUser question/answer flow ───────────────────────────
+  // In-memory store for pending questions per project
+  const pendingQuestions = new Map<string, {
+    question: string;
+    options?: string[];
+    context?: string;
+    resolve: (answer: string) => void;
+  }>();
+
+  // POST /api/cli/:projectId/question — MCP tool calls this, long-polls until user answers
+  app.post("/api/cli/:projectId/question", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const { question, options, context } = (request.body || {}) as { question: string; options?: string[]; context?: string };
+
+    if (!question) return reply.code(400).send({ error: "question required" });
+
+    // If there's already a pending question, reject old one
+    const existing = pendingQuestions.get(projectId);
+    if (existing) {
+      existing.resolve("Previous question superseded by a new one.");
+      pendingQuestions.delete(projectId);
+    }
+
+    // Emit the question as an SSE event so the frontend sees it
+    const session = getSession(projectId);
+    if (session) {
+      session.events.emit("event", {
+        type: "askUser",
+        question,
+        options: options || [],
+        context: context || "",
+      });
+    }
+
+    // Block until the user answers via /answer endpoint (max 5 min)
+    const answer = await new Promise<string>((resolve) => {
+      pendingQuestions.set(projectId, { question, options, context, resolve });
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        if (pendingQuestions.has(projectId)) {
+          pendingQuestions.delete(projectId);
+          resolve("No answer provided within timeout. Use your best judgment and document all assumptions.");
+        }
+      }, 5 * 60 * 1000);
+    });
+
+    return { answer };
+  });
+
+  // GET /api/cli/:projectId/pending-question — frontend polls for pending question
+  app.get("/api/cli/:projectId/pending-question", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const pending = pendingQuestions.get(projectId);
+    if (!pending) {
+      return { pending: false };
+    }
+    return {
+      pending: true,
+      question: pending.question,
+      options: pending.options || [],
+      context: pending.context || "",
+    };
+  });
+
+  // POST /api/cli/:projectId/answer — frontend submits the user's answer
+  app.post("/api/cli/:projectId/answer", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const { answer } = (request.body || {}) as { answer: string };
+
+    const pending = pendingQuestions.get(projectId);
+    if (!pending) {
+      return reply.code(404).send({ error: "No pending question for this project" });
+    }
+
+    pending.resolve(answer || "No specific answer provided. Use your best judgment.");
+    pendingQuestions.delete(projectId);
+
+    // Emit answer event so the stream picks it up
+    const session = getSession(projectId);
+    if (session) {
+      session.events.emit("event", {
+        type: "userAnswer",
+        answer,
+      });
+    }
+
+    return { ok: true, message: "Answer delivered to agent" };
+  });
 }

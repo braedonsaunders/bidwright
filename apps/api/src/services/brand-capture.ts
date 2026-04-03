@@ -199,6 +199,137 @@ async function extractBrandSignals(page: Page): Promise<string> {
 
 // ── BFS Crawler ──────────────────────────────────────────────────────────────
 
+// ── Fetch-based fallback (no browser needed) ────────────────────────────────
+
+async function fetchPageHtml(url: string): Promise<{ html: string; finalUrl: string } | null> {
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    return { html, finalUrl: resp.url };
+  } catch {
+    return null;
+  }
+}
+
+function extractContentFromHtml(html: string): string {
+  // Strip scripts, styles, and HTML tags to get text content
+  const cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, "");
+
+  // Extract text from semantic elements using regex
+  const lines: string[] = [];
+
+  // Extract title
+  const titleMatch = cleaned.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch) lines.push(titleMatch[1].trim());
+
+  // Extract meta description
+  const metaDesc = cleaned.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+  if (metaDesc) lines.push(metaDesc[1].trim());
+
+  const ogDesc = cleaned.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
+  if (ogDesc) lines.push(ogDesc[1].trim());
+
+  // Extract headings and paragraphs
+  const tagPattern = /<(h[1-4]|p|li|dt|dd|address)[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match;
+  while ((match = tagPattern.exec(cleaned)) !== null) {
+    const text = match[2].replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+    if (text.length >= 3 && /[a-z]/i.test(text)) lines.push(text);
+  }
+
+  // Extract links (social, email, phone)
+  const linkPattern = /<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  while ((match = linkPattern.exec(html)) !== null) {
+    const href = match[1];
+    const label = match[2].replace(/<[^>]+>/g, "").trim();
+    if (href.startsWith("mailto:")) lines.push(`Email: ${href.replace("mailto:", "")}`);
+    else if (href.startsWith("tel:")) lines.push(`Phone: ${href.replace("tel:", "")}`);
+    else if (/linkedin|twitter|facebook|instagram|youtube/i.test(href))
+      lines.push(`Social: ${label || ""} -> ${href}`);
+  }
+
+  // Dedupe
+  const seen = new Set<string>();
+  return lines.filter((l) => {
+    const k = l.toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).join("\n");
+}
+
+function extractBrandSignalsFromHtml(html: string): string {
+  const signals: string[] = [];
+  const themeColor = html.match(/<meta[^>]*name=["']theme-color["'][^>]*content=["']([^"']+)["']/i);
+  if (themeColor) signals.push(`Theme color: ${themeColor[1]}`);
+
+  const ogImage = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+  if (ogImage) signals.push(`OG image: ${ogImage[1]}`);
+
+  const logoImgs = html.matchAll(/<img[^>]*(?:class=["'][^"']*logo[^"']*["']|alt=["'][^"']*logo[^"']*["']|id=["'][^"']*logo[^"']*["'])[^>]*src=["']([^"']+)["'][^>]*>/gi);
+  for (const m of logoImgs) signals.push(`Logo candidate: ${m[1]}`);
+
+  // Also try src before class/alt
+  const logoImgs2 = html.matchAll(/<img[^>]*src=["']([^"']+)["'][^>]*(?:class=["'][^"']*logo[^"']*["']|alt=["'][^"']*logo[^"']*["'])/gi);
+  for (const m of logoImgs2) signals.push(`Logo candidate: ${m[1]}`);
+
+  return signals.join("\n");
+}
+
+async function crawlWithFetch(url: string, maxPages = 8): Promise<CrawlResult & { brandSignals: string }> {
+  const baseUrl = new URL(url);
+  const baseHostname = stripWww(baseUrl.hostname);
+  const baseOrigin = baseUrl.origin;
+
+  const visited = new Set<string>();
+  const pages: CrawledPage[] = [];
+  let brandSignals = "";
+
+  const priorityQueue: string[] = PRIORITY_PATHS.map((p) => normalizeUrl(baseOrigin + p));
+  const rootNormalized = normalizeUrl(url);
+  if (!priorityQueue.includes(rootNormalized)) priorityQueue.unshift(rootNormalized);
+
+  for (const pageUrl of priorityQueue) {
+    if (pages.length >= maxPages) break;
+    const normalized = normalizeUrl(pageUrl);
+    if (visited.has(normalized)) continue;
+    visited.add(normalized);
+
+    const result = await fetchPageHtml(pageUrl);
+    if (!result) continue;
+
+    if (!isInternalUrl(result.finalUrl, baseHostname)) continue;
+
+    const content = extractContentFromHtml(result.html);
+    if (content.length > 50) {
+      const titleMatch = result.html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      pages.push({ url: result.finalUrl, title: titleMatch?.[1]?.trim() || "", content: content.slice(0, 10000) });
+    }
+
+    if (pages.length === 1) {
+      brandSignals = extractBrandSignalsFromHtml(result.html);
+    }
+  }
+
+  console.log(`[brand-capture] Fetch fallback crawled ${pages.length} pages`);
+  const allContent = pages.map((p) => `--- ${p.title} (${p.url}) ---\n${p.content}`).join("\n\n");
+  return { pages, allContent, brandSignals };
+}
+
+// ── Playwright BFS Crawler ──────────────────────────────────────────────────
+
 async function crawlWebsite(url: string, maxPages = 8): Promise<CrawlResult & { brandSignals: string }> {
   let browser: Browser | null = null;
 
@@ -208,10 +339,12 @@ async function crawlWebsite(url: string, maxPages = 8): Promise<CrawlResult & { 
     const baseHostname = stripWww(baseUrl.hostname);
     let canonicalOrigin: string | undefined;
 
+    console.log(`[brand-capture] Launching browser for ${url}`);
     browser = await chromium.launch({ headless: true });
+    console.log("[brand-capture] Browser launched");
     const context = await browser.newContext({
       viewport: { width: 1440, height: 960 },
-      userAgent: "Mozilla/5.0 (compatible; BidwrightBot/1.0)",
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     });
     const page = await context.newPage();
 
@@ -244,12 +377,16 @@ async function crawlWebsite(url: string, maxPages = 8): Promise<CrawlResult & { 
 
       try {
         const response = await page.goto(currentUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        console.log(`[brand-capture] ${currentUrl} -> ${response?.status() ?? "no response"}`);
         if (!response || response.status() >= 400) continue;
 
         await stabilizePage(page);
 
         const finalUrl = page.url();
-        if (!isInternalUrl(finalUrl, baseHostname)) continue;
+        if (!isInternalUrl(finalUrl, baseHostname)) {
+          console.log(`[brand-capture] Skipping external redirect: ${finalUrl}`);
+          continue;
+        }
 
         canonicalOrigin = new URL(finalUrl).origin;
         const normalizedFinal = normalizeUrl(finalUrl, canonicalOrigin);
@@ -265,6 +402,7 @@ async function crawlWebsite(url: string, maxPages = 8): Promise<CrawlResult & { 
 
         if (content.length > 50) {
           pages.push({ url: finalUrl, title: title || "", content: content.slice(0, 10000) });
+          console.log(`[brand-capture] Crawled: ${finalUrl} (${content.length} chars)`);
         }
 
         // Discover links
@@ -281,15 +419,20 @@ async function crawlWebsite(url: string, maxPages = 8): Promise<CrawlResult & { 
             bfsQueue.push(normalized);
           }
         }
-      } catch {
+      } catch (err) {
+        console.error(`[brand-capture] Error crawling ${currentUrl}:`, (err as Error).message);
         continue;
       }
     }
 
     await context.close();
 
+    console.log(`[brand-capture] Playwright crawled ${pages.length} pages`);
     const allContent = pages.map((p) => `--- ${p.title} (${p.url}) ---\n${p.content}`).join("\n\n");
     return { pages, allContent, brandSignals: allBrandSignals };
+  } catch (err) {
+    console.error(`[brand-capture] Playwright crawl failed, falling back to fetch:`, (err as Error).message);
+    return crawlWithFetch(url, maxPages);
   } finally {
     if (browser) await browser.close();
   }
@@ -337,8 +480,19 @@ function extractJson(text: string): string {
 }
 
 export async function captureBrand(websiteUrl: string, config: BrandCaptureConfig): Promise<BrandProfile> {
-  // Crawl the website
-  const { allContent, brandSignals } = await crawlWebsite(websiteUrl, 8);
+  // Crawl the website — Playwright first, fetch fallback if it fails
+  let result = await crawlWebsite(websiteUrl, 8);
+
+  if (!result.allContent || result.allContent.trim().length < 50) {
+    console.log(`[brand-capture] Playwright returned insufficient content (${result.pages.length} pages), trying fetch fallback`);
+    result = await crawlWithFetch(websiteUrl, 8);
+  }
+
+  const { allContent, brandSignals, pages } = result;
+
+  if (!allContent || allContent.trim().length < 50) {
+    throw new Error(`Could not extract meaningful content from ${websiteUrl} (crawled ${pages.length} pages). The site may be blocking automated access or use client-side rendering that prevents content extraction.`);
+  }
 
   // Build the LLM prompt
   const userPrompt = `Analyze the following website content for brand extraction.
@@ -368,30 +522,48 @@ ${allContent.slice(0, 20000)}
     maxTokens: 1500,
   });
 
-  const text = typeof response.content[0] === "string"
-    ? response.content[0]
-    : (response.content[0] as { text?: string }).text ?? "";
+  // Extract text from response content blocks
+  const text = response.content
+    .filter((b) => b.type === "text" && b.text)
+    .map((b) => b.text)
+    .join("");
 
-  const parsed = JSON.parse(extractJson(text));
+  if (!text.trim()) {
+    throw new Error("LLM returned an empty response during brand extraction");
+  }
 
-  return {
-    companyName: parsed.companyName || "",
-    tagline: parsed.tagline || "",
-    industry: parsed.industry || "",
-    description: parsed.description || "",
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(extractJson(text));
+  } catch {
+    throw new Error(`Failed to parse LLM response as JSON: ${text.slice(0, 200)}`);
+  }
+
+  const brand: BrandProfile = {
+    companyName: (parsed.companyName as string) || "",
+    tagline: (parsed.tagline as string) || "",
+    industry: (parsed.industry as string) || "",
+    description: (parsed.description as string) || "",
     services: Array.isArray(parsed.services) ? parsed.services : [],
     targetMarkets: Array.isArray(parsed.targetMarkets) ? parsed.targetMarkets : [],
-    brandVoice: parsed.brandVoice || "",
+    brandVoice: (parsed.brandVoice as string) || "",
     colors: {
-      primary: parsed.colors?.primary || "",
-      secondary: parsed.colors?.secondary || "",
-      accent: parsed.colors?.accent || "",
+      primary: (parsed.colors as any)?.primary || "",
+      secondary: (parsed.colors as any)?.secondary || "",
+      accent: (parsed.colors as any)?.accent || "",
     },
-    logoUrl: parsed.logoUrl || "",
-    socialLinks: parsed.socialLinks || {},
+    logoUrl: (parsed.logoUrl as string) || "",
+    socialLinks: (parsed.socialLinks as Record<string, string>) || {},
     websiteUrl,
     lastCapturedAt: new Date().toISOString(),
   };
+
+  // Validate that we actually extracted something meaningful
+  if (!brand.companyName && !brand.description && brand.services.length === 0) {
+    throw new Error("Brand extraction completed but produced no meaningful data. The website content may not contain identifiable brand information.");
+  }
+
+  return brand;
 }
 
 // Export crawler for reuse by agent tools
