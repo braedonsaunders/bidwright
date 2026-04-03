@@ -56,7 +56,7 @@ export const DEFAULT_BRAND: AppSettings["brand"] = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
-  email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "" },
+  email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "", authMethod: "smtp", oauth2TenantId: "", oauth2ClientId: "", oauth2ClientSecret: "" },
   defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
   integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "", agentRuntime: undefined, agentModel: undefined, maxConcurrentSubAgents: 2 },
   brand: DEFAULT_BRAND,

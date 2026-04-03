@@ -129,6 +129,8 @@ export class AgentLoop {
     let totalOutput = 0;
 
     const contextBudget = this.config.llm.maxContextTokens * 0.7;
+    let contextCompactionRetries = 0;
+    const maxContextRetries = 3;
 
     for (let iteration = 0; iteration < this.config.maxIterations; iteration++) {
       // Check abort signal
@@ -260,8 +262,18 @@ export class AgentLoop {
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         if (errMsg.includes("context") || errMsg.includes("token") || errMsg.includes("too long") || errMsg.includes("maximum")) {
-          messages = compactMessages(messages, 6);
-          // Don't spam the UI with compaction messages — just log internally
+          contextCompactionRetries++;
+          if (contextCompactionRetries > maxContextRetries) {
+            this.config.onMessage?.({ role: "assistant", content: `[Error] Context window exceeded after ${maxContextRetries} compaction attempts. Stopping this agent loop.` });
+            return {
+              message: `Agent stopped: context window exceeded after ${maxContextRetries} compaction retries. Error: ${errMsg}`,
+              toolCallsExecuted: allToolCalls,
+              citations: [],
+              tokensUsed: { input: totalInput, output: totalOutput },
+            };
+          }
+          messages = compactMessages(messages, Math.max(4, 8 - contextCompactionRetries * 2));
+          this.config.onMessage?.({ role: "assistant", content: `[System] Compacting context (attempt ${contextCompactionRetries}/${maxContextRetries})...` });
           continue;
         }
         throw err;

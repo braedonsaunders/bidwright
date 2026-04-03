@@ -2853,7 +2853,8 @@ export interface IntakeStatusResult {
   sessionId: string;
   projectId: string;
   scope: string;
-  status: "running" | "completed" | "failed" | "stopped";
+  status: "running" | "completed" | "failed" | "stopped" | "waiting_for_user";
+  pendingQuestion?: { question: string; options?: string[]; context?: string } | null;
   toolCallCount: number;
   messageCount: number;
   summary: string | null;
@@ -2877,6 +2878,14 @@ export async function getIntakeStatus(sessionId: string) {
 export async function stopIntake(sessionId: string) {
   return apiRequest<{ message: string; status: string }>(`/api/intake/${sessionId}/stop`, {
     method: "POST",
+  });
+}
+
+export async function answerIntake(sessionId: string, answer: string) {
+  return apiRequest<{ message: string; status: string }>(`/api/intake/${sessionId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
   });
 }
 
@@ -2990,6 +2999,23 @@ export async function getCliStatus(projectId: string) {
     source?: "live" | "db";
     events?: any[];
   }>(`/api/cli/${projectId}/status`);
+}
+
+export async function getCliPendingQuestion(projectId: string) {
+  return apiRequest<{
+    pending: boolean;
+    question?: string;
+    options?: string[];
+    context?: string;
+  }>(`/api/cli/${projectId}/pending-question`);
+}
+
+export async function answerCliQuestion(projectId: string, answer: string) {
+  return apiRequest<{ ok: boolean; message: string }>(`/api/cli/${projectId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  });
 }
 
 // ── Quote Review ────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Globe,
+  KeyRound,
   Layers,
   Loader2,
   Lock,
@@ -85,6 +86,7 @@ import {
   createUser as apiCreateUser,
   updateUser as apiUpdateUser,
   deleteUser as apiDeleteUser,
+  listUsers as apiListUsers,
   testEmailConnection as apiTestEmail,
   getBrand as apiGetBrand,
   updateBrand as apiUpdateBrand,
@@ -129,7 +131,9 @@ import {
   deletePersona as apiDeletePersona,
   listKnowledgeBooks as apiListKnowledgeBooks,
   type KnowledgeBookRecord,
+  type AuthUser,
 } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
 import { PluginsPage } from "@/components/plugins-page";
@@ -182,6 +186,7 @@ export function SettingsPage({
   const [userSaving, setUserSaving] = useState<string | null>(null);
   const [brandCapturing, setBrandCapturing] = useState(false);
   const [brandCaptureUrl, setBrandCaptureUrl] = useState("");
+  const [brandCaptureError, setBrandCaptureError] = useState<string | null>(null);
   const [categories, setCategories] = useState<EntityCategory[]>([]);
   const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
   const [catEdits, setCatEdits] = useState<Record<string, Partial<EntityCategory>>>({});
@@ -235,6 +240,13 @@ export function SettingsPage({
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+
+  // Password reset
+  const [passwordResetUserId, setPasswordResetUserId] = useState<string | null>(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordResetSaving, setPasswordResetSaving] = useState(false);
+
+  const { user: currentUser } = useAuth();
 
   // Rate schedules (for embedding)
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>(initialSchedules);
@@ -326,6 +338,10 @@ export function SettingsPage({
             smtpPassword: apiSettings.email.password || prev.email.smtpPassword,
             fromAddress: apiSettings.email.fromAddress || prev.email.fromAddress,
             fromName: apiSettings.email.fromName || prev.email.fromName,
+            authMethod: apiSettings.email.authMethod || prev.email.authMethod,
+            oauth2TenantId: apiSettings.email.oauth2TenantId || prev.email.oauth2TenantId,
+            oauth2ClientId: apiSettings.email.oauth2ClientId || prev.email.oauth2ClientId,
+            oauth2ClientSecret: apiSettings.email.oauth2ClientSecret || prev.email.oauth2ClientSecret,
           },
           defaults: {
             ...prev.defaults,
@@ -379,6 +395,24 @@ export function SettingsPage({
         }
         setTimeout(() => { settingsLoaded.current = true; brandLoaded.current = true; }, 0);
       });
+  }, []);
+
+  // Load users from API
+  useEffect(() => {
+    apiListUsers()
+      .then((apiUsers) => {
+        const mapped: UserRecord[] = apiUsers.map((u) => ({
+          id: u.id,
+          name: u.name,
+          email: u.email,
+          role: (u.role.charAt(0).toUpperCase() + u.role.slice(1)) as UserRecord["role"],
+          active: u.active,
+        }));
+        if (mapped.length > 0) {
+          setSettings((s) => ({ ...s, users: mapped }));
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Load entity categories
@@ -719,6 +753,10 @@ export function SettingsPage({
         password: settings.email.smtpPassword,
         fromAddress: settings.email.fromAddress,
         fromName: settings.email.fromName,
+        authMethod: settings.email.authMethod,
+        oauth2TenantId: settings.email.oauth2TenantId,
+        oauth2ClientId: settings.email.oauth2ClientId,
+        oauth2ClientSecret: settings.email.oauth2ClientSecret,
       },
       defaults: {
         defaultMarkup: settings.defaults.defaultMarkup,
@@ -772,11 +810,13 @@ export function SettingsPage({
   const handleCaptureBrand = useCallback(async () => {
     if (!brandCaptureUrl.trim()) return;
     setBrandCapturing(true);
+    setBrandCaptureError(null);
     try {
       const captured = await apiCaptureBrand(brandCaptureUrl.trim());
       setBrand(captured);
-    } catch (err) {
-      // Show error inline
+    } catch (err: any) {
+      const msg = err?.message || "Brand capture failed";
+      setBrandCaptureError(msg);
       console.error("Brand capture failed:", err);
     } finally {
       setBrandCapturing(false);
@@ -871,6 +911,20 @@ export function SettingsPage({
     try { await apiDeleteUser(id); } catch { /* Remove locally anyway */ }
     setSettings((s) => ({ ...s, users: s.users.filter((u) => u.id !== id) }));
   }, []);
+
+  const handlePasswordReset = useCallback(async () => {
+    if (!passwordResetUserId || !newPassword) return;
+    setPasswordResetSaving(true);
+    try {
+      await apiUpdateUser(passwordResetUserId, { password: newPassword });
+      setPasswordResetUserId(null);
+      setNewPassword("");
+    } catch {
+      // still close
+    } finally {
+      setPasswordResetSaving(false);
+    }
+  }, [passwordResetUserId, newPassword]);
   const handleTestEmail = useCallback(async () => {
     setEmailTestStatus({ loading: true });
     try {
@@ -1006,7 +1060,10 @@ export function SettingsPage({
                       )}
                     </Button>
                   </div>
-                  {brand.lastCapturedAt && (
+                  {brandCaptureError && (
+                    <p className="text-[11px] text-red-500">{brandCaptureError}</p>
+                  )}
+                  {brand.lastCapturedAt && !brandCaptureError && (
                     <p className="text-[11px] text-fg/40">
                       Last captured: {new Date(brand.lastCapturedAt).toLocaleString()}
                     </p>
@@ -1105,34 +1162,104 @@ export function SettingsPage({
           {activeGroup === "integrations" && integrationsSubTab === "email" && (
             <Card>
               <CardHeader>
-                <CardTitle>Email (SMTP) Settings</CardTitle>
+                <CardTitle>Email Settings</CardTitle>
               </CardHeader>
               <CardBody className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>SMTP Host</Label>
-                    <Input value={settings.email.smtpHost} onChange={(e) => updateEmail({ smtpHost: e.target.value })} placeholder="smtp.gmail.com" />
-                  </div>
-                  <div>
-                    <Label>Port</Label>
-                    <Input value={settings.email.smtpPort} onChange={(e) => updateEmail({ smtpPort: e.target.value })} placeholder="587" />
+                {/* Auth method toggle */}
+                <div>
+                  <Label>Authentication Method</Label>
+                  <div className="mt-1.5 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateEmail({ authMethod: "smtp" })}
+                      className={cn(
+                        "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                        settings.email.authMethod !== "oauth2"
+                          ? "border-accent bg-accent/10 text-accent"
+                          : "border-line bg-bg/50 text-fg/50 hover:text-fg/70"
+                      )}
+                    >
+                      SMTP
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateEmail({ authMethod: "oauth2" })}
+                      className={cn(
+                        "rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors",
+                        settings.email.authMethod === "oauth2"
+                          ? "border-accent bg-accent/10 text-accent"
+                          : "border-line bg-bg/50 text-fg/50 hover:text-fg/70"
+                      )}
+                    >
+                      Office 365 (OAuth2)
+                    </button>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Username</Label>
-                    <Input value={settings.email.smtpUsername} onChange={(e) => updateEmail({ smtpUsername: e.target.value })} placeholder="user@gmail.com" />
-                  </div>
-                  <div>
-                    <Label>Password</Label>
-                    <Input type="password" value={settings.email.smtpPassword} onChange={(e) => updateEmail({ smtpPassword: e.target.value })} placeholder="********" />
-                  </div>
-                </div>
+
                 <Separator />
+
+                {/* SMTP fields */}
+                {settings.email.authMethod !== "oauth2" && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label>SMTP Host</Label>
+                        <Input value={settings.email.smtpHost} onChange={(e) => updateEmail({ smtpHost: e.target.value })} placeholder="smtp.gmail.com" />
+                      </div>
+                      <div>
+                        <Label>Port</Label>
+                        <Input value={settings.email.smtpPort} onChange={(e) => updateEmail({ smtpPort: e.target.value })} placeholder="587" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label>Username</Label>
+                        <Input value={settings.email.smtpUsername} onChange={(e) => updateEmail({ smtpUsername: e.target.value })} placeholder="user@gmail.com" />
+                      </div>
+                      <div>
+                        <Label>Password</Label>
+                        <Input type="password" value={settings.email.smtpPassword} onChange={(e) => updateEmail({ smtpPassword: e.target.value })} placeholder="********" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* OAuth2 fields */}
+                {settings.email.authMethod === "oauth2" && (
+                  <>
+                    <div className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-3">
+                      <p className="text-xs text-fg/70 leading-relaxed">
+                        <strong className="text-fg/90">Azure AD Setup:</strong> Register an app in Azure Portal &rarr; App registrations. Under API permissions, add <code className="rounded bg-bg/60 px-1 py-0.5 text-[10px]">Mail.Send</code> (Application type) and grant admin consent. Under Certificates &amp; secrets, create a client secret. Enter the values below.
+                      </p>
+                    </div>
+                    <div>
+                      <Label>Tenant ID</Label>
+                      <Input value={settings.email.oauth2TenantId} onChange={(e) => updateEmail({ oauth2TenantId: e.target.value })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+                      <p className="mt-1 text-[11px] text-fg/40">Found in Azure Portal &rarr; Azure Active Directory &rarr; Overview</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <Label>Client ID</Label>
+                        <Input value={settings.email.oauth2ClientId} onChange={(e) => updateEmail({ oauth2ClientId: e.target.value })} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+                      </div>
+                      <div>
+                        <Label>Client Secret</Label>
+                        <Input type="password" value={settings.email.oauth2ClientSecret} onChange={(e) => updateEmail({ oauth2ClientSecret: e.target.value })} placeholder="********" />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <Separator />
+
+                {/* Common fields */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>From Address</Label>
                     <Input value={settings.email.fromAddress} onChange={(e) => updateEmail({ fromAddress: e.target.value })} placeholder="quotes@yourcompany.com" />
+                    {settings.email.authMethod === "oauth2" && (
+                      <p className="mt-1 text-[11px] text-fg/40">Must be a licensed mailbox in your O365 tenant</p>
+                    )}
                   </div>
                   <div>
                     <Label>From Name</Label>
@@ -1192,6 +1319,7 @@ export function SettingsPage({
           )}
 
           {activeGroup === "users" && (
+            <>
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Users</CardTitle>
@@ -1208,14 +1336,19 @@ export function SettingsPage({
                       <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Email</th>
                       <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-36">Role</th>
                       <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-20">Active</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-20">Actions</th>
+                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-28">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {settings.users.map((user) => (
-                      <tr key={user.id} className="border-b border-line last:border-0">
+                    {settings.users.map((user) => {
+                      const isCurrentUser = user.id === currentUser?.id || (!!currentUser?.email && user.email === currentUser.email);
+                      return (
+                      <tr key={user.id} className={cn("border-b border-line last:border-0", isCurrentUser && "bg-accent/5")}>
                         <td className="px-5 py-2.5">
-                          <Input className="h-7 text-xs" value={user.name} onChange={(e) => updateUserLocal(user.id, { name: e.target.value })} onBlur={() => saveUser(user)} placeholder="Full name" />
+                          <div className="flex items-center gap-2">
+                            <Input className="h-7 text-xs" value={user.name} onChange={(e) => updateUserLocal(user.id, { name: e.target.value })} onBlur={() => saveUser(user)} placeholder="Full name" />
+                            {isCurrentUser && <Badge tone="info" className="text-[9px] shrink-0">You</Badge>}
+                          </div>
                         </td>
                         <td className="px-5 py-2.5">
                           <Input className="h-7 text-xs" value={user.email} onChange={(e) => updateUserLocal(user.id, { email: e.target.value })} onBlur={() => saveUser(user)} placeholder="email@company.com" />
@@ -1231,16 +1364,52 @@ export function SettingsPage({
                           <Toggle checked={user.active} onChange={(val) => { updateUserLocal(user.id, { active: val }); saveUser({ ...user, active: val }); }} />
                         </td>
                         <td className="px-5 py-2.5">
-                          <button onClick={() => removeUser(user.id)} className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors" title="Delete user">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <button onClick={() => { setPasswordResetUserId(user.id); setNewPassword(""); }} className="rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent transition-colors" title="Reset password">
+                              <KeyRound className="h-3.5 w-3.5" />
+                            </button>
+                            <button onClick={() => removeUser(user.id)} className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors" title="Delete user">
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </Card>
+
+            {/* Password Reset Modal */}
+            {passwordResetUserId && createPortal(
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPasswordResetUserId(null)}>
+                <div className="w-full max-w-sm rounded-lg border border-line bg-panel p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                  <h3 className="text-sm font-semibold text-fg mb-1">Reset Password</h3>
+                  <p className="text-xs text-fg/50 mb-4">
+                    Set a new password for {settings.users.find((u) => u.id === passwordResetUserId)?.name || "this user"}.
+                  </p>
+                  <Input
+                    type="password"
+                    className="h-8 text-xs mb-4"
+                    placeholder="New password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" size="xs" onClick={() => setPasswordResetUserId(null)}>Cancel</Button>
+                    <Button variant="accent" size="xs" onClick={handlePasswordReset} disabled={!newPassword || passwordResetSaving}>
+                      {passwordResetSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+                      {passwordResetSaving ? "Saving..." : "Reset Password"}
+                    </Button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )}
+            </>
+
           )}
 
           {activeGroup === "integrations" && integrationsSubTab === "apikeys" && (() => {

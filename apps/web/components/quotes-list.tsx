@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent, formatDate } from "@/lib/format";
 import type { ProjectListItem, OrgUser, OrgDepartment } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 import {
   Badge,
   Button,
@@ -27,6 +28,7 @@ type SortKey =
   | "quoteNumber"
   | "title"
   | "client"
+  | "estimator"
   | "status"
   | "subtotal"
   | "margin"
@@ -160,10 +162,15 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   users?: OrgUser[];
   departments?: OrgDepartment[];
 }) {
+  const { user: currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [clientFilter, setClientFilter] = useState<string[]>([]);
-  const [userFilter, setUserFilter] = useState<string[]>([]);
+  const [userFilter, setUserFilter] = useState<string[]>(() => {
+    // Default: estimators see only their own quotes
+    if (currentUser?.role === "estimator" && currentUser.id) return [currentUser.id];
+    return [];
+  });
   const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -184,6 +191,12 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [projectsWithQuotes]);
+
+  const userMap = useMemo(() => {
+    const m = new Map<string, OrgUser>();
+    for (const u of users) m.set(u.id, u);
+    return m;
+  }, [users]);
 
   const userOptions = useMemo(() => {
     return users.map((u) => ({ value: u.id, label: u.name || u.email }));
@@ -255,6 +268,12 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         case "client":
           cmp = a.clientName.localeCompare(b.clientName);
           break;
+        case "estimator": {
+          const aName = (a.quote.userId && userMap.get(a.quote.userId)?.name) || "";
+          const bName = (b.quote.userId && userMap.get(b.quote.userId)?.name) || "";
+          cmp = aName.localeCompare(bName);
+          break;
+        }
         case "status":
           cmp = a.quote.status.localeCompare(b.quote.status);
           break;
@@ -272,7 +291,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     });
 
     return list;
-  }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir]);
+  }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir, userMap]);
 
   const totalValue = projectsWithQuotes.reduce((sum, p) => sum + (p.latestRevision?.subtotal ?? 0), 0);
   const avgMargin = projectsWithQuotes.length > 0
@@ -283,6 +302,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     { key: "quoteNumber", label: "Quote #", className: "w-28" },
     { key: "title", label: "Title" },
     { key: "client", label: "Client", className: "w-40" },
+    { key: "estimator", label: "Estimator", className: "w-36" },
     { key: "status", label: "Status", className: "w-24" },
     { key: "subtotal", label: "Subtotal", className: "w-28 text-right" },
     { key: "margin", label: "Margin", className: "w-20 text-right" },
@@ -467,6 +487,9 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/60">
                       {project.clientName || "\u2014"}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-fg/60">
+                      {(project.quote.userId && userMap.get(project.quote.userId)?.name) || "\u2014"}
                     </td>
                     <td className="px-4 py-2.5">
                       <Badge tone={statusTone(project.quote.status) as any}>

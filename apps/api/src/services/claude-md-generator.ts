@@ -210,6 +210,7 @@ You have access to Bidwright tools via MCP. Key tools:
 - **searchBooks** — Search knowledge books by keyword
 - **queryDataset / searchDataset / listDatasets** — Search structured datasets (rate tables, historical data)
 - **searchCatalogs** — Search equipment/material catalogs for items with pricing
+- **askUser** — **MANDATORY** Ask the user a clarifying question and WAIT for their response. Blocks execution until they answer. Use this in Steps 1 and 2 of the Estimation Protocol. Do NOT skip this tool. Do NOT output questions as plain text instead.
 - **readMemory / writeMemory** — Persistent project memory (persists across sessions)
 - **getProjectSummary** — Current project context and totals
 - **reportProgress** — Tell the user what you're doing (shown in real-time UI)
@@ -500,18 +501,20 @@ After all sub-agents complete and every worksheet has line items, you MUST perfo
 
 You MUST follow this protocol for every estimate. Skipping steps is NOT allowed.
 
-### Step 1: Scope Confirmation
-After reading ALL documents, output a structured scope summary:
-- List every major system/area of work identified
-- List equipment counts with P&ID references
-- List piping systems with sizes and materials
-- State what you understand as included vs excluded
-- Note any specifications or codes referenced (B31.1, B31.3, SSPC-SP6, etc.)
-Ask the user: "Does this match your understanding? Anything to add or exclude?"
-WAIT for user response before proceeding to create worksheets.
+### Step 1: Scope Confirmation — USE askUser TOOL
+After reading ALL documents, prepare a structured scope summary covering:
+- Every major system/area of work identified
+- Equipment counts with P&ID references
+- Piping systems with sizes and materials
+- What is included vs excluded
+- Specifications or codes referenced (B31.1, B31.3, SSPC-SP6, etc.)
 
-### Step 2: Clarifying Questions
-Before estimating labour, you MUST ask these questions in a single batch:
+Then call the **askUser** MCP tool with the scope summary and ask: "Does this match your understanding? Anything to add or exclude?"
+
+**YOU MUST CALL THE askUser TOOL** — do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
+
+### Step 2: Clarifying Questions — USE askUser TOOL
+Before estimating labour, call the **askUser** tool with ALL of these questions bundled together:
 - Which activities will be subcontracted vs self-performed? (insulation, painting/blasting, NDT/RT inspection, pipe supports, scaffolding/access)
 - What access equipment is available? (scissor lifts, boom lifts, scaffolding, none)
 - Is there a shop/fabrication laydown area on site? (affects shop vs field hour split)
@@ -519,7 +522,8 @@ Before estimating labour, you MUST ask these questions in a single batch:
 - Any overtime or shift premium requirements?
 - Union or open shop?
 - Any site-specific access restrictions or working conditions?
-Collect ALL answers before creating labour line items. Log each answer as a working assumption.
+
+**YOU MUST USE THE askUser TOOL for this step.** Do NOT print the questions as regular text output. Do NOT assume answers. The askUser tool blocks until the user responds. Collect ALL answers before creating labour line items. Log each answer as a working assumption.
 
 **SUBCONTRACTOR IDENTIFICATION (CRITICAL — DO NOT SKIP)** — Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
 

@@ -15,6 +15,10 @@ export interface EmailConfig {
   pass: string;
   from: string;
   fromName: string;
+  authMethod?: "smtp" | "oauth2";
+  oauth2TenantId?: string;
+  oauth2ClientId?: string;
+  oauth2ClientSecret?: string;
 }
 
 function getEmailConfig(): EmailConfig | null {
@@ -30,6 +34,64 @@ function getEmailConfig(): EmailConfig | null {
   };
 }
 
+async function fetchOAuth2AccessToken(tenantId: string, clientId: string, clientSecret: string): Promise<string> {
+  const tokenUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+  const body = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: "https://outlook.office365.com/.default",
+  });
+
+  const res = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OAuth2 token request failed (${res.status}): ${text}`);
+  }
+
+  const data = (await res.json()) as { access_token: string };
+  return data.access_token;
+}
+
+function createTransporter(config: EmailConfig): Promise<nodemailer.Transporter> | nodemailer.Transporter {
+  if (config.authMethod === "oauth2") {
+    // OAuth2 path — need to fetch token first
+    return (async () => {
+      if (!config.oauth2TenantId || !config.oauth2ClientId || !config.oauth2ClientSecret) {
+        throw new Error("OAuth2 requires tenantId, clientId, and clientSecret");
+      }
+      const accessToken = await fetchOAuth2AccessToken(
+        config.oauth2TenantId,
+        config.oauth2ClientId,
+        config.oauth2ClientSecret,
+      );
+      return nodemailer.createTransport({
+        host: "smtp.office365.com",
+        port: 587,
+        secure: false,
+        auth: {
+          type: "OAuth2",
+          user: config.from,
+          accessToken,
+        } as any,
+      });
+    })();
+  }
+
+  // Standard SMTP path
+  return nodemailer.createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.port === 465,
+    auth: config.user ? { user: config.user, pass: config.pass } : undefined,
+  });
+}
+
 export async function sendQuoteEmail(input: SendQuoteInput, config?: EmailConfig): Promise<{ sent: boolean; message: string }> {
   const emailConfig = config ?? getEmailConfig();
 
@@ -40,12 +102,7 @@ export async function sendQuoteEmail(input: SendQuoteInput, config?: EmailConfig
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: emailConfig.host,
-      port: emailConfig.port,
-      secure: emailConfig.port === 465,
-      auth: emailConfig.user ? { user: emailConfig.user, pass: emailConfig.pass } : undefined,
-    });
+    const transporter = await createTransporter(emailConfig);
 
     const mailOptions: nodemailer.SendMailOptions = {
       from: `"${emailConfig.fromName}" <${emailConfig.from}>`,
@@ -79,27 +136,37 @@ export async function sendQuoteEmail(input: SendQuoteInput, config?: EmailConfig
 
 export async function testEmailConnection(config: EmailConfig): Promise<{ success: boolean; message: string }> {
   try {
-    const transporter = nodemailer.createTransport({
-      host: config.host,
-      port: config.port,
-      secure: config.port === 465,
-      auth: config.user ? { user: config.user, pass: config.pass } : undefined,
-      connectionTimeout: 5000,
-    });
+    const transporter = await createTransporter(config);
+
+    // For OAuth2, just verifying the transporter was created (token fetched) is a good test
+    if (config.authMethod === "oauth2") {
+      await transporter.verify();
+      return { success: true, message: "Office 365 OAuth2 connection verified successfully" };
+    }
 
     await transporter.verify();
     return { success: true, message: "SMTP connection verified successfully" };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    return { success: false, message: `SMTP connection failed: ${msg}` };
+    return { success: false, message: `Connection failed: ${msg}` };
   }
 }
 
 export function validateEmailConfig(config: Partial<EmailConfig>): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-  if (!config.host) errors.push("SMTP host is required");
-  if (!config.port || config.port < 1 || config.port > 65535) errors.push("Valid SMTP port is required (1-65535)");
-  if (!config.from) errors.push("From address is required");
-  if (config.from && !config.from.includes("@")) errors.push("From address must be a valid email");
+
+  if (config.authMethod === "oauth2") {
+    if (!config.oauth2TenantId) errors.push("Azure Tenant ID is required");
+    if (!config.oauth2ClientId) errors.push("Azure Client ID is required");
+    if (!config.oauth2ClientSecret) errors.push("Azure Client Secret is required");
+    if (!config.from) errors.push("From address is required");
+    if (config.from && !config.from.includes("@")) errors.push("From address must be a valid email");
+  } else {
+    if (!config.host) errors.push("SMTP host is required");
+    if (!config.port || config.port < 1 || config.port > 65535) errors.push("Valid SMTP port is required (1-65535)");
+    if (!config.from) errors.push("From address is required");
+    if (config.from && !config.from.includes("@")) errors.push("From address must be a valid email");
+  }
+
   return { valid: errors.length === 0, errors };
 }

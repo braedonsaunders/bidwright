@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import type { CreateUserInput, PrismaApiStore, UserPatchInput } from "../prisma-store.js";
+import { testEmailConnection, type EmailConfig } from "../services/email-service.js";
 
 const personaSchema = z.object({
   name: z.string().min(1),
@@ -160,10 +161,33 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
     if (!apiKey) return reply.code(400).send({ message: "No API key configured. Set an API key in Integrations settings first." });
 
-    const { captureBrand } = await import("../services/brand-capture.js");
-    const brand = await captureBrand(websiteUrl, { provider, apiKey, model });
-    await request.store!.updateSettings({ brand: brand as any });
-    return brand;
+    try {
+      const { captureBrand } = await import("../services/brand-capture.js");
+      const brand = await captureBrand(websiteUrl, { provider, apiKey, model });
+      await request.store!.updateSettings({ brand: brand as any });
+      return brand;
+    } catch (err: any) {
+      request.log.error({ err, websiteUrl }, "Brand capture failed");
+      return reply.code(500).send({ message: err.message || "Brand capture failed" });
+    }
+  });
+
+  app.post("/settings/test-email", async (request) => {
+    const settings = await request.store!.getSettings();
+    const email = settings.email;
+    const config: EmailConfig = {
+      host: email.host || "",
+      port: email.port || 587,
+      user: email.username || "",
+      pass: email.password || "",
+      from: email.fromAddress || "",
+      fromName: email.fromName || "",
+      authMethod: (email as any).authMethod || "smtp",
+      oauth2TenantId: (email as any).oauth2TenantId || "",
+      oauth2ClientId: (email as any).oauth2ClientId || "",
+      oauth2ClientSecret: (email as any).oauth2ClientSecret || "",
+    };
+    return testEmailConnection(config);
   });
 
   app.get("/users", async (request) => {

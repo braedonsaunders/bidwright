@@ -181,7 +181,7 @@ export function RichTextEditor({
           onInput={emitChange}
           onBlur={handleBlur}
           onPaste={handlePaste}
-          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none overflow-visible flex-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5"
+          className="prose prose-sm prose-invert max-w-none px-3 py-2 text-sm text-fg outline-none overflow-y-auto flex-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-0.5"
           style={{ minHeight, height: "auto" }}
         />
       </div>
