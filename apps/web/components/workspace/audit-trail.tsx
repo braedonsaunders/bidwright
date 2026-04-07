@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import type { Activity, ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { getActivities, revertActivity } from "@/lib/api";
-import { Badge, Button, EmptyState, Input, Select } from "@/components/ui";
+import { Badge, Button, Combobox, EmptyState, Input } from "@/components/ui";
 
 // ── Activity type display config ────────────────────────────────────────
 
@@ -129,6 +129,22 @@ const ACTIVITY_TYPE_CONFIG: Record<string, ActivityTypeConfig> = {
   ai_equipment_accepted: {
     icon: Sparkles,
     label: (d) => `Accepted ${d.equipmentCount ?? ""} AI-generated items`,
+    tone: "info",
+    category: "AI",
+  },
+  ai_tool_executed: {
+    icon: Sparkles,
+    label: (d) => {
+      const toolId = String(d.toolId ?? "tool");
+      const toolName = toolId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      return `AI executed **${toolName}**${d.summary ? ` — ${d.summary}` : ""}`;
+    },
+    tone: "info",
+    category: "AI",
+  },
+  ai_chat: {
+    icon: Sparkles,
+    label: (d) => `AI conversation${d.toolCount ? ` (${d.toolCount} tool call${Number(d.toolCount) !== 1 ? "s" : ""})` : ""}`,
     tone: "info",
     category: "AI",
   },
@@ -415,9 +431,9 @@ export function AuditTrailTab({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
-      {/* ─── Filter bar (shrink-0, never scrolls) ─── */}
-      <div className="flex items-center gap-2 flex-wrap shrink-0">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
+      {/* ─── Filter bar (single row, shrink-0, never scrolls) ─── */}
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="relative min-w-[180px] max-w-[240px] flex-1">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
           <Input
             className="h-8 pl-8 text-xs"
@@ -426,18 +442,28 @@ export function AuditTrailTab({
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        <Select className="h-8 text-xs w-[130px]" value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
-          <option value="">All categories</option>
-          {categoryOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
-        <Select className="h-8 text-xs w-[120px]" value={filterAction} onChange={(e) => setFilterAction(e.target.value)}>
-          {ACTION_TYPES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </Select>
+        <Combobox
+          className="h-8 text-xs w-[140px]"
+          placeholder="All categories"
+          value={filterCategory}
+          onChange={setFilterCategory}
+          options={[{ value: "", label: "All categories" }, ...categoryOptions]}
+        />
+        <Combobox
+          className="h-8 text-xs w-[130px]"
+          placeholder="All actions"
+          value={filterAction}
+          onChange={setFilterAction}
+          options={ACTION_TYPES.map((o) => ({ value: o.value, label: o.label }))}
+        />
         {userOptions.length > 1 && (
-          <Select className="h-8 text-xs w-[130px]" value={filterUser} onChange={(e) => setFilterUser(e.target.value)}>
-            <option value="">All users</option>
-            {userOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </Select>
+          <Combobox
+            className="h-8 text-xs w-[140px]"
+            placeholder="All users"
+            value={filterUser}
+            onChange={setFilterUser}
+            options={[{ value: "", label: "All users" }, ...userOptions]}
+          />
         )}
         {hasFilters && (
           <Button variant="ghost" size="xs" onClick={clearFilters}>

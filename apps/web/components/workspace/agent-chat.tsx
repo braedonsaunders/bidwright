@@ -325,6 +325,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const lastRefreshToolCount = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const sseReconnectCount = useRef(0);
+  const pollFailCount = useRef(0);
 
   // Load default provider/model from org settings + detect CLIs
   useEffect(() => {
@@ -458,7 +459,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     if (!isUserScrolledUp) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [messages, liveToolCalls, isUserScrolledUp]);
+  }, [messages, liveToolCalls, isUserScrolledUp, cliPendingQuestion]);
 
   // Track user scroll position
   const handleScroll = useCallback(() => {
@@ -715,6 +716,19 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       setThinkingBlocks((prev) => [...prev.slice(-5), { id: `file-${Date.now()}`, content: `Reading: ${data.fileName}` }]);
     });
 
+    es.addEventListener("askUser", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.question) {
+          setCliPendingQuestion({ question: data.question, options: data.options, context: data.context });
+        }
+      } catch {}
+    });
+
+    es.addEventListener("userAnswer", () => {
+      setCliPendingQuestion(null);
+    });
+
     es.addEventListener("status", (e) => {
       const data = JSON.parse(e.data);
       if (data.status === "completed" || data.status === "stopped" || data.status === "failed") {
@@ -815,6 +829,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     const poll = async () => {
       try {
         const data = await getCliStatus(projectId);
+        pollFailCount.current = 0; // Reset on success
         const events = data.events || [];
         if (events.length > 0) {
           // Update tool calls from persisted events
@@ -872,14 +887,29 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           onWorkspaceMutated?.();
         }
       } catch {
-        // Session gone (404) — mark as failed and clean up SSE
-        setIntakeStatus((prev) => prev ? { ...prev, status: "failed" } : prev);
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
-          setSseConnected(false);
+        // API unreachable (server restarting, network blip, etc.)
+        // Retry a few times before giving up — the server may come back with the
+        // actual final status from the DB after its startup cleanup runs.
+        pollFailCount.current = (pollFailCount.current || 0) + 1;
+        if (pollFailCount.current >= 4) {
+          // After ~20s of failures, accept it's gone and check DB one last time
+          try {
+            const recovered = await getCliStatus(projectId);
+            const finalStatus = recovered.status === "running" ? "stopped" : recovered.status;
+            setIntakeStatus((prev) => prev ? { ...prev, status: finalStatus as any, events: recovered.events } : prev);
+          } catch {
+            setIntakeStatus((prev) => prev ? { ...prev, status: "stopped" } : prev);
+          }
+          setCliPendingQuestion(null);
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+            setSseConnected(false);
+          }
+          onWorkspaceMutated?.();
+          pollFailCount.current = 0;
         }
-        onWorkspaceMutated?.();
+        // Otherwise silently retry on next interval
       }
     };
 
@@ -1251,72 +1281,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
             )}
 
-            {/* Pending question from CLI agent (askUser MCP tool) */}
-            {cliRuntime && cliPendingQuestion && (
-              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
-                <div className="flex items-center gap-2 text-xs font-medium text-warning">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Agent needs your input
-                </div>
-                {cliPendingQuestion.context && (
-                  <p className="text-xs text-fg/50">{cliPendingQuestion.context}</p>
-                )}
-                <p className="text-sm whitespace-pre-wrap">{cliPendingQuestion.question}</p>
-                {cliPendingQuestion.options && cliPendingQuestion.options.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {cliPendingQuestion.options.map((opt, i) => (
-                      <button
-                        key={i}
-                        onClick={async () => {
-                          try {
-                            await answerCliQuestion(projectId, opt);
-                            setCliPendingQuestion(null);
-                          } catch {}
-                        }}
-                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Type your answer..."
-                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-                    id="cli-question-input"
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter") {
-                        const val = e.currentTarget.value.trim();
-                        if (!val) return;
-                        try {
-                          await answerCliQuestion(projectId, val);
-                          e.currentTarget.value = "";
-                          setCliPendingQuestion(null);
-                        } catch {}
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={async () => {
-                      const input = document.getElementById("cli-question-input") as HTMLInputElement;
-                      if (!input) return;
-                      const val = input.value.trim();
-                      if (!val) return;
-                      try {
-                        await answerCliQuestion(projectId, val);
-                        input.value = "";
-                        setCliPendingQuestion(null);
-                      } catch {}
-                    }}
-                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
-                  >
-                    <Send className="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
-            )}
+            {/* CLI pending question moved to bottom — see before messagesEndRef */}
 
             {/* Unified chronological stream — all events from DB in order */}
             {(() => {
@@ -1412,6 +1377,74 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div className="flex items-center gap-1.5 text-[10px] text-fg/30 py-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 {isIntakeRunning ? (sseConnected ? "Agent working (live)..." : "Agent working...") : "Thinking..."}
+              </div>
+            )}
+
+            {/* Pending question from CLI agent (askUser MCP tool) — rendered at bottom so auto-scroll keeps it visible */}
+            {cliRuntime && cliPendingQuestion && (
+              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="flex items-center gap-2 text-xs font-medium text-warning">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Agent needs your input
+                </div>
+                {cliPendingQuestion.context && (
+                  <p className="text-xs text-fg/50">{cliPendingQuestion.context}</p>
+                )}
+                <p className="text-sm whitespace-pre-wrap">{cliPendingQuestion.question}</p>
+                {cliPendingQuestion.options && cliPendingQuestion.options.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {cliPendingQuestion.options.map((opt, i) => (
+                      <button
+                        key={i}
+                        onClick={async () => {
+                          try {
+                            await answerCliQuestion(projectId, opt);
+                            setCliPendingQuestion(null);
+                          } catch {}
+                        }}
+                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Type your answer..."
+                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
+                    id="cli-question-input"
+                    autoFocus
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter") {
+                        const val = e.currentTarget.value.trim();
+                        if (!val) return;
+                        try {
+                          await answerCliQuestion(projectId, val);
+                          e.currentTarget.value = "";
+                          setCliPendingQuestion(null);
+                        } catch {}
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={async () => {
+                      const input = document.getElementById("cli-question-input") as HTMLInputElement;
+                      if (!input) return;
+                      const val = input.value.trim();
+                      if (!val) return;
+                      try {
+                        await answerCliQuestion(projectId, val);
+                        input.value = "";
+                        setCliPendingQuestion(null);
+                      } catch {}
+                    }}
+                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
+                  >
+                    <Send className="h-3 w-3" />
+                  </button>
+                </div>
               </div>
             )}
 

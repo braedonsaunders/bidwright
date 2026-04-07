@@ -1,20 +1,24 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile, symlink } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import JSZip from "jszip";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
 
 import {
   type PrismaApiStore,
+  type AdjustmentPatchInput,
   type AdditionalLineItemPatchInput,
   type CatalogItemPatchInput,
   type CatalogPatchInput,
+  type CreateAdjustmentInput,
   type ConditionPatchInput,
   type CreateAdditionalLineItemInput,
   type CreateCatalogInput,
@@ -27,6 +31,7 @@ import {
   type CreateWorksheetInput,
   type CreateWorksheetItemInput,
   type CreateProjectInput,
+  type CreateSummaryRowInput,
   type FileNodePatchInput,
   type ModifierPatchInput,
   type PackageIngestionOutcome,
@@ -34,6 +39,7 @@ import {
   type QuotePatchInput,
   type ReportSectionPatchInput,
   type RevisionPatchInput,
+  type SummaryRowPatchInput,
   type StatusPatchInput,
   type WorksheetPatchInput,
   type WorksheetItemPatchInput,
@@ -66,6 +72,7 @@ import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { intakeRoutes } from "./routes/intake-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
+import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
 import { labourCostRoutes } from "./routes/labour-cost-routes.js";
 import { burdenRoutes } from "./routes/burden-routes.js";
@@ -268,6 +275,28 @@ const modifierPatchSchema = z.object({
   show: z.enum(["Yes", "No"]).optional()
 });
 
+const createAdjustmentSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  type: z.string().optional(),
+  kind: z.enum(["modifier", "line_item"]).optional(),
+  pricingMode: z.enum([
+    "modifier",
+    "option_standalone",
+    "option_additional",
+    "line_item_additional",
+    "line_item_standalone",
+    "custom_total",
+  ]).optional(),
+  appliesTo: z.string().optional(),
+  percentage: z.number().finite().nullable().optional(),
+  amount: z.number().finite().nullable().optional(),
+  show: z.enum(["Yes", "No"]).optional(),
+  order: z.number().int().optional(),
+});
+
+const adjustmentPatchSchema = createAdjustmentSchema;
+
 const createConditionSchema = z.object({
   type: z.string().min(1),
   value: z.string().min(1),
@@ -393,6 +422,14 @@ interface MultipartPackageUpload {
   checksum: string;
 }
 
+interface StagedMultipartFile {
+  originalFileName: string;
+  safeFileName: string;
+  stagingPath: string;
+  size: number;
+  mimeType?: string;
+}
+
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
@@ -405,6 +442,435 @@ function hashFile(filePath: string) {
     stream.on("end", () => resolve(hash.digest("hex")));
     stream.on("error", reject);
   });
+}
+
+function inferFallbackExtension(mimeType?: string) {
+  switch ((mimeType ?? "").toLowerCase()) {
+    case "application/zip":
+    case "application/x-zip-compressed":
+      return ".zip";
+    case "application/vnd.ms-outlook":
+      return ".msg";
+    case "application/pdf":
+      return ".pdf";
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      return ".xlsx";
+    case "application/vnd.ms-excel":
+      return ".xls";
+    case "text/csv":
+      return ".csv";
+    case "application/msword":
+      return ".doc";
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return ".docx";
+    case "message/rfc822":
+      return ".eml";
+    case "image/png":
+      return ".png";
+    case "image/jpeg":
+      return ".jpg";
+    case "text/plain":
+      return ".txt";
+    default:
+      return "";
+  }
+}
+
+function inferMultipartFileName(fileName: string | undefined, mimeType: string | undefined, index: number) {
+  const trimmed = fileName?.trim();
+  if (trimmed) {
+    return sanitizeFileName(path.basename(trimmed));
+  }
+
+  return sanitizeFileName(`upload-${index}${inferFallbackExtension(mimeType)}`);
+}
+
+function isZipUpload(fileName: string, mimeType?: string) {
+  const ext = path.extname(fileName).toLowerCase();
+  return ext === ".zip" || ["application/zip", "application/x-zip-compressed"].includes((mimeType ?? "").toLowerCase());
+}
+
+function isMsgUpload(fileName: string, mimeType?: string) {
+  const ext = path.extname(fileName).toLowerCase();
+  return ext === ".msg" || (mimeType ?? "").toLowerCase() === "application/vnd.ms-outlook";
+}
+
+function isEmlUpload(fileName: string, mimeType?: string) {
+  const ext = path.extname(fileName).toLowerCase();
+  return ext === ".eml" || (mimeType ?? "").toLowerCase() === "message/rfc822";
+}
+
+function ensureZipFileName(fileName: string) {
+  const safe = sanitizeFileName(fileName);
+  if (!safe) {
+    return "customer-package.zip";
+  }
+  return safe.toLowerCase().endsWith(".zip") ? safe : `${safe}.zip`;
+}
+
+function buildSyntheticArchiveName(fields: UploadFieldMap, files: StagedMultipartFile[]) {
+  const requestedName = fields.packageName?.trim();
+  if (requestedName) {
+    return ensureZipFileName(requestedName);
+  }
+
+  if (files.length === 1) {
+    return ensureZipFileName(path.basename(files[0].originalFileName, path.extname(files[0].originalFileName)));
+  }
+
+  return ensureZipFileName(`customer-package-${files.length}-files`);
+}
+
+function normalizeArchiveEntryPath(value: string) {
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((segment) => segment && segment !== "." && segment !== "..")
+    .join("/");
+}
+
+function isIgnoredArchivePath(value: string) {
+  const segments = normalizeArchiveEntryPath(value).split("/").filter(Boolean);
+  return segments.length === 0 || segments.some((segment) => segment === "__MACOSX" || segment.startsWith("."));
+}
+
+function reserveUniqueArchivePath(usedPaths: Set<string>, desiredPath: string) {
+  const normalized = normalizeArchiveEntryPath(desiredPath) || "file";
+  const directory = path.posix.dirname(normalized);
+  const extension = path.posix.extname(normalized);
+  const baseName = path.posix.basename(normalized, extension) || "file";
+  let candidate = normalized;
+  let suffix = 2;
+
+  while (usedPaths.has(candidate.toLowerCase())) {
+    candidate = directory === "."
+      ? `${baseName}-${suffix}${extension}`
+      : path.posix.join(directory, `${baseName}-${suffix}${extension}`);
+    suffix += 1;
+  }
+
+  usedPaths.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function addArchiveBuffer(zip: JSZip, usedPaths: Set<string>, desiredPath: string, content: Buffer | Uint8Array | string) {
+  const finalPath = reserveUniqueArchivePath(usedPaths, desiredPath);
+  zip.file(finalPath, content);
+  return finalPath;
+}
+
+function toDataView(buffer: Buffer) {
+  return new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+function stripHtmlTags(value: string) {
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function recipientList(recipients: FieldsData[] | undefined, kind?: "to" | "cc" | "bcc") {
+  return (recipients ?? [])
+    .filter((recipient) => !kind || recipient.recipType === kind)
+    .map((recipient) => recipient.smtpAddress || recipient.email || recipient.name || "")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function postalAddressList(addresses: PostalAddress[] | undefined) {
+  const values: string[] = [];
+
+  for (const address of addresses ?? []) {
+    if ("group" in address && Array.isArray(address.group)) {
+      values.push(...postalAddressList(address.group));
+      continue;
+    }
+
+    const parts = [address.name, address.address].map((value) => value?.trim()).filter(Boolean);
+    if (parts.length > 0) {
+      values.push(parts.join(" "));
+    }
+  }
+
+  return values;
+}
+
+function postalAttachmentBuffer(attachment: PostalAttachment) {
+  if (typeof attachment.content === "string") {
+    return Buffer.from(attachment.content, attachment.encoding === "base64" ? "base64" : "utf8");
+  }
+
+  if (attachment.content instanceof ArrayBuffer) {
+    return Buffer.from(attachment.content);
+  }
+
+  return Buffer.from(attachment.content.buffer, attachment.content.byteOffset, attachment.content.byteLength);
+}
+
+function formatRfc822MessageSummary(sourceFileName: string, email: PostalEmail) {
+  const from = postalAddressList(email.from ? [email.from] : undefined);
+  const to = postalAddressList(email.to);
+  const cc = postalAddressList(email.cc);
+  const bcc = postalAddressList(email.bcc);
+  const replyTo = postalAddressList(email.replyTo);
+  const attachmentNames = email.attachments
+    .map((attachment, index) =>
+      attachment.filename ||
+      `attachment-${index + 1}${inferFallbackExtension(attachment.mimeType)}`
+    )
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const body = [
+    email.text,
+    email.html ? stripHtmlTags(email.html) : undefined,
+  ]
+    .map((value) => value?.trim())
+    .find((value) => value && value.length > 0);
+
+  const lines = [
+    `Source file: ${sourceFileName}`,
+    `Subject: ${email.subject?.trim() || "(no subject)"}`,
+  ];
+
+  if (from.length > 0) lines.push(`From: ${from.join("; ")}`);
+  if (to.length > 0) lines.push(`To: ${to.join("; ")}`);
+  if (cc.length > 0) lines.push(`CC: ${cc.join("; ")}`);
+  if (bcc.length > 0) lines.push(`BCC: ${bcc.join("; ")}`);
+  if (replyTo.length > 0) lines.push(`Reply-To: ${replyTo.join("; ")}`);
+  if (email.date) lines.push(`Date: ${email.date}`);
+  if (email.messageId) lines.push(`Message-ID: ${email.messageId}`);
+
+  if (attachmentNames.length > 0) {
+    lines.push("", "Attachments:");
+    for (const attachmentName of attachmentNames) {
+      lines.push(`- ${attachmentName}`);
+    }
+  }
+
+  if (body) {
+    lines.push("", "Body:", body);
+  }
+
+  return lines.join("\n");
+}
+
+function formatOutlookMessageSummary(sourceFileName: string, info: FieldsData) {
+  const from = [info.senderSmtpAddress, info.senderEmail, info.senderName].filter(Boolean).join(" ").trim();
+  const to = recipientList(info.recipients, "to");
+  const cc = recipientList(info.recipients, "cc");
+  const bcc = recipientList(info.recipients, "bcc");
+  const attachmentNames = (info.attachments ?? [])
+    .filter((attachment) => !attachment.attachmentHidden)
+    .map((attachment, index) =>
+      attachment.fileName || attachment.fileNameShort || attachment.name || `attachment-${index + 1}`
+    );
+  const body = [
+    info.body,
+    info.preview,
+    info.bodyHtml ? stripHtmlTags(info.bodyHtml) : undefined,
+  ]
+    .map((value) => value?.trim())
+    .find((value) => value && value.length > 0);
+
+  const lines = [
+    `Source file: ${sourceFileName}`,
+    `Subject: ${info.subject?.trim() || "(no subject)"}`,
+  ];
+
+  if (from) lines.push(`From: ${from}`);
+  if (to.length > 0) lines.push(`To: ${to.join("; ")}`);
+  if (cc.length > 0) lines.push(`CC: ${cc.join("; ")}`);
+  if (bcc.length > 0) lines.push(`BCC: ${bcc.join("; ")}`);
+  if (info.messageDeliveryTime) lines.push(`Received: ${info.messageDeliveryTime}`);
+  if (info.clientSubmitTime) lines.push(`Sent: ${info.clientSubmitTime}`);
+  if (info.messageId) lines.push(`Message-ID: ${info.messageId}`);
+
+  if (attachmentNames.length > 0) {
+    lines.push("", "Attachments:");
+    for (const attachmentName of attachmentNames) {
+      lines.push(`- ${attachmentName}`);
+    }
+  }
+
+  if (body) {
+    lines.push("", "Body:", body);
+  } else if (info.headers?.trim()) {
+    lines.push("", "Headers:", info.headers.trim());
+  }
+
+  return lines.join("\n");
+}
+
+async function appendMsgBufferToArchive(
+  zip: JSZip,
+  usedPaths: Set<string>,
+  buffer: Buffer,
+  sourceFileName: string,
+  depth = 0
+) {
+  const baseName = sanitizeFileName(path.basename(sourceFileName, path.extname(sourceFileName))) || `email-${depth + 1}`;
+
+  try {
+    const reader = new MsgReader(toDataView(buffer));
+    const info = reader.getFileData();
+    addArchiveBuffer(zip, usedPaths, `${baseName}/${baseName}-email.txt`, formatOutlookMessageSummary(sourceFileName, info));
+
+    for (const [index, attachment] of (info.attachments ?? []).entries()) {
+      if (attachment.attachmentHidden) {
+        continue;
+      }
+
+      const attachmentData = reader.getAttachment(attachment);
+      const attachmentName = sanitizeFileName(
+        attachmentData.fileName ||
+        attachment.fileName ||
+        attachment.fileNameShort ||
+        attachment.name ||
+        `attachment-${index + 1}`
+      );
+      const attachmentBuffer = Buffer.from(attachmentData.content);
+
+      if (depth < 3 && isMsgUpload(attachmentName, attachment.attachMimeTag)) {
+        await appendMsgBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        continue;
+      }
+
+      addArchiveBuffer(zip, usedPaths, `${baseName}/attachments/${attachmentName}`, attachmentBuffer);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addArchiveBuffer(
+      zip,
+      usedPaths,
+      `${baseName}/${baseName}-email.txt`,
+      `Source file: ${sourceFileName}\n\nOutlook message parsing failed.\n${message}`
+    );
+    addArchiveBuffer(zip, usedPaths, `${baseName}/${sanitizeFileName(sourceFileName)}`, buffer);
+  }
+}
+
+async function appendEmlBufferToArchive(
+  zip: JSZip,
+  usedPaths: Set<string>,
+  buffer: Buffer,
+  sourceFileName: string,
+  depth = 0
+) {
+  const baseName = sanitizeFileName(path.basename(sourceFileName, path.extname(sourceFileName))) || `email-${depth + 1}`;
+
+  try {
+    const email = await PostalMime.parse(buffer, {
+      rfc822Attachments: true,
+      forceRfc822Attachments: true,
+      attachmentEncoding: "arraybuffer",
+    });
+    addArchiveBuffer(zip, usedPaths, `${baseName}/${baseName}-email.txt`, formatRfc822MessageSummary(sourceFileName, email));
+
+    for (const [index, attachment] of email.attachments.entries()) {
+      const attachmentName = sanitizeFileName(
+        attachment.filename ||
+        `attachment-${index + 1}${inferFallbackExtension(attachment.mimeType)}`
+      ) || `attachment-${index + 1}${inferFallbackExtension(attachment.mimeType)}`;
+      const attachmentBuffer = postalAttachmentBuffer(attachment);
+
+      if (depth < 3 && isMsgUpload(attachmentName, attachment.mimeType)) {
+        await appendMsgBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        continue;
+      }
+
+      if (depth < 3 && isEmlUpload(attachmentName, attachment.mimeType)) {
+        await appendEmlBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        continue;
+      }
+
+      addArchiveBuffer(zip, usedPaths, `${baseName}/attachments/${attachmentName}`, attachmentBuffer);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addArchiveBuffer(
+      zip,
+      usedPaths,
+      `${baseName}/${baseName}-email.txt`,
+      `Source file: ${sourceFileName}\n\nRFC822 email parsing failed.\n${message}`
+    );
+    addArchiveBuffer(zip, usedPaths, `${baseName}/${sanitizeFileName(sourceFileName)}`, buffer);
+  }
+}
+
+async function appendExpandedZipToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
+  const bytes = await readFile(file.stagingPath);
+  const sourceZip = await JSZip.loadAsync(bytes);
+  const archiveFolder = sanitizeFileName(path.basename(file.originalFileName, path.extname(file.originalFileName))) || "archive";
+
+  for (const entryName of Object.keys(sourceZip.files).sort()) {
+    const sourceEntry = sourceZip.files[entryName];
+    if (!sourceEntry || sourceEntry.dir || isIgnoredArchivePath(entryName)) {
+      continue;
+    }
+
+    const entryBuffer = await sourceEntry.async("nodebuffer");
+    const normalizedEntryName = normalizeArchiveEntryPath(entryName);
+
+    if (isMsgUpload(normalizedEntryName)) {
+      await appendMsgBufferToArchive(zip, usedPaths, entryBuffer, path.posix.basename(normalizedEntryName));
+      continue;
+    }
+
+    if (isEmlUpload(normalizedEntryName)) {
+      await appendEmlBufferToArchive(zip, usedPaths, entryBuffer, path.posix.basename(normalizedEntryName));
+      continue;
+    }
+
+    addArchiveBuffer(zip, usedPaths, `${archiveFolder}/${normalizedEntryName}`, entryBuffer);
+  }
+}
+
+async function appendUploadedFileToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
+  if (isZipUpload(file.originalFileName, file.mimeType)) {
+    await appendExpandedZipToArchive(zip, usedPaths, file);
+    return;
+  }
+
+  const buffer = await readFile(file.stagingPath);
+  if (isMsgUpload(file.originalFileName, file.mimeType)) {
+    await appendMsgBufferToArchive(zip, usedPaths, buffer, file.originalFileName);
+    return;
+  }
+
+  if (isEmlUpload(file.originalFileName, file.mimeType)) {
+    await appendEmlBufferToArchive(zip, usedPaths, buffer, file.originalFileName);
+    return;
+  }
+
+  addArchiveBuffer(zip, usedPaths, file.safeFileName, buffer);
+}
+
+async function writeSyntheticArchive(storagePath: string, files: StagedMultipartFile[]) {
+  const zip = new JSZip();
+  const usedPaths = new Set<string>();
+
+  for (const file of files) {
+    await appendUploadedFileToArchive(zip, usedPaths, file);
+  }
+
+  await mkdir(path.dirname(storagePath), { recursive: true });
+  await pipeline(
+    zip.generateNodeStream({
+      streamFiles: true,
+      compression: "DEFLATE",
+    }),
+    createWriteStream(storagePath)
+  );
 }
 
 export function summaryMetrics(workspace: PackageIngestionOutcome["workspace"]) {
@@ -431,48 +897,59 @@ export function summaryMetrics(workspace: PackageIngestionOutcome["workspace"]) 
 async function saveMultipartPackageUpload(request: FastifyRequest): Promise<MultipartPackageUpload> {
   const fields: UploadFieldMap = {};
   const packageId = `pkg-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const stagedFiles: StagedMultipartFile[] = [];
+  const stagingDir = resolveApiPath("packages", packageId, "staging");
   let originalFileName = "";
   let storagePath = "";
   let totalBytes = 0;
   let checksum = "";
-  let fileSeen = false;
 
-  for await (const part of request.parts()) {
-    if (part.type === "file") {
-      if (fileSeen) {
-        throw new Error("Only one zip file can be uploaded per request");
+  try {
+    for await (const part of request.parts()) {
+      if (part.type === "file") {
+        const safeFileName = inferMultipartFileName(part.filename, part.mimetype, stagedFiles.length + 1);
+        const stagingPath = path.join(
+          stagingDir,
+          `${String(stagedFiles.length + 1).padStart(3, "0")}-${safeFileName}`
+        );
+
+        await mkdir(path.dirname(stagingPath), { recursive: true });
+        await pipeline(part.file, createWriteStream(stagingPath));
+
+        const size = (await stat(stagingPath)).size;
+        stagedFiles.push({
+          originalFileName: safeFileName,
+          safeFileName,
+          stagingPath,
+          size,
+          mimeType: part.mimetype,
+        });
+        continue;
       }
 
-      fileSeen = true;
-      originalFileName = sanitizeFileName(part.filename || "customer-package.zip");
-      const fileExt = path.extname(originalFileName).toLowerCase();
-      if (fileExt !== ".zip") {
-        throw new Error("Only .zip uploads are supported");
-      }
-
-      storagePath = resolveApiPath(relativePackageArchivePath(packageId, originalFileName));
-      await mkdir(path.dirname(storagePath), { recursive: true });
-      await pipeline(part.file, createWriteStream(storagePath));
-
-      totalBytes = (await stat(storagePath)).size;
-      checksum = await hashFile(storagePath);
-      continue;
+      const value = Array.isArray(part.value) ? part.value.join("") : String(part.value);
+      (fields as Record<string, string | undefined>)[part.fieldname] = value;
     }
 
-    const value = Array.isArray(part.value) ? part.value.join("") : String(part.value);
-    (fields as Record<string, string | undefined>)[part.fieldname] = value;
-  }
+    if (stagedFiles.length === 0) {
+      throw new Error("At least one file is required for package upload");
+    }
 
-  if (!fileSeen) {
-    throw new Error("A zip file is required for package upload");
-  }
+    const archiveFileName = buildSyntheticArchiveName(fields, stagedFiles);
+    originalFileName = stagedFiles.length === 1 ? stagedFiles[0].originalFileName : archiveFileName;
+    storagePath = resolveApiPath(relativePackageArchivePath(packageId, archiveFileName));
 
-  if (!storagePath) {
-    throw new Error("Package upload could not be stored");
-  }
+    if (stagedFiles.length === 1 && isZipUpload(stagedFiles[0].originalFileName, stagedFiles[0].mimeType)) {
+      await mkdir(path.dirname(storagePath), { recursive: true });
+      await rename(stagedFiles[0].stagingPath, storagePath);
+    } else {
+      await writeSyntheticArchive(storagePath, stagedFiles);
+    }
 
-  if (!checksum) {
+    totalBytes = (await stat(storagePath)).size;
     checksum = await hashFile(storagePath);
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   }
 
   return {
@@ -588,6 +1065,42 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
   };
 }
 
+function requestActor(request: FastifyRequest): string {
+  const raw = request.headers["x-bidwright-actor"];
+  if (Array.isArray(raw)) return raw[0]?.toLowerCase() ?? "";
+  return typeof raw === "string" ? raw.toLowerCase() : "";
+}
+
+function shouldCaptureHumanEstimateFeedback(request: FastifyRequest): boolean {
+  const actor = requestActor(request);
+  return actor === "" || actor === "web";
+}
+
+async function captureHumanEstimateFeedback(
+  request: FastifyRequest,
+  projectId: string,
+  correction: Record<string, unknown>,
+  options?: {
+    source?: string;
+    feedbackType?: string;
+    sourceLabel?: string;
+    notes?: string;
+    quoteReviewId?: string | null;
+    createNew?: boolean;
+  },
+) {
+  if (!request.store || !shouldCaptureHumanEstimateFeedback(request)) return;
+  await request.store.captureAutomaticEstimateFeedback(projectId, {
+    source: options?.source,
+    feedbackType: options?.feedbackType,
+    sourceLabel: options?.sourceLabel,
+    notes: options?.notes,
+    quoteReviewId: options?.quoteReviewId ?? null,
+    createNew: options?.createNew,
+    correction,
+  }).catch(() => null);
+}
+
 async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
   const multipartUpload = await saveMultipartPackageUpload(request);
   const sourceKind = multipartUpload.fields.sourceKind ?? "project";
@@ -656,6 +1169,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     const zipData = await readFile(multipartUpload.storagePath);
     const zip = await JSZip.loadAsync(zipData);
     const now = new Date();
+    const usedDocumentNames = new Set<string>();
 
     // Also extract files to disk for CLI access
     const docsDir = resolveApiPath("projects", targetProjectId!, "documents");
@@ -673,7 +1187,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
 
     for (const relativePath of entries) {
       const fileName = path.basename(relativePath);
-      const sanitized = sanitizeFileName(fileName);
+      const sanitized = reserveUniqueArchivePath(usedDocumentNames, sanitizeFileName(fileName));
       const ext = path.extname(fileName).toLowerCase();
       const docId = `doc-${randomUUID()}`;
       const relStoragePath = path.join("projects", targetProjectId!, "documents", sanitized);
@@ -1104,6 +1618,11 @@ export function buildServer() {
     }
 
     await request.store!.updateRevision(projectId, revisionId, parsed.data satisfies RevisionPatchInput);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "update_revision",
+      revisionId,
+      fields: Object.keys(parsed.data),
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1188,6 +1707,12 @@ export function buildServer() {
     }
 
     await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "create_item",
+      worksheetId,
+      category: parsed.data.category,
+      entityName: parsed.data.entityName,
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1209,6 +1734,10 @@ export function buildServer() {
     }
 
     await request.store!.createWorksheet(projectId, parsed.data satisfies CreateWorksheetInput);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "create_worksheet",
+      name: parsed.data.name,
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1242,6 +1771,10 @@ export function buildServer() {
   app.delete("/projects/:projectId/worksheets/:worksheetId", async (request, reply) => {
     const { projectId, worksheetId } = request.params as { projectId: string; worksheetId: string };
     await request.store!.deleteWorksheet(projectId, worksheetId);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "delete_worksheet",
+      worksheetId,
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1262,6 +1795,11 @@ export function buildServer() {
     }
 
     await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "update_item",
+      itemId,
+      fields: Object.keys(parsed.data),
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1274,6 +1812,10 @@ export function buildServer() {
   app.delete("/projects/:projectId/worksheet-items/:itemId", async (request, reply) => {
     const { projectId, itemId } = request.params as { projectId: string; itemId: string };
     await request.store!.deleteWorksheetItem(projectId, itemId);
+    await captureHumanEstimateFeedback(request, projectId, {
+      action: "delete_item",
+      itemId,
+    });
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({
@@ -1460,6 +2002,67 @@ export function buildServer() {
   });
 
   // ── Modifier routes ────────────────────────────────────────────────
+
+  app.get("/projects/:projectId/adjustments", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return request.store!.listAdjustments(projectId);
+  });
+
+  app.post("/projects/:projectId/adjustments", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createAdjustmentSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid adjustment payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+
+    await request.store!.createAdjustment(projectId, workspace.currentRevision.id, parsed.data satisfies CreateAdjustmentInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/adjustments/:adjustmentId", async (request, reply) => {
+    const { projectId, adjustmentId } = request.params as { projectId: string; adjustmentId: string };
+    const parsed = adjustmentPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid adjustment payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    await request.store!.updateAdjustment(projectId, adjustmentId, parsed.data satisfies AdjustmentPatchInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/adjustments/:adjustmentId", async (request, reply) => {
+    const { projectId, adjustmentId } = request.params as { projectId: string; adjustmentId: string };
+    await request.store!.deleteAdjustment(projectId, adjustmentId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
 
   app.get("/projects/:projectId/modifiers", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
@@ -1687,20 +2290,15 @@ export function buildServer() {
   // ── Summary Row routes ──────────────────────────────────────────────
 
   const summaryRowCreateSchema = z.object({
-    type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).optional(),
+    type: z.enum(["category", "phase", "adjustment", "heading", "separator", "subtotal"]).optional(),
     label: z.string().optional(),
     order: z.number().int().optional(),
     visible: z.boolean().optional(),
     style: z.enum(["normal", "bold", "indent", "highlight"]).optional(),
-    sourceCategory: z.string().nullable().optional(),
-    sourcePhase: z.string().nullable().optional(),
-    manualValue: z.number().finite().nullable().optional(),
-    manualCost: z.number().finite().nullable().optional(),
-    overrideValue: z.number().finite().nullable().optional(),
-    overrideCost: z.number().finite().nullable().optional(),
-    modifierPercent: z.number().finite().nullable().optional(),
-    modifierAmount: z.number().finite().nullable().optional(),
-    appliesTo: z.array(z.string()).optional(),
+    sourceCategoryId: z.string().nullable().optional(),
+    sourceCategoryLabel: z.string().nullable().optional(),
+    sourcePhaseId: z.string().nullable().optional(),
+    sourceAdjustmentId: z.string().nullable().optional(),
   });
 
   const summaryRowPatchSchema = summaryRowCreateSchema;
@@ -3591,6 +4189,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(burdenRoutes);
   app.register(travelPolicyRoutes);
   app.register(settingsRoutes);
+  app.register(estimateRoutes);
   app.register(intakeRoutes);
   app.register(catalogRoutes);
   registerCliRoutes(app);
@@ -3599,6 +4198,20 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.addHook("onReady", async () => {
     await cleanExpiredSessions(prisma);
     setInterval(() => cleanExpiredSessions(prisma), 60 * 60 * 1000);
+
+    // Clean up orphaned AI runs stuck at "running" from previous server crashes/restarts.
+    // On startup, no CLI sessions are actually running, so any "running" AI run is orphaned.
+    try {
+      const orphaned = await prisma.aiRun.updateMany({
+        where: { status: "running" },
+        data: { status: "stopped" },
+      });
+      if (orphaned.count > 0) {
+        console.log(`[startup] Cleaned ${orphaned.count} orphaned AI run(s) stuck at "running" → "stopped"`);
+      }
+    } catch (err) {
+      console.error("[startup] Failed to clean orphaned AI runs:", err);
+    }
   });
 
   return app;

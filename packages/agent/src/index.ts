@@ -10,6 +10,7 @@ export { createLLMAdapter, AnthropicAdapter, OpenAIAdapter, OpenRouterAdapter, G
 
 // Tools
 export { quoteTools } from "./tools/quote.js";
+export { estimateTools } from "./tools/estimate.js";
 export { systemTools } from "./tools/system.js";
 export { knowledgeTools } from "./tools/knowledge.js";
 export { analysisTools } from "./tools/analysis.js";

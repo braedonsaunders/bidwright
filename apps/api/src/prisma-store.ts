@@ -8,6 +8,7 @@ import { buildProjectWorkspace, summarizeProjectTotals, computeSummaryRows, gene
 import type { SummaryPreset } from "@bidwright/domain";
 import type {
   Activity,
+  Adjustment,
   AdditionalLineItem,
   AppSettings,
   AuthSession,
@@ -23,6 +24,8 @@ import type {
   DatasetRow,
   Department,
   EntityCategory,
+  EstimateCalibrationFeedback,
+  EstimateStrategy,
   FileNode,
   Job,
   KnowledgeBook,
@@ -92,6 +95,7 @@ import {
   inferPageCount,
   knowledgeCategoryFromDocType,
   mapActivity,
+  mapAdjustment,
   mapAdditionalLineItem,
   mapAiRun,
   mapBurdenPeriod,
@@ -106,6 +110,8 @@ import {
   mapDatasetRow,
   mapDepartment,
   mapEntityCategory,
+  mapEstimateCalibrationFeedback,
+  mapEstimateStrategy,
   mapFileNode,
   mapIngestionJob,
   mapJob,
@@ -193,6 +199,57 @@ function resolveTierUnitKeys(
     resolved[key] = numVal;
   }
   return resolved;
+}
+
+function adjustmentToLegacyModifier(adjustment: Adjustment): Modifier | null {
+  if (adjustment.pricingMode !== "modifier" && adjustment.kind !== "modifier") {
+    return null;
+  }
+
+  return {
+    id: adjustment.id,
+    revisionId: adjustment.revisionId,
+    name: adjustment.name,
+    type: adjustment.type,
+    appliesTo: adjustment.appliesTo,
+    percentage: adjustment.percentage ?? null,
+    amount: adjustment.amount ?? null,
+    show: adjustment.show,
+  };
+}
+
+function adjustmentToLegacyAdditionalLineItem(adjustment: Adjustment): AdditionalLineItem | null {
+  if (adjustment.kind !== "line_item") {
+    return null;
+  }
+
+  const type: AdditionalLineItem["type"] =
+    adjustment.pricingMode === "option_standalone"
+      ? "OptionStandalone"
+      : adjustment.pricingMode === "option_additional"
+        ? "OptionAdditional"
+        : adjustment.pricingMode === "line_item_standalone"
+          ? "LineItemStandalone"
+          : adjustment.pricingMode === "custom_total"
+            ? "CustomTotal"
+            : "LineItemAdditional";
+
+  return {
+    id: adjustment.id,
+    revisionId: adjustment.revisionId,
+    name: adjustment.name,
+    description: adjustment.description,
+    type,
+    amount: adjustment.amount ?? 0,
+  };
+}
+
+function isLegacyModifier(value: Modifier | null): value is Modifier {
+  return value !== null;
+}
+
+function isLegacyAdditionalLineItem(value: AdditionalLineItem | null): value is AdditionalLineItem {
+  return value !== null;
 }
 
 // ── Re-exported Interfaces ────────────────────────────────────────────────────
@@ -408,6 +465,32 @@ export interface ModifierPatchInput {
   show?: "Yes" | "No";
 }
 
+export interface CreateAdjustmentInput {
+  name?: string;
+  description?: string;
+  type?: string;
+  kind?: Adjustment["kind"];
+  pricingMode?: Adjustment["pricingMode"];
+  appliesTo?: string;
+  percentage?: number | null;
+  amount?: number | null;
+  show?: "Yes" | "No";
+  order?: number;
+}
+
+export interface AdjustmentPatchInput {
+  name?: string;
+  description?: string;
+  type?: string;
+  kind?: Adjustment["kind"];
+  pricingMode?: Adjustment["pricingMode"];
+  appliesTo?: string;
+  percentage?: number | null;
+  amount?: number | null;
+  show?: "Yes" | "No";
+  order?: number;
+}
+
 export interface CreateConditionInput {
   type: string;
   value: string;
@@ -433,6 +516,20 @@ export interface AdditionalLineItemPatchInput {
   description?: string;
   amount?: number;
 }
+
+export interface CreateSummaryRowInput {
+  type?: SummaryRow["type"];
+  label?: string;
+  order?: number;
+  visible?: boolean;
+  style?: SummaryRow["style"];
+  sourceCategoryId?: string | null;
+  sourceCategoryLabel?: string | null;
+  sourcePhaseId?: string | null;
+  sourceAdjustmentId?: string | null;
+}
+
+export interface SummaryRowPatchInput extends CreateSummaryRowInput {}
 
 export interface CreateReportSectionInput {
   sectionType?: string;
@@ -600,6 +697,10 @@ async function writeJsonAtomic(filePath: string, value: unknown) {
   await rename(tempPath, filePath);
 }
 
+function toPrismaJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
+}
+
 async function sha256File(filePath: string) {
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
@@ -651,13 +752,14 @@ export class PrismaApiStore {
     const worksheetIds = worksheets.map((w) => w.id);
     const worksheetItems = await this.db.worksheetItem.findMany({ where: { worksheetId: { in: worksheetIds } } });
     const phases = await this.db.phase.findMany({ where: { revisionId: { in: revisionIds } } });
-    const modifiers = await this.db.modifier.findMany({ where: { revisionId: { in: revisionIds } } });
-    const additionalLineItems = await this.db.additionalLineItem.findMany({ where: { revisionId: { in: revisionIds } } });
+    const adjustments = await this.db.adjustment.findMany({ where: { revisionId: { in: revisionIds } } });
     const summaryRows = await this.db.summaryRow.findMany({ where: { revisionId: { in: revisionIds } }, orderBy: { order: "asc" } });
     const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } } });
     const reportSections = await this.db.reportSection.findMany({ where: { revisionId: { in: revisionIds } } });
     const sourceDocuments = await this.db.sourceDocument.findMany({ where: { projectId } });
     const aiRuns = await this.db.aiRun.findMany({ where: { projectId } });
+    const estimateStrategies = await this.db.estimateStrategy.findMany({ where: { projectId } });
+    const estimateCalibrationFeedback = await this.db.estimateCalibrationFeedback.findMany({ where: { projectId } });
     const citations = await this.db.citation.findMany({ where: { projectId } });
     const activities = await this.db.activity.findMany({ where: { projectId } });
     const jobs = await this.db.job.findMany({ where: { projectId } });
@@ -690,6 +792,13 @@ export class PrismaApiStore {
       where: { OR: [{ revisionId: { in: revisionIds } }, { organizationId: this.organizationId, scope: "global" }] },
       include: { tiers: true, items: true },
     });
+    const mappedAdjustments = adjustments.map(mapAdjustment);
+    const mappedModifiers = mappedAdjustments
+      .map(adjustmentToLegacyModifier)
+      .filter(isLegacyModifier);
+    const mappedAdditionalLineItems = mappedAdjustments
+      .map(adjustmentToLegacyAdditionalLineItem)
+      .filter(isLegacyAdditionalLineItem);
 
     return {
       projects: [mapProject(project)],
@@ -699,13 +808,16 @@ export class PrismaApiStore {
       worksheets: worksheets.map(mapWorksheet),
       worksheetItems: worksheetItems.map(mapWorksheetItem),
       phases: phases.map(mapPhase),
-      modifiers: modifiers.map(mapModifier),
-      additionalLineItems: additionalLineItems.map(mapAdditionalLineItem),
+      adjustments: mappedAdjustments,
+      modifiers: mappedModifiers,
+      additionalLineItems: mappedAdditionalLineItems,
       summaryRows: summaryRows.map(mapSummaryRow),
       conditions: conditions.map(mapCondition),
       catalogs: catalogs.map(mapCatalog),
       catalogItems: catalogItems.map(mapCatalogItem),
       aiRuns: aiRuns.map(mapAiRun) as any,
+      estimateStrategies: estimateStrategies.map(mapEstimateStrategy),
+      estimateCalibrationFeedback: estimateCalibrationFeedback.map(mapEstimateCalibrationFeedback),
       citations: citations.map(mapCitation) as any,
       activities: activities.map(mapActivity),
       conditionLibrary: conditionLibrary.map(mapConditionLibrary),
@@ -749,6 +861,8 @@ export class PrismaApiStore {
           estimatedMargin: totals.estimatedMargin,
           calculatedTotal: totals.calculatedTotal,
           totalHours: totals.totalHours,
+          breakoutPackage: totals.breakout as any,
+          calculatedCategoryTotals: totals.categoryTotals as any,
         },
       });
     }
@@ -775,6 +889,219 @@ export class PrismaApiStore {
     if (!quote) return { quote: null, revision: null };
     const revision = await this.db.quoteRevision.findFirst({ where: { id: quote.currentRevisionId } });
     return { quote, revision };
+  }
+
+  private async requireCurrentRevision(projectId: string) {
+    const { quote, revision } = await this.findCurrentRevision(projectId);
+    if (!quote || !revision) {
+      throw new Error(`Project ${projectId} does not have an active revision`);
+    }
+    return { quote, revision };
+  }
+
+  private advanceStrategyStage(currentStage: string | null | undefined, nextStage: string) {
+    const order: Record<string, number> = {
+      scope: 1,
+      execution: 2,
+      packaging: 3,
+      benchmark: 4,
+      reconcile: 5,
+      complete: 6,
+    };
+    const current = currentStage && order[currentStage] ? currentStage : "scope";
+    return order[nextStage] > order[current] ? nextStage : current;
+  }
+
+  private categoryShareMetrics(items: Array<{ category?: string | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
+    const totalsByCategory = new Map<string, { value: number; hours: number }>();
+    let totalValue = 0;
+    let totalHours = 0;
+
+    for (const item of items) {
+      const category = (item.category || "Uncategorized").trim() || "Uncategorized";
+      const value = Number(item.price ?? 0);
+      const hours = Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0);
+      totalValue += value;
+      totalHours += hours;
+      const existing = totalsByCategory.get(category) ?? { value: 0, hours: 0 };
+      existing.value += value;
+      existing.hours += hours;
+      totalsByCategory.set(category, existing);
+    }
+
+    const valueShare: Record<string, number> = {};
+    const hourShare: Record<string, number> = {};
+    for (const [category, totals] of totalsByCategory.entries()) {
+      valueShare[category] = totalValue > 0 ? totals.value / totalValue : 0;
+      hourShare[category] = totalHours > 0 ? totals.hours / totalHours : 0;
+    }
+
+    return { valueShare, hourShare, totalValue, totalHours };
+  }
+
+  private buildEstimateSnapshot(
+    workspace: ProjectWorkspace,
+    strategy?: { benchmarkProfile?: unknown } | null,
+  ): Record<string, unknown> {
+    const quantityAdjustedItems = (workspace.worksheets ?? []).flatMap((worksheet) =>
+      (worksheet.items ?? []).map((item) => {
+        const quantity = Number(item.quantity ?? 1);
+        return {
+          category: item.category,
+          price: Number(item.price ?? 0) * quantity,
+          unit1: Number(item.unit1 ?? 0) * quantity,
+          unit2: Number(item.unit2 ?? 0) * quantity,
+          unit3: Number(item.unit3 ?? 0) * quantity,
+        };
+      }),
+    );
+    const shares = this.categoryShareMetrics(quantityAdjustedItems);
+
+    const worksheetTotals = Object.fromEntries(
+      (workspace.worksheets ?? []).map((worksheet) => {
+        const totals = (worksheet.items ?? []).reduce((acc, item) => {
+          const quantity = Number(item.quantity ?? 1);
+          acc.lineItemCount += 1;
+          acc.extendedHours += quantity * (Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0));
+          acc.extendedCost += quantity * Number(item.cost ?? 0);
+          acc.extendedPrice += quantity * Number(item.price ?? 0);
+          return acc;
+        }, {
+          lineItemCount: 0,
+          extendedHours: 0,
+          extendedCost: 0,
+          extendedPrice: 0,
+        });
+
+        return [worksheet.name || worksheet.id, {
+          lineItemCount: totals.lineItemCount,
+          extendedHours: Number(totals.extendedHours.toFixed(2)),
+          extendedCost: Number(totals.extendedCost.toFixed(2)),
+          extendedPrice: Number(totals.extendedPrice.toFixed(2)),
+        }];
+      }),
+    );
+
+    return {
+      totalHours: Number(workspace.currentRevision.totalHours ?? workspace.estimate.totals.totalHours ?? 0),
+      subtotal: Number(workspace.currentRevision.subtotal ?? workspace.estimate.totals.subtotal ?? 0),
+      worksheetCount: workspace.worksheets.length,
+      lineItemCount: workspace.estimate.lineItems.length,
+      worksheetTotals,
+      categoryValueShare: shares.valueShare,
+      categoryHourShare: shares.hourShare,
+      benchmarkProfile: strategy && typeof strategy.benchmarkProfile === "object" ? strategy.benchmarkProfile : {},
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  private extractEstimateBaseline(strategy?: { summary?: unknown; confidenceSummary?: unknown } | null): Record<string, unknown> | null {
+    if (!strategy) return null;
+
+    const fromObject = (value: unknown): Record<string, unknown> | null => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      return value as Record<string, unknown>;
+    };
+
+    const summary = fromObject(strategy.summary);
+    const confidenceSummary = fromObject(strategy.confidenceSummary);
+    const summaryBaseline = fromObject(summary?.aiBaselineSnapshot);
+    if (summaryBaseline) return summaryBaseline;
+    const confidenceBaseline = fromObject(confidenceSummary?.aiBaselineSnapshot);
+    if (confidenceBaseline) return confidenceBaseline;
+    return null;
+  }
+
+  private computeEstimateDeltaSummary(
+    aiSnapshot: Record<string, unknown>,
+    humanSnapshot: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const asObject = (value: unknown): Record<string, unknown> =>
+      value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+    const numericMapDelta = (aiMapValue: unknown, humanMapValue: unknown) => {
+      const aiMap = asObject(aiMapValue);
+      const humanMap = asObject(humanMapValue);
+      const keys = new Set([...Object.keys(aiMap), ...Object.keys(humanMap)]);
+      return Array.from(keys)
+        .map((key) => {
+          const ai = Number(aiMap[key] ?? 0);
+          const human = Number(humanMap[key] ?? 0);
+          return {
+            key,
+            ai: Number(ai.toFixed(4)),
+            human: Number(human.toFixed(4)),
+            delta: Number((ai - human).toFixed(4)),
+          };
+        })
+        .filter((entry) => Math.abs(entry.delta) >= 0.0001)
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+        .slice(0, 8);
+    };
+
+    const worksheetMetricDelta = (aiValue: unknown, humanValue: unknown, field: string) => {
+      const aiMap = asObject(aiValue);
+      const humanMap = asObject(humanValue);
+      const keys = new Set([...Object.keys(aiMap), ...Object.keys(humanMap)]);
+      return Array.from(keys)
+        .map((key) => {
+          const ai = Number(asObject(aiMap[key])[field] ?? 0);
+          const human = Number(asObject(humanMap[key])[field] ?? 0);
+          return {
+            key,
+            ai: Number(ai.toFixed(2)),
+            human: Number(human.toFixed(2)),
+            delta: Number((ai - human).toFixed(2)),
+          };
+        })
+        .filter((entry) => Math.abs(entry.delta) >= 0.01)
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+        .slice(0, 8);
+    };
+
+    const aiHours = Number(aiSnapshot.totalHours ?? 0);
+    const humanHours = Number(humanSnapshot.totalHours ?? 0);
+    const aiSubtotal = Number(aiSnapshot.subtotal ?? 0);
+    const humanSubtotal = Number(humanSnapshot.subtotal ?? 0);
+    const aiLineItems = Number(aiSnapshot.lineItemCount ?? 0);
+    const humanLineItems = Number(humanSnapshot.lineItemCount ?? 0);
+    const aiWorksheets = Number(aiSnapshot.worksheetCount ?? 0);
+    const humanWorksheets = Number(humanSnapshot.worksheetCount ?? 0);
+
+    return {
+      totalHoursDelta: Number((aiHours - humanHours).toFixed(2)),
+      totalHoursDeltaPct: humanHours !== 0 ? Number((((aiHours - humanHours) / humanHours) * 100).toFixed(2)) : null,
+      subtotalDelta: Number((aiSubtotal - humanSubtotal).toFixed(2)),
+      subtotalDeltaPct: humanSubtotal !== 0 ? Number((((aiSubtotal - humanSubtotal) / humanSubtotal) * 100).toFixed(2)) : null,
+      lineItemCountDelta: aiLineItems - humanLineItems,
+      worksheetCountDelta: aiWorksheets - humanWorksheets,
+      worksheetHoursDelta: worksheetMetricDelta(aiSnapshot.worksheetTotals, humanSnapshot.worksheetTotals, "extendedHours"),
+      worksheetValueDelta: worksheetMetricDelta(aiSnapshot.worksheetTotals, humanSnapshot.worksheetTotals, "extendedPrice"),
+      categoryHourShareDelta: numericMapDelta(aiSnapshot.categoryHourShare, humanSnapshot.categoryHourShare),
+      categoryValueShareDelta: numericMapDelta(aiSnapshot.categoryValueShare, humanSnapshot.categoryValueShare),
+    };
+  }
+
+  private hasMeaningfulEstimateDelta(deltaSummary: Record<string, unknown>): boolean {
+    const totalHoursDelta = Math.abs(Number(deltaSummary.totalHoursDelta ?? 0));
+    const subtotalDelta = Math.abs(Number(deltaSummary.subtotalDelta ?? 0));
+    const lineItemCountDelta = Math.abs(Number(deltaSummary.lineItemCountDelta ?? 0));
+    const worksheetCountDelta = Math.abs(Number(deltaSummary.worksheetCountDelta ?? 0));
+    const worksheetHoursDelta = Array.isArray(deltaSummary.worksheetHoursDelta) ? deltaSummary.worksheetHoursDelta : [];
+    const worksheetValueDelta = Array.isArray(deltaSummary.worksheetValueDelta) ? deltaSummary.worksheetValueDelta : [];
+    const categoryHourShareDelta = Array.isArray(deltaSummary.categoryHourShareDelta) ? deltaSummary.categoryHourShareDelta : [];
+    const categoryValueShareDelta = Array.isArray(deltaSummary.categoryValueShareDelta) ? deltaSummary.categoryValueShareDelta : [];
+
+    return (
+      totalHoursDelta >= 0.01 ||
+      subtotalDelta >= 0.01 ||
+      lineItemCountDelta > 0 ||
+      worksheetCountDelta > 0 ||
+      worksheetHoursDelta.length > 0 ||
+      worksheetValueDelta.length > 0 ||
+      categoryHourShareDelta.length > 0 ||
+      categoryValueShareDelta.length > 0
+    );
   }
 
   // ── Private: pick helper for snapshots ──────────────────────────────────
@@ -1076,6 +1403,526 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
     return summarizeProjectTotals(store, projectId);
+  }
+
+  async getEstimateStrategy(projectId: string, revisionId?: string): Promise<EstimateStrategy | null> {
+    await this.requireProject(projectId);
+    const targetRevisionId = revisionId ?? (await this.requireCurrentRevision(projectId)).revision.id;
+    const row = await this.db.estimateStrategy.findFirst({
+      where: { projectId, revisionId: targetRevisionId },
+    });
+    return row ? mapEstimateStrategy(row) : null;
+  }
+
+  async saveEstimateStrategySection(projectId: string, input: {
+    section: "scopeGraph" | "executionPlan" | "assumptions" | "packagePlan" | "adjustmentPlan" | "reconcileReport" | "summary";
+    data: Record<string, unknown> | Array<Record<string, unknown>>;
+    aiRunId?: string | null;
+    personaId?: string | null;
+  }): Promise<EstimateStrategy> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const existing = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+
+    const stageBySection: Record<typeof input.section, string> = {
+      scopeGraph: "scope",
+      executionPlan: "execution",
+      assumptions: "execution",
+      packagePlan: "packaging",
+      adjustmentPlan: "benchmark",
+      reconcileReport: "reconcile",
+      summary: existing?.currentStage ?? "reconcile",
+    };
+
+    const nextStage = this.advanceStrategyStage(existing?.currentStage, stageBySection[input.section]);
+    const status = input.section === "reconcileReport" ? "complete" : (existing?.status === "complete" ? "complete" : "in_progress");
+    const row = await this.db.estimateStrategy.upsert({
+      where: { revisionId: revision.id },
+      create: {
+        projectId,
+        revisionId: revision.id,
+        aiRunId: input.aiRunId ?? null,
+        personaId: input.personaId ?? null,
+        status,
+        currentStage: nextStage,
+        [input.section]: input.data as any,
+        reviewCompleted: input.section === "reconcileReport",
+      },
+      update: {
+        aiRunId: input.aiRunId ?? existing?.aiRunId ?? null,
+        personaId: input.personaId ?? existing?.personaId ?? null,
+        status,
+        currentStage: nextStage,
+        [input.section]: input.data as any,
+        reviewCompleted: input.section === "reconcileReport" ? true : existing?.reviewCompleted ?? false,
+      },
+    });
+
+    await this.pushActivity(projectId, revision.id, "estimate_strategy_updated", {
+      section: input.section,
+      currentStage: row.currentStage,
+      status: row.status,
+    });
+
+    return mapEstimateStrategy(row);
+  }
+
+  async finalizeEstimateStrategy(projectId: string, summary: Record<string, unknown>): Promise<EstimateStrategy> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const existing = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+    const workspace = await this.getWorkspace(projectId);
+    if (!workspace) throw new Error(`Workspace unavailable for project ${projectId}`);
+    const baselineSnapshot = this.buildEstimateSnapshot(workspace, existing);
+    const mergedSummary = {
+      ...((existing?.summary as Record<string, unknown>) ?? {}),
+      ...summary,
+      aiBaselineSnapshot: baselineSnapshot,
+    };
+    const row = await this.db.estimateStrategy.upsert({
+      where: { revisionId: revision.id },
+      create: {
+        projectId,
+        revisionId: revision.id,
+        currentStage: "complete",
+        status: "complete",
+        reviewCompleted: true,
+        summary: mergedSummary as any,
+      },
+      update: {
+        currentStage: "complete",
+        status: "complete",
+        reviewCompleted: true,
+        summary: mergedSummary as any,
+      },
+    });
+
+    await this.pushActivity(projectId, revision.id, "estimate_strategy_finalized", {
+      currentStage: row.currentStage,
+      status: row.status,
+    });
+
+    return mapEstimateStrategy(row);
+  }
+
+  async recomputeEstimateBenchmarks(projectId: string): Promise<EstimateStrategy> {
+    await this.requireProject(projectId);
+    const currentWorkspace = await this.getWorkspace(projectId);
+    if (!currentWorkspace) throw new Error(`Workspace unavailable for project ${projectId}`);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const currentStrategy = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+
+    const currentLineItems = currentWorkspace.estimate.lineItems ?? [];
+    const currentShares = this.categoryShareMetrics(currentLineItems);
+    const currentFeatures = {
+      projectId,
+      revisionId: revision.id,
+      projectName: currentWorkspace.project.name,
+      totalHours: Number(currentWorkspace.currentRevision.totalHours ?? currentWorkspace.estimate.totals.totalHours ?? 0),
+      subtotal: Number(currentWorkspace.currentRevision.subtotal ?? currentWorkspace.estimate.totals.subtotal ?? 0),
+      worksheetCount: currentWorkspace.worksheets.length,
+      lineItemCount: currentLineItems.length,
+      documentCount: currentWorkspace.sourceDocuments.length,
+      valueShare: currentShares.valueShare,
+      hourShare: currentShares.hourShare,
+    };
+
+    const quotes = await this.db.quote.findMany({
+      where: {
+        project: {
+          organizationId: this.organizationId,
+          id: { not: projectId },
+        },
+      },
+      include: { project: true },
+    });
+
+    const candidateRevisionIds = quotes.map((quote) => quote.currentRevisionId).filter(Boolean);
+    const candidateProjectIds = quotes.map((quote) => quote.projectId);
+    const [candidateRevisions, candidateWorksheets, candidateDocuments] = await Promise.all([
+      candidateRevisionIds.length > 0
+        ? this.db.quoteRevision.findMany({ where: { id: { in: candidateRevisionIds } } })
+        : Promise.resolve([] as any[]),
+      candidateRevisionIds.length > 0
+        ? this.db.worksheet.findMany({ where: { revisionId: { in: candidateRevisionIds } } })
+        : Promise.resolve([] as any[]),
+      candidateProjectIds.length > 0
+        ? this.db.sourceDocument.findMany({ where: { projectId: { in: candidateProjectIds } }, select: { projectId: true } })
+        : Promise.resolve([] as Array<{ projectId: string }>),
+    ]);
+    const candidateWorksheetIds = candidateWorksheets.map((worksheet) => worksheet.id);
+    const candidateItems = candidateWorksheetIds.length > 0
+      ? await this.db.worksheetItem.findMany({ where: { worksheetId: { in: candidateWorksheetIds } } })
+      : [];
+
+    const revisionById = new Map(candidateRevisions.map((candidate) => [candidate.id, candidate]));
+    const worksheetsByRevision = new Map<string, any[]>();
+    for (const worksheet of candidateWorksheets) {
+      const list = worksheetsByRevision.get(worksheet.revisionId) ?? [];
+      list.push(worksheet);
+      worksheetsByRevision.set(worksheet.revisionId, list);
+    }
+    const itemsByWorksheet = new Map<string, any[]>();
+    for (const item of candidateItems) {
+      const list = itemsByWorksheet.get(item.worksheetId) ?? [];
+      list.push(item);
+      itemsByWorksheet.set(item.worksheetId, list);
+    }
+    const documentCountByProject = new Map<string, number>();
+    for (const document of candidateDocuments) {
+      documentCountByProject.set(document.projectId, (documentCountByProject.get(document.projectId) ?? 0) + 1);
+    }
+
+    const relativeScore = (left: number, right: number) => {
+      const baseline = Math.max(Math.abs(left), Math.abs(right), 1);
+      return 1 - Math.min(1, Math.abs(left - right) / baseline);
+    };
+
+    const shareSimilarity = (left: Record<string, number>, right: Record<string, number>) => {
+      const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+      if (keys.size === 0) return 0.5;
+      let distance = 0;
+      for (const key of keys) {
+        distance += Math.abs((left[key] ?? 0) - (right[key] ?? 0));
+      }
+      return 1 - Math.min(1, distance / 2);
+    };
+
+    const comparableRows = quotes.flatMap((quote) => {
+      const candidateRevision = revisionById.get(quote.currentRevisionId);
+      if (!candidateRevision) return [];
+      const worksheets = worksheetsByRevision.get(candidateRevision.id) ?? [];
+      const items = worksheets.flatMap((worksheet) => itemsByWorksheet.get(worksheet.id) ?? []);
+      if (items.length === 0 && Number(candidateRevision.totalHours ?? 0) === 0) return [];
+      const shares = this.categoryShareMetrics(items);
+      const totalHours = Number(candidateRevision.totalHours ?? 0);
+      const similarity =
+        0.35 * relativeScore(currentFeatures.totalHours, totalHours) +
+        0.2 * relativeScore(currentFeatures.lineItemCount, items.length) +
+        0.15 * relativeScore(currentFeatures.worksheetCount, worksheets.length) +
+        0.1 * relativeScore(currentFeatures.documentCount, documentCountByProject.get(quote.projectId) ?? 0) +
+        0.2 * shareSimilarity(currentFeatures.valueShare, shares.valueShare);
+
+      return [{
+        projectId: quote.projectId,
+        projectName: quote.project.name,
+        revisionId: candidateRevision.id,
+        totalHours,
+        subtotal: Number(candidateRevision.subtotal ?? 0),
+        worksheetCount: worksheets.length,
+        lineItemCount: items.length,
+        documentCount: documentCountByProject.get(quote.projectId) ?? 0,
+        valueShare: shares.valueShare,
+        hourShare: shares.hourShare,
+        similarityScore: Number(similarity.toFixed(4)),
+        pricePerHour: totalHours > 0 ? Number((Number(candidateRevision.subtotal ?? 0) / totalHours).toFixed(2)) : 0,
+        hoursPerItem: items.length > 0 ? Number((totalHours / items.length).toFixed(2)) : 0,
+        hoursPerWorksheet: worksheets.length > 0 ? Number((totalHours / worksheets.length).toFixed(2)) : 0,
+        updatedAt: candidateRevision.updatedAt.toISOString(),
+      }];
+    })
+      .sort((left, right) => right.similarityScore - left.similarityScore)
+      .slice(0, 5);
+
+    const median = (values: number[]) => {
+      if (values.length === 0) return 0;
+      const ordered = [...values].sort((a, b) => a - b);
+      const mid = Math.floor(ordered.length / 2);
+      return ordered.length % 2 === 0 ? (ordered[mid - 1] + ordered[mid]) / 2 : ordered[mid];
+    };
+
+    const medianHours = median(comparableRows.map((row) => row.totalHours));
+    const medianHoursPerItem = median(comparableRows.map((row) => row.hoursPerItem));
+    const medianHoursPerWorksheet = median(comparableRows.map((row) => row.hoursPerWorksheet));
+    const medianPricePerHour = median(comparableRows.map((row) => row.pricePerHour));
+
+    const categoryKeys = new Set<string>(Object.keys(currentFeatures.valueShare));
+    for (const candidate of comparableRows) {
+      Object.keys(candidate.valueShare).forEach((key) => categoryKeys.add(key));
+    }
+
+    const categoryBenchmarks = Array.from(categoryKeys)
+      .map((category) => {
+        const candidateValueShares = comparableRows.map((row) => row.valueShare[category] ?? 0);
+        const candidateHourShares = comparableRows.map((row) => row.hourShare[category] ?? 0);
+        const medianValueShare = median(candidateValueShares);
+        const medianHourShare = median(candidateHourShares);
+        const currentValueShare = currentFeatures.valueShare[category] ?? 0;
+        const currentHourShare = currentFeatures.hourShare[category] ?? 0;
+        const valueDeviation = currentValueShare - medianValueShare;
+        const hourDeviation = currentHourShare - medianHourShare;
+        const outlier = Math.abs(valueDeviation) >= 0.12 || Math.abs(hourDeviation) >= 0.12;
+        const recommendation = outlier
+          ? (valueDeviation > 0 || hourDeviation > 0 ? "heavy_vs_history" : "light_vs_history")
+          : "within_range";
+        return {
+          category,
+          currentValueShare: Number(currentValueShare.toFixed(4)),
+          medianValueShare: Number(medianValueShare.toFixed(4)),
+          currentHourShare: Number(currentHourShare.toFixed(4)),
+          medianHourShare: Number(medianHourShare.toFixed(4)),
+          valueDeviation: Number(valueDeviation.toFixed(4)),
+          hourDeviation: Number(hourDeviation.toFixed(4)),
+          outlier,
+          recommendation,
+        };
+      })
+      .sort((left, right) => Math.abs(right.valueDeviation) - Math.abs(left.valueDeviation));
+
+    const suggestedActions: Array<Record<string, unknown>> = [];
+    if (comparableRows.length > 0 && medianHours > 0) {
+      const ratio = currentFeatures.totalHours / medianHours;
+      if (ratio > 1.25) {
+        suggestedActions.push({
+          area: "overall_hours",
+          action: "scrutinize_and_reduce",
+          rationale: `Current total hours are ${ratio.toFixed(2)}x the median of comparable jobs.`,
+          benchmarkValue: medianHours,
+          currentValue: currentFeatures.totalHours,
+        });
+      } else if (ratio < 0.75) {
+        suggestedActions.push({
+          area: "overall_hours",
+          action: "check_for_omissions",
+          rationale: `Current total hours are ${ratio.toFixed(2)}x the median of comparable jobs.`,
+          benchmarkValue: medianHours,
+          currentValue: currentFeatures.totalHours,
+        });
+      }
+    }
+
+    for (const row of categoryBenchmarks.filter((entry) => entry.outlier).slice(0, 6)) {
+      suggestedActions.push({
+        area: row.category,
+        action: row.recommendation === "heavy_vs_history" ? "reduce_or_regroup" : "validate_scope_or_raise",
+        rationale: `Category share diverges from comparable jobs by value ${row.valueDeviation} and hours ${row.hourDeviation}.`,
+        benchmarkValue: {
+          medianValueShare: row.medianValueShare,
+          medianHourShare: row.medianHourShare,
+        },
+        currentValue: {
+          valueShare: row.currentValueShare,
+          hourShare: row.currentHourShare,
+        },
+      });
+    }
+
+    const benchmarkProfile = {
+      basis: "organization_historical_quotes",
+      candidateCount: comparableRows.length,
+      current: {
+        totalHours: currentFeatures.totalHours,
+        subtotal: currentFeatures.subtotal,
+        hoursPerItem: currentFeatures.lineItemCount > 0 ? Number((currentFeatures.totalHours / currentFeatures.lineItemCount).toFixed(2)) : 0,
+        hoursPerWorksheet: currentFeatures.worksheetCount > 0 ? Number((currentFeatures.totalHours / currentFeatures.worksheetCount).toFixed(2)) : 0,
+        pricePerHour: currentFeatures.totalHours > 0 ? Number((currentFeatures.subtotal / currentFeatures.totalHours).toFixed(2)) : 0,
+      },
+      medians: {
+        totalHours: Number(medianHours.toFixed(2)),
+        hoursPerItem: Number(medianHoursPerItem.toFixed(2)),
+        hoursPerWorksheet: Number(medianHoursPerWorksheet.toFixed(2)),
+        pricePerHour: Number(medianPricePerHour.toFixed(2)),
+      },
+      categoryBenchmarks,
+      suggestedActions,
+      computedAt: new Date().toISOString(),
+    };
+
+    const row = await this.db.estimateStrategy.upsert({
+      where: { revisionId: revision.id },
+      create: {
+        projectId,
+        revisionId: revision.id,
+        aiRunId: currentStrategy?.aiRunId ?? null,
+        personaId: currentStrategy?.personaId ?? null,
+        currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
+        status: currentStrategy?.status === "complete" ? "complete" : "in_progress",
+        benchmarkProfile: benchmarkProfile as any,
+        benchmarkComparables: comparableRows as any,
+      },
+      update: {
+        currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
+        status: currentStrategy?.status === "complete" ? "complete" : "in_progress",
+        benchmarkProfile: benchmarkProfile as any,
+        benchmarkComparables: comparableRows as any,
+      },
+    });
+
+    await this.pushActivity(projectId, revision.id, "estimate_benchmarks_recomputed", {
+      candidateCount: comparableRows.length,
+      suggestedActions: suggestedActions.length,
+    });
+
+    return mapEstimateStrategy(row);
+  }
+
+  async markEstimateReviewCompleted(projectId: string, revisionId: string, reviewId?: string | null): Promise<EstimateStrategy | null> {
+    await this.requireProject(projectId);
+    const existing = await this.db.estimateStrategy.findUnique({ where: { revisionId } });
+    if (!existing) return null;
+
+    const updated = await this.db.estimateStrategy.update({
+      where: { revisionId },
+      data: {
+        currentStage: this.advanceStrategyStage(existing.currentStage, "complete"),
+        status: "complete",
+        reviewCompleted: true,
+        summary: {
+          ...(existing.summary as Record<string, unknown>),
+          reviewId: reviewId ?? null,
+          externalReviewCompletedAt: new Date().toISOString(),
+        } as any,
+      },
+    });
+
+    await this.pushActivity(projectId, revisionId, "estimate_review_completed", {
+      reviewId: reviewId ?? null,
+    });
+
+    return mapEstimateStrategy(updated);
+  }
+
+  async listEstimateFeedback(projectId: string, revisionId?: string): Promise<EstimateCalibrationFeedback[]> {
+    await this.requireProject(projectId);
+    const where: Prisma.EstimateCalibrationFeedbackWhereInput = { projectId };
+    if (revisionId) where.revisionId = revisionId;
+    const rows = await this.db.estimateCalibrationFeedback.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map(mapEstimateCalibrationFeedback);
+  }
+
+  async createEstimateFeedback(projectId: string, input: {
+    source?: string;
+    feedbackType?: string;
+    sourceLabel?: string;
+    humanSnapshot: Record<string, unknown>;
+    corrections?: Array<Record<string, unknown>>;
+    lessons?: Array<Record<string, unknown>>;
+    notes?: string;
+    quoteReviewId?: string | null;
+  }): Promise<EstimateCalibrationFeedback> {
+    await this.requireProject(projectId);
+    const workspace = await this.getWorkspace(projectId);
+    if (!workspace) throw new Error(`Workspace unavailable for project ${projectId}`);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const strategy = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+    const currentSnapshot = this.buildEstimateSnapshot(workspace, strategy);
+    const aiSnapshot = this.extractEstimateBaseline(strategy) ?? currentSnapshot;
+    const deltaSummary = this.computeEstimateDeltaSummary(aiSnapshot, input.humanSnapshot);
+
+    const row = await this.db.estimateCalibrationFeedback.create({
+      data: {
+        projectId,
+        revisionId: revision.id,
+        strategyId: strategy?.id ?? null,
+        quoteReviewId: input.quoteReviewId ?? null,
+        source: input.source ?? "manual",
+        feedbackType: input.feedbackType ?? "comparison",
+        sourceLabel: input.sourceLabel ?? "",
+        aiSnapshot: aiSnapshot as any,
+        humanSnapshot: input.humanSnapshot as any,
+        deltaSummary: deltaSummary as any,
+        corrections: (input.corrections ?? []) as any,
+        lessons: (input.lessons ?? []) as any,
+        notes: input.notes ?? "",
+      },
+    });
+
+    await this.pushActivity(projectId, revision.id, "estimate_feedback_captured", {
+      feedbackId: row.id,
+      feedbackType: row.feedbackType,
+      source: row.source,
+    });
+
+    return mapEstimateCalibrationFeedback(row);
+  }
+
+  async captureAutomaticEstimateFeedback(projectId: string, input: {
+    source?: string;
+    feedbackType?: string;
+    sourceLabel?: string;
+    correction?: Record<string, unknown>;
+    notes?: string;
+    quoteReviewId?: string | null;
+    createNew?: boolean;
+  }): Promise<EstimateCalibrationFeedback | null> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const strategy = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+    const aiSnapshot = this.extractEstimateBaseline(strategy);
+    if (!strategy || !aiSnapshot) return null;
+
+    const workspace = await this.getWorkspace(projectId);
+    if (!workspace) return null;
+    const humanSnapshot = this.buildEstimateSnapshot(workspace, strategy);
+    const deltaSummary = this.computeEstimateDeltaSummary(aiSnapshot, humanSnapshot);
+    if (!this.hasMeaningfulEstimateDelta(deltaSummary)) return null;
+
+    const source = input.source ?? "background";
+    const feedbackType = input.feedbackType ?? "human_edit_stream";
+    const sourceLabel = input.sourceLabel ?? "Human corrections";
+    const nextCorrections = input.correction ? [input.correction] : [];
+
+    let row;
+    if (!input.createNew) {
+      const existing = await this.db.estimateCalibrationFeedback.findFirst({
+        where: {
+          projectId,
+          revisionId: revision.id,
+          source,
+          feedbackType,
+          sourceLabel,
+          quoteReviewId: input.quoteReviewId ?? null,
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (existing) {
+        row = await this.db.estimateCalibrationFeedback.update({
+          where: { id: existing.id },
+          data: {
+            strategyId: strategy.id,
+            quoteReviewId: input.quoteReviewId ?? existing.quoteReviewId ?? null,
+            aiSnapshot: aiSnapshot as any,
+            humanSnapshot: humanSnapshot as any,
+            deltaSummary: deltaSummary as any,
+            corrections: ([...((existing.corrections as Array<Record<string, unknown>>) ?? []), ...nextCorrections]) as any,
+            notes: input.notes ?? existing.notes,
+          },
+        });
+      }
+    }
+
+    if (!row) {
+      row = await this.db.estimateCalibrationFeedback.create({
+        data: {
+          projectId,
+          revisionId: revision.id,
+          strategyId: strategy.id,
+          quoteReviewId: input.quoteReviewId ?? null,
+          source,
+          feedbackType,
+          sourceLabel,
+          aiSnapshot: aiSnapshot as any,
+          humanSnapshot: humanSnapshot as any,
+          deltaSummary: deltaSummary as any,
+          corrections: nextCorrections as any,
+          lessons: [],
+          notes: input.notes ?? "",
+        },
+      });
+    }
+
+    await this.pushActivity(projectId, revision.id, "estimate_feedback_captured", {
+      feedbackId: row.id,
+      feedbackType: row.feedbackType,
+      source: row.source,
+      automatic: true,
+    });
+
+    return mapEstimateCalibrationFeedback(row);
   }
 
   // ── Packages ────────────────────────────────────────────────────────────
@@ -2736,24 +3583,36 @@ export class PrismaApiStore {
 
   // ── Modifier CRUD ──────────────────────────────────────────────────────
 
-  async listModifiers(projectId: string) {
+  async listAdjustments(projectId: string) {
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) return [];
-    const modifiers = await this.db.modifier.findMany({ where: { revisionId: revision.id } });
-    return modifiers.map(mapModifier);
+    const adjustments = await this.db.adjustment.findMany({
+      where: { revisionId: revision.id },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    });
+    return adjustments.map(mapAdjustment);
   }
 
-  async createModifier(projectId: string, revisionId: string, input: CreateModifierInput) {
+  async createAdjustment(projectId: string, revisionId: string, input: CreateAdjustmentInput) {
     await this.requireProject(projectId);
     const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
     if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
 
-    const modifier = await this.db.modifier.create({
+    const maxOrder = await this.db.adjustment.aggregate({
+      where: { revisionId },
+      _max: { order: true },
+    });
+
+    const adjustment = await this.db.adjustment.create({
       data: {
-        id: createId("mod"),
+        id: createId("adj"),
         revisionId,
-        name: input.name ?? "New Modifier",
-        type: input.type ?? "percentage",
+        order: input.order ?? ((maxOrder._max.order ?? -1) + 1),
+        kind: input.kind ?? "modifier",
+        pricingMode: input.pricingMode ?? "modifier",
+        name: input.name ?? "New Adjustment",
+        description: input.description ?? "",
+        type: input.type ?? "",
         appliesTo: input.appliesTo ?? "All",
         percentage: input.percentage ?? null,
         amount: input.amount ?? null,
@@ -2762,31 +3621,75 @@ export class PrismaApiStore {
     });
 
     await this.syncProjectEstimate(projectId);
-    return mapModifier(modifier);
+    return mapAdjustment(adjustment);
   }
 
-  async updateModifier(projectId: string, modifierId: string, patch: ModifierPatchInput) {
+  async updateAdjustment(projectId: string, adjustmentId: string, patch: AdjustmentPatchInput) {
     await this.requireProject(projectId);
-    const modifier = await this.db.modifier.findFirst({ where: { id: modifierId } });
-    if (!modifier) throw new Error(`Modifier ${modifierId} not found for project ${projectId}`);
+    const adjustment = await this.db.adjustment.findFirst({ where: { id: adjustmentId } });
+    if (!adjustment) throw new Error(`Adjustment ${adjustmentId} not found for project ${projectId}`);
 
-    const updated = await this.db.modifier.update({
-      where: { id: modifierId },
+    const updated = await this.db.adjustment.update({
+      where: { id: adjustmentId },
       data: patch as any,
     });
 
     await this.syncProjectEstimate(projectId);
-    return mapModifier(updated);
+    return mapAdjustment(updated);
+  }
+
+  async deleteAdjustment(projectId: string, adjustmentId: string) {
+    await this.requireProject(projectId);
+    const adjustment = await this.db.adjustment.findFirst({ where: { id: adjustmentId } });
+    if (!adjustment) throw new Error(`Adjustment ${adjustmentId} not found for project ${projectId}`);
+
+    await this.db.adjustment.delete({ where: { id: adjustmentId } });
+    await this.syncProjectEstimate(projectId);
+    return mapAdjustment(adjustment);
+  }
+
+  async listModifiers(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const adjustments = await this.db.adjustment.findMany({
+      where: { revisionId: revision.id, kind: "modifier" },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    });
+    return adjustments
+      .map(mapAdjustment)
+      .map(adjustmentToLegacyModifier)
+      .filter(isLegacyModifier);
+  }
+
+  async createModifier(projectId: string, revisionId: string, input: CreateModifierInput) {
+    const adjustment = await this.createAdjustment(projectId, revisionId, {
+      kind: "modifier",
+      pricingMode: "modifier",
+      name: input.name ?? "New Modifier",
+      type: input.type ?? "Contingency",
+      appliesTo: input.appliesTo ?? "All",
+      percentage: input.percentage ?? null,
+      amount: input.amount ?? null,
+      show: input.show ?? "Yes",
+    });
+    return adjustmentToLegacyModifier(adjustment)!;
+  }
+
+  async updateModifier(projectId: string, modifierId: string, patch: ModifierPatchInput) {
+    const adjustment = await this.updateAdjustment(projectId, modifierId, {
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.type !== undefined ? { type: patch.type } : {}),
+      ...(patch.appliesTo !== undefined ? { appliesTo: patch.appliesTo } : {}),
+      ...(patch.percentage !== undefined ? { percentage: patch.percentage } : {}),
+      ...(patch.amount !== undefined ? { amount: patch.amount } : {}),
+      ...(patch.show !== undefined ? { show: patch.show } : {}),
+    });
+    return adjustmentToLegacyModifier(adjustment)!;
   }
 
   async deleteModifier(projectId: string, modifierId: string) {
-    await this.requireProject(projectId);
-    const modifier = await this.db.modifier.findFirst({ where: { id: modifierId } });
-    if (!modifier) throw new Error(`Modifier ${modifierId} not found for project ${projectId}`);
-
-    await this.db.modifier.delete({ where: { id: modifierId } });
-    await this.syncProjectEstimate(projectId);
-    return mapModifier(modifier);
+    const adjustment = await this.deleteAdjustment(projectId, modifierId);
+    return adjustmentToLegacyModifier(adjustment)!;
   }
 
   // ── Condition CRUD ─────────────────────────────────────────────────────
@@ -2907,52 +3810,67 @@ export class PrismaApiStore {
   async listAdditionalLineItems(projectId: string) {
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) return [];
-    const items = await this.db.additionalLineItem.findMany({ where: { revisionId: revision.id } });
-    return items.map(mapAdditionalLineItem);
+    const adjustments = await this.db.adjustment.findMany({
+      where: { revisionId: revision.id, kind: "line_item" },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    });
+    return adjustments
+      .map(mapAdjustment)
+      .map(adjustmentToLegacyAdditionalLineItem)
+      .filter(isLegacyAdditionalLineItem);
   }
 
   async createAdditionalLineItem(projectId: string, revisionId: string, input: CreateAdditionalLineItemInput) {
-    await this.requireProject(projectId);
-    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
-    if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+    const pricingMode: Adjustment["pricingMode"] =
+      input.type === "OptionStandalone"
+        ? "option_standalone"
+        : input.type === "OptionAdditional"
+          ? "option_additional"
+          : input.type === "LineItemStandalone"
+            ? "line_item_standalone"
+            : input.type === "CustomTotal"
+              ? "custom_total"
+              : "line_item_additional";
 
-    const ali = await this.db.additionalLineItem.create({
-      data: {
-        id: createId("ali"),
-        revisionId,
-        name: input.name ?? "New Line Item",
-        type: input.type ?? "LineItemAdditional",
-        description: input.description ?? "",
-        amount: input.amount ?? 0,
-      },
+    const adjustment = await this.createAdjustment(projectId, revisionId, {
+      kind: "line_item",
+      pricingMode,
+      name: input.name ?? "New Line Item",
+      description: input.description ?? "",
+      type: input.type ?? "LineItemAdditional",
+      amount: input.amount ?? 0,
+      show: "Yes",
     });
-
-    await this.syncProjectEstimate(projectId);
-    return mapAdditionalLineItem(ali);
+    return adjustmentToLegacyAdditionalLineItem(adjustment)!;
   }
 
   async updateAdditionalLineItem(projectId: string, aliId: string, patch: AdditionalLineItemPatchInput) {
-    await this.requireProject(projectId);
-    const ali = await this.db.additionalLineItem.findFirst({ where: { id: aliId } });
-    if (!ali) throw new Error(`Additional line item ${aliId} not found for project ${projectId}`);
+    const pricingMode: Adjustment["pricingMode"] | undefined =
+      patch.type === undefined
+        ? undefined
+        : patch.type === "OptionStandalone"
+          ? "option_standalone"
+          : patch.type === "OptionAdditional"
+            ? "option_additional"
+            : patch.type === "LineItemStandalone"
+              ? "line_item_standalone"
+              : patch.type === "CustomTotal"
+                ? "custom_total"
+                : "line_item_additional";
 
-    const updated = await this.db.additionalLineItem.update({
-      where: { id: aliId },
-      data: patch as any,
+    const adjustment = await this.updateAdjustment(projectId, aliId, {
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.description !== undefined ? { description: patch.description } : {}),
+      ...(patch.type !== undefined ? { type: patch.type } : {}),
+      ...(pricingMode !== undefined ? { pricingMode } : {}),
+      ...(patch.amount !== undefined ? { amount: patch.amount } : {}),
     });
-
-    await this.syncProjectEstimate(projectId);
-    return mapAdditionalLineItem(updated);
+    return adjustmentToLegacyAdditionalLineItem(adjustment)!;
   }
 
   async deleteAdditionalLineItem(projectId: string, aliId: string) {
-    await this.requireProject(projectId);
-    const ali = await this.db.additionalLineItem.findFirst({ where: { id: aliId } });
-    if (!ali) throw new Error(`Additional line item ${aliId} not found for project ${projectId}`);
-
-    await this.db.additionalLineItem.delete({ where: { id: aliId } });
-    await this.syncProjectEstimate(projectId);
-    return mapAdditionalLineItem(ali);
+    const adjustment = await this.deleteAdjustment(projectId, aliId);
+    return adjustmentToLegacyAdditionalLineItem(adjustment)!;
   }
 
   // ── Summary Row CRUD ────────────────────────────────────────────────────
@@ -2968,22 +3886,11 @@ export class PrismaApiStore {
     return rows.map(mapSummaryRow);
   }
 
-  async createSummaryRow(projectId: string, revisionId: string, input: {
-    type?: string;
-    label?: string;
-    order?: number;
-    visible?: boolean;
-    style?: string;
-    sourceCategory?: string | null;
-    sourcePhase?: string | null;
-    manualValue?: number | null;
-    manualCost?: number | null;
-    overrideValue?: number | null;
-    overrideCost?: number | null;
-    modifierPercent?: number | null;
-    modifierAmount?: number | null;
-    appliesTo?: string[];
-  }): Promise<SummaryRow> {
+  async createSummaryRow(projectId: string, revisionId: string, input: CreateSummaryRowInput): Promise<SummaryRow> {
+    await this.requireProject(projectId);
+    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+
     // Auto-assign order if not provided
     let order = input.order;
     if (order === undefined) {
@@ -2994,47 +3901,33 @@ export class PrismaApiStore {
       order = (maxRow?.order ?? -1) + 1;
     }
 
-    const row = await this.db.summaryRow.create({
-      data: {
-        id: createId("sr"),
-        revisionId,
-        type: input.type ?? "manual",
-        label: input.label ?? "",
-        order,
-        visible: input.visible ?? true,
-        style: input.style ?? "normal",
-        sourceCategory: input.sourceCategory ?? null,
-        sourcePhase: input.sourcePhase ?? null,
-        manualValue: input.manualValue ?? null,
-        manualCost: input.manualCost ?? null,
-        overrideValue: input.overrideValue ?? null,
-        overrideCost: input.overrideCost ?? null,
-        modifierPercent: input.modifierPercent ?? null,
-        modifierAmount: input.modifierAmount ?? null,
-        appliesTo: input.appliesTo ?? [],
-      },
-    });
+      const row = await this.db.summaryRow.create({
+        data: {
+          id: createId("sr"),
+          revisionId,
+          type: input.type ?? "heading",
+          label: input.label ?? "",
+          order,
+          visible: input.visible ?? true,
+          style: input.style ?? "normal",
+          sourceCategory: input.sourceCategoryLabel ?? null,
+          sourcePhase: null,
+          sourceCategoryId: input.sourceCategoryId ?? null,
+          sourceCategoryLabel: input.sourceCategoryLabel ?? null,
+          sourcePhaseId: input.sourcePhaseId ?? null,
+          sourceAdjustmentId: input.sourceAdjustmentId ?? null,
+        },
+      });
 
-    await this.syncProjectEstimate(projectId);
-    return mapSummaryRow(row);
-  }
+      await this.db.quoteRevision.update({
+        where: { id: revisionId },
+        data: { summaryLayoutPreset: "custom" },
+      });
+      await this.syncProjectEstimate(projectId);
+      return mapSummaryRow(row);
+    }
 
-  async updateSummaryRow(projectId: string, rowId: string, patch: Partial<{
-    type: string;
-    label: string;
-    order: number;
-    visible: boolean;
-    style: string;
-    sourceCategory: string | null;
-    sourcePhase: string | null;
-    manualValue: number | null;
-    manualCost: number | null;
-    overrideValue: number | null;
-    overrideCost: number | null;
-    modifierPercent: number | null;
-    modifierAmount: number | null;
-    appliesTo: string[];
-  }>): Promise<SummaryRow> {
+  async updateSummaryRow(projectId: string, rowId: string, patch: SummaryRowPatchInput): Promise<SummaryRow> {
     await this.requireProject(projectId);
     const existing = await this.db.summaryRow.findFirst({ where: { id: rowId } });
     if (!existing) throw new Error(`Summary row ${rowId} not found`);
@@ -3045,17 +3938,19 @@ export class PrismaApiStore {
     if (patch.order !== undefined) data.order = patch.order;
     if (patch.visible !== undefined) data.visible = patch.visible;
     if (patch.style !== undefined) data.style = patch.style;
-    if (patch.sourceCategory !== undefined) data.sourceCategory = patch.sourceCategory;
-    if (patch.sourcePhase !== undefined) data.sourcePhase = patch.sourcePhase;
-    if (patch.manualValue !== undefined) data.manualValue = patch.manualValue;
-    if (patch.manualCost !== undefined) data.manualCost = patch.manualCost;
-    if (patch.overrideValue !== undefined) data.overrideValue = patch.overrideValue;
-    if (patch.overrideCost !== undefined) data.overrideCost = patch.overrideCost;
-    if (patch.modifierPercent !== undefined) data.modifierPercent = patch.modifierPercent;
-    if (patch.modifierAmount !== undefined) data.modifierAmount = patch.modifierAmount;
-    if (patch.appliesTo !== undefined) data.appliesTo = patch.appliesTo;
+    if (patch.sourceCategoryId !== undefined) data.sourceCategoryId = patch.sourceCategoryId;
+    if (patch.sourceCategoryLabel !== undefined) {
+      data.sourceCategoryLabel = patch.sourceCategoryLabel;
+      data.sourceCategory = patch.sourceCategoryLabel;
+    }
+    if (patch.sourcePhaseId !== undefined) data.sourcePhaseId = patch.sourcePhaseId;
+    if (patch.sourceAdjustmentId !== undefined) data.sourceAdjustmentId = patch.sourceAdjustmentId;
 
     const updated = await this.db.summaryRow.update({ where: { id: rowId }, data });
+    await this.db.quoteRevision.update({
+      where: { id: existing.revisionId },
+      data: { summaryLayoutPreset: "custom" },
+    });
     await this.syncProjectEstimate(projectId);
     return mapSummaryRow(updated);
   }
@@ -3066,17 +3961,26 @@ export class PrismaApiStore {
     if (!row) throw new Error(`Summary row ${rowId} not found`);
 
     await this.db.summaryRow.delete({ where: { id: rowId } });
+    await this.db.quoteRevision.update({
+      where: { id: row.revisionId },
+      data: { summaryLayoutPreset: "custom" },
+    });
     await this.syncProjectEstimate(projectId);
     return mapSummaryRow(row);
   }
 
   async reorderSummaryRows(projectId: string, orderedIds: string[]): Promise<{ reordered: number }> {
     await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
     await Promise.all(
       orderedIds.map((id, index) =>
         this.db.summaryRow.update({ where: { id }, data: { order: index } })
       )
     );
+    await this.db.quoteRevision.update({
+      where: { id: revision.id },
+      data: { summaryLayoutPreset: "custom" },
+    });
     await this.syncProjectEstimate(projectId);
     return { reordered: orderedIds.length };
   }
@@ -3086,51 +3990,51 @@ export class PrismaApiStore {
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) throw new Error("No current revision found");
 
-    // Gather category names from org entity categories
-    const entityCategories = await this.db.entityCategory.findMany({
-      where: { organizationId: this.organizationId, enabled: true },
-      orderBy: { order: "asc" },
-    });
-    const categoryNames = entityCategories.map((c) => c.name);
-
-    // Gather phase names from current revision
-    const phases = await this.db.phase.findMany({
-      where: { revisionId: revision.id },
-      orderBy: { order: "asc" },
-    });
-    const phaseNames = phases.map((p) => p.name);
-
-    // Delete existing summary rows
-    await this.db.summaryRow.deleteMany({ where: { revisionId: revision.id } });
-
-    // Generate new rows from preset
-    const templates = generateSummaryPreset(preset, categoryNames, phaseNames);
-    const created: SummaryRow[] = [];
-
-    for (const template of templates) {
-      const row = await this.db.summaryRow.create({
-        data: {
-          id: createId("sr"),
-          revisionId: revision.id,
-          type: template.type,
-          label: template.label,
-          order: template.order,
-          visible: template.visible,
-          style: template.style,
-          sourceCategory: template.sourceCategory ?? null,
-          sourcePhase: template.sourcePhase ?? null,
-          manualValue: template.manualValue ?? null,
-          manualCost: template.manualCost ?? null,
-          modifierPercent: template.modifierPercent ?? null,
-          modifierAmount: template.modifierAmount ?? null,
-          appliesTo: template.appliesTo ?? [],
-        },
+    if (preset === "custom") {
+      await this.db.quoteRevision.update({
+        where: { id: revision.id },
+        data: { summaryLayoutPreset: "custom" },
       });
-      created.push(mapSummaryRow(row));
+      await this.syncProjectEstimate(projectId);
+      return this.listSummaryRows(projectId);
     }
 
+    const store = await this.buildStoreSnapshot(projectId);
+    const totals = summarizeProjectTotals(store, projectId);
+    if (!totals) throw new Error(`Unable to generate summary preset for project ${projectId}`);
+
+    const templates = generateSummaryPreset(preset, totals);
+
+    await this.db.$transaction(async (tx) => {
+      await tx.summaryRow.deleteMany({ where: { revisionId: revision.id } });
+      for (const template of templates) {
+        await tx.summaryRow.create({
+          data: {
+            id: createId("sr"),
+            revisionId: revision.id,
+            type: template.type,
+            label: template.label,
+            order: template.order,
+            visible: template.visible,
+            style: template.style,
+            sourceCategory: template.sourceCategoryLabel ?? null,
+            sourcePhase: null,
+            sourceCategoryId: template.sourceCategoryId ?? null,
+            sourceCategoryLabel: template.sourceCategoryLabel ?? null,
+            sourcePhaseId: template.sourcePhaseId ?? null,
+            sourceAdjustmentId: template.sourceAdjustmentId ?? null,
+          },
+        });
+      }
+
+      await tx.quoteRevision.update({
+        where: { id: revision.id },
+        data: { summaryLayoutPreset: preset },
+      });
+    });
+
     await this.syncProjectEstimate(projectId);
-    return created;
+    return this.listSummaryRows(projectId);
   }
 
   // ── Rate Schedule CRUD ─────────────────────────────────────────────────
@@ -3476,6 +4380,8 @@ export class PrismaApiStore {
           totalHours: revData.totalHours,
           breakoutPackage: revData.breakoutPackage as any,
           calculatedCategoryTotals: revData.calculatedCategoryTotals as any,
+          summaryLayoutPreset: revData.summaryLayoutPreset,
+          pdfPreferences: revData.pdfPreferences as any,
           createdAt: timestamp,
           updatedAt: timestamp,
         },
@@ -3515,16 +4421,56 @@ export class PrismaApiStore {
         }
       }
 
-      // Copy modifiers
-      const oldModifiers = await tx.modifier.findMany({ where: { revisionId: currentRevision.id } });
-      for (const m of oldModifiers) {
-        await tx.modifier.create({ data: { id: createId("mod"), revisionId: newRevisionId, name: m.name, type: m.type, appliesTo: m.appliesTo, percentage: m.percentage, amount: m.amount, show: m.show } });
+      // Copy canonical adjustments
+      const adjustmentIdMap = new Map<string, string>();
+      const oldAdjustments = await tx.adjustment.findMany({
+        where: { revisionId: currentRevision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      });
+      for (const adjustment of oldAdjustments) {
+        const newAdjustmentId = createId("adj");
+        adjustmentIdMap.set(adjustment.id, newAdjustmentId);
+        await tx.adjustment.create({
+          data: {
+            id: newAdjustmentId,
+            revisionId: newRevisionId,
+            order: adjustment.order,
+            kind: adjustment.kind,
+            pricingMode: adjustment.pricingMode,
+            name: adjustment.name,
+            description: adjustment.description,
+            type: adjustment.type,
+            appliesTo: adjustment.appliesTo,
+            percentage: adjustment.percentage,
+            amount: adjustment.amount,
+            show: adjustment.show,
+          },
+        });
       }
 
-      // Copy ALIs
-      const oldAlis = await tx.additionalLineItem.findMany({ where: { revisionId: currentRevision.id } });
-      for (const a of oldAlis) {
-        await tx.additionalLineItem.create({ data: { id: createId("ali"), revisionId: newRevisionId, name: a.name, description: a.description, type: a.type, amount: a.amount } });
+      // Copy presentation-only summary rows with stable source remapping
+      const oldSummaryRows = await tx.summaryRow.findMany({
+        where: { revisionId: currentRevision.id },
+        orderBy: { order: "asc" },
+      });
+      for (const sourceRow of oldSummaryRows.map(mapSummaryRow)) {
+        await tx.summaryRow.create({
+          data: {
+            id: createId("sr"),
+            revisionId: newRevisionId,
+            type: sourceRow.type,
+            label: sourceRow.label,
+            order: sourceRow.order,
+            visible: sourceRow.visible,
+            style: sourceRow.style,
+            sourceCategory: sourceRow.sourceCategoryLabel ?? null,
+            sourcePhase: null,
+            sourceCategoryId: sourceRow.sourceCategoryId ?? null,
+            sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
+            sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
+            sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
+          },
+        });
       }
 
       // Copy conditions
@@ -3643,6 +4589,8 @@ export class PrismaApiStore {
       await tx.worksheetItem.deleteMany({ where: { worksheetId: { in: worksheetIds } } });
       await tx.worksheet.deleteMany({ where: { revisionId } });
       await tx.phase.deleteMany({ where: { revisionId } });
+      await tx.adjustment.deleteMany({ where: { revisionId } });
+      await tx.summaryRow.deleteMany({ where: { revisionId } });
       await tx.modifier.deleteMany({ where: { revisionId } });
       await tx.additionalLineItem.deleteMany({ where: { revisionId } });
       await tx.condition.deleteMany({ where: { revisionId } });
@@ -3754,6 +4702,8 @@ export class PrismaApiStore {
           calculatedTotal: revData.calculatedTotal ?? 0, totalHours: revData.totalHours,
           breakoutPackage: revData.breakoutPackage as any,
           calculatedCategoryTotals: revData.calculatedCategoryTotals as any,
+          summaryLayoutPreset: revData.summaryLayoutPreset,
+          pdfPreferences: revData.pdfPreferences as any,
           createdAt: timestamp, updatedAt: timestamp,
         },
       });
@@ -3790,13 +4740,56 @@ export class PrismaApiStore {
         }
       }
 
-      // Copy modifiers, ALIs, conditions, report sections
-      for (const m of await tx.modifier.findMany({ where: { revisionId: sourceRevision.id } })) {
-        await tx.modifier.create({ data: { id: createId("mod"), revisionId: newRevisionId, name: m.name, type: m.type, appliesTo: m.appliesTo, percentage: m.percentage, amount: m.amount, show: m.show } });
+      // Copy canonical adjustments
+      const adjustmentIdMap = new Map<string, string>();
+      for (const adjustment of await tx.adjustment.findMany({
+        where: { revisionId: sourceRevision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      })) {
+        const newAdjustmentId = createId("adj");
+        adjustmentIdMap.set(adjustment.id, newAdjustmentId);
+        await tx.adjustment.create({
+          data: {
+            id: newAdjustmentId,
+            revisionId: newRevisionId,
+            order: adjustment.order,
+            kind: adjustment.kind,
+            pricingMode: adjustment.pricingMode,
+            name: adjustment.name,
+            description: adjustment.description,
+            type: adjustment.type,
+            appliesTo: adjustment.appliesTo,
+            percentage: adjustment.percentage,
+            amount: adjustment.amount,
+            show: adjustment.show,
+          },
+        });
       }
-      for (const a of await tx.additionalLineItem.findMany({ where: { revisionId: sourceRevision.id } })) {
-        await tx.additionalLineItem.create({ data: { id: createId("ali"), revisionId: newRevisionId, name: a.name, description: a.description, type: a.type, amount: a.amount } });
+
+      // Copy presentation-only summary rows with stable source remapping
+      for (const sourceRow of (await tx.summaryRow.findMany({
+        where: { revisionId: sourceRevision.id },
+        orderBy: { order: "asc" },
+      })).map(mapSummaryRow)) {
+        await tx.summaryRow.create({
+          data: {
+            id: createId("sr"),
+            revisionId: newRevisionId,
+            type: sourceRow.type,
+            label: sourceRow.label,
+            order: sourceRow.order,
+            visible: sourceRow.visible,
+            style: sourceRow.style,
+            sourceCategory: sourceRow.sourceCategoryLabel ?? null,
+            sourcePhase: null,
+            sourceCategoryId: sourceRow.sourceCategoryId ?? null,
+            sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
+            sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
+            sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
+          },
+        });
       }
+
       for (const c of await tx.condition.findMany({ where: { revisionId: sourceRevision.id } })) {
         await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
       }
@@ -3890,6 +4883,8 @@ export class PrismaApiStore {
         await tx.worksheetItem.deleteMany({ where: { worksheetId: { in: otherWsIds } } });
         await tx.worksheet.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.phase.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
+        await tx.adjustment.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
+        await tx.summaryRow.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.modifier.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.additionalLineItem.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.condition.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
@@ -5850,6 +6845,11 @@ export class PrismaApiStore {
     systemPrompt?: string;
     knowledgeBookIds?: string[];
     datasetTags?: string[];
+    packageBuckets?: string[];
+    defaultAssumptions?: Record<string, unknown>;
+    productivityGuidance?: Record<string, unknown>;
+    commercialGuidance?: Record<string, unknown>;
+    reviewFocusAreas?: string[];
     isDefault?: boolean;
     enabled?: boolean;
     order?: number;
@@ -5863,6 +6863,11 @@ export class PrismaApiStore {
         systemPrompt: input.systemPrompt ?? "",
         knowledgeBookIds: input.knowledgeBookIds ?? [],
         datasetTags: input.datasetTags ?? [],
+        packageBuckets: input.packageBuckets ?? [],
+        defaultAssumptions: toPrismaJson(input.defaultAssumptions),
+        productivityGuidance: toPrismaJson(input.productivityGuidance),
+        commercialGuidance: toPrismaJson(input.commercialGuidance),
+        reviewFocusAreas: input.reviewFocusAreas ?? [],
         isDefault: input.isDefault ?? false,
         enabled: input.enabled ?? true,
         order: input.order ?? 0,
@@ -5878,13 +6883,30 @@ export class PrismaApiStore {
     systemPrompt?: string;
     knowledgeBookIds?: string[];
     datasetTags?: string[];
+    packageBuckets?: string[];
+    defaultAssumptions?: Record<string, unknown>;
+    productivityGuidance?: Record<string, unknown>;
+    commercialGuidance?: Record<string, unknown>;
+    reviewFocusAreas?: string[];
     isDefault?: boolean;
     enabled?: boolean;
     order?: number;
   }): Promise<any> {
+    const {
+      defaultAssumptions,
+      productivityGuidance,
+      commercialGuidance,
+      ...rest
+    } = patch;
+    const data: Prisma.EstimatorPersonaUpdateInput = {
+      ...rest,
+      ...(defaultAssumptions === undefined ? {} : { defaultAssumptions: toPrismaJson(defaultAssumptions) }),
+      ...(productivityGuidance === undefined ? {} : { productivityGuidance: toPrismaJson(productivityGuidance) }),
+      ...(commercialGuidance === undefined ? {} : { commercialGuidance: toPrismaJson(commercialGuidance) }),
+    };
     const row = await this.db.estimatorPersona.update({
       where: { id },
-      data: patch,
+      data,
     });
     return mapPersona(row);
   }

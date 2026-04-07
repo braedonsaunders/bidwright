@@ -17,6 +17,7 @@ export function getQuoteId() { return QUOTE_ID; }
 function headers(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (AUTH_TOKEN) h["Authorization"] = `Bearer ${AUTH_TOKEN}`;
+  h["X-Bidwright-Actor"] = "mcp-agent";
   return h;
 }
 

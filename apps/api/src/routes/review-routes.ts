@@ -319,6 +319,12 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
         where: { id: review.id },
         data: { [section]: data },
       });
+      if (section === "summary") {
+        const store = request.store;
+        if (store) {
+          await store.markEstimateReviewCompleted(projectId, review.revisionId, review.id).catch(() => null);
+        }
+      }
     }
 
     return { ok: true, section, reviewId: review.id };
@@ -394,6 +400,22 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
       where: { id: review.id },
       data: { recommendations: updatedRecs },
     });
+
+    await store.captureAutomaticEstimateFeedback(projectId, {
+      source: "review",
+      feedbackType: "recommendation_resolved",
+      sourceLabel: rec.title ?? "Resolved review recommendation",
+      quoteReviewId: review.id,
+      createNew: true,
+      notes: rec.resolution?.summary ?? "",
+      correction: {
+        recommendationId: recId,
+        title: rec.title ?? "",
+        priority: rec.priority ?? null,
+        actions,
+        resolvedAt: new Date().toISOString(),
+      },
+    }).catch(() => null);
 
     // Return updated workspace response
     const freshWorkspace = await buildWorkspaceResponse(store, projectId);

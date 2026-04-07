@@ -676,7 +676,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
           {tab === "summarize" && (
             <motion.div key="summarize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <SummarizeTab workspace={workspace} onApply={apply} />
+              <SummarizeTab
+                workspace={workspace}
+                onApply={apply}
+              />
             </motion.div>
           )}
           {tab === "documents" && (

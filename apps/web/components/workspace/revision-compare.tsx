@@ -11,12 +11,12 @@ import {
   X,
 } from "lucide-react";
 import type {
+  ProjectAdjustment,
   ProjectWorkspaceData,
   QuoteRevision,
   WorkspaceWorksheet,
   WorkspaceWorksheetItem,
   ProjectPhase,
-  ProjectModifier,
 } from "@/lib/api";
 import {
   Button,
@@ -85,7 +85,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
 
   const rev = workspace.currentRevision;
   const phases = workspace.phases ?? [];
-  const modifiers = workspace.modifiers ?? [];
+  const adjustments = workspace.adjustments ?? [];
   const worksheets = workspace.worksheets ?? [];
   const allItems = worksheets.flatMap((ws) => ws.items ?? []);
 
@@ -209,20 +209,24 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
               </CardBody>
             </Card>
 
-            {/* Modifiers */}
+            {/* Adjustments */}
             <Card>
               <CardHeader>
-                <CardTitle>Modifiers ({modifiers.length})</CardTitle>
+                <CardTitle>Adjustments ({adjustments.length})</CardTitle>
               </CardHeader>
               <CardBody className="space-y-1">
-                {modifiers.length === 0 ? (
-                  <EmptyState>No modifiers</EmptyState>
+                {adjustments.length === 0 ? (
+                  <EmptyState>No adjustments</EmptyState>
                 ) : (
-                  modifiers.map((m) => (
-                    <div key={m.id} className="flex items-center justify-between rounded border border-line bg-bg/30 px-3 py-1.5 text-sm">
-                      <span>{m.name}</span>
+                  adjustments.map((adjustment) => (
+                    <div key={adjustment.id} className="flex items-center justify-between rounded border border-line bg-bg/30 px-3 py-1.5 text-sm">
+                      <span>{adjustment.name}</span>
                       <span className="text-fg/60 tabular-nums">
-                        {m.percentage != null ? fmtPercent(m.percentage) : m.amount != null ? fmtMoney(m.amount) : "--"}
+                        {adjustment.percentage != null
+                          ? fmtPercent(adjustment.percentage)
+                          : adjustment.amount != null
+                            ? fmtMoney(adjustment.amount)
+                            : "--"}
                       </span>
                     </div>
                   ))
@@ -246,7 +250,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                   Load a revision to compare
                 </p>
                 <p className="mt-1 text-xs text-fg/25">
-                  Select a revision from the dropdown above to see a side-by-side diff of financials, line items, phases, and modifiers.
+                  Select a revision from the dropdown above to see a side-by-side diff of financials, line items, phases, and adjustments.
                 </p>
               </div>
             ) : (
@@ -255,7 +259,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                   Comparison data would load here via an API call.
                 </p>
                 <p className="mt-1 text-xs text-fg/25">
-                  Financial diffs, added/removed line items, phase changes, and modifier changes will appear once revision data is fetched.
+                  Financial diffs, added/removed line items, phase changes, and adjustment changes will appear once revision data is fetched.
                 </p>
               </div>
             )}
