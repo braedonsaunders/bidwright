@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ChevronDown,
@@ -37,6 +38,7 @@ export interface PdfLayoutOptions {
     phases: boolean;
     modifiers: boolean;
     conditions: boolean;
+    pricingSummary: boolean;
     hoursSummary: boolean;
     labourSummary: boolean;
     notes: boolean;
@@ -69,6 +71,7 @@ export interface PdfLayoutOptions {
     footerText: string;
     showPageNumbers: boolean;
   };
+  customerFacing: boolean;
   customSections: Array<{
     id: string;
     title: string;
@@ -83,23 +86,25 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
     scopeOfWork: true,
     leadLetter: true,
     lineItems: true,
-    phases: true,
+    phases: false,
     modifiers: true,
     conditions: true,
-    hoursSummary: true,
+    pricingSummary: true,
+    hoursSummary: false,
     labourSummary: false,
     notes: true,
     reportSections: true,
   },
   sectionOrder: [
-    "coverPage", "scopeOfWork", "leadLetter", "lineItems", "phases",
-    "modifiers", "conditions", "hoursSummary", "labourSummary", "notes", "reportSections",
+    "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
+    "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary",
   ],
   lineItemOptions: { showCostColumn: true, showMarkupColumn: true, groupBy: "none" },
   branding: { accentColor: "#3b82f6", headerBgColor: "#1a1a1a", fontFamily: "sans" },
   pageSetup: { orientation: "portrait", pageSize: "letter" },
   coverPageOptions: { companyName: "", tagline: "", logoUrl: "" },
   headerFooter: { showHeader: true, showFooter: true, headerText: "", footerText: "", showPageNumbers: true },
+  customerFacing: true,
   customSections: [],
 };
 
@@ -107,10 +112,11 @@ const SECTION_LABELS: Record<string, string> = {
   coverPage: "Cover Page",
   scopeOfWork: "Scope of Work",
   leadLetter: "Lead Letter",
+  pricingSummary: "Pricing Summary",
   lineItems: "Line Items",
   phases: "Phases",
-  modifiers: "Modifiers",
-  conditions: "Terms & Conditions",
+  modifiers: "Adjustments",
+  conditions: "Conditions",
   hoursSummary: "Hours Summary",
   labourSummary: "Labour Summary",
   notes: "Notes",
@@ -353,6 +359,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
             coverPage: true,
             scopeOfWork: true,
             leadLetter: false,
+            pricingSummary: true,
             lineItems: false,
             phases: false,
             modifiers: true,
@@ -362,6 +369,8 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
             notes: true,
             reportSections: false,
           },
+          customerFacing: true,
+          sectionOrder: DEFAULT_OPTIONS.sectionOrder,
         }));
         break;
       case "client":
@@ -372,16 +381,19 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
             coverPage: true,
             scopeOfWork: true,
             leadLetter: true,
+            pricingSummary: true,
             lineItems: true,
-            phases: true,
+            phases: false,
             modifiers: false,
             conditions: true,
             hoursSummary: false,
             labourSummary: false,
-            notes: false,
+            notes: true,
             reportSections: true,
           },
           lineItemOptions: { ...prev.lineItemOptions, showCostColumn: false, showMarkupColumn: false },
+          customerFacing: true,
+          sectionOrder: DEFAULT_OPTIONS.sectionOrder,
         }));
         break;
       case "detailed":
@@ -391,6 +403,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
             coverPage: true,
             scopeOfWork: true,
             leadLetter: true,
+            pricingSummary: true,
             lineItems: true,
             phases: true,
             modifiers: true,
@@ -401,6 +414,8 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
             reportSections: true,
           },
           lineItemOptions: { showCostColumn: true, showMarkupColumn: true, groupBy: "phase" },
+          customerFacing: false,
+          sectionOrder: DEFAULT_OPTIONS.sectionOrder,
         }));
         break;
       default: // standard
@@ -476,6 +491,19 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                             <div className="mt-0.5 text-[10px] text-fg/40 leading-tight">{t.description}</div>
                           </button>
                         ))}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between rounded-md border border-line px-3 py-2">
+                        <div>
+                          <div className="text-xs font-medium">Customer-Facing</div>
+                          <div className="text-[10px] text-fg/40">Hides cost, markup, margin & profit</div>
+                        </div>
+                        <Toggle
+                          checked={options.customerFacing}
+                          onChange={(v) => {
+                            setOptions((prev) => ({ ...prev, customerFacing: v }));
+                            setDirty(true);
+                          }}
+                        />
                       </div>
                     </SidebarPanel>
 
@@ -859,6 +887,16 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                   </button>
                 </div>
               </div>
+
+              {/* Warning when not customer-facing */}
+              {!options.customerFacing && (
+                <div className="mx-4 mt-3 flex items-center gap-2 rounded-lg border border-amber-400/50 bg-amber-50 px-3 py-2 dark:border-amber-500/30 dark:bg-amber-950/30">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                    Internal mode — cost, markup, margin & profit are visible. Do not share with customers.
+                  </span>
+                </div>
+              )}
 
               {/* Preview iframe */}
               <div className="flex-1 overflow-auto p-6">

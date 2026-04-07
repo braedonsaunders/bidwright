@@ -33,9 +33,12 @@ export interface PdfDataPackage {
     worksheetName: string;
   }>;
   phases: Array<{ number: string; name: string; description: string }>;
-  modifiers: Array<{
+  adjustments: Array<{
     name: string;
+    kind: string;
+    pricingMode: string;
     type: string;
+    description: string;
     appliesTo: string;
     percentage: number | null;
     amount: number | null;
@@ -76,6 +79,7 @@ export interface PdfLayoutOptions {
     phases: boolean;
     modifiers: boolean;
     conditions: boolean;
+    pricingSummary: boolean;
     hoursSummary: boolean;
     labourSummary: boolean;
     notes: boolean;
@@ -114,6 +118,8 @@ export interface PdfLayoutOptions {
     footerText: string;
     showPageNumbers: boolean;
   };
+  // Customer-facing mode: hides cost, markup, margin, and profit everywhere
+  customerFacing: boolean;
   // Custom sections
   customSections: Array<{
     id: string;
@@ -130,17 +136,18 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
       scopeOfWork: true,
       leadLetter: true,
       lineItems: true,
-      phases: true,
+      phases: false,
       modifiers: true,
       conditions: true,
-      hoursSummary: true,
+      pricingSummary: true,
+      hoursSummary: false,
       labourSummary: false,
       notes: true,
       reportSections: true,
     },
     sectionOrder: [
-      "coverPage", "scopeOfWork", "leadLetter", "lineItems", "phases",
-      "modifiers", "conditions", "hoursSummary", "labourSummary", "notes", "reportSections",
+      "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
+      "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary",
     ],
     lineItemOptions: {
       showCostColumn: true,
@@ -168,6 +175,7 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
       footerText: "",
       showPageNumbers: true,
     },
+    customerFacing: true,
     customSections: [],
   };
 }
@@ -231,7 +239,7 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], 
       computedCost: r.computedCost ?? 0,
       computedMargin: r.computedMargin ?? 0,
     })),
-    modifiers: workspace.modifiers ?? [],
+    adjustments: workspace.adjustments ?? [],
     conditions: (workspace.conditions ?? []).map((c: any) => ({
       type: c.type,
       value: c.value,
@@ -250,6 +258,15 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], 
   };
 }
 
+const ROW_TYPE_LABELS: Record<string, string> = {
+  category: "Category",
+  phase: "Phase",
+  adjustment: "Adjustment",
+  heading: "Heading",
+  subtotal: "Subtotal",
+  separator: "",
+};
+
 const FONT_STACKS: Record<PdfLayoutOptions["branding"]["fontFamily"], string> = {
   sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   serif: '"Georgia", "Times New Roman", serif',
@@ -263,6 +280,16 @@ export function generatePdfHtml(
 ): string {
   const defaults = getDefaultPdfLayoutOptions();
   const opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
+
+  // Ensure any new section keys present in defaults are added to sectionOrder
+  for (const key of defaults.sectionOrder) {
+    if (!opts.sectionOrder.includes(key)) {
+      // Insert at the default position
+      const defaultIdx = defaults.sectionOrder.indexOf(key);
+      const insertAt = Math.min(defaultIdx, opts.sectionOrder.length);
+      opts.sectionOrder.splice(insertAt, 0, key);
+    }
+  }
 
   const fontStack = FONT_STACKS[opts.branding.fontFamily];
   const accent = opts.branding.accentColor;
@@ -317,20 +344,50 @@ export function generatePdfHtml(
 
   const renderScopeOfWork = (): string => {
     if (!data.description) return "";
-    return `<h2>Scope of Work</h2><div class="section-body">${escapeHtml(data.description)}</div>`;
+    // Description may contain HTML from the rich text editor — render as-is
+    return `<h2>Scope of Work</h2><div class="section-body">${data.description}</div>`;
   };
 
   const renderLeadLetter = (): string => {
     if (templateType !== "main" || !data.leadLetter) return "";
-    return `<h2>Lead Letter</h2><div class="section-body">${escapeHtml(data.leadLetter)}</div>`;
+    // Lead letter may contain HTML from the rich text editor — render as-is
+    return `<h2>Lead Letter</h2><div class="section-body">${data.leadLetter}</div>`;
+  };
+
+  const renderPricingSummary = (): string => {
+    const visibleRows = data.summaryRows.filter((r) => r.visible).sort((a, b) => a.order - b.order);
+    if (visibleRows.length === 0) return "";
+
+    const showCost = !opts.customerFacing;
+    const colCount = showCost ? 3 : 2;
+    let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
+
+    for (const row of visibleRows) {
+      if (row.type === "separator") {
+        result += `<tr><td colspan="${colCount}" style="border:none;height:8px"></td></tr>`;
+        continue;
+      }
+      const isSubtotal = row.type === "subtotal";
+      const style = row.style === "highlight"
+        ? `background:#f0f4ff;font-weight:600`
+        : isSubtotal ? `font-weight:700;border-top:2px solid #333` : "";
+      result += `<tr${style ? ` style="${style}"` : ""}>
+        <td>${isSubtotal ? `<strong>${escapeHtml(row.label)}</strong>` : escapeHtml(row.label)}</td>
+        ${showCost ? `<td class="num">${formatMoney(row.computedCost)}</td>` : ""}
+        <td class="num">${isSubtotal ? `<strong>${formatMoney(row.computedValue)}</strong>` : formatMoney(row.computedValue)}</td>
+      </tr>`;
+    }
+    result += `</tbody></table>`;
+
+    return result;
   };
 
   const renderLineItems = (): string => {
     if (templateType === "closeout") return "";
 
     const backupCol = templateType === "backup";
-    const showCost = opts.lineItemOptions.showCostColumn;
-    const showMarkup = opts.lineItemOptions.showMarkupColumn;
+    const showCost = opts.customerFacing ? false : opts.lineItemOptions.showCostColumn;
+    const showMarkup = opts.customerFacing ? false : opts.lineItemOptions.showMarkupColumn;
     const groupBy = opts.lineItemOptions.groupBy;
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
@@ -417,11 +474,12 @@ export function generatePdfHtml(
     return result;
   };
 
-  const renderModifiers = (): string => {
-    if (data.modifiers.length === 0) return "";
-    let result = `<h2>Modifiers</h2><table><thead><tr><th>Name</th><th>Type</th><th>Applies To</th><th class="num">%</th><th class="num">Amount</th></tr></thead><tbody>`;
-    for (const m of data.modifiers) {
-      result += `<tr><td>${escapeHtml(m.name)}</td><td>${escapeHtml(m.type)}</td><td>${escapeHtml(m.appliesTo)}</td><td class="num">${m.percentage != null ? formatPct(m.percentage) : ""}</td><td class="num">${m.amount != null ? formatMoney(m.amount) : ""}</td></tr>`;
+  const renderAdjustments = (): string => {
+    const visibleAdjustments = data.adjustments.filter((adjustment) => adjustment.show !== "No");
+    if (visibleAdjustments.length === 0) return "";
+    let result = `<h2>Adjustments</h2><table><thead><tr><th>Name</th><th>Mode</th><th>Applies To</th><th class="num">%</th><th class="num">Amount</th></tr></thead><tbody>`;
+    for (const adjustment of visibleAdjustments) {
+      result += `<tr><td>${escapeHtml(adjustment.name)}</td><td>${escapeHtml(adjustment.type || adjustment.pricingMode)}</td><td>${escapeHtml(adjustment.appliesTo)}</td><td class="num">${adjustment.percentage != null ? formatPct(adjustment.percentage) : ""}</td><td class="num">${adjustment.amount != null ? formatMoney(adjustment.amount) : ""}</td></tr>`;
     }
     result += `</tbody></table>`;
     return result;
@@ -431,7 +489,7 @@ export function generatePdfHtml(
     const hasConditions = inclusions.length > 0 || exclusions.length > 0;
     const hasOrgTerms = !!data.orgTermsAndConditions?.trim();
     if (!hasConditions && !hasOrgTerms) return "";
-    let result = `<h2>Terms & Conditions</h2>`;
+    let result = `<h2>Conditions</h2>`;
     if (hasConditions) {
       result += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
       if (inclusions.length > 0) {
@@ -461,6 +519,7 @@ export function generatePdfHtml(
   };
 
   const renderLabourSummary = (): string => {
+    if (opts.customerFacing) return "";
     // Group labour by phase and compute totals
     const phaseLabour = new Map<string, { reg: number; ot: number; dt: number; total: number; cost: number }>();
     for (const item of data.lineItems) {
@@ -550,9 +609,10 @@ export function generatePdfHtml(
     coverPage: renderCoverPage,
     scopeOfWork: renderScopeOfWork,
     leadLetter: renderLeadLetter,
+    pricingSummary: renderPricingSummary,
     lineItems: renderLineItems,
     phases: renderPhases,
-    modifiers: renderModifiers,
+    modifiers: renderAdjustments,
     conditions: renderConditions,
     hoursSummary: renderHoursSummary,
     labourSummary: renderLabourSummary,
@@ -666,12 +726,14 @@ export function generatePdfHtml(
           ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
         </div>
       </div>`;
-      html += `<div class="summary-grid">
-        <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
-        <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
-        <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
-        <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
-      </div>`;
+      if (!opts.customerFacing) {
+        html += `<div class="summary-grid">
+          <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
+          <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
+          <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
+          <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
+        </div>`;
+      }
     }
   }
 
@@ -700,12 +762,12 @@ export function generatePdfHtml(
             ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
           </div>
         </div>
-        <div class="summary-grid">
+        ${!opts.customerFacing ? `<div class="summary-grid">
           <div class="summary-card"><div class="label">Subtotal</div><div class="value">${formatMoney(data.subtotal)}</div></div>
           <div class="summary-card"><div class="label">Cost</div><div class="value">${formatMoney(data.cost)}</div></div>
           <div class="summary-card"><div class="label">Profit</div><div class="value">${formatMoney(data.estimatedProfit)}</div></div>
           <div class="summary-card"><div class="label">Margin</div><div class="value">${formatPct(data.estimatedMargin)}</div></div>
-        </div>`;
+        </div>` : ""}`;
       html = html.slice(0, afterBody) + headerBlock + html.slice(afterBody);
     }
   }

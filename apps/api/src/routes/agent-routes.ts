@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { ToolRegistry, AgentLoop, buildSystemPrompt, type ToolExecutionContext, type AgentSession, type WorkspaceSnapshot } from "@bidwright/agent";
-import { quoteTools, systemTools, knowledgeTools, projectFileTools, datasetGenTools, webTools, scheduleTools, rateScheduleTools, pricingTools, pluginManagementTools } from "@bidwright/agent";
+import { quoteTools, estimateTools, systemTools, knowledgeTools, projectFileTools, datasetGenTools, webTools, scheduleTools, rateScheduleTools, pricingTools, pluginManagementTools } from "@bidwright/agent";
 import { createLLMAdapter } from "@bidwright/agent";
 import { knowledgeService } from "../services/knowledge-service.js";
 
@@ -10,7 +10,7 @@ const sessions = new Map<string, AgentSession & { organizationId?: string }>();
 export async function agentRoutes(app: FastifyInstance) {
   // Build registry once
   const registry = new ToolRegistry();
-  registry.registerMany([...quoteTools, ...systemTools, ...knowledgeTools, ...projectFileTools, ...datasetGenTools, ...webTools, ...scheduleTools, ...rateScheduleTools, ...pricingTools, ...pluginManagementTools]);
+  registry.registerMany([...quoteTools, ...estimateTools, ...systemTools, ...knowledgeTools, ...projectFileTools, ...datasetGenTools, ...webTools, ...scheduleTools, ...rateScheduleTools, ...pricingTools, ...pluginManagementTools]);
 
   app.post("/api/agent/sessions", async (request, reply) => {
     const body = request.body as { projectId: string; revisionId?: string; provider?: string; model?: string; apiKey?: string };
@@ -126,6 +126,30 @@ export async function agentRoutes(app: FastifyInstance) {
       session.messages.push({ role: "user", content });
       session.messages.push({ role: "assistant", content: response.message });
       session.updatedAt = new Date().toISOString();
+
+      // Log AI tool executions as activity
+      const revisionId = session.revisionId || null;
+      if (response.toolCallsExecuted.length > 0) {
+        for (const tc of response.toolCallsExecuted) {
+          try {
+            await request.store!.logActivity(session.projectId, revisionId, "ai_tool_executed", {
+              toolId: tc.toolId,
+              input: tc.input,
+              success: tc.result?.success ?? true,
+              summary: tc.result?.error ?? (tc.result?.sideEffects?.[0] ?? null),
+            });
+          } catch { /* non-critical */ }
+        }
+      }
+
+      // Log the overall AI chat interaction
+      try {
+        await request.store!.logActivity(session.projectId, revisionId, "ai_chat", {
+          userMessage: content.slice(0, 200),
+          toolCount: response.toolCallsExecuted.length,
+          tokensUsed: response.tokensUsed,
+        });
+      } catch { /* non-critical */ }
 
       return {
         sessionId,

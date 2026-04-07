@@ -64,6 +64,11 @@ model EstimatorPersona {
   systemPrompt     String       @default("")
   knowledgeBookIds Json         @default("[]")
   datasetTags      Json         @default("[]")
+  packageBuckets   String[]     @default([])
+  defaultAssumptions Json       @default("{}")
+  productivityGuidance Json     @default("{}")
+  commercialGuidance Json       @default("{}")
+  reviewFocusAreas String[]     @default([])
   isDefault        Boolean      @default(false)
   enabled          Boolean      @default(true)
   order            Int          @default(0)
@@ -158,6 +163,8 @@ model Project {
   takeoffLinks       TakeoffLink[]
   scheduleTasks      ScheduleTask[]
   quoteReviews       QuoteReview[]
+  estimateStrategies EstimateStrategy[]
+  estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([organizationId])
 }
@@ -253,12 +260,14 @@ model QuoteRevision {
   totalHours            Float    @default(0)
   breakoutPackage       Json     @default("[]")
   calculatedCategoryTotals Json  @default("[]")
+  summaryLayoutPreset   String   @default("custom")
   pdfPreferences        Json     @default("{}")
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
   worksheets      Worksheet[]
   phases          Phase[]
+  adjustments     Adjustment[]
   modifiers       Modifier[]
   additionalLineItems AdditionalLineItem[]
   summaryRows     SummaryRow[]
@@ -266,6 +275,8 @@ model QuoteRevision {
   reportSections  ReportSection[]
   scheduleTasks   ScheduleTask[]
   rateSchedules   RateSchedule[]
+  estimateStrategies EstimateStrategy[]
+  estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([quoteId])
 }
@@ -409,33 +420,43 @@ model AdditionalLineItem {
 
 // ── Summary Rows ──────────────────────────────────────────────────────────
 
+model Adjustment {
+  id          String        @id @default(cuid())
+  revisionId  String
+  revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  order       Int           @default(0)
+  kind        String        @default("modifier")
+  pricingMode String        @default("modifier")
+  name        String        @default("")
+  description String        @default("")
+  type        String        @default("")
+  appliesTo   String        @default("All")
+  percentage  Float?
+  amount      Float?
+  show        String        @default("Yes")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([revisionId])
+}
+
 model SummaryRow {
   id              String        @id @default(cuid())
   revisionId      String
   revision        QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
 
-  type            String        @default("manual")    // auto_category | auto_phase | manual | modifier | subtotal | separator
+  type            String        @default("heading")   // category | phase | adjustment | heading | subtotal | separator
   label           String        @default("")
   order           Int           @default(0)
   visible         Boolean       @default(true)
   style           String        @default("normal")    // normal | bold | indent | highlight
 
-  // Auto source
   sourceCategory  String?
   sourcePhase     String?
-
-  // Manual rows: direct value entry
-  manualValue     Float?
-  manualCost      Float?
-
-  // Auto row override: pin a value on auto rows instead of aggregating
-  overrideValue   Float?
-  overrideCost    Float?
-
-  // Modifier fields
-  modifierPercent Float?
-  modifierAmount  Float?
-  appliesTo       String[]      @default([])           // row IDs or ["all"]
+  sourceCategoryId String?
+  sourceCategoryLabel String?
+  sourcePhaseId   String?
+  sourceAdjustmentId String?
 
   // Computed (filled by recalculate)
   computedValue   Float         @default(0)
@@ -756,9 +777,70 @@ model QuoteReview {
   recommendations Json     @default("[]")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([projectId])
   @@index([revisionId])
+}
+
+// ── Estimate Strategy & Calibration ────────────────────────────────────────
+
+model EstimateStrategy {
+  id                   String        @id @default(cuid())
+  projectId            String
+  project              Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId           String        @unique
+  revision             QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  aiRunId              String?
+  personaId            String?
+  status               String        @default("draft") // draft | in_progress | ready_for_review | complete
+  currentStage         String        @default("scope") // scope | execution | packaging | benchmark | reconcile | complete
+  scopeGraph           Json          @default("{}")
+  executionPlan        Json          @default("{}")
+  assumptions          Json          @default("[]")
+  packagePlan          Json          @default("[]")
+  benchmarkProfile     Json          @default("{}")
+  benchmarkComparables Json          @default("[]")
+  adjustmentPlan       Json          @default("[]")
+  reconcileReport      Json          @default("{}")
+  confidenceSummary    Json          @default("{}")
+  summary              Json          @default("{}")
+  reviewRequired       Boolean       @default(true)
+  reviewCompleted      Boolean       @default(false)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  feedback EstimateCalibrationFeedback[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model EstimateCalibrationFeedback {
+  id            String         @id @default(cuid())
+  projectId     String
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId    String
+  revision      QuoteRevision  @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  strategyId    String?
+  strategy      EstimateStrategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
+  quoteReviewId String?
+  quoteReview   QuoteReview?   @relation(fields: [quoteReviewId], references: [id], onDelete: SetNull)
+  source        String         @default("manual")
+  feedbackType  String         @default("comparison")
+  sourceLabel   String         @default("")
+  aiSnapshot    Json           @default("{}")
+  humanSnapshot Json           @default("{}")
+  deltaSummary  Json           @default("{}")
+  corrections   Json           @default("[]")
+  lessons       Json           @default("[]")
+  notes         String         @default("")
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([projectId])
+  @@index([revisionId])
+  @@index([strategyId])
 }
 
 // ── Citations ─────────────────────────────────────────────────────────────

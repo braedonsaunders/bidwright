@@ -10,6 +10,9 @@ export async function apiFetch(ctx: ToolExecutionContext, url: string, init?: Re
   if (ctx.authToken && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${ctx.authToken}`);
   }
+  if (!headers.has("X-Bidwright-Actor")) {
+    headers.set("X-Bidwright-Actor", "ai-agent");
+  }
   if (!headers.has("Content-Type") && init?.body) {
     headers.set("Content-Type", "application/json");
   }

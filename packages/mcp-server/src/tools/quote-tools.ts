@@ -93,6 +93,7 @@ export function registerQuoteTools(server: McpServer) {
     const worksheets = ws.worksheets || [];
     const rateSchedules = ws.rateSchedules || [];
     const entityCategories = ws.entityCategories || [];
+    const strategy = ws.estimateStrategy || null;
 
     // Has the agent (or user) filled in quote basics?
     const hasQuoteInfo = !!(
@@ -111,6 +112,28 @@ export function registerQuoteTools(server: McpServer) {
       const action = gate === "importRateSchedule" ? "importing rate schedules"
         : gate === "createWorksheet" ? "creating worksheets" : "creating items";
       return `Quote setup required first. Call updateQuote with projectName and description before ${action}.`;
+    }
+
+    const hasScopeGraph = !!strategy && Object.keys(strategy.scopeGraph || {}).length > 0;
+    const hasExecutionPlan = !!strategy && Object.keys(strategy.executionPlan || {}).length > 0;
+    const hasAssumptions = !!strategy && Array.isArray(strategy.assumptions) && strategy.assumptions.length > 0;
+    const hasPackagePlan = !!strategy && Array.isArray(strategy.packagePlan) && strategy.packagePlan.length > 0;
+    const hasBenchmarks = !!strategy && Object.keys(strategy.benchmarkProfile || {}).length > 0;
+
+    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasScopeGraph) {
+      return `Estimate strategy is incomplete. Call saveEstimateScopeGraph before creating worksheets or items.`;
+    }
+    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasExecutionPlan) {
+      return `Execution model not saved yet. Call saveEstimateExecutionPlan before creating worksheets or items.`;
+    }
+    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasAssumptions) {
+      return `Assumptions are not persisted yet. Call saveEstimateAssumptions before creating worksheets or items.`;
+    }
+    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasPackagePlan) {
+      return `Commercial/package structure is missing. Call saveEstimatePackagePlan before creating worksheets or items.`;
+    }
+    if (gate === "createWorksheetItem" && !hasBenchmarks) {
+      return `Historical benchmark pass has not been run. Call recomputeEstimateBenchmarks and saveEstimateAdjustments before creating detailed line items.`;
     }
 
     // Gate 2: rate schedules required for createWorksheet and createWorksheetItem
@@ -160,6 +183,12 @@ export function registerQuoteTools(server: McpServer) {
           id: s.id, sectionType: s.sectionType, title: s.title, order: s.order,
         })),
         rateScheduleCount: (ws.rateSchedules || []).length,
+        estimateStrategy: ws.estimateStrategy ? {
+          currentStage: ws.estimateStrategy.currentStage,
+          status: ws.estimateStrategy.status,
+          reviewCompleted: ws.estimateStrategy.reviewCompleted,
+          benchmarkCandidateCount: ws.estimateStrategy.benchmarkProfile?.candidateCount ?? 0,
+        } : null,
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(summary, null, 2) }] };
     }

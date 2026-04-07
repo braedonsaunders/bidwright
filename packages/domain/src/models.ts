@@ -150,6 +150,7 @@ export interface QuoteRevision {
   doubleHours: number;
   breakoutPackage: unknown[];
   calculatedCategoryTotals: unknown[];
+  summaryLayoutPreset: SummaryPreset;
   pdfPreferences: Record<string, unknown>;
   subtotal: number;
   cost: number;
@@ -239,6 +240,30 @@ export interface ScheduleDependency {
   lagDays: number;
 }
 
+export type AdjustmentKind = "modifier" | "line_item";
+export type AdjustmentPricingMode =
+  | "modifier"
+  | "option_standalone"
+  | "option_additional"
+  | "line_item_additional"
+  | "line_item_standalone"
+  | "custom_total";
+
+export interface Adjustment {
+  id: string;
+  revisionId: string;
+  order: number;
+  kind: AdjustmentKind;
+  pricingMode: AdjustmentPricingMode;
+  name: string;
+  description: string;
+  type: string;
+  appliesTo: string;
+  percentage: number | null;
+  amount: number | null;
+  show: "Yes" | "No";
+}
+
 export interface Modifier {
   id: string;
   revisionId: string;
@@ -264,7 +289,7 @@ export interface AdditionalLineItem {
   amount: number;
 }
 
-export type SummaryRowType = "auto_category" | "auto_phase" | "manual" | "modifier" | "subtotal" | "separator";
+export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
 export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
 
@@ -278,24 +303,19 @@ export interface SummaryRow {
   style: SummaryRowStyle;
 
   // Auto source
-  sourceCategory?: string | null;
-  sourcePhase?: string | null;
+  sourceCategoryId?: string | null;
+  sourceCategoryLabel?: string | null;
+  sourcePhaseId?: string | null;
+  sourceAdjustmentId?: string | null;
 
   // Manual rows: direct value entry (not backed by items)
-  manualValue?: number | null;
-  manualCost?: number | null;
 
   // Auto row override: when set on auto_category/auto_phase rows,
   // this value is used INSTEAD of the aggregated value from items.
   // Set to null to go back to fully-auto. This lets users "pin" a
   // number while keeping the row linked to its source.
-  overrideValue?: number | null;
-  overrideCost?: number | null;
 
   // Modifier fields
-  modifierPercent?: number | null;
-  modifierAmount?: number | null;
-  appliesTo: string[]; // row IDs or ["all"]
 
   // Computed (filled by recalculate — reflects override if set)
   computedValue: number;
@@ -348,6 +368,57 @@ export interface AiRun {
   promptVersion: string;
   input: Record<string, unknown>;
   output: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EstimateStrategyStage =
+  | "scope"
+  | "execution"
+  | "packaging"
+  | "benchmark"
+  | "reconcile"
+  | "complete";
+
+export interface EstimateStrategy {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  aiRunId?: string | null;
+  personaId?: string | null;
+  status: "draft" | "in_progress" | "ready_for_review" | "complete";
+  currentStage: EstimateStrategyStage;
+  scopeGraph: Record<string, unknown>;
+  executionPlan: Record<string, unknown>;
+  assumptions: Array<Record<string, unknown>>;
+  packagePlan: Array<Record<string, unknown>>;
+  benchmarkProfile: Record<string, unknown>;
+  benchmarkComparables: Array<Record<string, unknown>>;
+  adjustmentPlan: Array<Record<string, unknown>>;
+  reconcileReport: Record<string, unknown>;
+  confidenceSummary: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  reviewRequired: boolean;
+  reviewCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EstimateCalibrationFeedback {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  strategyId?: string | null;
+  quoteReviewId?: string | null;
+  source: string;
+  feedbackType: string;
+  sourceLabel: string;
+  aiSnapshot: Record<string, unknown>;
+  humanSnapshot: Record<string, unknown>;
+  deltaSummary: Record<string, unknown>;
+  corrections: Array<Record<string, unknown>>;
+  lessons: Array<Record<string, unknown>>;
+  notes: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1086,6 +1157,7 @@ export interface BidwrightStore {
   worksheets: Worksheet[];
   worksheetItems: WorksheetItem[];
   phases: Phase[];
+  adjustments: Adjustment[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
   summaryRows: SummaryRow[];
@@ -1114,6 +1186,8 @@ export interface BidwrightStore {
   rateScheduleTiers: RateScheduleTier[];
   rateScheduleItems: RateScheduleItem[];
   takeoffLinks: TakeoffLink[];
+  estimateStrategies?: EstimateStrategy[];
+  estimateCalibrationFeedback?: EstimateCalibrationFeedback[];
 }
 
 export interface BreakoutEntry {
@@ -1131,6 +1205,31 @@ export interface BreakoutEntry {
   type?: string;
 }
 
+export interface SourceTotalEntry {
+  id: string;
+  name: string;
+  label: string;
+  value: number;
+  cost: number;
+  margin: number;
+  phaseId?: string | null;
+  phaseLabel?: string | null;
+}
+
+export interface AdjustmentTotalEntry {
+  id: string;
+  label: string;
+  kind: AdjustmentKind;
+  pricingMode: AdjustmentPricingMode;
+  type: string;
+  appliesTo: string;
+  show: "Yes" | "No";
+  affectsSubtotal: boolean;
+  value: number;
+  cost: number;
+  margin: number;
+}
+
 export interface RevisionTotals {
   subtotal: number;
   cost: number;
@@ -1141,10 +1240,10 @@ export interface RevisionTotals {
   overHours: number;
   doubleHours: number;
   totalHours: number;
-  categoryTotals: Array<{
-    name: string;
-    value: number;
-  }>;
+  categoryTotals: SourceTotalEntry[];
+  phaseTotals: SourceTotalEntry[];
+  phaseCategoryTotals: SourceTotalEntry[];
+  adjustmentTotals: AdjustmentTotalEntry[];
   tierUnitTotals?: Record<string, number>;
   breakout: BreakoutEntry[];
 }
@@ -1156,6 +1255,7 @@ export interface ProjectWorkspace {
   currentRevision: QuoteRevision;
   worksheets: Array<Worksheet & { items: WorksheetItem[] }>;
   phases: Phase[];
+  adjustments: Adjustment[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
   summaryRows: SummaryRow[];
@@ -1166,6 +1266,8 @@ export interface ProjectWorkspace {
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
   takeoffLinks: TakeoffLink[];
+  estimateStrategy?: EstimateStrategy | null;
+  estimateFeedback?: EstimateCalibrationFeedback[];
   estimate: {
     revisionId: string;
     totals: RevisionTotals;

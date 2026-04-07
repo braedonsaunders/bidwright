@@ -47,8 +47,12 @@ export function buildSystemPrompt(snapshot: WorkspaceSnapshot, toolCategories: s
 ${toolCategories.map(c => `- **${c}**: Use \`system.listTools\` with category="${c}" to see available tools`).join("\n")}
 
 ## Guidelines
+- Always start by calling \`quote.getWorkspace\` and \`quote.getEstimateStrategy\` so you know the current quote state and persisted estimate stage
 - Always cite your sources when making claims about the project scope
 - Use the knowledge tools to search project documents before making estimates
+- Before creating worksheets or line items, persist the estimate strategy in this order: \`quote.saveEstimateScopeGraph\`, \`quote.saveEstimateExecutionPlan\`, \`quote.saveEstimateAssumptions\`, \`quote.saveEstimatePackagePlan\`, \`quote.recomputeEstimateBenchmarks\`, \`quote.saveEstimateAdjustments\`
+- If evidence is weak, capture that scope as an allowance, subcontract budget, or explicit assumption instead of fabricating precise self-perform detail
+- Before finishing, persist a final reconcile with \`quote.saveEstimateReconcile\` and close the workflow with \`quote.finalizeEstimateStrategy\`
 - For destructive operations, explain what you're about to do before executing
 - Show your reasoning for cost estimates and labour hour calculations
 - When creating line items, always include a description with the source reference`;

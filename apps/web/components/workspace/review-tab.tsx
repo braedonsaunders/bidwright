@@ -45,7 +45,7 @@ import { formatMoney } from "@/lib/format";
 
 // ── Types ────────────────────────────────────────────────────
 
-type ReviewSubTab = "coverage" | "gaps" | "competitiveness" | "recommendations";
+type ReviewSubTab = "coverage" | "gaps" | "competitiveness" | "productivity" | "recommendations";
 
 interface ReviewTabProps {
   workspace: ProjectWorkspaceData;
@@ -80,6 +80,16 @@ function coverageColor(status: string) {
     case "NO": return "danger";
     default: return "default";
   }
+}
+
+function formatOptionalInteger(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "—";
+  return value.toLocaleString();
+}
+
+function formatOptionalDecimal(value?: number | null, digits = 1) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "—";
+  return value.toFixed(digits);
 }
 
 // ── Coverage SubTab ──────────────────────────────────────────
@@ -119,25 +129,27 @@ function CoverageSubTab({ items }: { items: ReviewCoverageItem[] }) {
       {items.length === 0 ? (
         <div className="text-center py-12 text-fg/30 text-sm">No coverage data yet</div>
       ) : (
-        <div className="rounded-lg border border-line overflow-hidden">
-          <table className="w-full text-xs">
+        <div className="rounded-lg border border-line overflow-x-auto">
+          <table className="w-full min-w-[760px] text-xs [&_tbody_td:last-child]:!max-w-none [&_tbody_td:last-child]:!overflow-visible [&_tbody_td:last-child]:!whitespace-normal [&_tbody_td:last-child]:!break-words [&_tbody_td:last-child]:!text-clip">
             <thead>
               <tr className="bg-panel2/50 border-b border-line">
                 <th className="px-3 py-2 text-left font-medium text-fg/50 w-20">Ref</th>
                 <th className="px-3 py-2 text-left font-medium text-fg/50">Requirement</th>
                 <th className="px-3 py-2 text-center font-medium text-fg/50 w-20">Status</th>
-                <th className="px-3 py-2 text-left font-medium text-fg/50">Notes</th>
+                <th className="px-3 py-2 text-left font-medium text-fg/50 min-w-[320px]">Notes</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item, i) => (
                 <tr key={i} className={cn("border-b border-line/50 last:border-0", item.status === "NO" && "bg-danger/[0.03]")}>
-                  <td className="px-3 py-2 font-mono text-fg/60">{item.specRef}</td>
-                  <td className="px-3 py-2 text-fg/80">{item.requirement}</td>
-                  <td className="px-3 py-2 text-center">
+                  <td className="px-3 py-2 align-top font-mono text-fg/60">{item.specRef}</td>
+                  <td className="px-3 py-2 align-top text-fg/80 whitespace-normal break-words">{item.requirement}</td>
+                  <td className="px-3 py-2 align-top text-center">
                     <Badge tone={coverageColor(item.status)} className="text-[10px]">{item.status}</Badge>
                   </td>
-                  <td className="px-3 py-2 text-fg/50 max-w-[300px] truncate">{item.notes || item.worksheetName || "—"}</td>
+                  <td className="px-3 py-2 align-top text-fg/50 whitespace-normal break-words">
+                    {item.notes || item.worksheetName || "—"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -231,7 +243,7 @@ function GapsRisksSubTab({ findings }: { findings: ReviewFinding[] }) {
 function CompetitivenessSubTab({ data }: { data: ReviewCompetitiveness }) {
   const overestimates = data.overestimates || [];
   const underestimates = data.underestimates || [];
-  const benchmarks = data.benchmarking?.streams || [];
+  const benchmarks = [] as NonNullable<ReviewCompetitiveness["benchmarking"]>["streams"];
 
   return (
     <div className="space-y-6">
@@ -359,6 +371,106 @@ function CompetitivenessSubTab({ data }: { data: ReviewCompetitiveness }) {
 }
 
 // ── Recommendations SubTab ───────────────────────────────────
+
+function ProductivitySubTab({ data }: { data: ReviewCompetitiveness }) {
+  const benchmarks = data.benchmarking?.streams || [];
+  const description = data.benchmarking?.description;
+  const streamsWithHours = benchmarks.filter((stream) => Number.isFinite(stream.hours) && stream.hours > 0).length;
+  const streamsWithRates = benchmarks.filter(
+    (stream) => typeof stream.productionRate === "number" && Number.isFinite(stream.productionRate) && stream.productionRate > 0
+  ).length;
+  const streamsWithFmTl = benchmarks.filter(
+    (stream) => typeof stream.fmTlRatio === "number" && Number.isFinite(stream.fmTlRatio) && stream.fmTlRatio > 0
+  ).length;
+  const incompleteStreams = benchmarks.filter(
+    (stream) =>
+      !(Number.isFinite(stream.hours) && stream.hours > 0) ||
+      !(typeof stream.productionRate === "number" && Number.isFinite(stream.productionRate) && stream.productionRate > 0) ||
+      !(typeof stream.fmTlRatio === "number" && Number.isFinite(stream.fmTlRatio) && stream.fmTlRatio > 0)
+  ).length;
+
+  if (benchmarks.length === 0) {
+    return <div className="text-center py-12 text-fg/30 text-sm">No productivity data yet</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-lg border border-line bg-panel2/30 px-4 py-3">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-fg/40">Streams</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums text-fg/85">{benchmarks.length}</div>
+        </div>
+        <div className="rounded-lg border border-line bg-panel2/30 px-4 py-3">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-fg/40">Quantified Hours</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums text-fg/85">
+            {streamsWithHours}/{benchmarks.length}
+          </div>
+        </div>
+        <div className="rounded-lg border border-line bg-panel2/30 px-4 py-3">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-fg/40">Benchmark Rates</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums text-fg/85">
+            {streamsWithRates}/{benchmarks.length}
+          </div>
+        </div>
+        <div className="rounded-lg border border-line bg-panel2/30 px-4 py-3">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-fg/40">FM:TL Ratios</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums text-fg/85">
+            {streamsWithFmTl}/{benchmarks.length}
+          </div>
+        </div>
+      </div>
+
+      {(description || incompleteStreams > 0) && (
+        <div className="rounded-lg border border-line bg-panel2/20 px-4 py-3 space-y-1.5">
+          {description && <p className="text-xs text-fg/55">{description}</p>}
+          {incompleteStreams > 0 && (
+            <p className="text-[11px] text-fg/40">
+              {incompleteStreams} stream{incompleteStreams === 1 ? "" : "s"} are missing one or more quantified productivity metrics, so unavailable values are shown as dashes.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-line overflow-x-auto">
+        <table className="w-full min-w-[960px] text-xs">
+          <thead>
+            <tr className="bg-panel2/50 border-b border-line">
+              <th className="px-3 py-2 text-left font-medium text-fg/50 min-w-[220px]">Stream</th>
+              <th className="px-3 py-2 text-right font-medium text-fg/50 w-28">Footage</th>
+              <th className="px-3 py-2 text-right font-medium text-fg/50 w-24">Hours</th>
+              <th className="px-3 py-2 text-right font-medium text-fg/50 w-32">MH/LF benchmark</th>
+              <th className="px-3 py-2 text-right font-medium text-fg/50 w-20">FM:TL</th>
+              <th className="px-3 py-2 text-left font-medium text-fg/50 min-w-[360px]">Assessment</th>
+            </tr>
+          </thead>
+          <tbody>
+            {benchmarks.map((benchmark, index) => {
+              const assessmentText = benchmark.assessment.trim() || "No productivity assessment provided yet";
+              const assessLow = assessmentText.toLowerCase();
+              const color =
+                assessLow.includes("heavy") || assessLow.includes("slow") || assessLow.includes("premium")
+                  ? "text-warning"
+                  : assessLow.includes("good") || assessLow.includes("efficient") || assessLow.includes("favorable")
+                    ? "text-success"
+                    : "text-fg/60";
+
+              return (
+                <tr key={`${benchmark.name}-${index}`} className="border-b border-line/50 last:border-0 align-top">
+                  <td className="px-3 py-2 font-medium text-fg/70">{benchmark.name}</td>
+                  <td className="px-3 py-2 text-right font-mono text-fg/60">{formatOptionalInteger(benchmark.footage)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-fg/60">{formatOptionalInteger(benchmark.hours)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-fg/60">{formatOptionalDecimal(benchmark.productionRate)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-fg/60">{formatOptionalDecimal(benchmark.fmTlRatio, 2)}</td>
+                  <td className={cn("px-3 py-2 whitespace-normal break-words", color)}>{assessmentText}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function RecommendationsSubTab({
   recommendations,
@@ -738,12 +850,18 @@ export function ReviewTab({ workspace, onApply, onError }: ReviewTabProps) {
   const coverage = (review?.coverage as ReviewCoverageItem[]) || [];
   const findings = (review?.findings as ReviewFinding[]) || [];
   const competitiveness = (review?.competitiveness as ReviewCompetitiveness) || {};
+  const productivityBenchmarks = competitiveness.benchmarking?.streams || [];
   const recommendations = (review?.recommendations as ReviewRecommendation[]) || [];
 
   const subTabs: Array<{ id: ReviewSubTab; label: string; count?: number }> = [
     { id: "coverage", label: "Coverage", count: coverage.length },
     { id: "gaps", label: "Gaps & Risks", count: findings.length },
-    { id: "competitiveness", label: "Competitiveness" },
+    {
+      id: "competitiveness",
+      label: "Competitiveness",
+      count: (competitiveness.overestimates?.length || 0) + (competitiveness.underestimates?.length || 0),
+    },
+    { id: "productivity", label: "Productivity", count: productivityBenchmarks.length },
     { id: "recommendations", label: "Recommendations", count: recommendations.filter(r => r.status === "open").length },
   ];
 
@@ -828,6 +946,11 @@ export function ReviewTab({ workspace, onApply, onError }: ReviewTabProps) {
           {subTab === "competitiveness" && (
             <motion.div key="competitiveness" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
               <CompetitivenessSubTab data={competitiveness} />
+            </motion.div>
+          )}
+          {subTab === "productivity" && (
+            <motion.div key="productivity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
+              <ProductivitySubTab data={competitiveness} />
             </motion.div>
           )}
           {subTab === "recommendations" && (

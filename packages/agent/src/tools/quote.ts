@@ -108,6 +108,56 @@ async function apiDelete(ctx: ToolExecutionContext, path: string, sideEffect: st
   return { success: true, data, sideEffects: [sideEffect], duration_ms: 0 };
 }
 
+function hasStructuredContent(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === "object") return Object.keys(value as Record<string, unknown>).length > 0;
+  if (typeof value === "string") return value.trim().length > 0;
+  return value != null;
+}
+
+async function checkEstimateStrategyGate(
+  ctx: ToolExecutionContext,
+  action: "createWorksheet" | "createWorksheetItem",
+): Promise<ToolResult | null> {
+  const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/api/estimate/${ctx.projectId}/strategy`, {
+    method: "GET",
+    headers: authHeaders(ctx),
+  });
+  if (!res.ok) {
+    return {
+      success: false,
+      error: `API error: unable to load estimate strategy (${res.status} ${res.statusText})`,
+      duration_ms: 0,
+    };
+  }
+
+  const payload = await res.json() as { strategy?: Record<string, unknown> | null };
+  const strategy = payload.strategy ?? {};
+  const missingTools: string[] = [];
+
+  if (!hasStructuredContent(strategy.scopeGraph)) missingTools.push("quote.saveEstimateScopeGraph");
+  if (!hasStructuredContent(strategy.executionPlan)) missingTools.push("quote.saveEstimateExecutionPlan");
+  if (!hasStructuredContent(strategy.assumptions)) missingTools.push("quote.saveEstimateAssumptions");
+  if (!hasStructuredContent(strategy.packagePlan)) missingTools.push("quote.saveEstimatePackagePlan");
+  if (action === "createWorksheetItem" && !hasStructuredContent(strategy.benchmarkProfile)) {
+    missingTools.push("quote.recomputeEstimateBenchmarks");
+  }
+
+  if (missingTools.length === 0) return null;
+
+  const blockedAction = action === "createWorksheet" ? "worksheet creation" : "line item creation";
+  return {
+    success: false,
+    error: `Estimate stage gate blocked ${blockedAction}. Call ${missingTools.join(", ")} first, then continue.`,
+    data: {
+      currentStage: strategy.currentStage ?? null,
+      status: strategy.status ?? null,
+      missingTools,
+    },
+    duration_ms: 0,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────
 // 1. quote.getWorkspace
 // ──────────────────────────────────────────────────────────────
@@ -421,6 +471,9 @@ If the server rejects your item, read the error message — it will tell you wha
   }),
   tags: ["item", "create", "write"],
 }, async (ctx, input) => {
+  const gate = await checkEstimateStrategyGate(ctx, "createWorksheetItem");
+  if (gate) return gate;
+
   const { worksheetId, category, ...rest } = input;
   const cost = Number(rest.cost ?? 0);
   const rawMarkup = Number(rest.markup ?? 0);
@@ -517,6 +570,9 @@ export const createWorksheetTool = createQuoteTool({
   }),
   tags: ["worksheet", "create", "write"],
 }, async (ctx, input) => {
+  const gate = await checkEstimateStrategyGate(ctx, "createWorksheet");
+  if (gate) return gate;
+
   return apiPost(ctx, "/worksheets", input, "Created worksheet");
 });
 

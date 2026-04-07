@@ -32,6 +32,11 @@ export interface ClaudeMdParams {
     systemPrompt: string;
     knowledgeBookNames: string[];
     datasetTags: string[];
+    packageBuckets: string[];
+    defaultAssumptions: Record<string, unknown>;
+    productivityGuidance: Record<string, unknown>;
+    commercialGuidance: Record<string, unknown>;
+    reviewFocusAreas: string[];
   } | null;
   maxConcurrentSubAgents?: number;
 }
@@ -138,6 +143,13 @@ ${params.persona.systemPrompt}
 **Priority Knowledge Sources:** Search these first, but you can and should search ALL available books and datasets.
 ${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- "${n}"`).join("\n") : "- (No specific books assigned — search all available)"}
 ${params.persona.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${params.persona.datasetTags.join(", ")}` : ""}
+${params.persona.packageBuckets.length > 0 ? `- Preferred package buckets: ${params.persona.packageBuckets.join(", ")}` : ""}
+${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.persona.reviewFocusAreas.join(", ")}` : ""}
+
+**Structured Priors**
+- Default assumptions: ${JSON.stringify(params.persona.defaultAssumptions)}
+- Productivity guidance: ${JSON.stringify(params.persona.productivityGuidance)}
+- Commercial guidance: ${JSON.stringify(params.persona.commercialGuidance)}
 
 ---
 
@@ -198,6 +210,15 @@ ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 
 You have access to Bidwright tools via MCP. Key tools:
 
+- **getEstimateStrategy** — Retrieve the persisted estimate strategy, benchmark state, and calibration feedback for this revision
+- **saveEstimateScopeGraph** — Persist the structured scope graph after document review
+- **saveEstimateExecutionPlan** — Lock the execution model before assigning hours
+- **saveEstimateAssumptions** — Persist explicit assumptions with confidence and user-confirmation flags
+- **saveEstimatePackagePlan** — Define the commercial/package structure before pricing
+- **recomputeEstimateBenchmarks** — Compare this revision to prior human quotes and surface distribution outliers
+- **saveEstimateAdjustments** — Record how benchmark findings should change the estimate approach
+- **saveEstimateReconcile** — Save the mandatory final self-review and outlier check
+- **finalizeEstimateStrategy** — Mark the staged estimate workflow complete after reconcile
 - **getItemConfig** — CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
 - **getWorkspace** — Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
 - **createWorksheet** — Create a worksheet (cost section) in the quote
@@ -247,9 +268,10 @@ These tools are for **automated symbol counting on construction drawings**, NOT 
 
 ### RESUME CHECK — ALWAYS DO THIS FIRST
 
-**Before doing ANY work, call \`getWorkspace\` to check existing state.** If the workspace already has worksheets, phases, or items from a prior session:
+**Before doing ANY work, call \`getWorkspace\` and \`getEstimateStrategy\` to check existing state.** If the workspace already has worksheets, phases, items, or saved strategy sections from a prior session:
 - Do NOT re-create worksheets or phases that already exist
 - Read memory (\`readMemory\`) to understand what was completed and what remains
+- Resume from the latest saved strategy stage instead of restarting from scratch
 - Pick up where the previous session left off
 - Only create NEW worksheets/phases/items that don't already exist
 - If worksheets exist but have no items, populate them — don't recreate them
@@ -259,6 +281,18 @@ These tools are for **automated symbol counting on construction drawings**, NOT 
 ### MANDATORY SEQUENCE (for new estimates)
 
 You decide your own workflow. Here's the MANDATORY sequence:
+
+**STAGE GATE - THIS OVERRIDES ANY SHORTCUTS**
+- Before you create detailed line items, you MUST persist the estimate strategy in this order:
+  1. \`saveEstimateScopeGraph\`
+  2. \`saveEstimateExecutionPlan\`
+  3. \`saveEstimateAssumptions\`
+  4. \`saveEstimatePackagePlan\`
+  5. \`recomputeEstimateBenchmarks\`
+  6. \`saveEstimateAdjustments\`
+- Do not jump from document facts directly to detailed hours.
+- If evidence is weak, price that scope as an allowance or subcontract budget instead of pretending you have a precise self-perform takeoff.
+- The package structure must be decided before the pricing structure. The execution model must be decided before labour hours. The benchmark pass must happen before you trust those labour hours.
 
 1. **Read the main spec/RFQ** — find and read the primary specification document using the Read tool on the documents/ folder
 2. **IMMEDIATELY update the quote — THIS IS YOUR #1 PRIORITY, DO IT BEFORE ANYTHING ELSE.** As soon as you read the main spec, call \`updateQuote\` with:
@@ -442,6 +476,13 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 ⚠️ **THIS IS THE MOST IMPORTANT SECTION. READ IT CAREFULLY.**
 
 **Your job is NOT done until ALL of the following are true:**
+0. âœ… saveEstimateScopeGraph called
+0. âœ… saveEstimateExecutionPlan called
+0. âœ… saveEstimateAssumptions called
+0. âœ… saveEstimatePackagePlan called
+0. âœ… recomputeEstimateBenchmarks completed and saveEstimateAdjustments recorded
+0. âœ… saveEstimateReconcile called
+0. âœ… finalizeEstimateStrategy called
 1. ✅ updateQuote called with project name, CONCISE scope description, client
 2. ✅ Rate schedules imported for all required categories
 3. ✅ ALL worksheets created (every major scope area has a worksheet)

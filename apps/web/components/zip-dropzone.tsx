@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEvent } from "react";
 import { ChevronDown, FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as RadixSelect from "@radix-ui/react-select";
@@ -44,11 +44,463 @@ function SelectItem({ value, children }: { value: string; children: React.ReactN
   );
 }
 
+type DataTransferItemWithFileSystemHandle = DataTransferItem & {
+  getAsFileSystemHandle?: () => Promise<{
+    kind?: string;
+    getFile?: () => Promise<File>;
+  } | null>;
+};
+
+interface FileSystemFileEntryLike {
+  isFile?: boolean;
+  file?: (success: (file: File) => void, error?: (error: unknown) => void) => void;
+}
+
+interface DroppedStringData {
+  type: string;
+  value: string;
+}
+
+interface DroppedRemoteFileCandidate {
+  url: string;
+  type: string;
+  suggestedName?: string;
+  mimeType?: string;
+}
+
+interface ExtractDroppedFilesResult {
+  files: File[];
+  errorMessage?: string;
+}
+
+const REMOTE_DROP_HOST_SUFFIXES = [
+  "office.com",
+  "office365.com",
+  "office.net",
+  "outlook.com",
+  "live.com",
+  "sharepoint.com",
+  "microsoft.com",
+];
+
+const DROP_STRING_TYPES = [
+  "DownloadURL",
+  "downloadurl",
+  "text/uri-list",
+  "text/plain",
+  "URL",
+  "text/x-moz-url",
+  "text/html",
+];
+
+const OUTLOOK_ROW_ONLY_PAYLOAD_TYPES = [
+  "multimaillistmessagerows",
+  "maillistrow",
+  "text/x-napi-message",
+];
+
+function dropFileKey(file: File) {
+  return `${file.name}::${file.size}::${file.lastModified}`;
+}
+
+function dedupeDroppedFiles(nextFiles: Iterable<File>) {
+  const seen = new Set<string>();
+  const uniqueFiles: File[] = [];
+
+  for (const file of nextFiles) {
+    const key = dropFileKey(file);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    uniqueFiles.push(file);
+  }
+
+  return uniqueFiles;
+}
+
+function sanitizeDroppedFileName(fileName: string) {
+  return fileName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function inferredExtensionFromMimeType(mimeType?: string) {
+  switch ((mimeType ?? "").toLowerCase()) {
+    case "message/rfc822":
+      return ".eml";
+    case "application/vnd.ms-outlook":
+      return ".msg";
+    case "application/pdf":
+      return ".pdf";
+    case "application/zip":
+    case "application/x-zip-compressed":
+      return ".zip";
+    default:
+      return "";
+  }
+}
+
+function ensureDroppedFileName(fileName: string | undefined, mimeType?: string, fallbackBase = "outlook-email") {
+  const normalized = sanitizeDroppedFileName(fileName ?? "");
+  const fallbackExtension = inferredExtensionFromMimeType(mimeType);
+
+  if (!normalized) {
+    return `${fallbackBase}${fallbackExtension}`;
+  }
+
+  if (!fallbackExtension || /\.[a-z0-9]{2,8}$/i.test(normalized)) {
+    return normalized;
+  }
+
+  return `${normalized}${fallbackExtension}`;
+}
+
+function looksLikeSupportedDroppedUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:", "blob:", "data:"].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedRemoteDropUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "blob:" || url.protocol === "data:") {
+      return true;
+    }
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return false;
+    }
+    if (typeof window !== "undefined" && url.origin === window.location.origin) {
+      return true;
+    }
+    const host = url.hostname.toLowerCase();
+    return REMOTE_DROP_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+  } catch {
+    return false;
+  }
+}
+
+function parseDownloadUrlValue(value: string): DroppedRemoteFileCandidate | null {
+  const firstColon = value.indexOf(":");
+  const secondColon = firstColon >= 0 ? value.indexOf(":", firstColon + 1) : -1;
+  if (firstColon <= 0 || secondColon <= firstColon + 1) {
+    return null;
+  }
+
+  const mimeType = value.slice(0, firstColon).trim();
+  const suggestedName = value.slice(firstColon + 1, secondColon).trim();
+  const url = value.slice(secondColon + 1).trim();
+
+  if (!looksLikeSupportedDroppedUrl(url)) {
+    return null;
+  }
+
+  return {
+    url,
+    type: "downloadurl",
+    mimeType,
+    suggestedName,
+  };
+}
+
+function parseUriListValue(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
+function parseMozUrlValue(value: string) {
+  const [url, suggestedName] = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!url || !looksLikeSupportedDroppedUrl(url)) {
+    return null;
+  }
+
+  return {
+    url,
+    type: "text/x-moz-url",
+    suggestedName,
+  } satisfies DroppedRemoteFileCandidate;
+}
+
+function firstHrefFromHtml(value: string) {
+  const match = value.match(/href=["']([^"']+)["']/i);
+  return match?.[1]?.trim() || null;
+}
+
+function droppedPathFileName(value: string) {
+  try {
+    const url = new URL(value);
+    const lastSegment = url.pathname.split("/").filter(Boolean).pop();
+    return lastSegment ? decodeURIComponent(lastSegment) : "";
+  } catch {
+    return "";
+  }
+}
+
+function contentDispositionFileName(headerValue: string | null) {
+  if (!headerValue) {
+    return "";
+  }
+
+  const encodedMatch = headerValue.match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      return encodedMatch[1];
+    }
+  }
+
+  const plainMatch = headerValue.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] ?? "";
+}
+
+function readDroppedStringItem(item: DataTransferItem) {
+  return new Promise<DroppedStringData | null>((resolve) => {
+    try {
+      item.getAsString((value) => {
+        const trimmed = value.trim();
+        resolve(trimmed ? { type: item.type || "text/plain", value: trimmed } : null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function readDirectDropStrings(dataTransfer: DataTransfer) {
+  const values = new Map<string, string>();
+  const types = new Set<string>([
+    ...Array.from(dataTransfer.types ?? []),
+    ...DROP_STRING_TYPES,
+  ]);
+
+  for (const type of types) {
+    try {
+      const value = dataTransfer.getData(type);
+      const trimmed = value.trim();
+      if (trimmed) {
+        values.set(type.toLowerCase(), trimmed);
+      }
+    } catch {
+      // Some browsers throw for unsupported external drag types.
+    }
+  }
+
+  return values;
+}
+
+function buildRemoteFileCandidates(stringValues: Map<string, string>) {
+  const candidates: DroppedRemoteFileCandidate[] = [];
+  const seen = new Set<string>();
+
+  function pushCandidate(candidate: DroppedRemoteFileCandidate | null) {
+    if (!candidate || !candidate.url) {
+      return;
+    }
+
+    const key = `${candidate.type}::${candidate.url}::${candidate.suggestedName ?? ""}::${candidate.mimeType ?? ""}`;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    candidates.push(candidate);
+  }
+
+  pushCandidate(parseDownloadUrlValue(stringValues.get("downloadurl") ?? ""));
+  pushCandidate(parseMozUrlValue(stringValues.get("text/x-moz-url") ?? ""));
+
+  for (const url of parseUriListValue(stringValues.get("text/uri-list") ?? "")) {
+    if (looksLikeSupportedDroppedUrl(url)) {
+      pushCandidate({ url, type: "text/uri-list" });
+    }
+  }
+
+  const plainText = stringValues.get("text/plain") ?? stringValues.get("url") ?? "";
+  if (looksLikeSupportedDroppedUrl(plainText)) {
+    pushCandidate({ url: plainText, type: "text/plain" });
+  }
+
+  const htmlHref = firstHrefFromHtml(stringValues.get("text/html") ?? "");
+  if (htmlHref && looksLikeSupportedDroppedUrl(htmlHref)) {
+    pushCandidate({ url: htmlHref, type: "text/html" });
+  }
+
+  return candidates;
+}
+
+async function fetchDroppedRemoteFile(candidate: DroppedRemoteFileCandidate) {
+  if (!isAllowedRemoteDropUrl(candidate.url)) {
+    return null;
+  }
+
+  const response = await fetch(candidate.url, {
+    credentials: "include",
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) {
+    return null;
+  }
+
+  const mimeType = blob.type || candidate.mimeType || "application/octet-stream";
+  const fileName = ensureDroppedFileName(
+    candidate.suggestedName ||
+      contentDispositionFileName(response.headers.get("content-disposition")) ||
+      droppedPathFileName(candidate.url),
+    mimeType
+  );
+
+  return new File([blob], fileName, {
+    type: mimeType,
+    lastModified: Date.now(),
+  });
+}
+
+function describePayloadTypes(payloadTypes: Set<string>) {
+  return Array.from(payloadTypes).sort().join(", ");
+}
+
+function readEntryFile(item: DataTransferItem) {
+  const entry = item.webkitGetAsEntry?.() as FileSystemFileEntryLike | null | undefined;
+  if (!entry?.isFile || typeof entry.file !== "function") {
+    return null;
+  }
+
+  return new Promise<File | null>((resolve) => {
+    entry.file?.(
+      (file) => resolve(file),
+      () => resolve(null)
+    );
+  });
+}
+
+async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractDroppedFilesResult> {
+  const directFiles = Array.from(dataTransfer.files ?? []).filter((file) => file instanceof File);
+  const items = Array.from(dataTransfer.items ?? []);
+  const payloadTypes = new Set<string>(Array.from(dataTransfer.types ?? []).map((type) => type.toLowerCase()));
+
+  if (!items.length) {
+    const files = dedupeDroppedFiles(directFiles);
+    return files.length > 0
+      ? { files }
+      : { files: [], errorMessage: "The dropped item did not expose any readable files." };
+  }
+
+  const extractedFiles = [...directFiles];
+  const asyncFileReads: Promise<File | null>[] = [];
+  const asyncStringReads: Promise<DroppedStringData | null>[] = [];
+  const directStringValues = readDirectDropStrings(dataTransfer);
+
+  for (const rawItem of items) {
+    const item = rawItem as DataTransferItemWithFileSystemHandle;
+    payloadTypes.add(item.type.toLowerCase());
+
+    if (item.kind === "file") {
+      const file = item.getAsFile();
+      if (file) {
+        extractedFiles.push(file);
+        continue;
+      }
+
+      if (typeof item.getAsFileSystemHandle === "function") {
+        asyncFileReads.push(
+          item.getAsFileSystemHandle()
+            .then(async (handle) => {
+              if (handle?.kind !== "file" || typeof handle.getFile !== "function") {
+                return null;
+              }
+              return handle.getFile();
+            })
+            .catch(() => null)
+        );
+      }
+
+      const entryRead = readEntryFile(item);
+      if (entryRead) {
+        asyncFileReads.push(entryRead);
+      }
+
+      continue;
+    }
+
+    if (item.kind === "string") {
+      asyncStringReads.push(readDroppedStringItem(item));
+    }
+  }
+
+  const resolvedFiles = (await Promise.all(asyncFileReads)).filter((file): file is File => file instanceof File);
+  const files = dedupeDroppedFiles([...extractedFiles, ...resolvedFiles]);
+  if (files.length > 0) {
+    return { files };
+  }
+
+  const resolvedStrings = (await Promise.all(asyncStringReads)).filter((entry): entry is DroppedStringData => Boolean(entry));
+  for (const entry of resolvedStrings) {
+    payloadTypes.add(entry.type.toLowerCase());
+    directStringValues.set(entry.type.toLowerCase(), entry.value);
+  }
+
+  const remoteCandidates = buildRemoteFileCandidates(directStringValues);
+  const fetchedFiles = (
+    await Promise.all(
+      remoteCandidates.map((candidate) =>
+        fetchDroppedRemoteFile(candidate).catch(() => null)
+      )
+    )
+  ).filter((file): file is File => file instanceof File);
+
+  const remoteFiles = dedupeDroppedFiles(fetchedFiles);
+  if (remoteFiles.length > 0) {
+    return { files: remoteFiles };
+  }
+
+  const payloadLabel = describePayloadTypes(payloadTypes);
+  if (OUTLOOK_ROW_ONLY_PAYLOAD_TYPES.some((type) => payloadTypes.has(type))) {
+    return {
+      files: [],
+      errorMessage: `New Outlook inbox-list drags use Outlook-only payloads (${payloadLabel}) and do not expose an email file to normal websites. Drag the attachment itself, try dragging from an opened message if Outlook exposes it there, save as .eml, or use classic Outlook.`,
+    };
+  }
+
+  if (remoteCandidates.length > 0) {
+    return {
+      files: [],
+      errorMessage: `New Outlook exposed web-link drag data (${payloadLabel}), but the browser could not turn it into a downloadable email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.`,
+    };
+  }
+
+  if (directStringValues.size > 0) {
+    return {
+      files: [],
+      errorMessage: `New Outlook exposed non-file drag data (${payloadLabel}), not a real email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.`,
+    };
+  }
+
+  return {
+    files: [],
+    errorMessage: "The dropped item did not expose any readable files.",
+  };
+}
+
 export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [projectId, setProjectId] = useState("");
   const [packageName, setPackageName] = useState("Client package");
   const [customerId, setCustomerId] = useState("");
@@ -84,22 +536,42 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     }
   }
 
-  function handleFile(nextFile: File | null) {
-    if (!nextFile) return;
-    const isZip = nextFile.name.toLowerCase().endsWith(".zip") || nextFile.type === "application/zip";
-    if (!isZip) {
-      setError("Only .zip files are supported.");
-      return;
-    }
+  function clearFiles() {
+    setFiles([]);
     setError(null);
     setStatus(null);
-    setFile(nextFile);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+  }
+
+  function handleFiles(nextFiles: File[] | FileList | null) {
+    const selectedFiles = Array.from(nextFiles ?? []).filter((candidate) => candidate instanceof File);
+    if (!selectedFiles.length) return;
+    setError(null);
+    setStatus(null);
+    setFiles(selectedFiles);
+  }
+
+  async function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragActive(false);
+
+    const { files: droppedFiles, errorMessage } = await extractDroppedFiles(event.dataTransfer);
+
+    if (droppedFiles.length > 0) {
+      handleFiles(droppedFiles);
+      return;
+    }
+
+    setStatus(null);
+    setError(errorMessage ?? "The dropped item did not expose any readable files.");
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!file) {
-      setError("Select a package file.");
+    if (!files.length) {
+      setError("Select at least one package file.");
       return;
     }
 
@@ -109,7 +581,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     startTransition(async () => {
       try {
         const result = await submitPackageIngest({
-          file,
+          files,
           projectId: projectId || undefined,
           packageName,
           clientName: customerOptions.find((c) => c.id === customerId)?.name || undefined,
@@ -126,7 +598,11 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           (result as { workspace?: { project?: { id?: string } } }).workspace?.project?.id ??
           projectId;
 
-        setStatus("Package uploaded successfully.");
+        setStatus(
+          files.length === 1
+            ? "Package uploaded successfully."
+            : `${files.length} files uploaded successfully.`
+        );
 
         if (nextProjectId) {
           router.push(`/projects/${nextProjectId}?tab=estimate&intake=true`);
@@ -147,39 +623,54 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             "relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-12 transition-colors",
             dragActive
               ? "border-accent bg-accent/5"
-              : file
+              : files.length > 0
                 ? "border-success/30 bg-success/5"
                 : "border-line bg-panel2/30 hover:border-fg/20"
           )}
           onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
-          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={() => setDragActive(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            handleFile(e.dataTransfer.files[0] ?? null);
-          }}
+          onDrop={(e) => { void handleDrop(e); }}
         >
-          {file ? (
-            <div className="flex items-center gap-3">
-              <FileUp className="h-5 w-5 text-success" />
-              <div>
-                <div className="text-sm font-medium">{file.name}</div>
-                <div className="text-xs text-fg/40">{(file.size / 1024 / 1024).toFixed(1)} MB</div>
+          {files.length > 0 ? (
+            <div className="w-full max-w-2xl">
+              <div className="flex items-start gap-3">
+                <FileUp className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm font-medium">
+                      {files.length === 1 ? files[0].name : `${files.length} files selected`}
+                    </div>
+                    <Badge tone="success">
+                      {files.length === 1 ? "Single file" : `${files.length} files`}
+                    </Badge>
+                  </div>
+                  <div className="mt-1 text-xs text-fg/40">
+                    {(files.reduce((sum, current) => sum + current.size, 0) / 1024 / 1024).toFixed(1)} MB total
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {files.slice(0, 8).map((selectedFile) => (
+                      <Badge key={`${selectedFile.name}-${selectedFile.size}-${selectedFile.lastModified}`}>
+                        {selectedFile.name}
+                      </Badge>
+                    ))}
+                    {files.length > 8 ? <Badge>+{files.length - 8} more</Badge> : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearFiles}
+                  className="ml-2 rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setFile(null)}
-                className="ml-2 rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
-              >
-                <X className="h-4 w-4" />
-              </button>
             </div>
           ) : (
             <>
               <UploadCloud className="h-8 w-8 text-fg/20" />
               <p className="mt-3 text-sm text-fg/50">
-                Drop bid package (.zip) here or{" "}
+                Drop a ZIP, loose bid files, or an Outlook email (.msg or .eml) here or{" "}
                 <button
                   type="button"
                   className="text-accent hover:underline"
@@ -188,14 +679,18 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                   browse
                 </button>
               </p>
+              <p className="mt-2 text-center text-xs text-fg/35">
+                Multiple files supported. PDF, XLSX, DWG, DXF, DOCX, ZIP, and Outlook .msg/.eml all work.
+              </p>
             </>
           )}
           <input
             ref={inputRef}
             className="hidden"
             type="file"
-            accept=".zip,application/zip"
-            onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+            accept=".zip,.pdf,.xlsx,.xls,.csv,.doc,.docx,.txt,.png,.jpg,.jpeg,.dwg,.dxf,.msg,.eml,application/zip,application/vnd.ms-outlook,message/rfc822"
+            multiple
+            onChange={(e) => handleFiles(e.target.files)}
           />
         </div>
 
@@ -279,7 +774,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             <Textarea placeholder="Optional notes" value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-16" />
           </div>
 
-          <Button className="w-full" type="submit" disabled={isPending || !file}>
+          <Button className="w-full" type="submit" disabled={isPending || files.length === 0}>
             {isPending ? (
               <>
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />

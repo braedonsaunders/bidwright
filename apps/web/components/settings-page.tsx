@@ -702,15 +702,33 @@ export function SettingsPage({
     const tempId = `new-${Date.now()}`;
     const newPersona: EstimatorPersona = {
       id: tempId, organizationId: "", name: "", trade: "general", description: "",
-      systemPrompt: "", knowledgeBookIds: [], datasetTags: [], isDefault: false,
+      systemPrompt: "", knowledgeBookIds: [], datasetTags: [], packageBuckets: [],
+      defaultAssumptions: {}, productivityGuidance: {}, commercialGuidance: {}, reviewFocusAreas: [], isDefault: false,
       enabled: true, order: personas.length, createdAt: "", updatedAt: "",
     };
     setPersonas((prev) => [...prev, newPersona]);
     setExpandedPersonaId(tempId);
   };
 
+  const normalizePersonaForSave = (persona: Partial<EstimatorPersona>): Partial<EstimatorPersona> => {
+    const parseJsonField = (value: unknown) => {
+      if (typeof value === "string") {
+        try { return value.trim() ? JSON.parse(value) : {}; } catch { return {}; }
+      }
+      return value && typeof value === "object" ? value : {};
+    };
+    return {
+      ...persona,
+      packageBuckets: Array.isArray(persona.packageBuckets) ? persona.packageBuckets : [],
+      reviewFocusAreas: Array.isArray(persona.reviewFocusAreas) ? persona.reviewFocusAreas : [],
+      defaultAssumptions: parseJsonField(persona.defaultAssumptions),
+      productivityGuidance: parseJsonField(persona.productivityGuidance),
+      commercialGuidance: parseJsonField(persona.commercialGuidance),
+    };
+  };
+
   const savePersona = useCallback(async (persona: EstimatorPersona) => {
-    const merged = { ...persona, ...(personaEdits[persona.id] || {}) };
+    const merged = normalizePersonaForSave({ ...persona, ...(personaEdits[persona.id] || {}) });
     try {
       if (persona.id.startsWith("new-")) {
         const created = await apiCreatePersona(merged);
@@ -2265,6 +2283,55 @@ export function SettingsPage({
                                 value={(edited.datasetTags || []).join(", ")}
                                 onChange={(e) => updatePersonaEdit(persona.id, { datasetTags: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
                                 placeholder="Comma-separated tags"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <Label>Package Buckets</Label>
+                              <Input
+                                value={(edited.packageBuckets || []).join(", ")}
+                                onChange={(e) => updatePersonaEdit(persona.id, { packageBuckets: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                                placeholder="Fabrication, Installation, Testing..."
+                              />
+                              <p className="mt-1 text-[10px] text-fg/30">Preferred commercial breakdown for this persona</p>
+                            </div>
+                            <div>
+                              <Label>Review Focus Areas</Label>
+                              <Input
+                                value={(edited.reviewFocusAreas || []).join(", ")}
+                                onChange={(e) => updatePersonaEdit(persona.id, { reviewFocusAreas: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                                placeholder="Supports, logistics, testing..."
+                              />
+                              <p className="mt-1 text-[10px] text-fg/30">Areas the reconcile pass should scrutinize first</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-4">
+                            <div>
+                              <Label>Default Assumptions (JSON)</Label>
+                              <textarea
+                                className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-xs text-fg font-mono leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[120px]"
+                                value={typeof (edited as any).defaultAssumptions === "string" ? (edited as any).defaultAssumptions : JSON.stringify(edited.defaultAssumptions || {}, null, 2)}
+                                onChange={(e) => updatePersonaEdit(persona.id, { defaultAssumptions: e.target.value as any } as any)}
+                                placeholder='{"selfPerformDefaults":["install"],"subcontractDefaults":["scaffold"]}'
+                              />
+                            </div>
+                            <div>
+                              <Label>Productivity Guidance (JSON)</Label>
+                              <textarea
+                                className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-xs text-fg font-mono leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[120px]"
+                                value={typeof (edited as any).productivityGuidance === "string" ? (edited as any).productivityGuidance : JSON.stringify(edited.productivityGuidance || {}, null, 2)}
+                                onChange={(e) => updatePersonaEdit(persona.id, { productivityGuidance: e.target.value as any } as any)}
+                                placeholder='{"crewNorms":{"foremanToTrades":"1:5"},"fixedVsVariable":"favor packaged allowances when evidence is weak"}'
+                              />
+                            </div>
+                            <div>
+                              <Label>Commercial Guidance (JSON)</Label>
+                              <textarea
+                                className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-xs text-fg font-mono leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[120px]"
+                                value={typeof (edited as any).commercialGuidance === "string" ? (edited as any).commercialGuidance : JSON.stringify(edited.commercialGuidance || {}, null, 2)}
+                                onChange={(e) => updatePersonaEdit(persona.id, { commercialGuidance: e.target.value as any } as any)}
+                                placeholder='{"preferredPricingModes":{"supports":"subcontract","testing":"allowance"},"confidencePolicy":"use allowance if execution model is not evidenced"}'
                               />
                             </div>
                           </div>

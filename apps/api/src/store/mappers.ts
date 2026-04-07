@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type {
   Activity,
+  Adjustment,
   AdditionalLineItem,
   AppSettings,
   Catalog,
@@ -14,6 +15,8 @@ import type {
   DatasetRow,
   Department,
   EntityCategory,
+  EstimateCalibrationFeedback,
+  EstimateStrategy,
   FileNode,
   Job,
   KnowledgeBook,
@@ -191,6 +194,7 @@ export function mapRevision(r: any): QuoteRevision {
     doubleHours: r.doubleHours,
     breakoutPackage: (r.breakoutPackage as unknown[]) ?? [],
     calculatedCategoryTotals: (r.calculatedCategoryTotals as unknown[]) ?? [],
+    summaryLayoutPreset: (r.summaryLayoutPreset ?? "custom") as QuoteRevision["summaryLayoutPreset"],
     pdfPreferences: (r.pdfPreferences as Record<string, unknown>) ?? {},
     subtotal: r.subtotal,
     cost: r.cost,
@@ -252,6 +256,23 @@ export function mapScheduleDependency(d: any): ScheduleDependency {
   return { id: d.id, predecessorId: d.predecessorId, successorId: d.successorId, type: d.type as ScheduleDependency["type"], lagDays: d.lagDays };
 }
 
+export function mapAdjustment(a: any): Adjustment {
+  return {
+    id: a.id,
+    revisionId: a.revisionId,
+    order: a.order ?? 0,
+    kind: a.kind as Adjustment["kind"],
+    pricingMode: a.pricingMode as Adjustment["pricingMode"],
+    name: a.name,
+    description: a.description ?? "",
+    type: a.type ?? "",
+    appliesTo: a.appliesTo ?? "All",
+    percentage: a.percentage ?? null,
+    amount: a.amount ?? null,
+    show: (a.show ?? "Yes") as Adjustment["show"],
+  };
+}
+
 export function mapModifier(m: any): Modifier {
   return { id: m.id, revisionId: m.revisionId, name: m.name, type: m.type, appliesTo: m.appliesTo, percentage: m.percentage ?? null, amount: m.amount ?? null, show: m.show as Modifier["show"] };
 }
@@ -269,15 +290,10 @@ export function mapSummaryRow(r: any): SummaryRow {
     order: r.order,
     visible: r.visible,
     style: (r.style ?? "normal") as SummaryRow["style"],
-    sourceCategory: r.sourceCategory ?? null,
-    sourcePhase: r.sourcePhase ?? null,
-    manualValue: r.manualValue ?? null,
-    manualCost: r.manualCost ?? null,
-    overrideValue: r.overrideValue ?? null,
-    overrideCost: r.overrideCost ?? null,
-    modifierPercent: r.modifierPercent ?? null,
-    modifierAmount: r.modifierAmount ?? null,
-    appliesTo: r.appliesTo ?? [],
+    sourceCategoryId: r.sourceCategoryId ?? null,
+    sourceCategoryLabel: r.sourceCategoryLabel ?? r.sourceCategory ?? null,
+    sourcePhaseId: r.sourcePhaseId ?? null,
+    sourceAdjustmentId: r.sourceAdjustmentId ?? null,
     computedValue: r.computedValue ?? 0,
     computedCost: r.computedCost ?? 0,
     computedMargin: r.computedMargin ?? 0,
@@ -403,6 +419,53 @@ export function mapAiRun(r: any): { id: string; projectId: string; revisionId: s
   return { id: r.id, projectId: r.projectId, revisionId: r.revisionId ?? null, kind: r.kind, status: r.status, model: r.model, promptVersion: r.promptVersion, input: (r.input as Record<string, unknown>) ?? {}, output: (r.output as Record<string, unknown>) ?? {}, createdAt: toISO(r.createdAt), updatedAt: toISO(r.updatedAt) };
 }
 
+export function mapEstimateStrategy(row: any): EstimateStrategy {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    revisionId: row.revisionId,
+    aiRunId: row.aiRunId ?? null,
+    personaId: row.personaId ?? null,
+    status: row.status,
+    currentStage: row.currentStage,
+    scopeGraph: (row.scopeGraph as Record<string, unknown>) ?? {},
+    executionPlan: (row.executionPlan as Record<string, unknown>) ?? {},
+    assumptions: (row.assumptions as Array<Record<string, unknown>>) ?? [],
+    packagePlan: (row.packagePlan as Array<Record<string, unknown>>) ?? [],
+    benchmarkProfile: (row.benchmarkProfile as Record<string, unknown>) ?? {},
+    benchmarkComparables: (row.benchmarkComparables as Array<Record<string, unknown>>) ?? [],
+    adjustmentPlan: (row.adjustmentPlan as Array<Record<string, unknown>>) ?? [],
+    reconcileReport: (row.reconcileReport as Record<string, unknown>) ?? {},
+    confidenceSummary: (row.confidenceSummary as Record<string, unknown>) ?? {},
+    summary: (row.summary as Record<string, unknown>) ?? {},
+    reviewRequired: row.reviewRequired ?? true,
+    reviewCompleted: row.reviewCompleted ?? false,
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
+  };
+}
+
+export function mapEstimateCalibrationFeedback(row: any): EstimateCalibrationFeedback {
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    revisionId: row.revisionId,
+    strategyId: row.strategyId ?? null,
+    quoteReviewId: row.quoteReviewId ?? null,
+    source: row.source,
+    feedbackType: row.feedbackType,
+    sourceLabel: row.sourceLabel ?? "",
+    aiSnapshot: (row.aiSnapshot as Record<string, unknown>) ?? {},
+    humanSnapshot: (row.humanSnapshot as Record<string, unknown>) ?? {},
+    deltaSummary: (row.deltaSummary as Record<string, unknown>) ?? {},
+    corrections: (row.corrections as Array<Record<string, unknown>>) ?? [],
+    lessons: (row.lessons as Array<Record<string, unknown>>) ?? [],
+    notes: row.notes ?? "",
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
+  };
+}
+
 export function mapCitation(c: any): { id: string; projectId: string; aiRunId: string | null; sourceDocumentId: string | null; resourceType: string; resourceKey: string; pageStart: number | null; pageEnd: number | null; excerpt: string; confidence: number } {
   return { id: c.id, projectId: c.projectId, aiRunId: c.aiRunId ?? null, sourceDocumentId: c.sourceDocumentId ?? null, resourceType: c.resourceType, resourceKey: c.resourceKey, pageStart: c.pageStart ?? null, pageEnd: c.pageEnd ?? null, excerpt: c.excerpt, confidence: c.confidence };
 }
@@ -523,6 +586,11 @@ export function mapPersona(row: any): any {
     systemPrompt: row.systemPrompt,
     knowledgeBookIds: Array.isArray(row.knowledgeBookIds) ? row.knowledgeBookIds : JSON.parse(row.knowledgeBookIds || "[]"),
     datasetTags: Array.isArray(row.datasetTags) ? row.datasetTags : JSON.parse(row.datasetTags || "[]"),
+    packageBuckets: Array.isArray(row.packageBuckets) ? row.packageBuckets : (row.packageBuckets ?? []),
+    defaultAssumptions: (row.defaultAssumptions as Record<string, unknown>) ?? {},
+    productivityGuidance: (row.productivityGuidance as Record<string, unknown>) ?? {},
+    commercialGuidance: (row.commercialGuidance as Record<string, unknown>) ?? {},
+    reviewFocusAreas: Array.isArray(row.reviewFocusAreas) ? row.reviewFocusAreas : (row.reviewFocusAreas ?? []),
     isDefault: row.isDefault,
     enabled: row.enabled,
     order: row.order,

@@ -154,6 +154,11 @@ export function registerCliRoutes(app: FastifyInstance) {
           systemPrompt: persona.systemPrompt,
           knowledgeBookNames: bookNames,
           datasetTags,
+          packageBuckets: Array.isArray((persona as any).packageBuckets) ? (persona as any).packageBuckets : [],
+          defaultAssumptions: ((persona as any).defaultAssumptions as Record<string, unknown>) ?? {},
+          productivityGuidance: ((persona as any).productivityGuidance as Record<string, unknown>) ?? {},
+          commercialGuidance: ((persona as any).commercialGuidance as Record<string, unknown>) ?? {},
+          reviewFocusAreas: Array.isArray((persona as any).reviewFocusAreas) ? (persona as any).reviewFocusAreas : [],
         };
       })() : null,
     };
@@ -177,25 +182,39 @@ export function registerCliRoutes(app: FastifyInstance) {
       output: { events: [] } as any,
     });
 
+    await prisma.estimateStrategy.upsert({
+      where: { revisionId: revision.id || "" },
+      create: {
+        projectId,
+        revisionId: revision.id || "",
+        aiRunId: sessionId,
+        personaId: body.personaId || null,
+        status: "in_progress",
+        currentStage: "scope",
+      },
+      update: {
+        aiRunId: sessionId,
+        personaId: body.personaId || undefined,
+        status: "in_progress",
+        currentStage: "scope",
+      },
+    }).catch(() => {});
+
     // Get settings for auth token
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
 
     // Spawn CLI
-    const initialPrompt = prompt || `Read CLAUDE.md now. Then execute the FULL estimation workflow:
+    const initialPrompt = prompt || `Read CLAUDE.md now. Then execute the staged estimate workflow in order:
 
-1. Read the main spec document (use Read tool on documents/ folder)
-2. Call updateQuote with project name, description, client name
-3. Call getItemConfig to learn categories and rate schedules
-4. Read knowledge books in knowledge/ folder — read table of contents then relevant chapters
-5. listDatasets + queryDataset for production rates
-6. importRateSchedule for each needed trade category
-7. createWorksheet for each major scope section
-8. createWorksheetItem for EVERY line item in EVERY worksheet — this is the BULK of your work
-9. createCondition for exclusions and clarifications
-10. Call getWorkspace at the end to verify worksheets have items
+1. Read the documents and save the structured scope graph with saveEstimateScopeGraph.
+2. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
+3. Define the commercial/package structure with saveEstimatePackagePlan.
+4. Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours.
+5. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items.
+6. Perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
 
-CRITICAL: You are NOT done until you have called createWorksheetItem multiple times to populate EVERY worksheet with real line items. Reading documents and writing a scope summary is only step 1-2 of 10. The MAJORITY of your work is steps 7-8: creating worksheets and populating them with dozens of line items each. If getWorkspace shows empty worksheets or zero items, you are NOT done. Keep going.`;
+CRITICAL: Do not jump from document facts straight into line-item hours. The estimate is only valid after the scope graph, execution plan, package plan, benchmark pass, and reconcile pass are all saved.`;
 
     try {
       const session = await spawnSession({
@@ -679,14 +698,12 @@ Merge tables that span multiple pages. Skip non-data pages.
       pendingQuestions.delete(projectId);
     }
 
-    // Emit the question as an SSE event so the frontend sees it
+    // Emit the question as an SSE event so the frontend sees it immediately
     const session = getSession(projectId);
     if (session) {
       session.events.emit("event", {
         type: "askUser",
-        question,
-        options: options || [],
-        context: context || "",
+        data: { question, options: options || [], context: context || "" },
       });
     }
 
@@ -739,7 +756,7 @@ Merge tables that span multiple pages. Skip non-data pages.
     if (session) {
       session.events.emit("event", {
         type: "userAnswer",
-        answer,
+        data: { answer },
       });
     }
 

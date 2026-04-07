@@ -10,6 +10,7 @@ import {
 } from "@bidwright/agent";
 import {
   quoteTools,
+  estimateTools,
   systemTools,
   knowledgeTools,
   projectFileTools,
@@ -57,6 +58,7 @@ export async function intakeRoutes(app: FastifyInstance) {
   const registry = new ToolRegistry();
   registry.registerMany([
     ...quoteTools,
+    ...estimateTools,
     ...systemTools,
     ...knowledgeTools,
     ...projectFileTools,
@@ -280,7 +282,10 @@ export async function intakeRoutes(app: FastifyInstance) {
       "project.readFile", "project.listFiles", "project.getDocumentManifest", "project.searchFiles",
       "knowledge.queryProjectDocs", "knowledge.searchBooks", "knowledge.queryGlobalLibrary",
       "knowledge.queryDataset", "knowledge.listDatasets", "knowledge.searchDataset",
-      "quote.getWorkspace", "quote.getItemConfig",
+      "quote.getWorkspace", "quote.getEstimateStrategy", "quote.getItemConfig",
+      "quote.saveEstimateScopeGraph", "quote.saveEstimateExecutionPlan", "quote.saveEstimateAssumptions",
+      "quote.saveEstimatePackagePlan", "quote.recomputeEstimateBenchmarks", "quote.saveEstimateAdjustments",
+      "quote.saveEstimateReconcile", "quote.finalizeEstimateStrategy",
       "quote.createWorksheet", "quote.updateQuote", "quote.createCondition", "quote.createPhase",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) planningTools.register(t); }
@@ -289,7 +294,7 @@ export async function intakeRoutes(app: FastifyInstance) {
     for (const id of [
       "project.readFile", "project.searchFiles", "knowledge.queryProjectDocs",
       "knowledge.searchBooks", "knowledge.queryDataset", "knowledge.searchDataset",
-      "quote.getItemConfig", "quote.createWorksheetItem", "quote.getWorkspace",
+      "quote.getItemConfig", "quote.getEstimateStrategy", "quote.createWorksheetItem", "quote.getWorkspace",
       "system.readMemory", "system.writeMemory",
     ]) { const t = registry.get(id); if (t) itemTools.register(t); }
 
@@ -346,7 +351,7 @@ export async function intakeRoutes(app: FastifyInstance) {
         const planLoop = new AgentLoop({
           llm: adapter, maxIterations: Math.min(30, Math.floor(maxIterations * 0.15)),
           maxTokens: 4096, temperature: 0, abortSignal: abortController.signal,
-          systemPrompt: systemPrompt + `\n\n## CURRENT PHASE: Scope & Worksheets\n\nYou are in Phase 1. Your job is to:\n1. Read the key documents (RFQ, main spec, quotation details)\n2. Write a detailed scope summary to memory section "scope_plan"\n3. **MANDATORY: Call system.askUser** to ask the user clarifying questions BEFORE creating worksheets. You MUST use the system.askUser tool — do NOT just write questions as text. Bundle all questions into ONE system.askUser call. Questions should cover: subcontracting decisions, labour basis (union/open shop), overtime/shift, schedule, access equipment, site conditions, and any ambiguous scope items. WAIT for the user's answer before proceeding.\n4. Update the quote description with quote.updateQuote\n5. Create ALL worksheets needed (one per trade/system)\n6. Write worksheet IDs to memory section "worksheets_created"\n\n**CRITICAL**: Step 3 is MANDATORY. You have the system.askUser tool available. You MUST call it as a tool, not print questions as text. The tool will pause execution and show the question to the user in a proper UI. Do NOT skip this step. Do NOT assume answers.\n\nDo NOT create line items yet — that happens in Phase 2.\nFocus on understanding the full scope and creating the right worksheet structure.`,
+          systemPrompt: systemPrompt + `\n\n## CURRENT PHASE: Scope & Worksheets\n\nYou are in Phase 1. Your job is to:\n1. Read the key documents (RFQ, main spec, quotation details)\n2. Write a detailed scope summary to memory section "scope_plan"\n3. **MANDATORY: Call system.askUser** to ask the user clarifying questions BEFORE creating worksheets. You MUST use the system.askUser tool — do NOT just write questions as text. Bundle all questions into ONE system.askUser call. Questions should cover: subcontracting decisions, labour basis (union/open shop), overtime/shift, schedule, access equipment, site conditions, and any ambiguous scope items. WAIT for the user's answer before proceeding.\n4. Persist the estimate strategy in this exact order: quote.saveEstimateScopeGraph, quote.saveEstimateExecutionPlan, quote.saveEstimateAssumptions, quote.saveEstimatePackagePlan, quote.recomputeEstimateBenchmarks, quote.saveEstimateAdjustments\n5. Update the quote description with quote.updateQuote\n6. Create ALL worksheets needed (one per trade/system)\n7. Write worksheet IDs to memory section "worksheets_created"\n\n**CRITICAL**: Step 3 is MANDATORY. You have the system.askUser tool available. You MUST call it as a tool, not print questions as text. The tool will pause execution and show the question to the user in a proper UI. Do NOT skip this step. Do NOT assume answers.\n\n**CRITICAL**: Step 4 is the estimate stage gate. Do NOT create worksheets or line items until the scope graph, execution plan, assumptions, package plan, and benchmark adjustment pass have been saved.\n\nDo NOT create line items yet — that happens in Phase 2.\nFocus on understanding the full scope and creating the right worksheet structure.`,
           onToolCall, onMessage,
         }, planningTools);
 
@@ -447,7 +452,7 @@ Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
         const finalLoop = new AgentLoop({
           llm: adapter, maxIterations: Math.min(10, Math.floor(maxIterations * 0.05)),
           maxTokens: 4096, temperature: 0, abortSignal: abortController.signal,
-          systemPrompt: `You are finalizing the estimate for "${(project as any).name}". Add conditions (exclusions, clarifications, assumptions) and write a completion summary to memory. Use quote.createCondition and system.writeMemory.`,
+          systemPrompt: `You are finalizing the estimate for "${(project as any).name}". Add conditions (exclusions, clarifications, assumptions), save the final reconcile with quote.saveEstimateReconcile, finalize the strategy with quote.finalizeEstimateStrategy, and write a completion summary to memory. Use quote.createCondition and system.writeMemory.`,
           onToolCall, onMessage,
         }, planningTools);
 

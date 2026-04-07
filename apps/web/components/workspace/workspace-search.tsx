@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { Search, X, FileText, Settings2, Layers3, Hash, SlidersHorizontal, ListChecks, ClipboardList } from "lucide-react";
+import { Search, X, FileText, Settings2, Layers3, Hash, SlidersHorizontal, ListChecks } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProjectWorkspaceData } from "@/lib/api";
 
@@ -27,7 +27,7 @@ interface SearchResult {
 
 /* ─── Helpers ─── */
 
-const CATEGORY_ORDER = ["Setup", "Customer", "Line Items", "Phases", "Modifiers", "Conditions", "Additional Items", "Documents"];
+const CATEGORY_ORDER = ["Setup", "Customer", "Line Items", "Phases", "Adjustments", "Conditions", "Documents"];
 const MAX_PER_CATEGORY = 8;
 const MAX_TOTAL = 40;
 const CONTEXT_RADIUS = 50;
@@ -38,9 +38,8 @@ const CATEGORY_ICONS: Record<string, typeof Search> = {
   "Customer": Settings2,
   "Line Items": Layers3,
   "Phases": Hash,
-  "Modifiers": SlidersHorizontal,
+  "Adjustments": SlidersHorizontal,
   "Conditions": ListChecks,
-  "Additional Items": ClipboardList,
   "Documents": FileText,
 };
 
@@ -159,17 +158,17 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
     });
   }
 
-  // Modifiers
-  for (const mod of (workspace.modifiers ?? [])) {
-    const text = [mod.name, mod.type].join(" ");
+  // Adjustments
+  for (const adjustment of (workspace.adjustments ?? [])) {
+    const text = [adjustment.name, adjustment.type, adjustment.description || ""].join(" ");
     entries.push({
-      id: `mod-${mod.id}`,
-      category: "Modifiers",
+      id: `adjustment-${adjustment.id}`,
+      category: "Adjustments",
       icon: SlidersHorizontal,
-      label: mod.name,
+      label: adjustment.name,
       searchText: text.toLowerCase(),
       rawText: text,
-      target: { tab: "setup" },
+      target: { tab: "summarize" },
     });
   }
 
@@ -181,20 +180,6 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
       category: "Conditions",
       icon: ListChecks,
       label: `${cond.type}: ${cond.value}`,
-      searchText: text.toLowerCase(),
-      rawText: text,
-      target: { tab: "setup" },
-    });
-  }
-
-  // Additional line items
-  for (const ali of (workspace.additionalLineItems ?? [])) {
-    const text = [ali.name, ali.description || ""].join(" ");
-    entries.push({
-      id: `ali-${ali.id}`,
-      category: "Additional Items",
-      icon: ClipboardList,
-      label: ali.name,
       searchText: text.toLowerCase(),
       rawText: text,
       target: { tab: "setup" },

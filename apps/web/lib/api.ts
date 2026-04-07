@@ -94,6 +94,7 @@ export interface QuoteRevision {
   doubleHours: number;
   breakoutPackage: unknown[];
   calculatedCategoryTotals: unknown[];
+  summaryLayoutPreset: SummaryPreset;
   subtotal: number;
   cost: number;
   estimatedProfit: number;
@@ -194,6 +195,30 @@ export interface ProjectModifier {
   show: string;
 }
 
+export type AdjustmentKind = "modifier" | "line_item";
+export type AdjustmentPricingMode =
+  | "modifier"
+  | "option_standalone"
+  | "option_additional"
+  | "line_item_additional"
+  | "line_item_standalone"
+  | "custom_total";
+
+export interface ProjectAdjustment {
+  id: string;
+  revisionId: string;
+  order: number;
+  kind: AdjustmentKind;
+  pricingMode: AdjustmentPricingMode;
+  name: string;
+  description: string;
+  type: string;
+  appliesTo: string;
+  percentage: number | null;
+  amount: number | null;
+  show: "Yes" | "No";
+}
+
 export interface ProjectCondition {
   id: string;
   revisionId: string;
@@ -211,7 +236,7 @@ export interface AdditionalLineItem {
   amount: number;
 }
 
-export type SummaryRowType = "auto_category" | "auto_phase" | "manual" | "modifier" | "subtotal" | "separator";
+export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
 export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
 
@@ -223,15 +248,10 @@ export interface SummaryRowData {
   order: number;
   visible: boolean;
   style: SummaryRowStyle;
-  sourceCategory?: string | null;
-  sourcePhase?: string | null;
-  manualValue?: number | null;
-  manualCost?: number | null;
-  overrideValue?: number | null;
-  overrideCost?: number | null;
-  modifierPercent?: number | null;
-  modifierAmount?: number | null;
-  appliesTo: string[];
+  sourceCategoryId?: string | null;
+  sourceCategoryLabel?: string | null;
+  sourcePhaseId?: string | null;
+  sourceAdjustmentId?: string | null;
   computedValue: number;
   computedCost: number;
   computedMargin: number;
@@ -243,15 +263,10 @@ export interface SummaryRowInput {
   order?: number;
   visible?: boolean;
   style?: SummaryRowStyle;
-  sourceCategory?: string | null;
-  sourcePhase?: string | null;
-  manualValue?: number | null;
-  manualCost?: number | null;
-  overrideValue?: number | null;
-  overrideCost?: number | null;
-  modifierPercent?: number | null;
-  modifierAmount?: number | null;
-  appliesTo?: string[];
+  sourceCategoryId?: string | null;
+  sourceCategoryLabel?: string | null;
+  sourcePhaseId?: string | null;
+  sourceAdjustmentId?: string | null;
 }
 
 export interface Activity {
@@ -371,7 +386,32 @@ export interface EstimateTotalBreakout {
     value: number;
     cost: number;
     margin: number;
-  }>;
+    }>;
+}
+
+export interface SourceTotalEntry {
+  id: string;
+  name: string;
+  label: string;
+  value: number;
+  cost: number;
+  margin: number;
+  phaseId?: string | null;
+  phaseLabel?: string | null;
+}
+
+export interface AdjustmentTotalEntry {
+  id: string;
+  label: string;
+  kind: AdjustmentKind;
+  pricingMode: AdjustmentPricingMode;
+  type: string;
+  appliesTo: string;
+  show: "Yes" | "No";
+  affectsSubtotal: boolean;
+  value: number;
+  cost: number;
+  margin: number;
 }
 
 export interface EstimateData {
@@ -381,7 +421,15 @@ export interface EstimateData {
     cost: number;
     estimatedProfit: number;
     estimatedMargin: number;
+    calculatedTotal?: number;
+    regHours?: number;
+    overHours?: number;
+    doubleHours?: number;
     totalHours: number;
+    categoryTotals: SourceTotalEntry[];
+    phaseTotals: SourceTotalEntry[];
+    phaseCategoryTotals: SourceTotalEntry[];
+    adjustmentTotals: AdjustmentTotalEntry[];
     breakout: EstimateTotalBreakout[];
   };
   lineItems: WorkspaceWorksheetItem[];
@@ -392,6 +440,49 @@ export interface EstimateData {
     citationCount: number;
     aiRunCount: number;
   };
+}
+
+export interface EstimateStrategy {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  aiRunId?: string | null;
+  personaId?: string | null;
+  status: "draft" | "in_progress" | "ready_for_review" | "complete";
+  currentStage: "scope" | "execution" | "packaging" | "benchmark" | "reconcile" | "complete";
+  scopeGraph: Record<string, unknown>;
+  executionPlan: Record<string, unknown>;
+  assumptions: Array<Record<string, unknown>>;
+  packagePlan: Array<Record<string, unknown>>;
+  benchmarkProfile: Record<string, unknown>;
+  benchmarkComparables: Array<Record<string, unknown>>;
+  adjustmentPlan: Array<Record<string, unknown>>;
+  reconcileReport: Record<string, unknown>;
+  confidenceSummary: Record<string, unknown>;
+  summary: Record<string, unknown>;
+  reviewRequired: boolean;
+  reviewCompleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EstimateCalibrationFeedback {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  strategyId?: string | null;
+  quoteReviewId?: string | null;
+  source: string;
+  feedbackType: string;
+  sourceLabel: string;
+  aiSnapshot: Record<string, unknown>;
+  humanSnapshot: Record<string, unknown>;
+  deltaSummary: Record<string, unknown>;
+  corrections: Array<Record<string, unknown>>;
+  lessons: Array<Record<string, unknown>>;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectWorkspaceData {
@@ -413,6 +504,7 @@ export interface ProjectWorkspaceData {
   currentRevision: QuoteRevision;
   worksheets: WorkspaceWorksheet[];
   phases: ProjectPhase[];
+  adjustments: ProjectAdjustment[];
   modifiers: ProjectModifier[];
   conditions: ProjectCondition[];
   additionalLineItems: AdditionalLineItem[];
@@ -425,6 +517,8 @@ export interface ProjectWorkspaceData {
   scheduleDependencies: ScheduleDependency[];
   estimate: EstimateData;
   takeoffLinks?: TakeoffLinkRecord[];
+  estimateStrategy?: EstimateStrategy | null;
+  estimateFeedback?: EstimateCalibrationFeedback[];
 }
 
 export interface PackageRecord {
@@ -483,6 +577,16 @@ export interface WorkspaceResponse {
   packages: PackageRecord[];
   jobs: JobRecord[];
   documents: SourceDocument[];
+}
+
+export async function updateWorkspaceState(projectId: string, patch: Record<string, unknown>) {
+  return apiRequest<WorkspaceStateRecord>(`/projects/${projectId}/workspace-state`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +851,41 @@ export async function getProject(projectId: string) {
 
 export async function getProjectWorkspace(projectId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/workspace`);
+}
+
+export async function getEstimateStrategy(projectId: string) {
+  return apiRequest<{ strategy: EstimateStrategy | null; feedback: EstimateCalibrationFeedback[] }>(`/api/estimate/${projectId}/strategy`);
+}
+
+export async function recomputeEstimateBenchmarks(projectId: string) {
+  return apiRequest<WorkspaceResponse>(`/api/estimate/${projectId}/benchmarks/recompute`, {
+    method: "POST",
+  });
+}
+
+export async function finalizeEstimateStrategy(projectId: string, summary: Record<string, unknown>) {
+  return apiRequest<WorkspaceResponse>(`/api/estimate/${projectId}/finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(summary),
+  });
+}
+
+export async function saveEstimateFeedback(projectId: string, input: {
+  source?: string;
+  feedbackType?: string;
+  sourceLabel?: string;
+  humanSnapshot: Record<string, unknown>;
+  corrections?: Array<Record<string, unknown>>;
+  lessons?: Array<Record<string, unknown>>;
+  notes?: string;
+  quoteReviewId?: string | null;
+}) {
+  return apiRequest<WorkspaceResponse>(`/api/estimate/${projectId}/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export async function getProjectEstimate(projectId: string) {
@@ -1160,6 +1299,55 @@ export async function clearScheduleBaseline(projectId: string) {
 
 export function getSchedulePdfUrl(projectId: string) {
   return resolveApiUrl(`/projects/${projectId}/pdf/schedule`);
+}
+
+// ---------------------------------------------------------------------------
+// Adjustments
+// ---------------------------------------------------------------------------
+
+export interface CreateAdjustmentInput {
+  name?: string;
+  description?: string;
+  type?: string;
+  kind?: AdjustmentKind;
+  pricingMode?: AdjustmentPricingMode;
+  appliesTo?: string;
+  percentage?: number | null;
+  amount?: number | null;
+  show?: "Yes" | "No";
+  order?: number;
+}
+
+export interface AdjustmentPatchInput extends CreateAdjustmentInput {}
+
+export async function getAdjustments(projectId: string) {
+  return apiRequest<ProjectAdjustment[]>(`/projects/${projectId}/adjustments`);
+}
+
+export async function createAdjustment(projectId: string, input: CreateAdjustmentInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/adjustments`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAdjustment(projectId: string, adjustmentId: string, patch: AdjustmentPatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/adjustments/${adjustmentId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteAdjustment(projectId: string, adjustmentId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/adjustments/${adjustmentId}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,7 +1841,8 @@ export async function updateProjectStatus(projectId: string, status: string) {
 // ---------------------------------------------------------------------------
 
 export interface PackageIngestInput {
-  file: File;
+  file?: File;
+  files?: File[];
   projectId?: string;
   packageName?: string;
   clientName?: string;
@@ -1814,7 +2003,14 @@ export async function createProjectJob(
 
 export async function submitPackageIngest(input: PackageIngestInput) {
   const formData = new FormData();
-  formData.append("file", input.file);
+  const files = input.files?.length ? input.files : input.file ? [input.file] : [];
+  if (!files.length) {
+    throw new Error("Select at least one package file.");
+  }
+
+  for (const file of files) {
+    formData.append("file", file);
+  }
 
   if (input.packageName) {
     formData.append("packageName", input.packageName);
@@ -2925,6 +3121,11 @@ export interface EstimatorPersona {
   systemPrompt: string;
   knowledgeBookIds: string[];
   datasetTags: string[];
+  packageBuckets: string[];
+  defaultAssumptions: Record<string, unknown>;
+  productivityGuidance: Record<string, unknown>;
+  commercialGuidance: Record<string, unknown>;
+  reviewFocusAreas: string[];
   isDefault: boolean;
   enabled: boolean;
   order: number;
