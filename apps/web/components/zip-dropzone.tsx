@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEvent, type InputHTMLAttributes } from "react";
 import { ChevronDown, FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as RadixSelect from "@radix-ui/react-select";
-import type { Customer, ProjectListItem } from "@/lib/api";
+import type { Customer, PackageIngestFile, ProjectListItem } from "@/lib/api";
 import { submitPackageIngest, getCustomers, createCustomer } from "@/lib/api";
 import { Badge, Button, Card, CardBody, Input, Label, Textarea } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -47,13 +47,32 @@ function SelectItem({ value, children }: { value: string; children: React.ReactN
 type DataTransferItemWithFileSystemHandle = DataTransferItem & {
   getAsFileSystemHandle?: () => Promise<{
     kind?: string;
+    name?: string;
+    entries?: () => AsyncIterable<[string, FileSystemHandleLike]>;
     getFile?: () => Promise<File>;
   } | null>;
 };
 
-interface FileSystemFileEntryLike {
+type FileSystemHandleLike = {
+  kind?: string;
+  name?: string;
+  entries?: () => AsyncIterable<[string, FileSystemHandleLike]>;
+  getFile?: () => Promise<File>;
+};
+
+interface FileSystemEntryReaderLike {
+  readEntries?: (
+    success: (entries: FileSystemEntryLike[]) => void,
+    error?: (error: unknown) => void
+  ) => void;
+}
+
+interface FileSystemEntryLike {
   isFile?: boolean;
+  isDirectory?: boolean;
+  name?: string;
   file?: (success: (file: File) => void, error?: (error: unknown) => void) => void;
+  createReader?: () => FileSystemEntryReaderLike;
 }
 
 interface DroppedStringData {
@@ -69,9 +88,18 @@ interface DroppedRemoteFileCandidate {
 }
 
 interface ExtractDroppedFilesResult {
-  files: File[];
+  files: SelectedUploadFile[];
   errorMessage?: string;
 }
+
+interface SelectedUploadFile extends PackageIngestFile {
+  relativePath: string;
+}
+
+type DirectoryInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory?: string;
+  directory?: string;
+};
 
 const REMOTE_DROP_HOST_SUFFIXES = [
   "office.com",
@@ -99,21 +127,44 @@ const OUTLOOK_ROW_ONLY_PAYLOAD_TYPES = [
   "text/x-napi-message",
 ];
 
-function dropFileKey(file: File) {
-  return `${file.name}::${file.size}::${file.lastModified}`;
+function dropFileKey(entry: SelectedUploadFile) {
+  return `${entry.relativePath.toLowerCase()}::${entry.file.size}::${entry.file.lastModified}`;
 }
 
-function dedupeDroppedFiles(nextFiles: Iterable<File>) {
-  const seen = new Set<string>();
-  const uniqueFiles: File[] = [];
+function normalizeDroppedRelativePath(relativePath: string | undefined, fallbackFileName: string) {
+  const safeSegments = (relativePath ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .split("/")
+    .map((segment) => sanitizeDroppedFileName(segment))
+    .filter((segment) => segment && segment !== "." && segment !== "..");
 
-  for (const file of nextFiles) {
-    const key = dropFileKey(file);
+  if (safeSegments.length > 0) {
+    return safeSegments.join("/");
+  }
+
+  return sanitizeDroppedFileName(fallbackFileName) || "file";
+}
+
+function toSelectedUploadFile(file: File, relativePath?: string): SelectedUploadFile {
+  const webkitRelativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return {
+    file,
+    relativePath: normalizeDroppedRelativePath(relativePath || webkitRelativePath || file.name, file.name),
+  };
+}
+
+function dedupeDroppedFiles(nextFiles: Iterable<SelectedUploadFile>) {
+  const seen = new Set<string>();
+  const uniqueFiles: SelectedUploadFile[] = [];
+
+  for (const entry of nextFiles) {
+    const key = dropFileKey(entry);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    uniqueFiles.push(file);
+    uniqueFiles.push(entry);
   }
 
   return uniqueFiles;
@@ -374,10 +425,9 @@ function describePayloadTypes(payloadTypes: Set<string>) {
   return Array.from(payloadTypes).sort().join(", ");
 }
 
-function readEntryFile(item: DataTransferItem) {
-  const entry = item.webkitGetAsEntry?.() as FileSystemFileEntryLike | null | undefined;
+function readEntryFile(entry: FileSystemEntryLike) {
   if (!entry?.isFile || typeof entry.file !== "function") {
-    return null;
+    return Promise.resolve(null);
   }
 
   return new Promise<File | null>((resolve) => {
@@ -388,20 +438,98 @@ function readEntryFile(item: DataTransferItem) {
   });
 }
 
+function readEntryDirectory(reader: FileSystemEntryReaderLike) {
+  return new Promise<FileSystemEntryLike[]>((resolve) => {
+    reader.readEntries?.(
+      (entries) => resolve(entries ?? []),
+      () => resolve([])
+    );
+  });
+}
+
+async function readFileSystemEntry(entry: FileSystemEntryLike, prefix: string[] = []): Promise<SelectedUploadFile[]> {
+  if (entry.isFile) {
+    const file = await readEntryFile(entry);
+    if (!file) {
+      return [];
+    }
+
+    const entryName = sanitizeDroppedFileName(entry.name || file.name) || file.name;
+    return [toSelectedUploadFile(file, [...prefix, entryName].join("/"))];
+  }
+
+  if (!entry.isDirectory) {
+    return [];
+  }
+
+  const reader = entry.createReader?.();
+  if (!reader) {
+    return [];
+  }
+
+  const nextPrefix = [...prefix, sanitizeDroppedFileName(entry.name || "folder") || "folder"];
+  const files: SelectedUploadFile[] = [];
+  while (true) {
+    const batch = await readEntryDirectory(reader);
+    if (batch.length === 0) {
+      break;
+    }
+
+    for (const child of batch) {
+      files.push(...await readFileSystemEntry(child, nextPrefix));
+    }
+  }
+
+  return files;
+}
+
+async function readFileSystemHandle(handle: FileSystemHandleLike | null, prefix: string[] = []): Promise<SelectedUploadFile[]> {
+  if (!handle?.kind) {
+    return [];
+  }
+
+  if (handle.kind === "file" && typeof handle.getFile === "function") {
+    const file = await handle.getFile().catch(() => null);
+    if (!file) {
+      return [];
+    }
+
+    const handleName = sanitizeDroppedFileName(handle.name || file.name) || file.name;
+    return [toSelectedUploadFile(file, [...prefix, handleName].join("/"))];
+  }
+
+  if (handle.kind !== "directory" || typeof handle.entries !== "function") {
+    return [];
+  }
+
+  const directoryName = sanitizeDroppedFileName(handle.name || "folder") || "folder";
+  const nextPrefix = [...prefix, directoryName];
+  const files: SelectedUploadFile[] = [];
+
+  for await (const [, childHandle] of handle.entries()) {
+    files.push(...await readFileSystemHandle(childHandle, nextPrefix));
+  }
+
+  return files;
+}
+
 async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractDroppedFilesResult> {
-  const directFiles = Array.from(dataTransfer.files ?? []).filter((file) => file instanceof File);
   const items = Array.from(dataTransfer.items ?? []);
   const payloadTypes = new Set<string>(Array.from(dataTransfer.types ?? []).map((type) => type.toLowerCase()));
 
   if (!items.length) {
-    const files = dedupeDroppedFiles(directFiles);
+    const files = dedupeDroppedFiles(
+      Array.from(dataTransfer.files ?? [])
+        .filter((file) => file instanceof File)
+        .map((file) => toSelectedUploadFile(file))
+    );
     return files.length > 0
       ? { files }
       : { files: [], errorMessage: "The dropped item did not expose any readable files." };
   }
 
-  const extractedFiles = [...directFiles];
-  const asyncFileReads: Promise<File | null>[] = [];
+  const extractedFiles: SelectedUploadFile[] = [];
+  const asyncFileReads: Promise<SelectedUploadFile[]>[] = [];
   const asyncStringReads: Promise<DroppedStringData | null>[] = [];
   const directStringValues = readDirectDropStrings(dataTransfer);
 
@@ -410,28 +538,24 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
     payloadTypes.add(item.type.toLowerCase());
 
     if (item.kind === "file") {
-      const file = item.getAsFile();
-      if (file) {
-        extractedFiles.push(file);
-        continue;
-      }
-
       if (typeof item.getAsFileSystemHandle === "function") {
         asyncFileReads.push(
           item.getAsFileSystemHandle()
-            .then(async (handle) => {
-              if (handle?.kind !== "file" || typeof handle.getFile !== "function") {
-                return null;
-              }
-              return handle.getFile();
-            })
-            .catch(() => null)
+            .then((handle) => readFileSystemHandle(handle))
+            .catch(() => [])
         );
+        continue;
       }
 
-      const entryRead = readEntryFile(item);
-      if (entryRead) {
-        asyncFileReads.push(entryRead);
+      const entry = item.webkitGetAsEntry?.() as FileSystemEntryLike | null | undefined;
+      if (entry) {
+        asyncFileReads.push(readFileSystemEntry(entry).catch(() => []));
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (file) {
+        extractedFiles.push(toSelectedUploadFile(file));
       }
 
       continue;
@@ -442,7 +566,7 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
     }
   }
 
-  const resolvedFiles = (await Promise.all(asyncFileReads)).filter((file): file is File => file instanceof File);
+  const resolvedFiles = (await Promise.all(asyncFileReads)).flat();
   const files = dedupeDroppedFiles([...extractedFiles, ...resolvedFiles]);
   if (files.length > 0) {
     return { files };
@@ -461,7 +585,9 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
         fetchDroppedRemoteFile(candidate).catch(() => null)
       )
     )
-  ).filter((file): file is File => file instanceof File);
+  )
+    .filter((file): file is File => file instanceof File)
+    .map((file) => toSelectedUploadFile(file));
 
   const remoteFiles = dedupeDroppedFiles(fetchedFiles);
   if (remoteFiles.length > 0) {
@@ -498,9 +624,10 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
 
 export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const router = useRouter();
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<SelectedUploadFile[]>([]);
   const [projectId, setProjectId] = useState("");
   const [packageName, setPackageName] = useState("Client package");
   const [customerId, setCustomerId] = useState("");
@@ -540,17 +667,26 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     setFiles([]);
     setError(null);
     setStatus(null);
-    if (inputRef.current) {
-      inputRef.current.value = "";
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    if (folderInputRef.current) {
+      folderInputRef.current.value = "";
     }
   }
 
-  function handleFiles(nextFiles: File[] | FileList | null) {
-    const selectedFiles = Array.from(nextFiles ?? []).filter((candidate) => candidate instanceof File);
+  function handleFiles(nextFiles: SelectedUploadFile[] | FileList | null, options?: { append?: boolean }) {
+    const selectedFiles = Array.isArray(nextFiles)
+      ? nextFiles
+      : Array.from(nextFiles ?? [])
+          .filter((candidate) => candidate instanceof File)
+          .map((candidate) => toSelectedUploadFile(candidate));
     if (!selectedFiles.length) return;
     setError(null);
     setStatus(null);
-    setFiles(selectedFiles);
+    setFiles((previousFiles) =>
+      dedupeDroppedFiles(options?.append ? [...previousFiles, ...selectedFiles] : selectedFiles)
+    );
   }
 
   async function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -639,19 +775,21 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="text-sm font-medium">
-                      {files.length === 1 ? files[0].name : `${files.length} files selected`}
+                      {files.length === 1 ? files[0].relativePath : `${files.length} files selected`}
                     </div>
                     <Badge tone="success">
-                      {files.length === 1 ? "Single file" : `${files.length} files`}
+                      {files.length === 1
+                        ? (files[0].relativePath.includes("/") ? "Folder file" : "Single file")
+                        : `${files.length} files`}
                     </Badge>
                   </div>
                   <div className="mt-1 text-xs text-fg/40">
-                    {(files.reduce((sum, current) => sum + current.size, 0) / 1024 / 1024).toFixed(1)} MB total
+                    {(files.reduce((sum, current) => sum + current.file.size, 0) / 1024 / 1024).toFixed(1)} MB total
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5">
                     {files.slice(0, 8).map((selectedFile) => (
-                      <Badge key={`${selectedFile.name}-${selectedFile.size}-${selectedFile.lastModified}`}>
-                        {selectedFile.name}
+                      <Badge key={`${selectedFile.relativePath}-${selectedFile.file.size}-${selectedFile.file.lastModified}`}>
+                        {selectedFile.relativePath}
                       </Badge>
                     ))}
                     {files.length > 8 ? <Badge>+{files.length - 8} more</Badge> : null}
@@ -670,27 +808,46 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             <>
               <UploadCloud className="h-8 w-8 text-fg/20" />
               <p className="mt-3 text-sm text-fg/50">
-                Drop a ZIP, loose bid files, or an Outlook email (.msg or .eml) here or{" "}
+                Drop a folder, ZIP, loose bid files, or an Outlook email (.msg or .eml) here,{" "}
                 <button
                   type="button"
                   className="text-accent hover:underline"
-                  onClick={() => inputRef.current?.click()}
+                  onClick={() => fileInputRef.current?.click()}
                 >
-                  browse
+                  browse files
+                </button>
+                , or{" "}
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => folderInputRef.current?.click()}
+                >
+                  browse a folder
                 </button>
               </p>
               <p className="mt-2 text-center text-xs text-fg/35">
-                Multiple files supported. PDF, XLSX, DWG, DXF, DOCX, ZIP, and Outlook .msg/.eml all work.
+                Multiple files and folder drops are supported. PDF, XLSX, DWG, DXF, DOCX, ZIP, and Outlook .msg/.eml all work.
               </p>
             </>
           )}
           <input
-            ref={inputRef}
+            ref={fileInputRef}
             className="hidden"
             type="file"
             accept=".zip,.pdf,.xlsx,.xls,.csv,.doc,.docx,.txt,.png,.jpg,.jpeg,.dwg,.dxf,.msg,.eml,application/zip,application/vnd.ms-outlook,message/rfc822"
             multiple
-            onChange={(e) => handleFiles(e.target.files)}
+            onChange={(e) => handleFiles(e.target.files, { append: true })}
+          />
+          <input
+            ref={folderInputRef}
+            className="hidden"
+            type="file"
+            multiple
+            {...({
+              webkitdirectory: "",
+              directory: "",
+            } satisfies DirectoryInputProps)}
+            onChange={(e) => handleFiles(e.target.files, { append: true })}
           />
         </div>
 

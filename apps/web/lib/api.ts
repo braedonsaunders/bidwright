@@ -9,6 +9,7 @@ export interface ProjectListItem {
   name: string;
   clientName: string;
   location: string;
+  scope: string;
   packageName: string;
   packageUploadedAt: string;
   ingestionStatus: string;
@@ -21,6 +22,9 @@ export interface ProjectListItem {
     title: string;
     status: string;
     currentRevisionId: string;
+    customerId?: string | null;
+    customerName?: string | null;
+    customerString?: string;
     userId?: string | null;
     userName?: string | null;
     departmentId?: string | null;
@@ -494,6 +498,7 @@ export interface ProjectWorkspaceData {
     projectId: string;
     customerExistingNew: "Existing" | "New";
     customerId: string | null;
+    customerName?: string | null;
     customerString: string;
     customerContactId: string | null;
     customerContactString: string;
@@ -1842,7 +1847,7 @@ export async function updateProjectStatus(projectId: string, status: string) {
 
 export interface PackageIngestInput {
   file?: File;
-  files?: File[];
+  files?: Array<File | PackageIngestFile>;
   projectId?: string;
   packageName?: string;
   clientName?: string;
@@ -1851,6 +1856,11 @@ export interface PackageIngestInput {
   dueDate?: string;
   scope?: string;
   notes?: string;
+}
+
+export interface PackageIngestFile {
+  file: File;
+  relativePath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -2003,14 +2013,37 @@ export async function createProjectJob(
 
 export async function submitPackageIngest(input: PackageIngestInput) {
   const formData = new FormData();
-  const files = input.files?.length ? input.files : input.file ? [input.file] : [];
-  if (!files.length) {
+  const fileEntries = input.files?.length
+    ? input.files.map((entry) =>
+        entry instanceof File
+          ? {
+              file: entry,
+              relativePath: (entry as File & { webkitRelativePath?: string }).webkitRelativePath || undefined,
+            }
+          : entry
+      )
+    : input.file
+      ? [{
+          file: input.file,
+          relativePath: (input.file as File & { webkitRelativePath?: string }).webkitRelativePath || undefined,
+        }]
+      : [];
+  if (!fileEntries.length) {
     throw new Error("Select at least one package file.");
   }
 
-  for (const file of files) {
-    formData.append("file", file);
+  for (const entry of fileEntries) {
+    formData.append("file", entry.file);
   }
+  formData.append(
+    "fileManifest",
+    JSON.stringify(
+      fileEntries.map((entry, index) => ({
+        index,
+        relativePath: entry.relativePath || undefined,
+      }))
+    )
+  );
 
   if (input.packageName) {
     formData.append("packageName", input.packageName);
@@ -3208,6 +3241,13 @@ export async function getCliPendingQuestion(projectId: string) {
     question?: string;
     options?: string[];
     context?: string;
+    questions?: Array<{
+      id?: string;
+      prompt: string;
+      options?: string[];
+      placeholder?: string;
+      context?: string;
+    }>;
   }>(`/api/cli/${projectId}/pending-question`);
 }
 

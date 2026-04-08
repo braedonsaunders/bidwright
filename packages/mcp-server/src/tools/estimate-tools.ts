@@ -122,7 +122,7 @@ export function registerEstimateTools(server: McpServer) {
     "Compute historical benchmark comparisons from prior human quotes in the organization. Call before assigning detailed labour hours.",
     {},
     async () => {
-      const data = await apiPost<any>(`/api/estimate/${getProjectId()}/benchmarks/recompute`);
+      const data = await apiPost<any>(`/api/estimate/${getProjectId()}/benchmarks/recompute`, {});
       const strategy = data?.workspace?.estimateStrategy ?? null;
       const candidateCount = strategy?.benchmarkProfile?.candidateCount ?? 0;
       const actions = strategy?.benchmarkProfile?.suggestedActions?.length ?? 0;

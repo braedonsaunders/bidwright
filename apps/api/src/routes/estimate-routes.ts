@@ -70,6 +70,24 @@ const packagePlanSchema = z.array(z.object({
   pricingMode: z.enum(["detailed", "allowance", "subcontract", "historical_allowance"]),
   confidence: z.enum(["high", "medium", "low"]),
   hoursBasis: z.string().optional(),
+  bindings: z.object({
+    worksheetIds: z.array(z.string()).default([]),
+    worksheetNames: z.array(z.string()).default([]),
+    categories: z.array(z.string()).default([]),
+    categoryTargets: z.array(z.string()).default([]),
+    textMatchers: z.array(z.string()).default([]),
+    descriptionMatchers: z.array(z.string()).default([]),
+    itemMatchers: z.array(z.string()).default([]),
+  }).passthrough().default({}),
+  commercialModel: z.object({
+    executionMode: z.enum(["self_perform", "subcontract", "allowance", "historical_allowance", "mixed"]).optional(),
+    supervisionMode: z.enum(["single_source", "embedded", "general_conditions", "hybrid"]).optional(),
+    evidencePolicy: z.string().optional(),
+  }).passthrough().default({}),
+  topDownEnvelope: z.object({
+    labourHours: z.number().nonnegative().optional(),
+    subtotal: z.number().nonnegative().optional(),
+  }).passthrough().optional(),
 }).passthrough());
 
 const adjustmentPlanSchema = z.array(z.object({

@@ -26,6 +26,200 @@ function extractAuthToken(request: FastifyRequest): string {
   return (request.query as any)?.token || "";
 }
 
+function buildSyntheticCompletionEvents(summary: any, updatedAt: Date | string | null | undefined) {
+  const timestamp = updatedAt instanceof Date
+    ? updatedAt.toISOString()
+    : typeof updatedAt === "string" && updatedAt
+      ? updatedAt
+      : new Date().toISOString();
+
+  const totalWorksheets = typeof summary?.totalWorksheets === "number" ? summary.totalWorksheets : null;
+  const totalItems = typeof summary?.totalItems === "number" ? summary.totalItems : null;
+  const totalLabourMH = typeof summary?.totalLabourMH === "number" ? summary.totalLabourMH : null;
+  const parts = [
+    totalWorksheets != null ? `${totalWorksheets} worksheet${totalWorksheets === 1 ? "" : "s"}` : null,
+    totalItems != null ? `${totalItems} item${totalItems === 1 ? "" : "s"}` : null,
+    totalLabourMH != null ? `~${totalLabourMH} labour MH` : null,
+  ].filter(Boolean);
+
+  const detail = parts.length > 0
+    ? `Estimate finalized from workspace state — ${parts.join(", ")}.`
+    : "Estimate finalized from workspace state.";
+
+  const summaryNote = typeof summary?.note === "string" && summary.note.trim()
+    ? summary.note.trim()
+    : null;
+
+  const message = summaryNote
+    ? `Estimate complete. ${summaryNote}`
+    : detail;
+
+  return [
+    {
+      type: "progress",
+      data: {
+        phase: "Complete",
+        detail,
+        derived: true,
+      },
+      timestamp,
+    },
+    {
+      type: "message",
+      data: {
+        role: "assistant",
+        content: message,
+        derived: true,
+      },
+      timestamp,
+    },
+    {
+      type: "status",
+      data: {
+        status: "completed",
+        derived: true,
+      },
+      timestamp,
+    },
+  ];
+}
+
+type PersistedCliEvent = {
+  type?: string;
+  data?: Record<string, unknown>;
+  timestamp?: string;
+};
+
+function cliEventFingerprint(event: PersistedCliEvent): string {
+  return JSON.stringify({
+    type: event.type || "",
+    timestamp: event.timestamp || "",
+    data: event.data || null,
+  });
+}
+
+function mergeCliEvents(existing: PersistedCliEvent[], incoming: PersistedCliEvent[]): PersistedCliEvent[] {
+  const seen = new Set(existing.map(cliEventFingerprint));
+  const merged = [...existing];
+
+  for (const event of incoming) {
+    const fingerprint = cliEventFingerprint(event);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    merged.push(event);
+  }
+
+  return merged;
+}
+
+async function appendCliEventsToLatestRun(projectId: string, incoming: PersistedCliEvent[]) {
+  if (incoming.length === 0) return;
+
+  const latestRun = await prisma.aiRun.findFirst({
+    where: { projectId, kind: "cli-intake" },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      output: true,
+    },
+  });
+
+  if (!latestRun) return;
+
+  const existing = (((latestRun.output as any)?.events || []) as PersistedCliEvent[]);
+  await prisma.aiRun.update({
+    where: { id: latestRun.id },
+    data: {
+      output: {
+        events: mergeCliEvents(existing, incoming),
+      } as any,
+    },
+  });
+}
+
+function normalizeCliModel(runtime: AgentRuntime, model: string | null | undefined) {
+  if (runtime === "claude-code") {
+    return !model || model.includes("/") ? "sonnet" : model;
+  }
+  return !model || !model.startsWith("gpt") ? "gpt-5.4" : model;
+}
+
+async function bindEstimateStrategyRun(projectId: string, revisionId: string | null | undefined, aiRunId: string) {
+  if (!revisionId) return;
+
+  await prisma.estimateStrategy.upsert({
+    where: { revisionId },
+    create: {
+      projectId,
+      revisionId,
+      aiRunId,
+      status: "in_progress",
+      currentStage: "scope",
+    },
+    update: {
+      aiRunId,
+    },
+  }).catch(() => {});
+}
+
+function attachCliRunPersistence(
+  runId: string,
+  session: { events: { on: (event: string, handler: (payload: any) => void) => void } },
+) {
+  let eventBuffer: PersistedCliEvent[] = [];
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushEvents = async () => {
+    if (eventBuffer.length === 0) return;
+    const toSave = [...eventBuffer];
+    eventBuffer = [];
+    try {
+      const run = await prisma.aiRun.findFirst({ where: { id: runId } });
+      const existing = ((run?.output as any)?.events || []) as PersistedCliEvent[];
+      await prisma.aiRun.update({
+        where: { id: runId },
+        data: {
+          output: {
+            events: mergeCliEvents(existing, toSave),
+          } as any,
+        },
+      });
+    } catch (err) {
+      console.error(`[cli] Failed to persist events for ${runId}:`, err);
+      eventBuffer.unshift(...toSave);
+    }
+  };
+
+  const scheduleFlush = () => {
+    if (saveTimer) return;
+    saveTimer = setTimeout(async () => {
+      saveTimer = null;
+      await flushEvents();
+    }, 3000);
+  };
+
+  session.events.on("event", (evt: any) => {
+    eventBuffer.push({ ...evt, timestamp: evt?.timestamp || new Date().toISOString() });
+    scheduleFlush();
+  });
+
+  session.events.on("done", async (finalStatus: string) => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    try {
+      await flushEvents();
+      await prisma.aiRun.update({
+        where: { id: runId },
+        data: { status: finalStatus },
+      });
+    } catch (err) {
+      console.error(`[cli] Failed to persist final status for ${runId}:`, err);
+    }
+  });
+}
+
 export function registerCliRoutes(app: FastifyInstance) {
 
   // ── CLI Detection + Auth Status ──────────────────────────────
@@ -77,12 +271,7 @@ export function registerCliRoutes(app: FastifyInstance) {
 
     const { projectId, runtime = "claude-code", scope, prompt } = body;
     // Ensure model is valid for the chosen runtime — don't pass OpenRouter model IDs to Claude CLI
-    let model = body.model;
-    if (runtime === "claude-code" && (!model || model.includes("/"))) {
-      model = "sonnet"; // Default Claude model for CLI
-    } else if (runtime === "codex" && (!model || !model.startsWith("gpt"))) {
-      model = "gpt-5.4";
-    }
+    const model = normalizeCliModel(runtime, body.model);
     const store = request.store!;
 
     // Get project context
@@ -92,6 +281,11 @@ export function registerCliRoutes(app: FastifyInstance) {
     const project = workspace.project || {} as any;
     const quote = workspace.quote || {} as any;
     const revision = workspace.currentRevision || {} as any;
+    const effectiveScope = typeof scope === "string" && scope.trim()
+      ? scope.trim()
+      : typeof project.scope === "string" && project.scope.trim()
+        ? project.scope.trim()
+        : "";
     const documents = (workspace.sourceDocuments || []).map((d: any) => ({
       id: d.id,
       fileName: d.fileName,
@@ -126,6 +320,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     // Fetch settings early so we can pass integrations into CLAUDE.md params
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
+    const estimateDefaults = (settingsEarly as any)?.defaults || {};
 
     // Generate CLAUDE.md / codex.md (includes knowledge book file list)
     const params = {
@@ -133,11 +328,12 @@ export function registerCliRoutes(app: FastifyInstance) {
       projectName: project.name || "Untitled Project",
       clientName: project.clientName || "",
       location: project.location || "",
-      scope: scope || "",
+      scope: effectiveScope,
       quoteNumber: quote.quoteNumber || "",
       dataRoot: apiDataRoot,
       documents,
       knowledgeBookFiles: linkedBookNames,
+      estimateDefaults,
       maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
       persona: persona ? await (async () => {
         const bookIds: string[] = Array.isArray(persona.knowledgeBookIds) ? persona.knowledgeBookIds : JSON.parse(persona.knowledgeBookIds as string || "[]");
@@ -178,7 +374,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       kind: "cli-intake",
       status: "running",
       model: model || (runtime === "claude-code" ? "sonnet" : "gpt-5.4"),
-      input: { runtime, scope, documentCount: documents.length } as any,
+      input: { runtime, scope: effectiveScope, documentCount: documents.length } as any,
       output: { events: [] } as any,
     });
 
@@ -203,18 +399,23 @@ export function registerCliRoutes(app: FastifyInstance) {
     // Get settings for auth token
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
+    const benchmarkingEnabled = (settings as any)?.defaults?.benchmarkingEnabled !== false;
 
     // Spawn CLI
-    const initialPrompt = prompt || `Read CLAUDE.md now. Then execute the staged estimate workflow in order:
+    const scopeDirective = effectiveScope
+      ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${effectiveScope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
+      : "";
+
+    const initialPrompt = prompt || `Read CLAUDE.md now.${scopeDirective} Then execute the staged estimate workflow in order:
 
 1. Read the documents and save the structured scope graph with saveEstimateScopeGraph.
 2. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
 3. Define the commercial/package structure with saveEstimatePackagePlan.
-4. Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours.
+4. ${benchmarkingEnabled ? "Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours." : "Skip recomputeEstimateBenchmarks because organization benchmarking is disabled, and record the top-down sanity checks you used in saveEstimateAdjustments."}
 5. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items.
-6. Perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
+6. Build the quote summary breakout with applySummaryPreset using the most appropriate preset for the actual worksheet/phase structure, then perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
 
-CRITICAL: Do not jump from document facts straight into line-item hours. The estimate is only valid after the scope graph, execution plan, package plan, benchmark pass, and reconcile pass are all saved.`;
+CRITICAL: Do not jump from document facts straight into line-item hours. The estimate is only valid after the scope graph, execution plan, package plan, ${benchmarkingEnabled ? "benchmark pass, " : ""}adjustment pass, and reconcile pass are all saved.`;
 
     try {
       const session = await spawnSession({
@@ -234,52 +435,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
       });
 
-      // Persist events to DB using prisma directly (survives store context issues)
-      let eventBuffer: any[] = [];
-      let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
-      const flushEvents = async () => {
-        if (eventBuffer.length === 0) return;
-        const toSave = [...eventBuffer];
-        eventBuffer = [];
-        try {
-          const run = await prisma.aiRun.findFirst({ where: { id: sessionId } });
-          const existing = ((run?.output as any)?.events || []);
-          await prisma.aiRun.update({
-            where: { id: sessionId },
-            data: { output: { events: [...existing, ...toSave] } as any },
-          });
-        } catch (err) {
-          console.error(`[cli] Failed to persist events for ${sessionId}:`, err);
-          eventBuffer.unshift(...toSave); // Put back
-        }
-      };
-
-      const scheduleFlush = () => {
-        if (saveTimer) return;
-        saveTimer = setTimeout(async () => {
-          saveTimer = null;
-          await flushEvents();
-        }, 3000); // Flush every 3s
-      };
-
-      session.events.on("event", (evt: any) => {
-        eventBuffer.push({ ...evt, timestamp: new Date().toISOString() });
-        scheduleFlush();
-      });
-
-      session.events.on("done", async (finalStatus: string) => {
-        if (saveTimer) clearTimeout(saveTimer);
-        try {
-          await flushEvents(); // Flush remaining events
-          await prisma.aiRun.update({
-            where: { id: sessionId },
-            data: { status: finalStatus },
-          });
-        } catch (err) {
-          console.error(`[cli] Failed to persist final status for ${sessionId}:`, err);
-        }
-      });
+      attachCliRunPersistence(sessionId, session);
 
       return { sessionId, projectId, runtime, status: "running" };
     } catch (err) {
@@ -349,19 +505,76 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
   });
 
   // ── Resume Session ──────────────────────────────────────────
-  app.post("/api/cli/:projectId/resume", async (request) => {
+  app.post("/api/cli/:projectId/resume", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const body = (request.body || {}) as { prompt?: string; model?: string };
     const projectDir = resolveProjectDir(projectId);
+    const store = request.store!;
+    const workspace = await store.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({ error: "Project not found" });
+    }
 
-    const session = await resumeSession({
-      projectId,
-      projectDir,
-      prompt: body.prompt,
-      model: body.model,
+    const settings = await store.getSettings();
+    const integrations = (settings as any)?.integrations || {};
+    const latestRun = await prisma.aiRun.findFirst({
+      where: { projectId, kind: "cli-intake" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, model: true },
     });
+    const model = normalizeCliModel("claude-code", body.model ?? latestRun?.model ?? integrations.agentModel);
+    const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
-    return { sessionId: session.sessionId, status: "running" };
+    try {
+      const session = await resumeSession({
+        projectId,
+        projectDir,
+        prompt: body.prompt,
+        model,
+        authToken: extractAuthToken(request),
+        apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
+        customCliPath: integrations.claudeCodePath || undefined,
+        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
+      });
+
+      await store.createAiRun({
+        id: aiRunId,
+        projectId,
+        revisionId: workspace.currentRevision.id,
+        kind: "cli-intake",
+        status: "running",
+        model,
+        input: {
+          runtime: "claude-code",
+          prompt: body.prompt ?? "",
+          resumed: true,
+          resumeSourceAiRunId: latestRun?.id ?? null,
+          cliSessionId: session.sessionId || null,
+        } as any,
+        output: { events: [] } as any,
+      });
+      await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, aiRunId);
+      attachCliRunPersistence(aiRunId, session);
+
+      return { sessionId: aiRunId, status: "running" };
+    } catch (err) {
+      await store.createAiRun({
+        id: aiRunId,
+        projectId,
+        revisionId: workspace.currentRevision.id,
+        kind: "cli-intake",
+        status: "failed",
+        model,
+        input: {
+          runtime: "claude-code",
+          prompt: body.prompt ?? "",
+          resumed: true,
+          resumeSourceAiRunId: latestRun?.id ?? null,
+        } as any,
+        output: { events: [] } as any,
+      }).catch(() => {});
+      return reply.code(500).send({ error: err instanceof Error ? err.message : "Failed to resume session" });
+    }
   });
 
   // ── Send Message to Session ─────────────────────────────────
@@ -382,56 +595,61 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     // Claude Code will read CLAUDE.md + agent-memory.json for context
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
+    const workspace = await store.getWorkspace(projectId);
+    if (!workspace) return reply.code(404).send({ error: "Project not found" });
+
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
+    const latestRun = await prisma.aiRun.findFirst({
+      where: { projectId, kind: "cli-intake" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, model: true, input: true },
+    });
+    const latestRuntime = (latestRun?.input as any)?.runtime;
+    const runtime: AgentRuntime = latestRuntime === "codex" || latestRuntime === "claude-code"
+      ? latestRuntime
+      : integrations.agentRuntime === "codex"
+        ? "codex"
+        : "claude-code";
+    const model = normalizeCliModel(runtime, latestRun?.model ?? integrations.agentModel);
 
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-    await prisma.aiRun.create({
-      data: {
-        id: sessionId,
-        projectId,
-        kind: "cli-intake",
-        status: "running",
-        model: "sonnet",
-        input: { runtime: "claude-code", prompt: message } as any,
-        output: { events: [] } as any,
-      },
+    await store.createAiRun({
+      id: sessionId,
+      projectId,
+      revisionId: workspace.currentRevision.id,
+      kind: "cli-intake",
+      status: "running",
+      model,
+      input: {
+        runtime,
+        prompt: message,
+        followUp: true,
+        previousAiRunId: latestRun?.id ?? null,
+      } as any,
+      output: { events: [] } as any,
     });
+    await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, sessionId);
 
     try {
       const session = await spawnSession({
         projectId,
         projectDir,
         prompt: message,
-        runtime: "claude-code",
-        model: "sonnet",
+        runtime,
+        model,
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
+        revisionId: workspace.currentRevision.id,
+        quoteId: workspace.quote.id,
+        customCliPath: runtime === "claude-code"
+          ? integrations.claudeCodePath || undefined
+          : integrations.codexPath || undefined,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
+        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
       });
 
-      // Set up event persistence (same as start)
-      let eventBuffer: any[] = [];
-      let saveTimer: ReturnType<typeof setTimeout> | null = null;
-      const flushEvents = async () => {
-        if (eventBuffer.length === 0) return;
-        const toSave = [...eventBuffer];
-        eventBuffer = [];
-        try {
-          const run = await prisma.aiRun.findFirst({ where: { id: sessionId } });
-          const existing = ((run?.output as any)?.events || []);
-          await prisma.aiRun.update({ where: { id: sessionId }, data: { output: { events: [...existing, ...toSave] } as any } });
-        } catch { eventBuffer.unshift(...toSave); }
-      };
-      session.events.on("event", (evt: any) => {
-        eventBuffer.push({ ...evt, timestamp: new Date().toISOString() });
-        if (!saveTimer) saveTimer = setTimeout(async () => { saveTimer = null; await flushEvents(); }, 3000);
-      });
-      session.events.on("done", async (finalStatus: string) => {
-        if (saveTimer) clearTimeout(saveTimer);
-        await flushEvents();
-        await prisma.aiRun.update({ where: { id: sessionId }, data: { status: finalStatus } }).catch(() => {});
-      });
+      attachCliRunPersistence(sessionId, session);
 
       return { sessionId, status: "running", message: "New session started with your message" };
     } catch (err) {
@@ -502,6 +720,53 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       return { status: "none" };
     }
 
+    const latestRun = runs[runs.length - 1];
+    const latestRunEvents = ((latestRun?.output as any)?.events || []) as Array<{
+      type?: string;
+      timestamp?: string;
+      data?: Record<string, unknown>;
+    }>;
+    const latestRunClosed = latestRunEvents.some((event) =>
+      event?.type === "status" &&
+      ((event.data as any)?.status === "completed" || (event.data as any)?.status === "failed" || (event.data as any)?.status === "stopped")
+    );
+
+    let derivedCompletionEvents: any[] = [];
+    let derivedStatus: string | null = null;
+
+    if (!session && latestRun?.revisionId) {
+      const strategy = await prisma.estimateStrategy.findUnique({
+        where: { revisionId: latestRun.revisionId },
+        select: {
+          aiRunId: true,
+          status: true,
+          currentStage: true,
+          summary: true,
+          updatedAt: true,
+        },
+      });
+
+      const strategyMatchesLatestRun =
+        strategy?.aiRunId === latestRun.id &&
+        strategy.status === "complete" &&
+        strategy.currentStage === "complete";
+
+      if (strategyMatchesLatestRun) {
+        derivedStatus = "completed";
+
+        if (!latestRunClosed) {
+          const lastEventTimestamp = latestRunEvents[latestRunEvents.length - 1]?.timestamp;
+          const strategyUpdatedAt = strategy.updatedAt instanceof Date
+            ? strategy.updatedAt.toISOString()
+            : strategy.updatedAt;
+
+          if (!lastEventTimestamp || (strategyUpdatedAt && strategyUpdatedAt > lastEventTimestamp)) {
+            derivedCompletionEvents = buildSyntheticCompletionEvents(strategy.summary, strategy.updatedAt);
+          }
+        }
+      }
+    }
+
     // Merge all runs into a single chronological event stream with run dividers
     const mergedEvents: any[] = [];
     for (const run of runs) {
@@ -525,11 +790,16 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       for (const event of runEvents) {
         mergedEvents.push(event);
       }
+
+      if (run.id === latestRun?.id && derivedCompletionEvents.length > 0) {
+        mergedEvents.push(...derivedCompletionEvents);
+      }
     }
 
     // Determine current status: live session takes priority
-    const latestRun = runs[runs.length - 1];
-    const currentStatus = session?.status === "running" ? "running" : (latestRun?.status || "none");
+    const currentStatus = session?.status === "running"
+      ? "running"
+      : (derivedStatus || latestRun?.status || "none");
 
     return {
       status: currentStatus,
@@ -681,13 +951,31 @@ Merge tables that span multiple pages. Skip non-data pages.
     question: string;
     options?: string[];
     context?: string;
+    questions?: Array<{
+      id?: string;
+      prompt: string;
+      options?: string[];
+      placeholder?: string;
+      context?: string;
+    }>;
     resolve: (answer: string) => void;
   }>();
 
   // POST /api/cli/:projectId/question — MCP tool calls this, long-polls until user answers
   app.post("/api/cli/:projectId/question", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { question, options, context } = (request.body || {}) as { question: string; options?: string[]; context?: string };
+    const { question, options, context, questions } = (request.body || {}) as {
+      question: string;
+      options?: string[];
+      context?: string;
+      questions?: Array<{
+        id?: string;
+        prompt: string;
+        options?: string[];
+        placeholder?: string;
+        context?: string;
+      }>;
+    };
 
     if (!question) return reply.code(400).send({ error: "question required" });
 
@@ -699,17 +987,21 @@ Merge tables that span multiple pages. Skip non-data pages.
     }
 
     // Emit the question as an SSE event so the frontend sees it immediately
+    const promptEvent: PersistedCliEvent = {
+      type: "askUser",
+      data: { question, options: options || [], context: context || "", questions: questions || [] },
+      timestamp: new Date().toISOString(),
+    };
     const session = getSession(projectId);
     if (session) {
-      session.events.emit("event", {
-        type: "askUser",
-        data: { question, options: options || [], context: context || "" },
-      });
+      session.events.emit("event", promptEvent);
+    } else {
+      await appendCliEventsToLatestRun(projectId, [promptEvent]).catch(() => {});
     }
 
     // Block until the user answers via /answer endpoint (max 5 min)
     const answer = await new Promise<string>((resolve) => {
-      pendingQuestions.set(projectId, { question, options, context, resolve });
+      pendingQuestions.set(projectId, { question, options, context, questions, resolve });
 
       // Timeout after 5 minutes
       setTimeout(() => {
@@ -735,6 +1027,7 @@ Merge tables that span multiple pages. Skip non-data pages.
       question: pending.question,
       options: pending.options || [],
       context: pending.context || "",
+      questions: pending.questions || [],
     };
   });
 
@@ -752,12 +1045,16 @@ Merge tables that span multiple pages. Skip non-data pages.
     pendingQuestions.delete(projectId);
 
     // Emit answer event so the stream picks it up
+    const answerEvent: PersistedCliEvent = {
+      type: "userAnswer",
+      data: { answer },
+      timestamp: new Date().toISOString(),
+    };
     const session = getSession(projectId);
     if (session) {
-      session.events.emit("event", {
-        type: "userAnswer",
-        data: { answer },
-      });
+      session.events.emit("event", answerEvent);
+    } else {
+      await appendCliEventsToLatestRun(projectId, [answerEvent]).catch(() => {});
     }
 
     return { ok: true, message: "Answer delivered to agent" };

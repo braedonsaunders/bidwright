@@ -58,6 +58,7 @@ import {
   getProjectWorkspace,
   updateWorksheetItem,
 } from "@/lib/api";
+import { getClientDisplayName } from "@/lib/client-display";
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
 import { AgentChat } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
@@ -527,7 +528,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <Badge tone={statusTone(workspace.currentRevision.status)}>{workspace.currentRevision.type ?? "Firm"}</Badge>
           </div>
           <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg/40 truncate">
-            <span>{workspace.project.clientName}</span>
+            <span>{getClientDisplayName(workspace.project, workspace.quote)}</span>
             <span>·</span>
             <span>{workspace.quote.quoteNumber}</span>
             <span>·</span>

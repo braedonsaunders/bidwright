@@ -23,6 +23,7 @@ import {
   FadeIn,
   Input,
 } from "@/components/ui";
+import { getClientDisplayName } from "@/lib/client-display";
 
 type SortKey =
   | "quoteNumber"
@@ -185,7 +186,8 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   const clientOptions = useMemo(() => {
     const clients = new Map<string, string>();
     for (const p of projectsWithQuotes) {
-      if (p.clientName) clients.set(p.clientName, p.clientName);
+      const clientLabel = getClientDisplayName(p, p.quote);
+      if (clientLabel && clientLabel !== "—") clients.set(clientLabel, clientLabel);
     }
     return [...clients.entries()]
       .map(([value, label]) => ({ value, label }))
@@ -233,7 +235,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     }
 
     if (clientFilter.length > 0) {
-      list = list.filter((p) => clientFilter.includes(p.clientName));
+      list = list.filter((p) => clientFilter.includes(getClientDisplayName(p, p.quote)));
     }
 
     if (userFilter.length > 0) {
@@ -250,7 +252,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         (p) =>
           p.quote.quoteNumber.toLowerCase().includes(q) ||
           p.quote.title.toLowerCase().includes(q) ||
-          p.clientName.toLowerCase().includes(q) ||
+          getClientDisplayName(p, p.quote).toLowerCase().includes(q) ||
           p.name.toLowerCase().includes(q) ||
           (p.location || "").toLowerCase().includes(q)
       );
@@ -266,7 +268,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
           cmp = a.quote.title.localeCompare(b.quote.title);
           break;
         case "client":
-          cmp = a.clientName.localeCompare(b.clientName);
+          cmp = getClientDisplayName(a, a.quote).localeCompare(getClientDisplayName(b, b.quote));
           break;
         case "estimator": {
           const aName = (a.quote.userId && userMap.get(a.quote.userId)?.name) || "";
@@ -486,7 +488,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                       </Link>
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/60">
-                      {project.clientName || "\u2014"}
+                      {getClientDisplayName(project, project.quote)}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-fg/60">
                       {(project.quote.userId && userMap.get(project.quote.userId)?.name) || "\u2014"}

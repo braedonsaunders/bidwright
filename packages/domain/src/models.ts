@@ -13,6 +13,7 @@ export interface Project {
   name: string;
   clientName: string;
   location: string;
+  scope: string;
   packageName: string;
   packageUploadedAt: string;
   ingestionStatus: ProjectIngestionStatus;
@@ -56,6 +57,7 @@ export interface Quote {
   currentRevisionId: string;
   customerExistingNew: "Existing" | "New";
   customerId: string | null;
+  customerName?: string | null;
   customerString: string;
   customerContactId: string | null;
   customerContactString: string;
@@ -1033,7 +1035,22 @@ export interface BrandProfile {
 export interface AppSettings {
   general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string; authMethod?: "smtp" | "oauth2"; oauth2TenantId?: string; oauth2ClientId?: string; oauth2ClientSecret?: string };
-  defaults: { defaultMarkup: number; breakoutStyle: string; quoteType: string; timezone: string; currency: string; dateFormat: string; fiscalYearStart: number; maxAgentIterations?: number };
+  defaults: {
+    defaultMarkup: number;
+    breakoutStyle: string;
+    quoteType: string;
+    timezone: string;
+    currency: string;
+    dateFormat: string;
+    fiscalYearStart: number;
+    maxAgentIterations?: number;
+    benchmarkingEnabled?: boolean;
+    benchmarkMinimumSimilarity?: number;
+    benchmarkMaximumComparables?: number;
+    benchmarkLowerHoursRatio?: number;
+    benchmarkUpperHoursRatio?: number;
+    requireHumanReviewForBenchmarkOutliers?: boolean;
+  };
   integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string; agentModel?: string; maxConcurrentSubAgents?: number };
   brand: BrandProfile;
   termsAndConditions: string;

@@ -7,6 +7,7 @@ export const mockStore: BidwrightStore = {
       name: "City Hospital Mechanical Plant Expansion",
       clientName: "Metro Health Authority",
       location: "Toronto, ON",
+      scope: "",
       packageName: "City Hospital RFQ Package",
       packageUploadedAt: "2026-03-21T14:30:00.000Z",
       ingestionStatus: "review",

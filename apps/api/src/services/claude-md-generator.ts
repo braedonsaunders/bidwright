@@ -26,6 +26,9 @@ export interface ClaudeMdParams {
     storagePath?: string; // relative to dataRoot
   }>;
   knowledgeBookFiles?: string[]; // filenames in knowledge/ directory (already symlinked)
+  estimateDefaults?: {
+    benchmarkingEnabled?: boolean;
+  };
   persona?: {
     name: string;
     trade: string;
@@ -123,6 +126,7 @@ async function symlinkProjectDocuments(
 
 function buildClaudeMdContent(params: ClaudeMdParams): string {
   const maxSubAgents = params.maxConcurrentSubAgents ?? 2;
+  const benchmarkingEnabled = params.estimateDefaults?.benchmarkingEnabled !== false;
 
   const docManifest = params.documents.length > 0
     ? params.documents.map((d, i) =>
@@ -133,6 +137,10 @@ function buildClaudeMdContent(params: ClaudeMdParams): string {
   const scopeSection = params.scope
     ? `## Scope (USER INSTRUCTIONS — MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope mentions subcontracting specific activities (e.g. "subcontract insulation", "sub out painting"), you MUST create Subcontractor items for those activities — do NOT estimate them as self-performed labour. The scope instruction is AUTHORITATIVE and overrides any default assumptions.`
     : `## Scope\n\nNo specific scope defined — estimate the full bid package.`;
+
+  const commercialScopeSection = params.scope
+    ? `${scopeSection}\n\nInterpret commercial directives literally:\n- If the scope says an activity is subcontracted, create it as a Subcontractor/commercial package — do NOT estimate it as self-performed labour.\n- If the scope says a package is already priced, fixed, quoted, budgeted, or otherwise commercially known, carry that package at the stated amount instead of rebuilding it bottom-up.\n- If the scope says something is owner-supplied or install-only, price only the installation/support scope that remains.\n- Only produce a bottom-up validation breakdown for a fixed/commercial package if the user explicitly asks for that validation.`
+    : scopeSection;
 
   const personaSection = params.persona
     ? `# Estimator Persona: ${params.persona.name}
@@ -156,6 +164,27 @@ ${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.p
 `
     : "";
 
+  const benchmarkToolLine = benchmarkingEnabled
+    ? `- **recomputeEstimateBenchmarks** — Compare this revision to prior human quotes and surface distribution outliers`
+    : `- **recomputeEstimateBenchmarks** — Historical benchmark pass is disabled by organization defaults; only use this if the user explicitly re-enables benchmarking`;
+
+  const stageGateSequence = benchmarkingEnabled
+    ? `  1. \`saveEstimateScopeGraph\`
+  2. \`saveEstimateExecutionPlan\`
+  3. \`saveEstimateAssumptions\`
+  4. \`saveEstimatePackagePlan\`
+  5. \`recomputeEstimateBenchmarks\`
+  6. \`saveEstimateAdjustments\``
+    : `  1. \`saveEstimateScopeGraph\`
+  2. \`saveEstimateExecutionPlan\`
+  3. \`saveEstimateAssumptions\`
+  4. \`saveEstimatePackagePlan\`
+  5. \`saveEstimateAdjustments\` (record top-down sanity checks and note that org benchmarking is disabled)`;
+
+  const benchmarkGateNarrative = benchmarkingEnabled
+    ? `- The package structure must be decided before the pricing structure. The execution model must be decided before labour hours. The benchmark pass must happen before you trust those labour hours.`
+    : `- The package structure must be decided before the pricing structure. The execution model must be decided before labour hours. Organization-wide historical benchmarking is disabled, so use persona guidance, package-mode discipline, and explicit top-down sanity checks instead of comparable-job heuristics.`;
+
   return `${personaSection}# Bidwright Estimating Agent
 
 You are an expert construction estimator building a quote for **"${params.projectName}"**.
@@ -164,7 +193,7 @@ You are an expert construction estimator building a quote for **"${params.projec
 - **Location:** ${params.location}
 - **Quote:** ${params.quoteNumber}
 
-${scopeSection}
+${commercialScopeSection}
 
 ## Project Documents
 
@@ -215,7 +244,7 @@ You have access to Bidwright tools via MCP. Key tools:
 - **saveEstimateExecutionPlan** — Lock the execution model before assigning hours
 - **saveEstimateAssumptions** — Persist explicit assumptions with confidence and user-confirmation flags
 - **saveEstimatePackagePlan** — Define the commercial/package structure before pricing
-- **recomputeEstimateBenchmarks** — Compare this revision to prior human quotes and surface distribution outliers
+${benchmarkToolLine}
 - **saveEstimateAdjustments** — Record how benchmark findings should change the estimate approach
 - **saveEstimateReconcile** — Save the mandatory final self-review and outlier check
 - **finalizeEstimateStrategy** — Mark the staged estimate workflow complete after reconcile
@@ -240,6 +269,8 @@ You have access to Bidwright tools via MCP. Key tools:
 - **createScheduleTask** — Create Gantt chart tasks/milestones linked to phases, with dates and durations
 - **listScheduleTasks** — View existing schedule
 - **recalculateTotals** — Recalculate financial totals
+
+- **applySummaryPreset** - Configure the quote summary breakout so the finalized quote has an appropriate line-item rollup
 
 ### Vision & Drawing Takeoff Tools (for symbol counting ONLY)
 
@@ -284,15 +315,12 @@ You decide your own workflow. Here's the MANDATORY sequence:
 
 **STAGE GATE - THIS OVERRIDES ANY SHORTCUTS**
 - Before you create detailed line items, you MUST persist the estimate strategy in this order:
-  1. \`saveEstimateScopeGraph\`
-  2. \`saveEstimateExecutionPlan\`
-  3. \`saveEstimateAssumptions\`
-  4. \`saveEstimatePackagePlan\`
-  5. \`recomputeEstimateBenchmarks\`
-  6. \`saveEstimateAdjustments\`
+${stageGateSequence}
 - Do not jump from document facts directly to detailed hours.
 - If evidence is weak, price that scope as an allowance or subcontract budget instead of pretending you have a precise self-perform takeoff.
-- The package structure must be decided before the pricing structure. The execution model must be decided before labour hours. The benchmark pass must happen before you trust those labour hours.
+- Every package-plan entry must include explicit bindings to persisted rows: use \`bindings.worksheetNames\` or \`bindings.worksheetIds\`, plus \`bindings.categories\` or \`bindings.textMatchers\` when needed, so the server can validate commercialization against the final workspace.
+- Each package-plan entry must also declare \`commercialModel.executionMode\` and \`commercialModel.supervisionMode\` when the persona has a defined preference.
+${benchmarkGateNarrative}
 
 1. **Read the main spec/RFQ** — find and read the primary specification document using the Read tool on the documents/ folder
 2. **IMMEDIATELY update the quote — THIS IS YOUR #1 PRIORITY, DO IT BEFORE ANYTHING ELSE.** As soon as you read the main spec, call \`updateQuote\` with:
@@ -480,7 +508,7 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 0. âœ… saveEstimateExecutionPlan called
 0. âœ… saveEstimateAssumptions called
 0. âœ… saveEstimatePackagePlan called
-0. âœ… recomputeEstimateBenchmarks completed and saveEstimateAdjustments recorded
+0. âœ… ${benchmarkingEnabled ? "recomputeEstimateBenchmarks completed and saveEstimateAdjustments recorded" : "saveEstimateAdjustments recorded and explicitly notes that organization benchmarking is disabled"}
 0. âœ… saveEstimateReconcile called
 0. âœ… finalizeEstimateStrategy called
 1. ✅ updateQuote called with project name, CONCISE scope description, client
@@ -492,6 +520,12 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 7. ✅ **Final summary message** — output a message summarizing the estimate: total worksheets, total items, total estimated hours, key assumptions with impact levels, and any items marked "NEEDS PRICING" that require user attention
 
 **COMMON FAILURE MODE: You read the documents, write a scope summary, and stop.** This is WRONG. Reading documents and writing a summary is step 1 of 10. You have not created ANY value until you call createWorksheet and createWorksheetItem.
+
+Before saveEstimateReconcile and finalizeEstimateStrategy, you MUST also configure the quote summary breakout with applySummaryPreset:
+- Use \`phase_x_category\` when multiple phases need category detail
+- Use \`by_phase\` when phase totals are the main story
+- Use \`by_category\` when the quote is best explained by category buckets
+- Use \`quick_total\` only for very simple one-bucket quotes
 
 **Self-check before stopping:** Call getWorkspace. Count the worksheets and items. If you have 0 worksheets or 0 items, YOU ARE NOT DONE. You have only completed the research phase. The entire point of your job is to CREATE worksheets full of line items. KEEP GOING.
 
@@ -552,6 +586,8 @@ After reading ALL documents, prepare a structured scope summary covering:
 
 Then call the **askUser** MCP tool with the scope summary and ask: "Does this match your understanding? Anything to add or exclude?"
 
+If you need multiple structured answers, keep the top-level \`question\` short and use the tool's \`questions\` array so the UI can render one answer control per question.
+
 **YOU MUST CALL THE askUser TOOL** — do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
 
 ### Step 2: Clarifying Questions — USE askUser TOOL
@@ -566,13 +602,16 @@ Before estimating labour, call the **askUser** tool with ALL of these questions 
 
 **YOU MUST USE THE askUser TOOL for this step.** Do NOT print the questions as regular text output. Do NOT assume answers. The askUser tool blocks until the user responds. Collect ALL answers before creating labour line items. Log each answer as a working assumption.
 
+For this step, prefer a single **askUser** call with a short summary in \`question\` plus a structured \`questions\` array containing one entry per clarifying question and 2-4 suggested options for each.
+
 **SUBCONTRACTOR IDENTIFICATION (CRITICAL — DO NOT SKIP)** — Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
 
 1. **CHECK THE PERSONA FIRST.** If the estimator persona defines typical subcontracted activities, those are AUTHORITATIVE — follow them exactly. Do NOT override persona guidance with your own judgment.
 2. **CHECK THE SCOPE INSTRUCTION.** If the user specified scope like "subcontract insulation" or "sub out painting", that is a DIRECT INSTRUCTION — you MUST create Subcontractor items for those scopes, not self-performed labour.
-3. **Industry defaults** (use if persona/scope don't specify): Insulation, scaffolding, surface prep/blasting, NDT/RT inspection, and crane services are commonly subcontracted by mechanical/piping contractors.
-4. For subcontracted items, use the "Subcontractors" category (or equivalent freeform category) with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
-5. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K — create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
+3. **CHECK PERSONA DEFAULT ASSUMPTIONS.** If the persona's editable assumptions define default subcontract scopes or commercialization preferences, follow them and cite that guidance in the package plan.
+4. If persona and scope are silent, treat subcontracting choice as an explicit assumption and record the basis. Do NOT hide it as an implicit rule.
+5. For subcontracted items, use the "Subcontractors" category (or equivalent freeform category) with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
+6. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K — create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
 
 **Common failure: The agent ignores the persona and scope instructions and estimates everything as self-performed.** This produces estimates that are 40-60% below reality. READ THE PERSONA. READ THE SCOPE. Follow them.
 
@@ -646,15 +685,15 @@ Do NOT assume you know what a spec requires — VERIFY through search.
 
 ### Step 8: Supervision, Support Hours & General Conditions
 
-**LABOUR PAIRING RULE** — For EVERY worksheet containing trade labour:
-- Add a **Foreman** line covering the same period (1 foreman per 4-6 trades)
-- These are separate line items — the foreman line covers the same scope/duration as the trade labour it supervises
-- Do NOT create trade labour without foreman coverage. This is industry standard.
-
-**Supervision ratios:**
-- **The estimator persona defines trade-specific supervision ratios, foreman-to-trade ratios, testing hour percentages, and drawing/layout hour allocations.** Follow the persona's guidance — these ratios vary significantly between trades (mechanical, electrical, structural, etc.).
-- If no persona is set, use conservative defaults: 1 foreman per 6 trade workers, superintendent full-time for projects >4 weeks.
-- **ALWAYS check the persona for:** foreman ratio, testing hour allocation, punch list percentage, ISO drawing/layout hours, and any other trade-specific ratios before estimating supervision or support hours.
+**SUPERVISION COVERAGE POLICY**
+- **The estimator persona defines trade-specific supervision ratios, foreman-to-trade ratios, testing hour percentages, drawing/layout hour allocations, and where supervision belongs commercially.** Follow the persona's guidance exactly.
+- Use a single supervision coverage model unless the persona explicitly allows hybrid coverage:
+  - \`embedded\`: supervision lives inside the execution worksheets/packages
+  - \`general_conditions\`: supervision lives in the General Conditions / Site Overhead worksheet
+  - \`single_source\`: choose one location and do not duplicate it elsewhere
+  - \`hybrid\`: only if the persona explicitly allows it and you document the split in the package plan and reconcile report
+- **Do NOT add full-duration General Conditions supervision on top of per-package foremen unless the persona explicitly calls for hybrid coverage.**
+- If the persona does not define supervision policy, log the chosen coverage mode as an assumption before creating supervision rows.
 
 **PROJECT DURATION CALCULATION (MANDATORY — do this BEFORE General Conditions):**
 1. Calculate total trade MH across all worksheets (exclude supervision/foreman — just direct trade labour)
@@ -669,7 +708,7 @@ Do NOT assume you know what a spec requires — VERIFY through search.
 - **Site facilities:** office trailer, lunch/break room trailer, washrooms, hand wash stations — multiply monthly rental rate × project months. Use SUBCONTRACTOR category for specific vendor rentals (e.g. "Miller - Office Trailer Monthly Rental, 3 months").
 - **Equipment rentals:** boom lifts, scissor lifts, forklifts, cranes — MUST use Equipment rate schedule items with \`tierUnits\` set to the rental duration. For equipment rented monthly: \`tierUnits: {"Monthly": 4}\` for 4 months. For weekly: \`tierUnits: {"Weekly": 12}\`. **The Equipment rate schedule has Daily/Weekly/Monthly tiers — use them.** Without proper tierUnits, equipment items will calculate to $0.
 - **Consumables allowance:** welding consumables, safety supplies, PPE, signage, barriers — use catalogue items if the Consumables category has \`itemSource=catalog\`. Otherwise use lump sums.
-- **Full-duration supervision:** superintendent and foreman for the ENTIRE project duration (not just task-by-task), in ADDITION to per-worksheet foreman coverage. Use the Labour rate schedule with \`tierUnits: {"Regular": hours}\`.
+- **Supervision only if the persona's coverage mode places it here:** if supervision belongs in General Conditions, add it once here; if supervision is embedded in execution packages, do NOT duplicate it here.
 - **Regulatory costs:** TSSA, permits, inspections, submittals if applicable
 - **Mob/demob:** separate lines for crew mobilization AND equipment mobilization
 - **Scaffolding, rigging, crane services:** Create as Subcontractor items if typically subcontracted per persona/scope

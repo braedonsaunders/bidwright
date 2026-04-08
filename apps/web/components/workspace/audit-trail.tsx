@@ -68,6 +68,36 @@ const ACTIVITY_TYPE_CONFIG: Record<string, ActivityTypeConfig> = {
     tone: "info",
     category: "Revision",
   },
+  quote_updated: {
+    icon: FileEdit,
+    label: (d) => {
+      const fields = Array.isArray(d.fields) ? d.fields : [];
+      return `Updated quote details${fields.length > 0 ? ` (${fields.slice(0, 3).join(", ")}${fields.length > 3 ? `, +${fields.length - 3} more` : ""})` : ""}`;
+    },
+    tone: "info",
+    category: "Quote",
+  },
+  worksheet_created: {
+    icon: FolderPlus,
+    label: (d) => `Created worksheet ${bold(d.name ?? d.worksheetName)}`,
+    tone: "success",
+    category: "Worksheets",
+  },
+  worksheet_updated: {
+    icon: FolderPlus,
+    label: (d) => {
+      const n = Array.isArray(d.patch) ? d.patch.length : 0;
+      return `Updated worksheet ${bold(d.name ?? d.worksheetName)}${n > 0 ? ` (${fieldWord(n)})` : ""}`;
+    },
+    tone: "info",
+    category: "Worksheets",
+  },
+  worksheet_deleted: {
+    icon: FolderMinus,
+    label: (d) => `Deleted worksheet ${bold(d.name ?? d.worksheetName)}`,
+    tone: "danger",
+    category: "Worksheets",
+  },
   phase_created: {
     icon: FolderPlus,
     label: (d) => `Created phase ${bold(d.name)}`,

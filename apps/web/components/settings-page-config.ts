@@ -59,6 +59,12 @@ export interface DefaultSettings {
   defaultMarkup: number;
   defaultBreakoutStyle: string;
   defaultQuoteType: string;
+  benchmarkingEnabled: boolean;
+  benchmarkMinimumSimilarity: number;
+  benchmarkMaximumComparables: number;
+  benchmarkLowerHoursRatio: number;
+  benchmarkUpperHoursRatio: number;
+  requireHumanReviewForBenchmarkOutliers: boolean;
 }
 
 export interface UserRecord {
@@ -133,6 +139,12 @@ export const DEFAULT_SETTINGS: AllSettings = {
     defaultMarkup: 15,
     defaultBreakoutStyle: "category",
     defaultQuoteType: "Firm",
+    benchmarkingEnabled: true,
+    benchmarkMinimumSimilarity: 0.55,
+    benchmarkMaximumComparables: 5,
+    benchmarkLowerHoursRatio: 0.75,
+    benchmarkUpperHoursRatio: 1.25,
+    requireHumanReviewForBenchmarkOutliers: true,
   },
   users: [
     {

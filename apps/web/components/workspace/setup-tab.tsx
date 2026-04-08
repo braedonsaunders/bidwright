@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition, useRef, useCallback } from "react";
+import { useEffect, useState, useTransition, useRef, useCallback, useMemo } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -364,6 +364,33 @@ function GeneralSubTab({
     }
   }, [customerId]);
 
+  useEffect(() => {
+    setCustomerId(quote.customerId ?? "");
+    setCustomerContactId(quote.customerContactId ?? "");
+    setDepartmentId(quote.departmentId ?? "");
+    setQuoteType(rev.type ?? "Firm");
+    setDateQuote(toDateInput(rev.dateQuote));
+    setDateDue(toDateInput(rev.dateDue));
+  }, [
+    quote.customerId,
+    quote.customerContactId,
+    quote.departmentId,
+    rev.type,
+    rev.dateQuote,
+    rev.dateDue,
+  ]);
+
+  const selectedCustomer = useMemo(
+    () => customerOptions.find((c) => c.id === customerId) ?? null,
+    [customerId, customerOptions],
+  );
+  const sourceClientLabel = (quote.customerString || workspace.project.clientName || "").trim();
+  const showClientAliasNote = Boolean(
+    selectedCustomer
+    && sourceClientLabel
+    && sourceClientLabel !== selectedCustomer.name,
+  );
+
   // Refs for latest state values used by auto-save
   const stateRef = useRef({ customerId, customerContactId, departmentId, quoteType, dateQuote, dateDue });
   stateRef.current = { customerId, customerContactId, departmentId, quoteType, dateQuote, dateDue };
@@ -498,6 +525,11 @@ function GeneralSubTab({
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>
+              )}
+              {showClientAliasNote && (
+                <p className="mt-1 text-[11px] text-fg/40">
+                  Linked customer: {selectedCustomer?.name}. Source/import label on this quote: {sourceClientLabel}.
+                </p>
               )}
             </div>
             <div>

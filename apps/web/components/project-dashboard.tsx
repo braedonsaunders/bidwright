@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowRight, TrendingUp } from "lucide-react";
 import type { AiRun, CatalogSummary, ProjectListItem } from "@/lib/api";
 import { formatCompactMoney, formatDateTime, formatMoney, formatPercent } from "@/lib/format";
+import { getClientDisplayName } from "@/lib/client-display";
 import { AIReviewQueue } from "@/components/ai-review-queue";
 import { Badge, Button, Card, CardBody, CardHeader, CardTitle, EmptyState, FadeIn, Progress } from "@/components/ui";
 
@@ -76,7 +77,7 @@ export function ProjectDashboard({
                         <Badge tone={statusTone(project.ingestionStatus)}>{project.ingestionStatus}</Badge>
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs text-fg/40">
-                        <span>{project.clientName}</span>
+                        <span>{getClientDisplayName(project, project.quote)}</span>
                         <span>·</span>
                         <span>{project.location}</span>
                         <span>·</span>

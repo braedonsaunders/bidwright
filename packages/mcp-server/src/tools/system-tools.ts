@@ -11,17 +11,25 @@ const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
 const ASK_USER_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function registerSystemTools(server: McpServer) {
+  const askUserQuestionSchema = z.object({
+    id: z.string().optional().describe("Stable identifier for this question"),
+    prompt: z.string().describe("Question shown to the user"),
+    options: z.array(z.string()).optional().describe("2-4 suggested answer choices"),
+    placeholder: z.string().optional().describe("Optional textbox placeholder for extra detail"),
+    context: z.string().optional().describe("Optional short context for this individual question"),
+  });
 
   // ── askUser — block until the user responds ──────────────
   server.tool(
     "askUser",
     "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
     {
-      question: z.string().describe("The question to ask. Bundle multiple related questions into one call."),
+      question: z.string().describe("Short overall prompt or summary for this ask. If using `questions`, keep this concise."),
       options: z.array(z.string()).optional().describe("Optional suggested answer choices the user can click"),
       context: z.string().optional().describe("Brief context explaining why you need this information"),
+      questions: z.array(askUserQuestionSchema).optional().describe("Optional structured list of related questions. Prefer this when asking more than one thing at a time."),
     },
-    async ({ question, options, context }) => {
+    async ({ question, options, context, questions }) => {
       const projectId = process.env.BIDWRIGHT_PROJECT_ID || "";
       if (!projectId) {
         return { content: [{ type: "text" as const, text: "Error: No project ID configured" }] };
@@ -35,7 +43,7 @@ export function registerSystemTools(server: McpServer) {
             "Content-Type": "application/json",
             ...(process.env.BIDWRIGHT_AUTH_TOKEN ? { "Authorization": `Bearer ${process.env.BIDWRIGHT_AUTH_TOKEN}` } : {}),
           },
-          body: JSON.stringify({ question, options, context }),
+          body: JSON.stringify({ question, options, context, questions }),
           signal: AbortSignal.timeout(ASK_USER_TIMEOUT_MS),
         });
 

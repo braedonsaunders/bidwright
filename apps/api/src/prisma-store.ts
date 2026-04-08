@@ -150,6 +150,15 @@ import type { IngestionJobRecord, StoredPackageRecord, WorkspaceStateRecord } fr
 
 const NON_REVERTIBLE_ACTIVITY_TYPES = new Set([
   "quote_sent", "ai_phases_accepted", "ai_equipment_accepted",
+  "quote_updated", "worksheet_created", "worksheet_updated", "worksheet_deleted",
+]);
+
+const DIRECT_COST_ESTIMATE_CATEGORIES = new Set([
+  "Material",
+  "Materials",
+  "Rental Equipment",
+  "Travel & Per Diem",
+  "Subcontractors",
 ]);
 
 function isActivityRevertible(activity: { type: string; data: any }): boolean {
@@ -686,6 +695,22 @@ function relativePackageDocumentArtifact(packageId: string, documentId: string, 
   return relativePackageDocumentPath(packageId, documentId, title);
 }
 
+function normalizeStoredSourcePath(value: string | undefined, fallbackFileName: string) {
+  const safeSegments = (value ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((segment) => segment && segment !== "." && segment !== "..")
+    .map((segment) => sanitizeFileName(segment))
+    .filter(Boolean);
+
+  if (safeSegments.length > 0) {
+    return safeSegments.join("/");
+  }
+
+  return sanitizeFileName(fallbackFileName);
+}
+
 async function ensureParentDir(filePath: string) {
   await mkdir(path.dirname(filePath), { recursive: true });
 }
@@ -717,8 +742,12 @@ async function sha256File(filePath: string) {
 export class PrismaApiStore {
   private importCache = new Map<string, { headers: string[]; rows: string[][] }>();
   private _userId: string | null = null;
+  private _activityActor: { id: string; name: string; type: "user" | "super_admin" | "ai" | "system" } | null = null;
 
   setUserId(id: string) { this._userId = id; }
+  setActivityActor(actor: { id: string; name: string; type: "user" | "super_admin" | "ai" | "system" } | null) {
+    this._activityActor = actor;
+  }
 
   constructor(
     private readonly db: PrismaClient,
@@ -744,7 +773,10 @@ export class PrismaApiStore {
     });
     if (!project) throw new Error(`Project ${projectId} not found`);
 
-    const quotes = await this.db.quote.findMany({ where: { projectId } });
+    const quotes = await this.db.quote.findMany({
+      where: { projectId },
+      include: { customer: true },
+    });
     const quoteIds = quotes.map((q) => q.id);
     const revisions = await this.db.quoteRevision.findMany({ where: { quoteId: { in: quoteIds } } });
     const revisionIds = revisions.map((r) => r.id);
@@ -912,15 +944,49 @@ export class PrismaApiStore {
     return order[nextStage] > order[current] ? nextStage : current;
   }
 
-  private categoryShareMetrics(items: Array<{ category?: string | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
+  private normalizeEstimateCategory(value: string | null | undefined) {
+    if (!value) return "Uncategorized";
+    const trimmed = value.trim();
+    if (!trimmed) return "Uncategorized";
+    return trimmed === "Materials" ? "Material" : trimmed;
+  }
+
+  private estimateItemExtendedHours(item: {
+    category?: string | null;
+    quantity?: number | null;
+    unit1?: number | null;
+    unit2?: number | null;
+    unit3?: number | null;
+  }) {
+    const category = this.normalizeEstimateCategory(item.category);
+    if (category !== "Labour") {
+      return 0;
+    }
+
+    const quantity = Number(item.quantity ?? 1);
+    return quantity * (Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0));
+  }
+
+  private estimateItemExtendedCost(item: {
+    category?: string | null;
+    quantity?: number | null;
+    cost?: number | null;
+  }) {
+    const category = this.normalizeEstimateCategory(item.category);
+    const quantity = Number(item.quantity ?? 1);
+    const cost = Number(item.cost ?? 0);
+    return DIRECT_COST_ESTIMATE_CATEGORIES.has(category) ? quantity * cost : cost;
+  }
+
+  private categoryShareMetrics(items: Array<{ category?: string | null; quantity?: number | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
     const totalsByCategory = new Map<string, { value: number; hours: number }>();
     let totalValue = 0;
     let totalHours = 0;
 
     for (const item of items) {
-      const category = (item.category || "Uncategorized").trim() || "Uncategorized";
+      const category = this.normalizeEstimateCategory(item.category);
       const value = Number(item.price ?? 0);
-      const hours = Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0);
+      const hours = this.estimateItemExtendedHours(item);
       totalValue += value;
       totalHours += hours;
       const existing = totalsByCategory.get(category) ?? { value: 0, hours: 0 };
@@ -943,28 +1009,16 @@ export class PrismaApiStore {
     workspace: ProjectWorkspace,
     strategy?: { benchmarkProfile?: unknown } | null,
   ): Record<string, unknown> {
-    const quantityAdjustedItems = (workspace.worksheets ?? []).flatMap((worksheet) =>
-      (worksheet.items ?? []).map((item) => {
-        const quantity = Number(item.quantity ?? 1);
-        return {
-          category: item.category,
-          price: Number(item.price ?? 0) * quantity,
-          unit1: Number(item.unit1 ?? 0) * quantity,
-          unit2: Number(item.unit2 ?? 0) * quantity,
-          unit3: Number(item.unit3 ?? 0) * quantity,
-        };
-      }),
-    );
-    const shares = this.categoryShareMetrics(quantityAdjustedItems);
+    const lineItems = (workspace.worksheets ?? []).flatMap((worksheet) => worksheet.items ?? []);
+    const shares = this.categoryShareMetrics(lineItems);
 
     const worksheetTotals = Object.fromEntries(
       (workspace.worksheets ?? []).map((worksheet) => {
         const totals = (worksheet.items ?? []).reduce((acc, item) => {
-          const quantity = Number(item.quantity ?? 1);
           acc.lineItemCount += 1;
-          acc.extendedHours += quantity * (Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0));
-          acc.extendedCost += quantity * Number(item.cost ?? 0);
-          acc.extendedPrice += quantity * Number(item.price ?? 0);
+          acc.extendedHours += this.estimateItemExtendedHours(item);
+          acc.extendedCost += this.estimateItemExtendedCost(item);
+          acc.extendedPrice += Number(item.price ?? 0);
           return acc;
         }, {
           lineItemCount: 0,
@@ -992,6 +1046,520 @@ export class PrismaApiStore {
       categoryHourShare: shares.hourShare,
       benchmarkProfile: strategy && typeof strategy.benchmarkProfile === "object" ? strategy.benchmarkProfile : {},
       capturedAt: new Date().toISOString(),
+    };
+  }
+
+  private buildEstimateComputedSummary(
+    workspace: ProjectWorkspace,
+    strategy?: { benchmarkProfile?: unknown } | null,
+  ): Record<string, unknown> {
+    const items = (workspace.worksheets ?? []).flatMap((worksheet) => worksheet.items ?? []);
+    const categoryTotals = new Map<string, { lineItemCount: number; hours: number; cost: number; price: number }>();
+
+    for (const item of items) {
+      const category = this.normalizeEstimateCategory(item.category);
+      const existing = categoryTotals.get(category) ?? { lineItemCount: 0, hours: 0, cost: 0, price: 0 };
+      existing.lineItemCount += 1;
+      existing.hours += this.estimateItemExtendedHours(item);
+      existing.cost += this.estimateItemExtendedCost(item);
+      existing.price += Number(item.price ?? 0);
+      categoryTotals.set(category, existing);
+    }
+
+    const pickCategory = (names: string[]) =>
+      names.reduce((acc, name) => {
+        const totals = categoryTotals.get(name);
+        if (!totals) return acc;
+        acc.lineItemCount += totals.lineItemCount;
+        acc.hours += totals.hours;
+        acc.cost += totals.cost;
+        acc.price += totals.price;
+        return acc;
+      }, { lineItemCount: 0, hours: 0, cost: 0, price: 0 });
+
+    const categoryBreakdown = Object.fromEntries(
+      Array.from(categoryTotals.entries())
+        .sort((left, right) => left[0].localeCompare(right[0]))
+        .map(([category, totals]) => [category, {
+          lineItemCount: totals.lineItemCount,
+          hours: Number(totals.hours.toFixed(2)),
+          cost: Number(totals.cost.toFixed(2)),
+          price: Number(totals.price.toFixed(2)),
+        }]),
+    );
+
+    const zeroPricedItems = items.filter((item) => Number(item.price ?? 0) === 0 && this.estimateItemExtendedCost(item) === 0);
+    const duplicateGroups = new Map<string, number>();
+    for (const item of items) {
+      const entity = String(item.entityName ?? "").trim().toLowerCase();
+      const description = String(item.description ?? "").trim().toLowerCase();
+      if (!entity && !description) continue;
+      const signature = `${this.normalizeEstimateCategory(item.category)}|${entity}|${description}`;
+      duplicateGroups.set(signature, (duplicateGroups.get(signature) ?? 0) + 1);
+    }
+    const duplicateEntries = Array.from(duplicateGroups.values()).filter((count) => count > 1);
+
+    const labour = pickCategory(["Labour"]);
+    const material = pickCategory(["Material"]);
+    const equipment = pickCategory(["Equipment", "Rental Equipment"]);
+    const subcontractor = pickCategory(["Subcontractors"]);
+    const allowance = Array.from(categoryTotals.entries())
+      .filter(([category]) => /allowance|contingency/i.test(category))
+      .reduce((acc, [, totals]) => {
+        acc.lineItemCount += totals.lineItemCount;
+        acc.hours += totals.hours;
+        acc.cost += totals.cost;
+        acc.price += totals.price;
+        return acc;
+      }, { lineItemCount: 0, hours: 0, cost: 0, price: 0 });
+
+    return {
+      totalHours: Number(workspace.currentRevision.totalHours ?? workspace.estimate.totals.totalHours ?? 0),
+      subtotal: Number(workspace.currentRevision.subtotal ?? workspace.estimate.totals.subtotal ?? 0),
+      worksheetCount: workspace.worksheets.length,
+      lineItemCount: workspace.estimate.lineItems.length,
+      totalLabourMH: Number(labour.hours.toFixed(2)),
+      labourPrice: Number(labour.price.toFixed(2)),
+      labourCost: Number(labour.cost.toFixed(2)),
+      materialPrice: Number(material.price.toFixed(2)),
+      materialCost: Number(material.cost.toFixed(2)),
+      equipmentPrice: Number(equipment.price.toFixed(2)),
+      equipmentCost: Number(equipment.cost.toFixed(2)),
+      subcontractorPrice: Number(subcontractor.price.toFixed(2)),
+      subcontractorCost: Number(subcontractor.cost.toFixed(2)),
+      allowancePrice: Number(allowance.price.toFixed(2)),
+      allowanceCost: Number(allowance.cost.toFixed(2)),
+      zeroPriceItemCount: zeroPricedItems.length,
+      duplicateGroupCount: duplicateEntries.length,
+      duplicateItemCount: duplicateEntries.reduce((sum, count) => sum + count, 0),
+      categoryBreakdown,
+      benchmarkProfile: strategy && typeof strategy.benchmarkProfile === "object" ? strategy.benchmarkProfile : {},
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  private asEstimateObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private asEstimateStringArray(value: unknown): string[] {
+    return Array.isArray(value)
+      ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+      : [];
+  }
+
+  private estimateSizeBucket(totalHours: number) {
+    if (totalHours < 400) return "small";
+    if (totalHours < 2000) return "medium";
+    return "large";
+  }
+
+  private derivePackageCommercialProfile(packagePlanValue: unknown) {
+    const counts = {
+      detailed: 0,
+      allowance: 0,
+      subcontract: 0,
+      historical_allowance: 0,
+    };
+
+    const packagePlan = Array.isArray(packagePlanValue)
+      ? packagePlanValue.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+
+    for (const entry of packagePlan) {
+      const pricingMode = String(entry.pricingMode ?? "");
+      if (pricingMode in counts) {
+        counts[pricingMode as keyof typeof counts] += 1;
+      }
+    }
+
+    const packageCount = Object.values(counts).reduce((sum, count) => sum + count, 0);
+    let commercialModel = "unspecified";
+    if (packageCount > 0) {
+      if (counts.subcontract / packageCount >= 0.6) {
+        commercialModel = "subcontract_led";
+      } else if ((counts.allowance + counts.historical_allowance) / packageCount >= 0.6) {
+        commercialModel = "allowance_led";
+      } else if (counts.detailed / packageCount >= 0.6) {
+        commercialModel = "self_perform_detailed";
+      } else {
+        commercialModel = "mixed";
+      }
+    }
+
+    return {
+      packageCount,
+      pricingModeCounts: counts,
+      commercialModel,
+    };
+  }
+
+  private validatePackagePlanAgainstWorkspace(packagePlanValue: unknown, workspace: ProjectWorkspace) {
+    const issues: Array<Record<string, unknown>> = [];
+    const packagePlan = Array.isArray(packagePlanValue)
+      ? packagePlanValue.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    const itemPackageAssignments = new Map<string, string[]>();
+    const directExecutionCategories = new Set([
+      "Labour",
+      "Material",
+      "Equipment",
+      "Rental Equipment",
+      "Travel & Per Diem",
+    ]);
+
+    const worksheetRows = (workspace.worksheets ?? []).flatMap((worksheet) =>
+      (worksheet.items ?? []).map((item) => ({ worksheet, item })),
+    );
+
+    for (const entry of packagePlan) {
+      const packageId = String(entry.id ?? "");
+      const packageName = String(entry.name ?? (packageId || "Unnamed package")).trim();
+      const pricingMode = String(entry.pricingMode ?? "");
+      const bindings = this.asEstimateObject(entry.bindings);
+      const fallbackBindings = Object.keys(bindings).length > 0 ? bindings : this.asEstimateObject(entry.binding);
+      const worksheetIds = this.asEstimateStringArray(fallbackBindings.worksheetIds);
+      const worksheetNames = this.asEstimateStringArray(fallbackBindings.worksheetNames).map((value) => value.toLowerCase());
+      const categories = this.asEstimateStringArray(fallbackBindings.categories ?? fallbackBindings.categoryTargets)
+        .map((value) => this.normalizeEstimateCategory(value));
+      const textMatchers = this.asEstimateStringArray(fallbackBindings.textMatchers ?? fallbackBindings.descriptionMatchers ?? fallbackBindings.itemMatchers)
+        .map((value) => value.toLowerCase());
+      const hasBindings = worksheetIds.length > 0 || worksheetNames.length > 0 || categories.length > 0 || textMatchers.length > 0;
+
+      if (!hasBindings) {
+        issues.push({
+          code: "package_binding_missing",
+          packageId,
+          packageName,
+          message: "Package plan entries must bind to worksheets, categories, or text matchers so commercialization can be validated.",
+        });
+        continue;
+      }
+
+      const matchedItems = worksheetRows
+        .filter(({ worksheet, item }) => {
+          const normalizedWorksheetName = String(worksheet.name ?? "").trim().toLowerCase();
+          const textHaystack = `${worksheet.name ?? ""} ${item.entityName ?? ""} ${item.description ?? ""} ${item.vendor ?? ""}`.toLowerCase();
+          const worksheetIdMatch = worksheetIds.length === 0 || worksheetIds.includes(worksheet.id);
+          const worksheetNameMatch = worksheetNames.length === 0 || worksheetNames.some((target) =>
+            normalizedWorksheetName === target || normalizedWorksheetName.includes(target) || target.includes(normalizedWorksheetName),
+          );
+          const categoryMatch = categories.length === 0 || categories.includes(this.normalizeEstimateCategory(item.category));
+          const textMatch = textMatchers.length === 0 || textMatchers.some((matcher) => textHaystack.includes(matcher));
+          return worksheetIdMatch && worksheetNameMatch && categoryMatch && textMatch;
+        })
+        .map(({ item }) => item);
+
+      if (matchedItems.length === 0) {
+        issues.push({
+          code: "package_binding_unresolved",
+          packageId,
+          packageName,
+          pricingMode,
+          message: "Package bindings did not resolve to any worksheet items in the current workspace.",
+        });
+        continue;
+      }
+
+      for (const item of matchedItems) {
+        const assignedPackages = itemPackageAssignments.get(item.id) ?? [];
+        assignedPackages.push(packageId || packageName);
+        itemPackageAssignments.set(item.id, assignedPackages);
+      }
+
+      const labourHours = matchedItems.reduce((sum, item) => sum + this.estimateItemExtendedHours(item), 0);
+      const categoriesPresent = new Set(matchedItems.map((item) => this.normalizeEstimateCategory(item.category)));
+      const hasSubcontractorLine = categoriesPresent.has("Subcontractors");
+      const hasAllowanceLine = Array.from(categoriesPresent).some((category) => /allowance|contingency/i.test(category));
+      const hasDetailedExecutionLine = Array.from(categoriesPresent).some((category) => directExecutionCategories.has(category)) || labourHours > 0;
+
+      if (pricingMode === "subcontract") {
+        if (labourHours > 0) {
+          issues.push({
+            code: "package_mode_conflict",
+            packageId,
+            packageName,
+            pricingMode,
+            labourHours: Number(labourHours.toFixed(2)),
+            message: "Subcontract packages cannot carry detailed labour hours in persisted worksheet rows.",
+          });
+        }
+        if (!hasSubcontractorLine) {
+          issues.push({
+            code: "package_mode_conflict",
+            packageId,
+            packageName,
+            pricingMode,
+            message: "Subcontract packages must resolve to subcontractor-priced worksheet rows.",
+          });
+        }
+      } else if (pricingMode === "allowance" || pricingMode === "historical_allowance") {
+        if (labourHours > 0) {
+          issues.push({
+            code: "package_mode_conflict",
+            packageId,
+            packageName,
+            pricingMode,
+            labourHours: Number(labourHours.toFixed(2)),
+            message: "Allowance packages cannot carry detailed labour hours in persisted worksheet rows.",
+          });
+        }
+        if (!hasAllowanceLine && !hasSubcontractorLine) {
+          issues.push({
+            code: "package_mode_conflict",
+            packageId,
+            packageName,
+            pricingMode,
+            message: "Allowance packages must resolve to allowance-style or subcontract-style worksheet rows, not detailed execution rows.",
+          });
+        }
+      } else if (pricingMode === "detailed" && !hasDetailedExecutionLine) {
+        issues.push({
+          code: "package_mode_conflict",
+          packageId,
+          packageName,
+          pricingMode,
+          message: "Detailed packages must resolve to persisted execution rows, not only lump-sum allowance or subcontract rows.",
+        });
+      }
+    }
+
+    for (const [itemId, packageIds] of itemPackageAssignments.entries()) {
+      const uniquePackageIds = Array.from(new Set(packageIds));
+      if (uniquePackageIds.length > 1) {
+        issues.push({
+          code: "package_binding_overlap",
+          itemId,
+          packageIds: uniquePackageIds,
+          message: "A worksheet item is governed by multiple package-plan bindings. Package ownership must be exclusive.",
+        });
+      }
+    }
+
+    return issues;
+  }
+
+  private resolveSupervisionCoverageMode(
+    productivityGuidanceValue: unknown,
+    commercialGuidanceValue: unknown,
+  ): "single_source" | "embedded" | "general_conditions" | "hybrid" {
+    const productivityGuidance = this.asEstimateObject(productivityGuidanceValue);
+    const commercialGuidance = this.asEstimateObject(commercialGuidanceValue);
+    const supervisionSources = [
+      this.asEstimateObject(productivityGuidance.supervision).coverageMode,
+      productivityGuidance.supervisionMode,
+      this.asEstimateObject(commercialGuidance.supervision).coverageMode,
+      commercialGuidance.supervisionMode,
+    ];
+
+    for (const source of supervisionSources) {
+      const normalized = String(source ?? "").trim().toLowerCase();
+      if (normalized === "embedded" || normalized === "general_conditions" || normalized === "hybrid" || normalized === "single_source") {
+        return normalized as "single_source" | "embedded" | "general_conditions" | "hybrid";
+      }
+    }
+
+    return "single_source";
+  }
+
+  private validateSupervisionCoverage(
+    workspace: ProjectWorkspace,
+    coverageMode: "single_source" | "embedded" | "general_conditions" | "hybrid",
+  ) {
+    const issues: Array<Record<string, unknown>> = [];
+    const supervisionPattern = /(foreman|superintendent|supervision|supervisor|general foreman|lead hand|leadman)/i;
+    const overheadWorksheetPattern = /(general conditions|site overhead|overhead|site services|general condition)/i;
+    const gcSupervisionItems: Array<{ worksheet: string; itemId: string }> = [];
+    const embeddedSupervisionItems: Array<{ worksheet: string; itemId: string }> = [];
+
+    for (const worksheet of workspace.worksheets ?? []) {
+      for (const item of worksheet.items ?? []) {
+        if (this.normalizeEstimateCategory(item.category) !== "Labour") continue;
+        const text = `${item.entityName ?? ""} ${item.description ?? ""}`;
+        if (!supervisionPattern.test(text)) continue;
+        if (overheadWorksheetPattern.test(String(worksheet.name ?? ""))) {
+          gcSupervisionItems.push({ worksheet: worksheet.name, itemId: item.id });
+        } else {
+          embeddedSupervisionItems.push({ worksheet: worksheet.name, itemId: item.id });
+        }
+      }
+    }
+
+    if (coverageMode === "embedded" && gcSupervisionItems.length > 0) {
+      issues.push({
+        code: "supervision_coverage_conflict",
+        coverageMode,
+        gcSupervisionItemCount: gcSupervisionItems.length,
+        message: "Persona guidance says supervision should be embedded in execution packages, but General Conditions labour supervision rows were persisted.",
+      });
+    }
+
+    if (coverageMode === "general_conditions" && embeddedSupervisionItems.length > 0) {
+      issues.push({
+        code: "supervision_coverage_conflict",
+        coverageMode,
+        embeddedSupervisionItemCount: embeddedSupervisionItems.length,
+        message: "Persona guidance says supervision should be carried in General Conditions, but package-level supervision rows were persisted.",
+      });
+    }
+
+    if (coverageMode === "single_source" && gcSupervisionItems.length > 0 && embeddedSupervisionItems.length > 0) {
+      issues.push({
+        code: "supervision_coverage_conflict",
+        coverageMode,
+        gcSupervisionItemCount: gcSupervisionItems.length,
+        embeddedSupervisionItemCount: embeddedSupervisionItems.length,
+        message: "Supervision exists in both General Conditions and execution worksheets. Choose one coverage model unless the persona explicitly allows hybrid supervision.",
+      });
+    }
+
+    return issues;
+  }
+
+  private async buildHistoricalCalibrationEnvelope(
+    projectId: string,
+    packagePlanValue: unknown,
+    personaTrade: string | null | undefined,
+    totalHours: number,
+    subtotal: number,
+    estimateDefaults: {
+      benchmarkLowerHoursRatio: number;
+      benchmarkUpperHoursRatio: number;
+    },
+  ) {
+    const currentCommercialProfile = this.derivePackageCommercialProfile(packagePlanValue);
+    const currentTrade = String(personaTrade ?? "unknown").trim().toLowerCase() || "unknown";
+    const currentSizeBucket = this.estimateSizeBucket(totalHours);
+    const feedbackRows = await this.db.estimateCalibrationFeedback.findMany({
+      where: {
+        project: {
+          organizationId: this.organizationId,
+          id: { not: projectId },
+        },
+      },
+      include: {
+        strategy: {
+          select: {
+            personaId: true,
+            packagePlan: true,
+          },
+        },
+        revision: {
+          select: {
+            totalHours: true,
+            subtotal: true,
+          },
+        },
+      },
+    });
+
+    const personaIds = Array.from(new Set(
+      feedbackRows
+        .map((row) => row.strategy?.personaId ?? null)
+        .filter((personaId): personaId is string => Boolean(personaId)),
+    ));
+    const personas = personaIds.length > 0
+      ? await this.db.estimatorPersona.findMany({
+        where: { id: { in: personaIds } },
+        select: { id: true, trade: true },
+      })
+      : [];
+    const personaTradeById = new Map(personas.map((persona) => [persona.id, persona.trade.trim().toLowerCase()]));
+
+    const comparableRows = feedbackRows
+      .map((row) => {
+        const humanSnapshot = this.asEstimateObject(row.humanSnapshot);
+        const humanHours = Number(humanSnapshot.totalHours ?? row.revision.totalHours ?? 0);
+        const humanSubtotal = Number(humanSnapshot.subtotal ?? row.revision.subtotal ?? 0);
+        if (!Number.isFinite(humanHours) || humanHours <= 0 || !Number.isFinite(humanSubtotal) || humanSubtotal <= 0) {
+          return null;
+        }
+
+        const calibration = this.asEstimateObject(humanSnapshot.calibration);
+        const trade = String(
+          calibration.trade ??
+          (row.strategy?.personaId ? personaTradeById.get(row.strategy.personaId) : undefined) ??
+          "unknown",
+        ).trim().toLowerCase() || "unknown";
+        const commercialModel = String(
+          calibration.commercialModel ??
+          this.derivePackageCommercialProfile(row.strategy?.packagePlan).commercialModel,
+        ).trim().toLowerCase() || "unspecified";
+        const sizeBucket = String(calibration.sizeBucket ?? this.estimateSizeBucket(humanHours)).trim().toLowerCase() || "medium";
+
+        return {
+          totalHours: humanHours,
+          subtotal: humanSubtotal,
+          trade,
+          commercialModel,
+          sizeBucket,
+        };
+      })
+      .filter((row): row is {
+        totalHours: number;
+        subtotal: number;
+        trade: string;
+        commercialModel: string;
+        sizeBucket: string;
+      } => row !== null);
+
+    const sameTradeRows = currentTrade === "unknown"
+      ? comparableRows
+      : comparableRows.filter((row) => row.trade === currentTrade);
+    const sameCommercialRows = sameTradeRows.filter((row) => row.commercialModel === currentCommercialProfile.commercialModel);
+    const sameSizeRows = sameCommercialRows.filter((row) => row.sizeBucket === currentSizeBucket);
+
+    const matchedRows =
+      sameSizeRows.length >= 2 ? sameSizeRows
+        : sameCommercialRows.length >= 2 ? sameCommercialRows
+          : sameTradeRows.length >= 2 ? sameTradeRows
+            : [];
+    const matchedBy =
+      matchedRows === sameSizeRows ? "trade+commercial_model+size_bucket"
+        : matchedRows === sameCommercialRows ? "trade+commercial_model"
+          : matchedRows === sameTradeRows ? "trade"
+            : "insufficient_history";
+
+    if (matchedRows.length < 2) {
+      return {
+        trade: currentTrade,
+        commercialModel: currentCommercialProfile.commercialModel,
+        sizeBucket: currentSizeBucket,
+        matchedBy,
+        candidateCount: matchedRows.length,
+        outlier: false,
+      };
+    }
+
+    const median = (values: number[]) => {
+      const ordered = [...values].sort((left, right) => left - right);
+      const mid = Math.floor(ordered.length / 2);
+      return ordered.length % 2 === 0 ? (ordered[mid - 1] + ordered[mid]) / 2 : ordered[mid];
+    };
+
+    const medianHours = median(matchedRows.map((row) => row.totalHours));
+    const medianSubtotal = median(matchedRows.map((row) => row.subtotal));
+    const hoursRatio = medianHours > 0 ? totalHours / medianHours : null;
+    const subtotalRatio = medianSubtotal > 0 ? subtotal / medianSubtotal : null;
+    const outlier =
+      (hoursRatio !== null &&
+        (hoursRatio < estimateDefaults.benchmarkLowerHoursRatio || hoursRatio > estimateDefaults.benchmarkUpperHoursRatio)) ||
+      (subtotalRatio !== null &&
+        (subtotalRatio < estimateDefaults.benchmarkLowerHoursRatio || subtotalRatio > estimateDefaults.benchmarkUpperHoursRatio));
+
+    return {
+      trade: currentTrade,
+      commercialModel: currentCommercialProfile.commercialModel,
+      sizeBucket: currentSizeBucket,
+      matchedBy,
+      candidateCount: matchedRows.length,
+      medianHours: Number(medianHours.toFixed(2)),
+      medianSubtotal: Number(medianSubtotal.toFixed(2)),
+      hoursRatio: hoursRatio !== null ? Number(hoursRatio.toFixed(4)) : null,
+      subtotalRatio: subtotalRatio !== null ? Number(subtotalRatio.toFixed(4)) : null,
+      outlier,
     };
   }
 
@@ -1112,18 +1680,34 @@ export class PrismaApiStore {
     return result;
   }
 
+  private resolveActivityUserId(): string | null {
+    if (this._activityActor?.type === "user") return this._activityActor.id;
+    return this._userId;
+  }
+
+  private withActivityActor(data: Record<string, unknown>): Record<string, unknown> {
+    if (!this._activityActor) return data;
+    return {
+      ...data,
+      actorId: data.actorId ?? this._activityActor.id,
+      actorName: data.actorName ?? this._activityActor.name,
+      actorType: data.actorType ?? this._activityActor.type,
+    };
+  }
+
   // ── Private: push activity ──────────────────────────────────────────────
 
   private async pushActivity(projectId: string, revisionId: string | null, type: string, data: Record<string, unknown>) {
     try {
+      const payload = this.withActivityActor(data);
       await this.db.activity.create({
         data: {
           id: createId("activity"),
           projectId,
           revisionId,
           type,
-          data: data as any,
-          userId: this._userId || null,
+          data: payload as any,
+          userId: this.resolveActivityUserId(),
           createdAt: new Date(),
         },
       });
@@ -1177,8 +1761,8 @@ export class PrismaApiStore {
         for (const document of report.documents) {
           const entry = entryMap.get(document.sourcePath);
           if (!entry || entry.bytes.length === 0) continue;
-          const safeName = sanitizeFileName(path.basename(entry.name));
-          const relPath = path.join("packages", packageId, "originals", document.id, safeName);
+          const safeRelativePath = normalizeStoredSourcePath(entry.path, path.basename(entry.name));
+          const relPath = path.join("packages", packageId, "originals", document.id, ...safeRelativePath.split("/"));
           const absPath = resolveApiPath(relPath);
           await mkdir(path.dirname(absPath), { recursive: true });
           await writeFile(absPath, Buffer.from(entry.bytes));
@@ -1281,7 +1865,10 @@ export class PrismaApiStore {
       this.db.storedPackage.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.ingestionJob.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.workspaceState.findMany({ where: { projectId: { in: projectIds } } }),
-      this.db.quote.findMany({ where: { projectId: { in: projectIds } }, include: { department: true } }),
+      this.db.quote.findMany({
+        where: { projectId: { in: projectIds } },
+        include: { department: true, customer: true },
+      }),
       this.db.quoteRevision.findMany({
         where: { quote: { projectId: { in: projectIds } } },
       }),
@@ -1309,6 +1896,9 @@ export class PrismaApiStore {
           title: quote.title,
           status: quote.status,
           currentRevisionId: quote.currentRevisionId,
+          customerId: quote.customerId || null,
+          customerName: (quote as any).customer?.name || null,
+          customerString: quote.customerString || "",
           userId: quote.userId || null,
           userName: quote.userId ? users.find((u) => u.id === quote.userId)?.name || null : null,
           departmentId: quote.departmentId || null,
@@ -1435,7 +2025,10 @@ export class PrismaApiStore {
     };
 
     const nextStage = this.advanceStrategyStage(existing?.currentStage, stageBySection[input.section]);
-    const status = input.section === "reconcileReport" ? "complete" : (existing?.status === "complete" ? "complete" : "in_progress");
+    const status =
+      existing?.status === "complete" || existing?.status === "ready_for_review"
+        ? existing.status
+        : "in_progress";
     const row = await this.db.estimateStrategy.upsert({
       where: { revisionId: revision.id },
       create: {
@@ -1446,7 +2039,7 @@ export class PrismaApiStore {
         status,
         currentStage: nextStage,
         [input.section]: input.data as any,
-        reviewCompleted: input.section === "reconcileReport",
+        reviewCompleted: false,
       },
       update: {
         aiRunId: input.aiRunId ?? existing?.aiRunId ?? null,
@@ -1454,7 +2047,7 @@ export class PrismaApiStore {
         status,
         currentStage: nextStage,
         [input.section]: input.data as any,
-        reviewCompleted: input.section === "reconcileReport" ? true : existing?.reviewCompleted ?? false,
+        reviewCompleted: existing?.reviewCompleted ?? false,
       },
     });
 
@@ -1467,32 +2060,310 @@ export class PrismaApiStore {
     return mapEstimateStrategy(row);
   }
 
+  private resolveEstimateDefaults(settings?: AppSettings | null) {
+    const defaults = (settings?.defaults ?? {}) as AppSettings["defaults"];
+    const asNumber = (value: unknown, fallback: number) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+
+    return {
+      benchmarkingEnabled: defaults.benchmarkingEnabled !== false,
+      benchmarkMinimumSimilarity: Math.min(0.99, Math.max(0, asNumber(defaults.benchmarkMinimumSimilarity, 0.55))),
+      benchmarkMaximumComparables: Math.max(1, Math.min(10, Math.round(asNumber(defaults.benchmarkMaximumComparables, 5)))),
+      benchmarkLowerHoursRatio: Math.max(0.1, asNumber(defaults.benchmarkLowerHoursRatio, 0.75)),
+      benchmarkUpperHoursRatio: Math.max(0.1, asNumber(defaults.benchmarkUpperHoursRatio, 1.25)),
+      requireHumanReviewForBenchmarkOutliers: defaults.requireHumanReviewForBenchmarkOutliers !== false,
+    };
+  }
+
+  private selectAutomaticSummaryPreset(workspace: ProjectWorkspace): SummaryPreset {
+    const totals = workspace.estimate?.totals;
+    const nonZeroCategories = (totals?.categoryTotals ?? []).filter((entry) => entry.value !== 0 || entry.cost !== 0);
+    const nonZeroPhases = (totals?.phaseTotals ?? []).filter((entry) => entry.value !== 0 || entry.cost !== 0);
+    const nonZeroPhaseCategories = (totals?.phaseCategoryTotals ?? []).filter((entry) => entry.value !== 0 || entry.cost !== 0);
+    const visibleAdjustments = (totals?.adjustmentTotals ?? []).filter((entry) => entry.show !== "No");
+
+    if (nonZeroPhases.length > 1 && nonZeroCategories.length > 1 && nonZeroPhaseCategories.length > nonZeroPhases.length) {
+      return "phase_x_category";
+    }
+    if (nonZeroPhases.length > 1) {
+      return "by_phase";
+    }
+    if (nonZeroCategories.length > 1 || visibleAdjustments.length > 0) {
+      return "by_category";
+    }
+    return "quick_total";
+  }
+
+  private async ensureSummaryPresentation(projectId: string, revisionId: string, workspace: ProjectWorkspace) {
+    const existingRowCount = await this.db.summaryRow.count({ where: { revisionId } });
+    if (existingRowCount > 0) {
+      return {
+        generated: false,
+        preset: workspace.currentRevision.summaryLayoutPreset as SummaryPreset,
+        rowCount: existingRowCount,
+      };
+    }
+
+    const preset = this.selectAutomaticSummaryPreset(workspace);
+    await this.applySummaryPreset(projectId, preset);
+    const rowCount = await this.db.summaryRow.count({ where: { revisionId } });
+    return {
+      generated: true,
+      preset,
+      rowCount,
+    };
+  }
+
+  private async resolveEstimateFinalizeAiRun(projectId: string, revisionId: string, boundAiRunId?: string | null) {
+    const boundRun = boundAiRunId
+      ? await this.db.aiRun.findUnique({
+        where: { id: boundAiRunId },
+        select: { id: true, status: true },
+      })
+      : null;
+    const latestRevisionRun = await this.db.aiRun.findFirst({
+      where: { projectId, revisionId, kind: "cli-intake" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true },
+    });
+    const latestProjectRun = latestRevisionRun ?? await this.db.aiRun.findFirst({
+      where: { projectId, kind: "cli-intake" },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true },
+    });
+
+    const effectiveRun = latestProjectRun ?? boundRun;
+    return {
+      boundAiRunId: boundRun?.id ?? boundAiRunId ?? null,
+      effectiveAiRunId: effectiveRun?.id ?? boundAiRunId ?? null,
+      aiRunStatus: effectiveRun?.status ?? boundRun?.status ?? null,
+      reboundToLatestRun: Boolean(boundRun?.id && effectiveRun?.id && boundRun.id !== effectiveRun.id),
+    };
+  }
+
   async finalizeEstimateStrategy(projectId: string, summary: Record<string, unknown>): Promise<EstimateStrategy> {
     await this.requireProject(projectId);
     const { revision } = await this.requireCurrentRevision(projectId);
     const existing = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
     const workspace = await this.getWorkspace(projectId);
     if (!workspace) throw new Error(`Workspace unavailable for project ${projectId}`);
+    const summaryPresentation = await this.ensureSummaryPresentation(projectId, revision.id, workspace);
+    const settings = await this.getSettings();
+    const estimateDefaults = this.resolveEstimateDefaults(settings);
+    const aiRunContext = await this.resolveEstimateFinalizeAiRun(projectId, revision.id, existing?.aiRunId);
     const baselineSnapshot = this.buildEstimateSnapshot(workspace, existing);
+    const computedSummary = this.buildEstimateComputedSummary(workspace, existing);
+    const persona = existing?.personaId
+      ? await this.db.estimatorPersona.findFirst({
+        where: { id: existing.personaId, organizationId: this.organizationId },
+        select: {
+          trade: true,
+          productivityGuidance: true,
+          commercialGuidance: true,
+        },
+      })
+      : null;
+
+    const asObject = (value: unknown): Record<string, unknown> =>
+      value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const asArray = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+    const numericClaim = (key: string) => {
+      const value = summary[key];
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && value.trim() !== "") {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return null;
+    };
+
+    const validationIssues: Array<Record<string, unknown>> = [];
+    if (!existing || !existing.scopeGraph || Object.keys(asObject(existing.scopeGraph)).length === 0) {
+      validationIssues.push({ code: "missing_scope_graph", message: "Scope graph must be saved before finalize." });
+    }
+    if (!existing || !existing.executionPlan || Object.keys(asObject(existing.executionPlan)).length === 0) {
+      validationIssues.push({ code: "missing_execution_plan", message: "Execution plan must be saved before finalize." });
+    }
+    if (!existing || !Array.isArray(existing.assumptions)) {
+      validationIssues.push({ code: "missing_assumptions", message: "Assumptions must be saved before finalize." });
+    }
+    if (!existing || !Array.isArray(existing.packagePlan) || existing.packagePlan.length === 0) {
+      validationIssues.push({ code: "missing_package_plan", message: "Package plan must be saved before finalize." });
+    }
+    if (!existing || !existing.reconcileReport || Object.keys(asObject(existing.reconcileReport)).length === 0) {
+      validationIssues.push({ code: "missing_reconcile_report", message: "Reconcile report must be saved before finalize." });
+    }
+
+    const packageValidationIssues = this.validatePackagePlanAgainstWorkspace(existing?.packagePlan, workspace);
+    validationIssues.push(...packageValidationIssues);
+
+    const supervisionCoverageMode = this.resolveSupervisionCoverageMode(
+      persona?.productivityGuidance,
+      persona?.commercialGuidance,
+    );
+    const supervisionCoverageIssues = this.validateSupervisionCoverage(workspace, supervisionCoverageMode);
+    validationIssues.push(...supervisionCoverageIssues);
+
+    const aiRunStatus = aiRunContext.aiRunStatus;
+
+    if (estimateDefaults.benchmarkingEnabled) {
+      const benchmarkProfile = asObject(existing?.benchmarkProfile);
+      if (!benchmarkProfile.computedAt) {
+        validationIssues.push({
+          code: "missing_benchmark_pass",
+          message: "Benchmark recompute must run before finalize when benchmarking is enabled.",
+        });
+      }
+    }
+
+    const comparisons: Array<{
+      claimKeys: string[];
+      actualKeys: string[];
+      tolerance: (actual: number) => number;
+    }> = [
+      { claimKeys: ["totalHours", "totalLabourMH"], actualKeys: ["totalHours", "totalLabourMH"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["subtotal", "quotedTotal", "totalPrice"], actualKeys: ["subtotal"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["worksheetCount"], actualKeys: ["worksheetCount"], tolerance: () => 0 },
+      { claimKeys: ["lineItemCount", "itemCount"], actualKeys: ["lineItemCount"], tolerance: () => 0 },
+      { claimKeys: ["labourPrice", "labourCost"], actualKeys: ["labourPrice", "labourCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["materialPrice", "materialCost"], actualKeys: ["materialPrice", "materialCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["subcontractorPrice", "subcontractorCost"], actualKeys: ["subcontractorPrice", "subcontractorCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["equipmentPrice", "equipmentCost"], actualKeys: ["equipmentPrice", "equipmentCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["allowancePrice", "allowanceCost"], actualKeys: ["allowancePrice", "allowanceCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["zeroPriceItemCount"], actualKeys: ["zeroPriceItemCount"], tolerance: () => 0 },
+      { claimKeys: ["duplicateGroupCount", "duplicateItemCount"], actualKeys: ["duplicateGroupCount", "duplicateItemCount"], tolerance: () => 0 },
+    ];
+
+    for (const comparison of comparisons) {
+      const claimKey = comparison.claimKeys.find((key) => numericClaim(key) !== null);
+      if (!claimKey) continue;
+      const claimed = numericClaim(claimKey);
+      if (claimed === null) continue;
+
+      const actualCandidates = comparison.actualKeys
+        .map((key) => ({ key, value: Number(computedSummary[key] ?? 0) }))
+        .filter((entry) => Number.isFinite(entry.value));
+      if (actualCandidates.length === 0) continue;
+
+      const closest = actualCandidates.reduce(
+        (best, candidate) =>
+          Math.abs(candidate.value - claimed) < Math.abs(best.value - claimed) ? candidate : best,
+        actualCandidates[0],
+      );
+      const allowedDelta = comparison.tolerance(closest.value);
+      if (Math.abs(closest.value - claimed) > allowedDelta) {
+        validationIssues.push({
+          code: "summary_mismatch",
+          field: claimKey,
+          actualField: closest.key,
+          claimed,
+          actual: Number(closest.value.toFixed(2)),
+          allowedDelta: Number(allowedDelta.toFixed(2)),
+        });
+      }
+    }
+
+    if (validationIssues.length > 0) {
+      throw Object.assign(new Error("Estimate strategy finalize validation failed."), {
+        statusCode: 400,
+        details: {
+          validationIssues,
+          computedSummary,
+        },
+      });
+    }
+
+    const benchmarkProfile = asObject(existing?.benchmarkProfile);
+    const benchmarkMedians = asObject(benchmarkProfile.medians);
+    const benchmarkCategoryBenchmarks = asArray(benchmarkProfile.categoryBenchmarks);
+    const medianHours = Number(benchmarkMedians.totalHours ?? 0);
+    const totalHours = Number(computedSummary.totalHours ?? 0);
+    const hoursRatio = medianHours > 0 ? totalHours / medianHours : null;
+    const benchmarkOutlier =
+      hoursRatio !== null &&
+      (hoursRatio < estimateDefaults.benchmarkLowerHoursRatio || hoursRatio > estimateDefaults.benchmarkUpperHoursRatio);
+    const categoryOutlier = benchmarkCategoryBenchmarks.some((entry) => asObject(entry).outlier === true);
+    const calibrationEnvelope = await this.buildHistoricalCalibrationEnvelope(
+      projectId,
+      existing?.packagePlan,
+      persona?.trade,
+      totalHours,
+      Number(computedSummary.subtotal ?? 0),
+      estimateDefaults,
+    );
+    const requiresHumanReview =
+      calibrationEnvelope.outlier === true ||
+      (
+        estimateDefaults.requireHumanReviewForBenchmarkOutliers &&
+        estimateDefaults.benchmarkingEnabled &&
+        Number(benchmarkProfile.candidateCount ?? 0) > 0 &&
+        (benchmarkOutlier || categoryOutlier)
+      );
+    const status = requiresHumanReview ? "ready_for_review" : "complete";
+
+    const validationSummary = {
+      validatedAt: new Date().toISOString(),
+      aiRunId: aiRunContext.effectiveAiRunId,
+      aiRunStatus,
+      aiRunRebound: aiRunContext.reboundToLatestRun,
+      benchmarkingEnabled: estimateDefaults.benchmarkingEnabled,
+      benchmarkHoursRatio: hoursRatio !== null ? Number(hoursRatio.toFixed(4)) : null,
+      benchmarkOutlier,
+      calibrationEnvelope,
+      supervisionCoverageMode,
+      requiresHumanReview,
+      issues: [
+        ...(summaryPresentation.generated
+          ? [{
+            code: "summary_presentation_generated",
+            preset: summaryPresentation.preset,
+            rowCount: summaryPresentation.rowCount,
+          }]
+          : []),
+        ...(aiRunContext.reboundToLatestRun
+          ? [{
+            code: "ai_run_rebound",
+            fromAiRunId: aiRunContext.boundAiRunId,
+            toAiRunId: aiRunContext.effectiveAiRunId,
+          }]
+          : []),
+      ],
+    };
     const mergedSummary = {
       ...((existing?.summary as Record<string, unknown>) ?? {}),
       ...summary,
+      ...computedSummary,
       aiBaselineSnapshot: baselineSnapshot,
+      summaryPresentation,
+      packagePlanValidation: {
+        validatedAt: validationSummary.validatedAt,
+        issueCount: packageValidationIssues.length,
+      },
+      supervisionPolicy: {
+        coverageMode: supervisionCoverageMode,
+      },
+      finalizationValidation: validationSummary,
     };
     const row = await this.db.estimateStrategy.upsert({
       where: { revisionId: revision.id },
       create: {
         projectId,
         revisionId: revision.id,
+        aiRunId: aiRunContext.effectiveAiRunId,
         currentStage: "complete",
-        status: "complete",
-        reviewCompleted: true,
+        status,
+        reviewRequired: requiresHumanReview,
+        reviewCompleted: !requiresHumanReview,
         summary: mergedSummary as any,
       },
       update: {
+        aiRunId: aiRunContext.effectiveAiRunId,
         currentStage: "complete",
-        status: "complete",
-        reviewCompleted: true,
+        status,
+        reviewRequired: requiresHumanReview,
+        reviewCompleted: !requiresHumanReview,
         summary: mergedSummary as any,
       },
     });
@@ -1500,6 +2371,7 @@ export class PrismaApiStore {
     await this.pushActivity(projectId, revision.id, "estimate_strategy_finalized", {
       currentStage: row.currentStage,
       status: row.status,
+      reviewRequired: row.reviewRequired,
     });
 
     return mapEstimateStrategy(row);
@@ -1511,6 +2383,8 @@ export class PrismaApiStore {
     if (!currentWorkspace) throw new Error(`Workspace unavailable for project ${projectId}`);
     const { revision } = await this.requireCurrentRevision(projectId);
     const currentStrategy = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+    const settings = await this.getSettings();
+    const estimateDefaults = this.resolveEstimateDefaults(settings);
 
     const currentLineItems = currentWorkspace.estimate.lineItems ?? [];
     const currentShares = this.categoryShareMetrics(currentLineItems);
@@ -1526,6 +2400,53 @@ export class PrismaApiStore {
       valueShare: currentShares.valueShare,
       hourShare: currentShares.hourShare,
     };
+
+    if (!estimateDefaults.benchmarkingEnabled) {
+      const disabledProfile = {
+        basis: "organization_setting_disabled",
+        disabled: true,
+        candidateCount: 0,
+        current: {
+          totalHours: currentFeatures.totalHours,
+          subtotal: currentFeatures.subtotal,
+          hoursPerItem: currentFeatures.lineItemCount > 0 ? Number((currentFeatures.totalHours / currentFeatures.lineItemCount).toFixed(2)) : 0,
+          hoursPerWorksheet: currentFeatures.worksheetCount > 0 ? Number((currentFeatures.totalHours / currentFeatures.worksheetCount).toFixed(2)) : 0,
+          pricePerHour: currentFeatures.totalHours > 0 ? Number((currentFeatures.subtotal / currentFeatures.totalHours).toFixed(2)) : 0,
+        },
+        medians: {},
+        categoryBenchmarks: [],
+        suggestedActions: [],
+        computedAt: new Date().toISOString(),
+      };
+
+      const disabledRow = await this.db.estimateStrategy.upsert({
+        where: { revisionId: revision.id },
+        create: {
+          projectId,
+          revisionId: revision.id,
+          aiRunId: currentStrategy?.aiRunId ?? null,
+          personaId: currentStrategy?.personaId ?? null,
+          currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
+          status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
+          benchmarkProfile: disabledProfile as any,
+          benchmarkComparables: [] as any,
+        },
+        update: {
+          currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
+          status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
+          benchmarkProfile: disabledProfile as any,
+          benchmarkComparables: [] as any,
+        },
+      });
+
+      await this.pushActivity(projectId, revision.id, "estimate_benchmarks_recomputed", {
+        disabled: true,
+        candidateCount: 0,
+        suggestedActions: 0,
+      });
+
+      return mapEstimateStrategy(disabledRow);
+    }
 
     const quotes = await this.db.quote.findMany({
       where: {
@@ -1597,11 +2518,13 @@ export class PrismaApiStore {
       const shares = this.categoryShareMetrics(items);
       const totalHours = Number(candidateRevision.totalHours ?? 0);
       const similarity =
-        0.35 * relativeScore(currentFeatures.totalHours, totalHours) +
-        0.2 * relativeScore(currentFeatures.lineItemCount, items.length) +
+        0.25 * relativeScore(currentFeatures.totalHours, totalHours) +
+        0.15 * relativeScore(currentFeatures.subtotal, Number(candidateRevision.subtotal ?? 0)) +
+        0.15 * relativeScore(currentFeatures.lineItemCount, items.length) +
         0.15 * relativeScore(currentFeatures.worksheetCount, worksheets.length) +
         0.1 * relativeScore(currentFeatures.documentCount, documentCountByProject.get(quote.projectId) ?? 0) +
-        0.2 * shareSimilarity(currentFeatures.valueShare, shares.valueShare);
+        0.1 * shareSimilarity(currentFeatures.valueShare, shares.valueShare) +
+        0.1 * shareSimilarity(currentFeatures.hourShare, shares.hourShare);
 
       return [{
         projectId: quote.projectId,
@@ -1621,8 +2544,9 @@ export class PrismaApiStore {
         updatedAt: candidateRevision.updatedAt.toISOString(),
       }];
     })
+      .filter((row) => row.similarityScore >= estimateDefaults.benchmarkMinimumSimilarity)
       .sort((left, right) => right.similarityScore - left.similarityScore)
-      .slice(0, 5);
+      .slice(0, estimateDefaults.benchmarkMaximumComparables);
 
     const median = (values: number[]) => {
       if (values.length === 0) return 0;
@@ -1672,7 +2596,7 @@ export class PrismaApiStore {
     const suggestedActions: Array<Record<string, unknown>> = [];
     if (comparableRows.length > 0 && medianHours > 0) {
       const ratio = currentFeatures.totalHours / medianHours;
-      if (ratio > 1.25) {
+      if (ratio > estimateDefaults.benchmarkUpperHoursRatio) {
         suggestedActions.push({
           area: "overall_hours",
           action: "scrutinize_and_reduce",
@@ -1680,7 +2604,7 @@ export class PrismaApiStore {
           benchmarkValue: medianHours,
           currentValue: currentFeatures.totalHours,
         });
-      } else if (ratio < 0.75) {
+      } else if (ratio < estimateDefaults.benchmarkLowerHoursRatio) {
         suggestedActions.push({
           area: "overall_hours",
           action: "check_for_omissions",
@@ -1736,13 +2660,13 @@ export class PrismaApiStore {
         aiRunId: currentStrategy?.aiRunId ?? null,
         personaId: currentStrategy?.personaId ?? null,
         currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
-        status: currentStrategy?.status === "complete" ? "complete" : "in_progress",
+        status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
         benchmarkProfile: benchmarkProfile as any,
         benchmarkComparables: comparableRows as any,
       },
       update: {
         currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
-        status: currentStrategy?.status === "complete" ? "complete" : "in_progress",
+        status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
         benchmarkProfile: benchmarkProfile as any,
         benchmarkComparables: comparableRows as any,
       },
@@ -2582,6 +3506,7 @@ export class PrismaApiStore {
         rateScheduleItemId: item.rateScheduleItemId ?? null,
         itemId: item.itemId ?? null,
         tierUnits: item.tierUnits ?? {},
+        sourceNotes: item.sourceNotes ?? "",
       },
     });
 
@@ -2613,6 +3538,12 @@ export class PrismaApiStore {
       },
     });
 
+    await this.pushActivity(projectId, revision.id, "worksheet_created", {
+      worksheetId: worksheet.id,
+      name: worksheet.name,
+      before: null,
+      after: mapWorksheet(worksheet),
+    });
     await this.syncProjectEstimate(projectId);
     return mapWorksheet(worksheet);
   }
@@ -2630,7 +3561,15 @@ export class PrismaApiStore {
     if (typeof patch.name === "string") data.name = patch.name.trim() || worksheet.name;
     if (typeof patch.order === "number") data.order = patch.order;
 
+    const worksheetBefore = mapWorksheet(worksheet);
     const updated = await this.db.worksheet.update({ where: { id: worksheetId }, data });
+    await this.pushActivity(projectId, revision.id, "worksheet_updated", {
+      worksheetId,
+      name: updated.name,
+      patch: Object.keys(data),
+      before: worksheetBefore,
+      after: mapWorksheet(updated),
+    });
     await this.syncProjectEstimate(projectId);
     return mapWorksheet(updated);
   }
@@ -2650,8 +3589,15 @@ export class PrismaApiStore {
     }
 
     // Delete items then worksheet
+    const worksheetBefore = mapWorksheet(worksheet);
     await this.db.worksheetItem.deleteMany({ where: { worksheetId } });
     await this.db.worksheet.delete({ where: { id: worksheetId } });
+    await this.pushActivity(projectId, revision.id, "worksheet_deleted", {
+      worksheetId,
+      name: worksheet.name,
+      before: worksheetBefore,
+      after: null,
+    });
     await this.syncProjectEstimate(projectId);
 
     return mapWorksheet(worksheet);
@@ -2857,6 +3803,8 @@ export class PrismaApiStore {
           unit2: item.unit2,
           unit3: item.unit3,
           lineOrder: item.lineOrder,
+          tierUnits: item.tierUnits ?? {},
+          sourceNotes: item.sourceNotes ?? "",
         },
       });
 
@@ -3136,7 +4084,7 @@ export class PrismaApiStore {
       const sourceDocuments: SourceDocument[] = report.documents.map((document) => ({
         id: document.id,
         projectId: project.id,
-        fileName: sanitizeFileName(path.basename(document.sourcePath || document.title)),
+        fileName: normalizeStoredSourcePath(document.sourcePath, document.title),
         fileType: path.extname(document.sourcePath || document.title).replace(/^\./, "") || "txt",
         documentType: documentTypeFromIngestion(document.kind),
         pageCount: inferPageCount(document, report.chunks),
@@ -4416,6 +5364,10 @@ export class PrismaApiStore {
               uom: oldItem.uom, cost: oldItem.cost, markup: oldItem.markup, price: oldItem.price,
               unit1: oldItem.unit1, unit2: oldItem.unit2, unit3: oldItem.unit3,
               lineOrder: oldItem.lineOrder,
+              rateScheduleItemId: oldItem.rateScheduleItemId ?? null,
+              itemId: oldItem.itemId ?? null,
+              tierUnits: oldItem.tierUnits ?? {},
+              sourceNotes: oldItem.sourceNotes ?? "",
             },
           });
         }
@@ -4735,6 +5687,10 @@ export class PrismaApiStore {
               uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
               unit1: it.unit1, unit2: it.unit2, unit3: it.unit3,
               lineOrder: it.lineOrder,
+              rateScheduleItemId: it.rateScheduleItemId ?? null,
+              itemId: it.itemId ?? null,
+              tierUnits: it.tierUnits ?? {},
+              sourceNotes: it.sourceNotes ?? "",
             },
           });
         }
@@ -4853,9 +5809,30 @@ export class PrismaApiStore {
     const quote = await this.db.quote.findFirst({ where: { projectId } });
     if (!quote) throw new Error(`Quote not found for project ${projectId}`);
 
+    const before = {
+      id: quote.id,
+      title: quote.title,
+      customerString: quote.customerString,
+      userId: quote.userId,
+      quoteNumber: quote.quoteNumber,
+      currentRevisionId: quote.currentRevisionId,
+    };
     const updated = await this.db.quote.update({
       where: { id: quote.id },
       data: { ...patch as any, updatedAt: new Date() },
+    });
+
+    await this.pushActivity(projectId, updated.currentRevisionId ?? null, "quote_updated", {
+      fields: Object.keys(patch),
+      before,
+      after: {
+        id: updated.id,
+        title: updated.title,
+        customerString: updated.customerString,
+        userId: updated.userId,
+        quoteNumber: updated.quoteNumber,
+        currentRevisionId: updated.currentRevisionId,
+      },
     });
 
     return mapQuote(updated);
@@ -4905,16 +5882,175 @@ export class PrismaApiStore {
 
   // ── Activity ───────────────────────────────────────────────────────────
 
+  private mapSyntheticActivityFromAiToolEvent(
+    projectId: string,
+    run: { id: string; revisionId: string | null; createdAt: Date; output: Prisma.JsonValue },
+    event: any,
+    index: number,
+  ) {
+    const toolIdRaw = String(event?.data?.toolId ?? "");
+    const toolId = toolIdRaw.replace(/^mcp__bidwright__/, "");
+    const input = ((event?.data?.input as Record<string, unknown>) ?? {});
+    const createdAt = typeof event?.timestamp === "string" ? event.timestamp : run.createdAt.toISOString();
+    const baseData: Record<string, unknown> = {
+      aiRunId: run.id,
+      actorId: run.id,
+      actorName: "Bidwright AI",
+      actorType: "ai",
+      source: "ai_run_event",
+      toolId: toolIdRaw,
+    };
+
+    if (toolId === "updateQuote") {
+      const fields = Object.keys(input);
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "quote_updated",
+        data: {
+          ...baseData,
+          fields,
+          patch: fields,
+          projectName: input.projectName ?? input.name ?? null,
+          clientName: input.clientName ?? null,
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
+    if (toolId === "createWorksheet") {
+      const name = String(input.name ?? "Worksheet");
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "worksheet_created",
+        data: {
+          ...baseData,
+          name,
+          worksheetName: name,
+          description: String(input.description ?? ""),
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
+    if (toolId === "createWorksheetItem") {
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "item_created",
+        data: {
+          ...baseData,
+          entityName: String(input.entityName ?? "Item"),
+          category: String(input.category ?? ""),
+          worksheetId: typeof input.worksheetId === "string" ? input.worksheetId : null,
+          description: String(input.description ?? ""),
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
+    if (toolId === "updateWorksheetItem") {
+      const patch = Object.keys(input).filter((key) => key !== "itemId");
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "item_updated",
+        data: {
+          ...baseData,
+          itemId: typeof input.itemId === "string" ? input.itemId : null,
+          entityName: String(input.entityName ?? "Item"),
+          patch,
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
+    if (toolId === "deleteWorksheetItem") {
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "item_deleted",
+        data: {
+          ...baseData,
+          itemId: typeof input.itemId === "string" ? input.itemId : null,
+          entityName: String(input.entityName ?? "Item"),
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
+    return null;
+  }
+
+  private async buildSyntheticActivitiesFromAiRuns(projectId: string) {
+    const runs = await this.db.aiRun.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        revisionId: true,
+        createdAt: true,
+        output: true,
+      },
+    });
+
+    const synthetic: Array<{
+      id: string;
+      projectId: string;
+      revisionId: string | null;
+      type: string;
+      data: Record<string, unknown>;
+      userId: string | null;
+      userName: string | null;
+      revertible: boolean;
+      createdAt: string;
+    }> = [];
+
+    for (const run of runs) {
+      const events = (((run.output as Record<string, unknown> | null)?.events ?? []) as any[]);
+      events.forEach((event, index) => {
+        if (!event || (event.type !== "tool_call" && event.type !== "tool")) return;
+        const activity = this.mapSyntheticActivityFromAiToolEvent(projectId, run, event, index);
+        if (activity) synthetic.push(activity);
+      });
+    }
+
+    synthetic.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return synthetic;
+  }
+
   async logActivity(projectId: string, revisionId: string | null, type: string, data: Record<string, unknown>) {
     await this.requireProject(projectId);
+    const payload = this.withActivityActor(data);
     const activity = await this.db.activity.create({
       data: {
         id: createId("activity"),
         projectId,
         revisionId,
         type,
-        data: data as any,
-        userId: this._userId,
+        data: payload as any,
+        userId: this.resolveActivityUserId(),
         createdAt: new Date(),
       },
     });
@@ -4927,9 +6063,13 @@ export class PrismaApiStore {
       orderBy: { createdAt: "desc" },
       include: { user: { select: { name: true } } },
     });
+    if (activities.length === 0) {
+      return this.buildSyntheticActivitiesFromAiRuns(projectId);
+    }
     return activities.map((a) => ({
       ...mapActivity(a),
-      userName: (a as any).user?.name ?? null,
+      userId: a.userId ?? ((a.data as Record<string, unknown> | null)?.actorId as string | null) ?? null,
+      userName: (a as any).user?.name ?? ((a.data as Record<string, unknown> | null)?.actorName as string | null) ?? null,
       revertible: isActivityRevertible(a),
     }));
   }

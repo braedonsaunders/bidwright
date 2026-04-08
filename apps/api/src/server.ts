@@ -410,6 +410,7 @@ interface UploadFieldMap {
   packageName?: string;
   scope?: string;
   summary?: string;
+  fileManifest?: string;
   sourceKind?: "project" | "library";
 }
 
@@ -425,10 +426,20 @@ interface MultipartPackageUpload {
 interface StagedMultipartFile {
   originalFileName: string;
   safeFileName: string;
+  relativePath: string;
   stagingPath: string;
   size: number;
   mimeType?: string;
 }
+
+interface UploadFileManifestEntry {
+  index: number;
+  relativePath?: string;
+}
+
+const MULTIPART_MAX_FILES = 10_000;
+const MULTIPART_MAX_FIELDS = 32;
+const MULTIPART_MAX_FILE_SIZE_BYTES = 1_073_741_824;
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -528,6 +539,73 @@ function normalizeArchiveEntryPath(value: string) {
     .split("/")
     .filter((segment) => segment && segment !== "." && segment !== "..")
     .join("/");
+}
+
+function sanitizeArchiveDirectoryPath(value: string | undefined) {
+  return normalizeArchiveEntryPath(value ?? "")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => sanitizeFileName(segment))
+    .filter(Boolean)
+    .join("/");
+}
+
+function sanitizeArchiveFilePath(value: string | undefined, fallbackFileName: string) {
+  const normalized = normalizeArchiveEntryPath(value ?? "");
+  const directory = sanitizeArchiveDirectoryPath(path.posix.dirname(normalized));
+  const desiredName = normalized ? path.posix.basename(normalized) : fallbackFileName;
+  const safeName = sanitizeFileName(desiredName || fallbackFileName);
+  return directory ? path.posix.join(directory, safeName) : safeName;
+}
+
+function archiveFileDirectory(value: string) {
+  const directory = sanitizeArchiveDirectoryPath(path.posix.dirname(normalizeArchiveEntryPath(value)));
+  return directory || "";
+}
+
+function archiveDerivedFolderPath(sourceFileName: string, depth: number) {
+  const safeSourcePath = sanitizeArchiveFilePath(sourceFileName, `email-${depth + 1}.msg`);
+  const directory = archiveFileDirectory(safeSourcePath);
+  const baseName = sanitizeFileName(path.posix.basename(safeSourcePath, path.posix.extname(safeSourcePath))) || `email-${depth + 1}`;
+  return directory ? path.posix.join(directory, baseName) : baseName;
+}
+
+function archiveOriginalSourcePath(sourceFileName: string, fallbackFileName: string) {
+  return sanitizeArchiveFilePath(sourceFileName, fallbackFileName);
+}
+
+function parseUploadFileManifest(rawValue: string | undefined) {
+  if (!rawValue?.trim()) {
+    return new Map<number, string | undefined>();
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) {
+      return new Map<number, string | undefined>();
+    }
+
+    const manifest = new Map<number, string | undefined>();
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const index = Number((entry as UploadFileManifestEntry).index);
+      if (!Number.isInteger(index) || index < 0) {
+        continue;
+      }
+
+      const relativePath = typeof (entry as UploadFileManifestEntry).relativePath === "string"
+        ? (entry as UploadFileManifestEntry).relativePath
+        : undefined;
+      manifest.set(index, relativePath);
+    }
+
+    return manifest;
+  } catch {
+    return new Map<number, string | undefined>();
+  }
 }
 
 function isIgnoredArchivePath(value: string) {
@@ -718,12 +796,13 @@ async function appendMsgBufferToArchive(
   sourceFileName: string,
   depth = 0
 ) {
-  const baseName = sanitizeFileName(path.basename(sourceFileName, path.extname(sourceFileName))) || `email-${depth + 1}`;
+  const basePath = archiveDerivedFolderPath(sourceFileName, depth);
+  const baseName = path.posix.basename(basePath);
 
   try {
     const reader = new MsgReader(toDataView(buffer));
     const info = reader.getFileData();
-    addArchiveBuffer(zip, usedPaths, `${baseName}/${baseName}-email.txt`, formatOutlookMessageSummary(sourceFileName, info));
+    addArchiveBuffer(zip, usedPaths, `${basePath}/${baseName}-email.txt`, formatOutlookMessageSummary(sourceFileName, info));
 
     for (const [index, attachment] of (info.attachments ?? []).entries()) {
       if (attachment.attachmentHidden) {
@@ -741,21 +820,32 @@ async function appendMsgBufferToArchive(
       const attachmentBuffer = Buffer.from(attachmentData.content);
 
       if (depth < 3 && isMsgUpload(attachmentName, attachment.attachMimeTag)) {
-        await appendMsgBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        await appendMsgBufferToArchive(
+          zip,
+          usedPaths,
+          attachmentBuffer,
+          path.posix.join(basePath, "attachments", attachmentName),
+          depth + 1
+        );
         continue;
       }
 
-      addArchiveBuffer(zip, usedPaths, `${baseName}/attachments/${attachmentName}`, attachmentBuffer);
+      addArchiveBuffer(zip, usedPaths, `${basePath}/attachments/${attachmentName}`, attachmentBuffer);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addArchiveBuffer(
       zip,
       usedPaths,
-      `${baseName}/${baseName}-email.txt`,
+      `${basePath}/${baseName}-email.txt`,
       `Source file: ${sourceFileName}\n\nOutlook message parsing failed.\n${message}`
     );
-    addArchiveBuffer(zip, usedPaths, `${baseName}/${sanitizeFileName(sourceFileName)}`, buffer);
+    addArchiveBuffer(
+      zip,
+      usedPaths,
+      archiveOriginalSourcePath(path.posix.join(basePath, path.posix.basename(sourceFileName)), path.posix.basename(sourceFileName)),
+      buffer
+    );
   }
 }
 
@@ -766,7 +856,8 @@ async function appendEmlBufferToArchive(
   sourceFileName: string,
   depth = 0
 ) {
-  const baseName = sanitizeFileName(path.basename(sourceFileName, path.extname(sourceFileName))) || `email-${depth + 1}`;
+  const basePath = archiveDerivedFolderPath(sourceFileName, depth);
+  const baseName = path.posix.basename(basePath);
 
   try {
     const email = await PostalMime.parse(buffer, {
@@ -774,7 +865,7 @@ async function appendEmlBufferToArchive(
       forceRfc822Attachments: true,
       attachmentEncoding: "arraybuffer",
     });
-    addArchiveBuffer(zip, usedPaths, `${baseName}/${baseName}-email.txt`, formatRfc822MessageSummary(sourceFileName, email));
+    addArchiveBuffer(zip, usedPaths, `${basePath}/${baseName}-email.txt`, formatRfc822MessageSummary(sourceFileName, email));
 
     for (const [index, attachment] of email.attachments.entries()) {
       const attachmentName = sanitizeFileName(
@@ -784,26 +875,43 @@ async function appendEmlBufferToArchive(
       const attachmentBuffer = postalAttachmentBuffer(attachment);
 
       if (depth < 3 && isMsgUpload(attachmentName, attachment.mimeType)) {
-        await appendMsgBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        await appendMsgBufferToArchive(
+          zip,
+          usedPaths,
+          attachmentBuffer,
+          path.posix.join(basePath, "attachments", attachmentName),
+          depth + 1
+        );
         continue;
       }
 
       if (depth < 3 && isEmlUpload(attachmentName, attachment.mimeType)) {
-        await appendEmlBufferToArchive(zip, usedPaths, attachmentBuffer, attachmentName, depth + 1);
+        await appendEmlBufferToArchive(
+          zip,
+          usedPaths,
+          attachmentBuffer,
+          path.posix.join(basePath, "attachments", attachmentName),
+          depth + 1
+        );
         continue;
       }
 
-      addArchiveBuffer(zip, usedPaths, `${baseName}/attachments/${attachmentName}`, attachmentBuffer);
+      addArchiveBuffer(zip, usedPaths, `${basePath}/attachments/${attachmentName}`, attachmentBuffer);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addArchiveBuffer(
       zip,
       usedPaths,
-      `${baseName}/${baseName}-email.txt`,
+      `${basePath}/${baseName}-email.txt`,
       `Source file: ${sourceFileName}\n\nRFC822 email parsing failed.\n${message}`
     );
-    addArchiveBuffer(zip, usedPaths, `${baseName}/${sanitizeFileName(sourceFileName)}`, buffer);
+    addArchiveBuffer(
+      zip,
+      usedPaths,
+      archiveOriginalSourcePath(path.posix.join(basePath, path.posix.basename(sourceFileName)), path.posix.basename(sourceFileName)),
+      buffer
+    );
   }
 }
 
@@ -811,6 +919,8 @@ async function appendExpandedZipToArchive(zip: JSZip, usedPaths: Set<string>, fi
   const bytes = await readFile(file.stagingPath);
   const sourceZip = await JSZip.loadAsync(bytes);
   const archiveFolder = sanitizeFileName(path.basename(file.originalFileName, path.extname(file.originalFileName))) || "archive";
+  const archiveParent = archiveFileDirectory(file.relativePath);
+  const archiveRoot = archiveParent ? path.posix.join(archiveParent, archiveFolder) : archiveFolder;
 
   for (const entryName of Object.keys(sourceZip.files).sort()) {
     const sourceEntry = sourceZip.files[entryName];
@@ -820,18 +930,19 @@ async function appendExpandedZipToArchive(zip: JSZip, usedPaths: Set<string>, fi
 
     const entryBuffer = await sourceEntry.async("nodebuffer");
     const normalizedEntryName = normalizeArchiveEntryPath(entryName);
+    const expandedEntryPath = path.posix.join(archiveRoot, normalizedEntryName);
 
     if (isMsgUpload(normalizedEntryName)) {
-      await appendMsgBufferToArchive(zip, usedPaths, entryBuffer, path.posix.basename(normalizedEntryName));
+      await appendMsgBufferToArchive(zip, usedPaths, entryBuffer, expandedEntryPath);
       continue;
     }
 
     if (isEmlUpload(normalizedEntryName)) {
-      await appendEmlBufferToArchive(zip, usedPaths, entryBuffer, path.posix.basename(normalizedEntryName));
+      await appendEmlBufferToArchive(zip, usedPaths, entryBuffer, expandedEntryPath);
       continue;
     }
 
-    addArchiveBuffer(zip, usedPaths, `${archiveFolder}/${normalizedEntryName}`, entryBuffer);
+    addArchiveBuffer(zip, usedPaths, expandedEntryPath, entryBuffer);
   }
 }
 
@@ -843,16 +954,16 @@ async function appendUploadedFileToArchive(zip: JSZip, usedPaths: Set<string>, f
 
   const buffer = await readFile(file.stagingPath);
   if (isMsgUpload(file.originalFileName, file.mimeType)) {
-    await appendMsgBufferToArchive(zip, usedPaths, buffer, file.originalFileName);
+    await appendMsgBufferToArchive(zip, usedPaths, buffer, file.relativePath);
     return;
   }
 
   if (isEmlUpload(file.originalFileName, file.mimeType)) {
-    await appendEmlBufferToArchive(zip, usedPaths, buffer, file.originalFileName);
+    await appendEmlBufferToArchive(zip, usedPaths, buffer, file.relativePath);
     return;
   }
 
-  addArchiveBuffer(zip, usedPaths, file.safeFileName, buffer);
+  addArchiveBuffer(zip, usedPaths, file.relativePath, buffer);
 }
 
 async function writeSyntheticArchive(storagePath: string, files: StagedMultipartFile[]) {
@@ -918,8 +1029,9 @@ async function saveMultipartPackageUpload(request: FastifyRequest): Promise<Mult
 
         const size = (await stat(stagingPath)).size;
         stagedFiles.push({
-          originalFileName: safeFileName,
+          originalFileName: part.filename?.trim() || safeFileName,
           safeFileName,
+          relativePath: safeFileName,
           stagingPath,
           size,
           mimeType: part.mimetype,
@@ -935,11 +1047,21 @@ async function saveMultipartPackageUpload(request: FastifyRequest): Promise<Mult
       throw new Error("At least one file is required for package upload");
     }
 
+    const fileManifest = parseUploadFileManifest(fields.fileManifest);
+    delete fields.fileManifest;
+    for (const [index, file] of stagedFiles.entries()) {
+      file.relativePath = sanitizeArchiveFilePath(fileManifest.get(index), file.safeFileName);
+    }
+
     const archiveFileName = buildSyntheticArchiveName(fields, stagedFiles);
     originalFileName = stagedFiles.length === 1 ? stagedFiles[0].originalFileName : archiveFileName;
     storagePath = resolveApiPath(relativePackageArchivePath(packageId, archiveFileName));
 
-    if (stagedFiles.length === 1 && isZipUpload(stagedFiles[0].originalFileName, stagedFiles[0].mimeType)) {
+    if (
+      stagedFiles.length === 1 &&
+      isZipUpload(stagedFiles[0].originalFileName, stagedFiles[0].mimeType) &&
+      path.posix.dirname(stagedFiles[0].relativePath) === "."
+    ) {
       await mkdir(path.dirname(storagePath), { recursive: true });
       await rename(stagedFiles[0].stagingPath, storagePath);
     } else {
@@ -1186,18 +1308,19 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     });
 
     for (const relativePath of entries) {
-      const fileName = path.basename(relativePath);
-      const sanitized = reserveUniqueArchivePath(usedDocumentNames, sanitizeFileName(fileName));
+      const sanitized = reserveUniqueArchivePath(usedDocumentNames, sanitizeArchiveFilePath(relativePath, path.basename(relativePath)));
+      const fileName = path.posix.basename(sanitized);
       const ext = path.extname(fileName).toLowerCase();
       const docId = `doc-${randomUUID()}`;
-      const relStoragePath = path.join("projects", targetProjectId!, "documents", sanitized);
+      const relStoragePath = path.join("projects", targetProjectId!, "documents", ...sanitized.split("/"));
 
       // Extract file to disk FIRST so storagePath is valid
       try {
         const zipEntry = zip.file(relativePath);
         if (zipEntry) {
           const fileData = await zipEntry.async("nodebuffer");
-          const diskPath = path.join(docsDir, sanitized);
+          const diskPath = path.join(docsDir, ...sanitized.split("/"));
+          await mkdir(path.dirname(diskPath), { recursive: true });
           await writeFile(diskPath, fileData);
         } else {
           console.error("[upload] zip.file() returned null for:", relativePath);
@@ -1290,6 +1413,18 @@ export function buildServer() {
     logger: true
   });
 
+  // Allow empty JSON body (sends {} instead of erroring with FST_ERR_CTP_EMPTY_JSON_BODY)
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    const str = (body as string || "").trim();
+    if (!str) return done(null, {});
+    try {
+      done(null, JSON.parse(str));
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  });
+
   // Prisma lifecycle
   app.addHook("onClose", async () => {
     await prisma.$disconnect();
@@ -1302,17 +1437,54 @@ export function buildServer() {
 
   app.register(multipart, {
     limits: {
-      files: 1,
-      fileSize: 1_073_741_824
+      files: MULTIPART_MAX_FILES,
+      fields: MULTIPART_MAX_FIELDS,
+      parts: MULTIPART_MAX_FILES + MULTIPART_MAX_FIELDS,
+      fileSize: MULTIPART_MAX_FILE_SIZE_BYTES
     }
   });
 
   app.register(authPlugin);
 
   app.setErrorHandler((error, _request, reply) => {
-    app.log.error(error);
-    reply.status(500).send({
-      message: error instanceof Error ? error.message : "Internal server error"
+    const multipartCode = typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : null;
+
+    const statusCode = (() => {
+      if (multipartCode === "FST_FILES_LIMIT" || multipartCode === "FST_PARTS_LIMIT" || multipartCode === "FST_FILE_TOO_LARGE") {
+        return 413;
+      }
+
+      if (typeof (error as { statusCode?: unknown }).statusCode === "number") {
+        return (error as { statusCode: number }).statusCode;
+      }
+
+      return 500;
+    })();
+
+    const message = (() => {
+      switch (multipartCode) {
+        case "FST_FILES_LIMIT":
+          return `Upload contains too many files. Intake accepts up to ${MULTIPART_MAX_FILES.toLocaleString()} files per upload.`;
+        case "FST_PARTS_LIMIT":
+          return `Upload contains too many multipart parts. Intake accepts up to ${(MULTIPART_MAX_FILES + MULTIPART_MAX_FIELDS).toLocaleString()} total parts per upload.`;
+        case "FST_FILE_TOO_LARGE":
+          return `One of the uploaded files exceeds the ${Math.floor(MULTIPART_MAX_FILE_SIZE_BYTES / (1024 * 1024 * 1024))} GB per-file limit.`;
+        default:
+          return error instanceof Error ? error.message : "Internal server error";
+      }
+    })();
+
+    if (statusCode >= 500) {
+      app.log.error(error);
+    } else {
+      app.log.warn(error);
+    }
+
+    reply.status(statusCode).send({
+      message,
+      code: multipartCode ?? undefined
     });
   });
 
@@ -1403,6 +1575,17 @@ export function buildServer() {
     }
 
     try {
+      const beforeProject = await prisma.project.findUnique({
+        where: { id: projectId },
+        select: {
+          name: true,
+          clientName: true,
+          location: true,
+          scope: true,
+          summary: true,
+        },
+      });
+
       // Update project
       if (Object.keys(projectPatch).length > 0) {
         await prisma.project.update({
@@ -1413,6 +1596,8 @@ export function buildServer() {
 
       // Sync name/client to Quote + Revision
       const quote = await prisma.quote.findFirst({ where: { projectId } });
+      let revisionSnapshotBefore: { id: string; title: string; description: string; notes: string } | null = null;
+      let revisionSnapshotAfter: { id: string; title: string; description: string; notes: string } | null = null;
       if (quote) {
         const quoteUpdate: Record<string, unknown> = {};
         if (name) quoteUpdate.title = name;
@@ -1425,18 +1610,82 @@ export function buildServer() {
         if (name) revisionPatch.title = name;
 
         // Update revision description/notes/title
+        const revision = await prisma.quoteRevision.findFirst({
+          where: { quoteId: quote.id },
+          orderBy: { createdAt: "desc" },
+        });
+        if (revision) {
+          revisionSnapshotBefore = {
+            id: revision.id,
+            title: revision.title,
+            description: revision.description,
+            notes: revision.notes,
+          };
+        }
         if (Object.keys(revisionPatch).length > 0) {
-          const revision = await prisma.quoteRevision.findFirst({
-            where: { quoteId: quote.id },
-            orderBy: { createdAt: "desc" },
-          });
           if (revision) {
-            await prisma.quoteRevision.update({
+            const updatedRevision = await prisma.quoteRevision.update({
               where: { id: revision.id },
               data: revisionPatch,
             });
+            revisionSnapshotAfter = {
+              id: updatedRevision.id,
+              title: updatedRevision.title,
+              description: updatedRevision.description,
+              notes: updatedRevision.notes,
+            };
           }
+        } else {
+          revisionSnapshotAfter = revisionSnapshotBefore;
         }
+
+        const afterProject = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: {
+            name: true,
+            clientName: true,
+            location: true,
+            scope: true,
+            summary: true,
+          },
+        });
+
+        const changedFields = [...Object.keys(projectPatch), ...Object.keys(revisionPatch)];
+        if (changedFields.length > 0) {
+          await request.store!.logActivity(projectId, revisionSnapshotAfter?.id ?? revisionSnapshotBefore?.id ?? quote.currentRevisionId ?? null, "quote_updated", {
+            fields: changedFields,
+            before: {
+              project: beforeProject,
+              revision: revisionSnapshotBefore,
+            },
+            after: {
+              project: afterProject,
+              revision: revisionSnapshotAfter,
+            },
+          });
+        }
+      } else if (Object.keys(projectPatch).length > 0) {
+        const afterProject = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: {
+            name: true,
+            clientName: true,
+            location: true,
+            scope: true,
+            summary: true,
+          },
+        });
+        await request.store!.logActivity(projectId, null, "quote_updated", {
+          fields: Object.keys(projectPatch),
+          before: {
+            project: beforeProject,
+            revision: null,
+          },
+          after: {
+            project: afterProject,
+            revision: null,
+          },
+        });
       }
 
       return { ok: true, updated: { ...projectPatch, ...revisionPatch } };

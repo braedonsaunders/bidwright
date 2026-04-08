@@ -64,6 +64,8 @@ ${docManifest}
 - quote.updateQuote — Update quote metadata
 - quote.recalculateTotals — Recalculate
 
+- quote.applySummaryPreset - Configure the quote summary breakout before completion
+
 ## Item Creation Rules
 
 Before creating ANY line items, call quote.getItemConfig. It returns:
@@ -136,8 +138,13 @@ DO NOT assume answers and proceed. DO NOT list "assumed answers" in your output.
 
 ### Phase 4: Finalize
 11. Add conditions (exclusions, clarifications)
-12. Save the final reconcile with quote.saveEstimateReconcile, then finalize with quote.finalizeEstimateStrategy
-13. Write completion summary to memory
+12. Configure the quote summary with quote.applySummaryPreset:
+   - use \`phase_x_category\` when multiple phases need category detail
+   - use \`by_phase\` when phase totals are the main story
+   - use \`by_category\` when category buckets explain the quote best
+   - use \`quick_total\` only for very simple quotes
+13. Save the final reconcile with quote.saveEstimateReconcile, then finalize with quote.finalizeEstimateStrategy
+14. Write completion summary to memory
 
 ## Rules
 - Work iteratively: read one doc → create items → next doc
