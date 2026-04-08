@@ -348,6 +348,12 @@ export function SettingsPage({
             defaultMarkup: apiSettings.defaults.defaultMarkup ?? prev.defaults.defaultMarkup,
             defaultBreakoutStyle: apiSettings.defaults.breakoutStyle || prev.defaults.defaultBreakoutStyle,
             defaultQuoteType: apiSettings.defaults.quoteType || prev.defaults.defaultQuoteType,
+            benchmarkingEnabled: apiSettings.defaults.benchmarkingEnabled ?? prev.defaults.benchmarkingEnabled,
+            benchmarkMinimumSimilarity: apiSettings.defaults.benchmarkMinimumSimilarity ?? prev.defaults.benchmarkMinimumSimilarity,
+            benchmarkMaximumComparables: apiSettings.defaults.benchmarkMaximumComparables ?? prev.defaults.benchmarkMaximumComparables,
+            benchmarkLowerHoursRatio: apiSettings.defaults.benchmarkLowerHoursRatio ?? prev.defaults.benchmarkLowerHoursRatio,
+            benchmarkUpperHoursRatio: apiSettings.defaults.benchmarkUpperHoursRatio ?? prev.defaults.benchmarkUpperHoursRatio,
+            requireHumanReviewForBenchmarkOutliers: apiSettings.defaults.requireHumanReviewForBenchmarkOutliers ?? prev.defaults.requireHumanReviewForBenchmarkOutliers,
           },
           users: prev.users,
           integrations: {
@@ -710,20 +716,41 @@ export function SettingsPage({
     setExpandedPersonaId(tempId);
   };
 
+  const parsePersonaJsonField = (value: unknown) => {
+    if (typeof value === "string") {
+      try { return value.trim() ? JSON.parse(value) : {}; } catch { return {}; }
+    }
+    return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  };
+
+  const patchPersonaNestedJsonField = (
+    personaId: string,
+    field: "defaultAssumptions" | "productivityGuidance" | "commercialGuidance",
+    currentValue: unknown,
+    section: string,
+    patch: Record<string, unknown>,
+  ) => {
+    const currentRoot = parsePersonaJsonField(currentValue);
+    const currentSection = parsePersonaJsonField(currentRoot[section]);
+    updatePersonaEdit(personaId, {
+      [field]: {
+        ...currentRoot,
+        [section]: {
+          ...currentSection,
+          ...patch,
+        },
+      },
+    } as Partial<EstimatorPersona>);
+  };
+
   const normalizePersonaForSave = (persona: Partial<EstimatorPersona>): Partial<EstimatorPersona> => {
-    const parseJsonField = (value: unknown) => {
-      if (typeof value === "string") {
-        try { return value.trim() ? JSON.parse(value) : {}; } catch { return {}; }
-      }
-      return value && typeof value === "object" ? value : {};
-    };
     return {
       ...persona,
       packageBuckets: Array.isArray(persona.packageBuckets) ? persona.packageBuckets : [],
       reviewFocusAreas: Array.isArray(persona.reviewFocusAreas) ? persona.reviewFocusAreas : [],
-      defaultAssumptions: parseJsonField(persona.defaultAssumptions),
-      productivityGuidance: parseJsonField(persona.productivityGuidance),
-      commercialGuidance: parseJsonField(persona.commercialGuidance),
+      defaultAssumptions: parsePersonaJsonField(persona.defaultAssumptions),
+      productivityGuidance: parsePersonaJsonField(persona.productivityGuidance),
+      commercialGuidance: parsePersonaJsonField(persona.commercialGuidance),
     };
   };
 
@@ -784,6 +811,12 @@ export function SettingsPage({
         currency: settings.general.currency,
         dateFormat: settings.general.dateFormat,
         fiscalYearStart: settings.general.fiscalYearStart,
+        benchmarkingEnabled: settings.defaults.benchmarkingEnabled,
+        benchmarkMinimumSimilarity: settings.defaults.benchmarkMinimumSimilarity,
+        benchmarkMaximumComparables: settings.defaults.benchmarkMaximumComparables,
+        benchmarkLowerHoursRatio: settings.defaults.benchmarkLowerHoursRatio,
+        benchmarkUpperHoursRatio: settings.defaults.benchmarkUpperHoursRatio,
+        requireHumanReviewForBenchmarkOutliers: settings.defaults.requireHumanReviewForBenchmarkOutliers,
       },
       integrations: {
         openaiKey: settings.integrations.openaiApiKey,
@@ -1306,31 +1339,111 @@ export function SettingsPage({
                 <CardTitle>Default Values</CardTitle>
               </CardHeader>
               <CardBody className="space-y-4">
-                <div>
-                  <Label>Default Markup (%)</Label>
-                  <Input
-                    type="number"
-                    value={settings.defaults.defaultMarkup}
-                    onChange={(e) => updateDefaults({ defaultMarkup: parseFloat(e.target.value) || 0 })}
-                    placeholder="15"
-                  />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div>
+                    <Label>Default Markup (%)</Label>
+                    <Input
+                      type="number"
+                      value={settings.defaults.defaultMarkup}
+                      onChange={(e) => updateDefaults({ defaultMarkup: parseFloat(e.target.value) || 0 })}
+                      placeholder="15"
+                    />
+                  </div>
+                  <div>
+                    <Label>Default Breakout Style</Label>
+                    <Select value={settings.defaults.defaultBreakoutStyle} onChange={(e) => updateDefaults({ defaultBreakoutStyle: e.target.value })}>
+                      <option value="category">By Category</option>
+                      <option value="phase">By Phase</option>
+                      <option value="worksheet">By Worksheet</option>
+                      <option value="flat">Flat (No Breakout)</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Default Quote Type</Label>
+                    <Select value={settings.defaults.defaultQuoteType} onChange={(e) => updateDefaults({ defaultQuoteType: e.target.value })}>
+                      <option value="Firm">Firm</option>
+                      <option value="Budget">Budget</option>
+                      <option value="BudgetDNE">Budget DNE</option>
+                    </Select>
+                  </div>
                 </div>
-                <div>
-                  <Label>Default Breakout Style</Label>
-                  <Select value={settings.defaults.defaultBreakoutStyle} onChange={(e) => updateDefaults({ defaultBreakoutStyle: e.target.value })}>
-                    <option value="category">By Category</option>
-                    <option value="phase">By Phase</option>
-                    <option value="worksheet">By Worksheet</option>
-                    <option value="flat">Flat (No Breakout)</option>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Default Quote Type</Label>
-                  <Select value={settings.defaults.defaultQuoteType} onChange={(e) => updateDefaults({ defaultQuoteType: e.target.value })}>
-                    <option value="Firm">Firm</option>
-                    <option value="Budget">Budget</option>
-                    <option value="BudgetDNE">Budget DNE</option>
-                  </Select>
+
+                <Separator />
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <Label className="mb-1 block">Historical Benchmarking</Label>
+                      <p className="text-xs text-fg/40">
+                        Controls whether AI estimates can use organization quote history as a benchmark input.
+                      </p>
+                    </div>
+                    <Toggle
+                      checked={settings.defaults.benchmarkingEnabled}
+                      onChange={(val) => updateDefaults({ benchmarkingEnabled: val })}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div>
+                      <Label>Minimum Similarity</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        value={settings.defaults.benchmarkMinimumSimilarity}
+                        onChange={(e) => updateDefaults({ benchmarkMinimumSimilarity: parseFloat(e.target.value) || 0 })}
+                        placeholder="0.55"
+                      />
+                      <p className="mt-1 text-[11px] text-fg/35">Comparables below this similarity score are discarded.</p>
+                    </div>
+                    <div>
+                      <Label>Maximum Comparables</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={settings.defaults.benchmarkMaximumComparables}
+                        onChange={(e) => updateDefaults({ benchmarkMaximumComparables: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        placeholder="5"
+                      />
+                      <p className="mt-1 text-[11px] text-fg/35">Caps how many historical jobs are included in benchmark medians.</p>
+                    </div>
+                    <div>
+                      <Label>Lower Review Ratio</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        value={settings.defaults.benchmarkLowerHoursRatio}
+                        onChange={(e) => updateDefaults({ benchmarkLowerHoursRatio: parseFloat(e.target.value) || 0 })}
+                        placeholder="0.75"
+                      />
+                      <p className="mt-1 text-[11px] text-fg/35">Require review if hours or calibrated totals fall below this share of the median.</p>
+                    </div>
+                    <div>
+                      <Label>Upper Review Ratio</Label>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        value={settings.defaults.benchmarkUpperHoursRatio}
+                        onChange={(e) => updateDefaults({ benchmarkUpperHoursRatio: parseFloat(e.target.value) || 0 })}
+                        placeholder="1.25"
+                      />
+                      <p className="mt-1 text-[11px] text-fg/35">Require review if hours or calibrated totals rise above this share of the median.</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 rounded-lg border border-line bg-panel2/40 px-4 py-3">
+                    <div>
+                      <Label className="mb-1 block">Require Human Review For Outliers</Label>
+                      <p className="text-xs text-fg/40">
+                        When enabled, benchmark and calibration envelope outliers stop at review instead of auto-completing.
+                      </p>
+                    </div>
+                    <Toggle
+                      checked={settings.defaults.requireHumanReviewForBenchmarkOutliers}
+                      onChange={(val) => updateDefaults({ requireHumanReviewForBenchmarkOutliers: val })}
+                    />
+                  </div>
                 </div>
               </CardBody>
             </Card>
@@ -2207,6 +2320,11 @@ export function SettingsPage({
                 {personas.map((persona) => {
                   const edited = getPersonaEdit(persona);
                   const isExpanded = expandedPersonaId === persona.id;
+                  const defaultAssumptions = parsePersonaJsonField((edited as any).defaultAssumptions);
+                  const productivityGuidance = parsePersonaJsonField((edited as any).productivityGuidance);
+                  const commercialGuidance = parsePersonaJsonField((edited as any).commercialGuidance);
+                  const supervisionGuidance = parsePersonaJsonField(productivityGuidance.supervision);
+                  const packagingGuidance = parsePersonaJsonField(commercialGuidance.packaging);
                   return (
                     <div key={persona.id}>
                       <div
@@ -2304,6 +2422,118 @@ export function SettingsPage({
                                 placeholder="Supports, logistics, testing..."
                               />
                               <p className="mt-1 text-[10px] text-fg/30">Areas the reconcile pass should scrutinize first</p>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-line bg-panel/50 p-4 space-y-4">
+                            <div>
+                              <p className="text-sm font-medium text-fg">Editable Estimating Policy</p>
+                              <p className="text-xs text-fg/40 mt-1">
+                                These helpers write into the persona JSON so supervision and commercialization rules live in user-editable policy, not the prompt generator.
+                              </p>
+                            </div>
+                            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                              <div className="space-y-3">
+                                <p className="text-xs font-medium text-fg/70 uppercase tracking-wide">Supervision</p>
+                                <div>
+                                  <Label>Coverage Mode</Label>
+                                  <Select
+                                    value={String(supervisionGuidance.coverageMode ?? "single_source")}
+                                    onChange={(e) => patchPersonaNestedJsonField(
+                                      persona.id,
+                                      "productivityGuidance",
+                                      (edited as any).productivityGuidance,
+                                      "supervision",
+                                      { coverageMode: e.target.value },
+                                    )}
+                                  >
+                                    <option value="single_source">Single source only</option>
+                                    <option value="embedded">Embedded in packages</option>
+                                    <option value="general_conditions">General Conditions</option>
+                                    <option value="hybrid">Hybrid split</option>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label>Foreman To Trades</Label>
+                                  <Input
+                                    value={String(supervisionGuidance.foremanToTrades ?? "")}
+                                    onChange={(e) => patchPersonaNestedJsonField(
+                                      persona.id,
+                                      "productivityGuidance",
+                                      (edited as any).productivityGuidance,
+                                      "supervision",
+                                      { foremanToTrades: e.target.value },
+                                    )}
+                                    placeholder="1:6"
+                                  />
+                                </div>
+                                <div>
+                                  <Label>Superintendent Threshold (Weeks)</Label>
+                                  <Input
+                                    type="number"
+                                    value={String(supervisionGuidance.superintendentThresholdWeeks ?? "")}
+                                    onChange={(e) => patchPersonaNestedJsonField(
+                                      persona.id,
+                                      "productivityGuidance",
+                                      (edited as any).productivityGuidance,
+                                      "supervision",
+                                      { superintendentThresholdWeeks: parseFloat(e.target.value) || 0 },
+                                    )}
+                                    placeholder="4"
+                                  />
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                <p className="text-xs font-medium text-fg/70 uppercase tracking-wide">Commercialization</p>
+                                <div>
+                                  <Label>Weak Evidence Pricing Mode</Label>
+                                  <Select
+                                    value={String(packagingGuidance.weakEvidencePricingMode ?? "allowance")}
+                                    onChange={(e) => patchPersonaNestedJsonField(
+                                      persona.id,
+                                      "commercialGuidance",
+                                      (edited as any).commercialGuidance,
+                                      "packaging",
+                                      { weakEvidencePricingMode: e.target.value },
+                                    )}
+                                  >
+                                    <option value="allowance">Allowance</option>
+                                    <option value="subcontract">Subcontract</option>
+                                    <option value="historical_allowance">Historical allowance</option>
+                                    <option value="detailed">Detailed takeoff</option>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label>Shop Fabrication Pricing Mode</Label>
+                                  <Select
+                                    value={String(packagingGuidance.shopFabricationPricingMode ?? "detailed")}
+                                    onChange={(e) => patchPersonaNestedJsonField(
+                                      persona.id,
+                                      "commercialGuidance",
+                                      (edited as any).commercialGuidance,
+                                      "packaging",
+                                      { shopFabricationPricingMode: e.target.value },
+                                    )}
+                                  >
+                                    <option value="detailed">Detailed takeoff</option>
+                                    <option value="subcontract">Subcontract</option>
+                                    <option value="historical_allowance">Historical allowance</option>
+                                    <option value="allowance">Allowance</option>
+                                  </Select>
+                                </div>
+                                <div>
+                                  <Label>Default Subcontract Scopes</Label>
+                                  <Input
+                                    value={(Array.isArray(defaultAssumptions.subcontractDefaults) ? defaultAssumptions.subcontractDefaults : []).join(", ")}
+                                    onChange={(e) => updatePersonaEdit(persona.id, {
+                                      defaultAssumptions: {
+                                        ...defaultAssumptions,
+                                        subcontractDefaults: e.target.value.split(",").map((value) => value.trim()).filter(Boolean),
+                                      },
+                                    } as any)}
+                                    placeholder="scaffolding, NDT, insulation"
+                                  />
+                                </div>
+                              </div>
                             </div>
                           </div>
                           <div className="grid grid-cols-1 gap-4">

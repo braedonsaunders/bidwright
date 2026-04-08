@@ -270,6 +270,69 @@ function isJunkFile(name: string): boolean {
   return false;
 }
 
+function splitSourceDocumentPath(fileName: string) {
+  return fileName.replace(/\\/g, "/").split("/").filter(Boolean);
+}
+
+function sortTreeItems(items: TreeItem[]): TreeItem[] {
+  return items
+    .map((item) => item.type === "directory" ? { ...item, children: sortTreeItems(item.children) } : item)
+    .sort((a, b) => {
+      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+function buildSourceDocumentChildren(parentId: string, documents: SourceDocument[]): TreeItem[] {
+  const rootChildren: TreeItem[] = [];
+  const directoryMap = new Map<string, TreeItem>();
+
+  for (const doc of documents) {
+    const segments = splitSourceDocumentPath(doc.fileName);
+    const fileName = segments.pop() ?? doc.fileName;
+    let currentChildren = rootChildren;
+    let currentParentId = parentId;
+    let currentPath = "";
+
+    for (const segment of segments) {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      let directory = directoryMap.get(currentPath);
+      if (!directory) {
+        directory = {
+          id: `${parentId}::dir::${currentPath}`,
+          name: segment,
+          type: "directory",
+          parentId: currentParentId,
+          children: [],
+          isAutoFolder: true,
+          documentType: doc.documentType,
+        };
+        directoryMap.set(currentPath, directory);
+        currentChildren.push(directory);
+      }
+
+      currentChildren = directory.children;
+      currentParentId = directory.id;
+    }
+
+    currentChildren.push({
+      id: `doc-${doc.id}`,
+      name: fileName,
+      type: "file",
+      parentId: currentParentId,
+      children: [],
+      sourceDocument: doc,
+      documentType: doc.documentType,
+      fileType: doc.fileType,
+      pageCount: doc.pageCount,
+      createdAt: doc.createdAt,
+      extractedText: doc.extractedText,
+    });
+  }
+
+  return sortTreeItems(rootChildren);
+}
+
 function buildAutoFolders(documents: SourceDocument[]): TreeItem[] {
   // Filter out macOS resource forks (._*) and other junk files
   documents = documents.filter((d) => !isJunkFile(d.fileName));
@@ -286,19 +349,7 @@ function buildAutoFolders(documents: SourceDocument[]): TreeItem[] {
       parentId: null,
       isAutoFolder: true,
       documentType: cfg.documentType,
-      children: docs.map((doc) => ({
-        id: `doc-${doc.id}`,
-        name: doc.fileName,
-        type: "file" as const,
-        parentId: `auto-${cfg.key}`,
-        children: [],
-        sourceDocument: doc,
-        documentType: doc.documentType,
-        fileType: doc.fileType,
-        pageCount: doc.pageCount,
-        createdAt: doc.createdAt,
-        extractedText: doc.extractedText,
-      })),
+      children: buildSourceDocumentChildren(`auto-${cfg.key}`, docs),
     });
   }
 
@@ -311,19 +362,7 @@ function buildAutoFolders(documents: SourceDocument[]): TreeItem[] {
       type: "directory",
       parentId: null,
       isAutoFolder: true,
-      children: uncategorized.map((doc) => ({
-        id: `doc-${doc.id}`,
-        name: doc.fileName,
-        type: "file" as const,
-        parentId: "auto-other",
-        children: [],
-        sourceDocument: doc,
-        documentType: doc.documentType,
-        fileType: doc.fileType,
-        pageCount: doc.pageCount,
-        createdAt: doc.createdAt,
-        extractedText: doc.extractedText,
-      })),
+      children: buildSourceDocumentChildren("auto-other", uncategorized),
     });
   }
 

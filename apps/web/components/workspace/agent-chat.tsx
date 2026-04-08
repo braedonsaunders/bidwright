@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, ArrowDown, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
-import { Badge, Button, Select } from "@/components/ui";
+import { Badge, Button, Select, Textarea } from "@/components/ui";
 import {
   startIntake, getIntakeStatus, stopIntake, answerIntake, getSettings, type IntakeStatusResult,
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
   getCliPendingQuestion, answerCliQuestion,
+  getProjectWorkspace,
   listPersonas, type EstimatorPersona,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,21 @@ interface AgentChatProps {
   autoStartIntake?: boolean;
   onIntakeStarted?: () => void;
   onWorkspaceMutated?: () => void;
+}
+
+interface PendingQuestionStep {
+  id?: string;
+  prompt: string;
+  options?: string[];
+  placeholder?: string;
+  context?: string;
+}
+
+interface PendingQuestionPrompt {
+  question: string;
+  options?: string[];
+  context?: string;
+  questions?: PendingQuestionStep[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
@@ -285,6 +301,590 @@ function LiveToolFeed({ toolCalls, isRunning }: { toolCalls: ToolCallEntry[]; is
 
 // ─── Main Component ───────────────────────────────────────────────────
 
+interface GuidedQuestion {
+  id: string;
+  prompt: string;
+  options: string[];
+  placeholder: string;
+  context?: string;
+}
+
+interface GuidedQuestionnaire {
+  summary: string;
+  questions: GuidedQuestion[];
+}
+
+const DEFAULTS_PATTERN = /(reasonable defaults|use defaults|proceed .*defaults)/i;
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*/g, "")
+    .replace(/`/g, "")
+    .replace(/\[(.*?)\]\(.*?\)/g, "$1")
+    .trim();
+}
+
+function normalizePromptText(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function extractNumberedBlocks(section: string): string[] {
+  const matches = section.matchAll(/(?:^|\n)(\d+)\.\s+([\s\S]*?)(?=(?:\n\d+\.\s)|$)/g);
+  return Array.from(matches, (match) => match[2].trim()).filter(Boolean);
+}
+
+function looksLikeQuestionHeading(paragraph: string): boolean {
+  const normalized = stripMarkdown(paragraph.replace(/\s+/g, " ").trim());
+  if (!normalized) return false;
+  if (/^[A-Z][A-Za-z0-9/&(),'"\- ]{1,60}:/.test(normalized)) return true;
+  if (normalized.endsWith("?")) return true;
+  return false;
+}
+
+function extractPromptBlocks(section: string): string[] {
+  const numberedBlocks = extractNumberedBlocks(section);
+  if (numberedBlocks.length > 0) return numberedBlocks;
+
+  const paragraphs = normalizePromptText(section).split(/\n\s*\n+/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const blocks: string[] = [];
+
+  for (const paragraph of paragraphs) {
+    if (blocks.length === 0 || looksLikeQuestionHeading(paragraph)) {
+      blocks.push(paragraph);
+      continue;
+    }
+    blocks[blocks.length - 1] = `${blocks[blocks.length - 1]}\n${paragraph}`;
+  }
+
+  return blocks;
+}
+
+function splitBlock(block: string) {
+  const lines = normalizePromptText(block).split("\n").map((line) => line.trim()).filter(Boolean);
+  const bullets: string[] = [];
+  const prose: string[] = [];
+
+  for (const [index, line] of lines.entries()) {
+    if (/^[-*]\s+/.test(line)) {
+      bullets.push(stripMarkdown(line.replace(/^[-*]\s+/, "")));
+    } else if (index > 0 && /\?$/.test(line)) {
+      bullets.push(stripMarkdown(line));
+    } else {
+      prose.push(line);
+    }
+  }
+
+  return {
+    prose: stripMarkdown(prose.join(" ")),
+    bullets,
+  };
+}
+
+function deriveQuestionOptions(prompt: string): string[] {
+  const lower = prompt.toLowerCase();
+
+  if (lower.includes("match your understanding") || lower.includes("scope summary")) {
+    return ["Yes, that scope looks right", "Mostly right", "No, it needs changes"];
+  }
+  if (lower.includes("owner-furnished")) {
+    return ["Owner-furnished / install only", "Include procurement", "Mixed / partial"];
+  }
+  if (lower.includes("electrical scope") || lower.includes("electrical work")) {
+    return ["Excluded / by others", "Included in our scope", "Mixed / partial"];
+  }
+  if (lower.includes("subcontract") || lower.includes("rigging") || lower.includes("crane")) {
+    return ["Subcontract", "Self-perform", "Mixed / unsure"];
+  }
+  if (lower.includes("shut down")) {
+    return ["Yes", "No", "Partially / phased"];
+  }
+  if (lower.includes("site access hours")) {
+    return ["Weekday dayshift", "Extended hours", "24/7"];
+  }
+  if (lower.includes("project duration") || lower.includes("target completion")) {
+    return ["Less than 4 weeks", "4-6 weeks", "More than 6 weeks"];
+  }
+  if (lower.includes("union") || lower.includes("open shop")) {
+    return ["Union", "Open shop", "Unsure"];
+  }
+  if (lower.includes("overtime") || lower.includes("shift premium")) {
+    return ["No overtime", "Some overtime", "Shift work / premium"];
+  }
+  if (lower.includes("fabrication area") || lower.includes("laydown area") || lower.includes("shop fabrication location")) {
+    return ["On-site laydown area", "Off-site shop fabrication", "Mixed / both"];
+  }
+  if (lower.includes("access equipment")) {
+    return ["Scissor lifts", "Boom lifts", "Scaffolding / mixed access"];
+  }
+  if (lower.includes("other trades")) {
+    return ["No other trades", "Some trades should be subcontracted", "Unsure"];
+  }
+
+  return ["Yes", "No", "Unsure"];
+}
+
+function deriveQuestionPlaceholder(prompt: string): string {
+  const lower = prompt.toLowerCase();
+
+  if (lower.includes("scope summary") || lower.includes("match your understanding")) {
+    return "Add scope additions, exclusions, or corrections";
+  }
+  if (lower.includes("project duration") || lower.includes("target completion")) {
+    return "Add the target duration or completion date";
+  }
+  if (lower.includes("site access hours")) {
+    return "Add the actual working hours if needed";
+  }
+  if (lower.includes("other trades")) {
+    return "List any additional trades or scopes";
+  }
+  if (lower.includes("overtime") || lower.includes("shift premium")) {
+    return "Add overtime rules or shift details";
+  }
+  if (lower.includes("fabrication area") || lower.includes("laydown area")) {
+    return "Add any fabrication or shipping constraints";
+  }
+
+  return "Add details if needed";
+}
+
+function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestionnaire | null {
+  if (prompt.questions && prompt.questions.length > 0) {
+    return {
+      summary: prompt.question,
+      questions: prompt.questions.map((question, index) => ({
+        id: question.id || `guided-${index + 1}`,
+        prompt: question.prompt,
+        options: question.options && question.options.length > 0 ? question.options : deriveQuestionOptions(question.prompt),
+        placeholder: question.placeholder || deriveQuestionPlaceholder(question.prompt),
+        context: question.context,
+      })),
+    };
+  }
+
+  const text = normalizePromptText(prompt.question);
+  const clarifyingMatch = text.match(/(?:\*\*CLARIFYING QUESTIONS:\*\*|##\s*Clarifying Questions|Clarifying Questions:?)([\s\S]*)$/i);
+  if (!clarifyingMatch) return null;
+
+  const clarifyingSection = clarifyingMatch[1]?.trim();
+  if (!clarifyingSection) return null;
+
+  const summary = text.slice(0, clarifyingMatch.index).trim();
+  const blocks = extractPromptBlocks(clarifyingSection);
+  if (blocks.length === 0) return null;
+
+  const questions: GuidedQuestion[] = [
+    {
+      id: "scope-confirmation",
+      prompt: "Does the scope summary match your understanding?",
+      options: deriveQuestionOptions("scope summary"),
+      placeholder: deriveQuestionPlaceholder("scope summary"),
+    },
+  ];
+
+  for (const block of blocks) {
+    const { prose, bullets } = splitBlock(block);
+    const promptText = prose.replace(/:\s*$/, "").trim();
+
+    if (bullets.length > 0) {
+      for (const bullet of bullets) {
+        const isQuestion = /\?$/.test(bullet);
+        let derivedPrompt = isQuestion ? bullet : `${bullet}?`;
+
+        if (/^any others\??$/i.test(bullet) && /subcontract|self-perform/i.test(promptText)) {
+          derivedPrompt = "Any other activities that should be subcontracted?";
+        } else if (/subcontract|self-perform/i.test(promptText)) {
+          derivedPrompt = `How should we handle ${bullet.replace(/\?$/, "")}?`;
+        } else if (/access equipment/i.test(promptText)) {
+          derivedPrompt = "What access equipment is available or planned?";
+        } else if (!isQuestion && promptText) {
+          derivedPrompt = `${promptText.replace(/\?$/, "")} ${bullet}`.trim();
+        }
+
+        questions.push({
+          id: `${questions.length + 1}`,
+          prompt: stripMarkdown(derivedPrompt),
+          options: deriveQuestionOptions(`${promptText} ${bullet}`),
+          placeholder: deriveQuestionPlaceholder(`${promptText} ${bullet}`),
+        });
+      }
+      continue;
+    }
+
+    if (!promptText) continue;
+
+    questions.push({
+      id: `${questions.length + 1}`,
+      prompt: promptText,
+      options: deriveQuestionOptions(promptText),
+      placeholder: deriveQuestionPlaceholder(promptText),
+    });
+  }
+
+  return questions.length > 0 ? { summary, questions } : null;
+}
+
+function compileGuidedAnswer(questionnaire: GuidedQuestionnaire, responses: Record<string, { choice?: string; detail: string }>) {
+  const lines = ["I answered each question individually."];
+
+  questionnaire.questions.forEach((question, index) => {
+    const response = responses[question.id];
+    if (!response) return;
+
+    const detail = response.detail.trim();
+
+    lines.push(`${index + 1}. ${question.prompt}`);
+    if (response.choice) {
+      lines.push(`   Choice: ${response.choice}`);
+    }
+    if (detail) {
+      lines.push(`   Detail: ${detail}`);
+    }
+  });
+
+  return lines.join("\n");
+}
+
+function promptMatchesAskUserEvent(prompt: PendingQuestionPrompt, event: any): boolean {
+  return normalizePromptText(event?.data?.question || "") === normalizePromptText(prompt.question || "");
+}
+
+function findAnswerForAskUser(events: any[], askIndex: number): string | null {
+  for (let i = askIndex + 1; i < events.length; i += 1) {
+    const event = events[i];
+    if (!event) continue;
+    if (event.type === "askUser" || event.type === "run_divider") break;
+    if (event.type === "userAnswer") {
+      return typeof event.data?.answer === "string" ? event.data.answer : null;
+    }
+  }
+
+  return null;
+}
+
+function isDuplicateAskUserEvent(events: any[], askIndex: number): boolean {
+  const current = events[askIndex];
+  const currentQuestion = normalizePromptText(current?.data?.question || "");
+  if (!currentQuestion) return false;
+
+  for (let i = askIndex - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event) continue;
+    if (event.type === "userAnswer" || event.type === "run_divider") break;
+    if (event.type !== "askUser") continue;
+
+    const priorQuestion = normalizePromptText(event?.data?.question || "");
+    if (priorQuestion !== currentQuestion) continue;
+
+    return !findAnswerForAskUser(events, i);
+  }
+
+  return false;
+}
+
+function hasOpenAskUserEvent(events: any[] | undefined, prompt: PendingQuestionPrompt): boolean {
+  const timeline = events ?? [];
+  return timeline.some((event, index) =>
+    event?.type === "askUser"
+    && promptMatchesAskUserEvent(prompt, event)
+    && !isDuplicateAskUserEvent(timeline, index)
+    && !findAnswerForAskUser(timeline, index),
+  );
+}
+
+function appendTimelineEvent(events: any[] | undefined, event: any): any[] {
+  const timeline = events ?? [];
+
+  if (event?.type === "askUser") {
+    const prompt: PendingQuestionPrompt = {
+      question: event?.data?.question || "",
+      options: event?.data?.options || [],
+      context: event?.data?.context || "",
+      questions: event?.data?.questions || [],
+    };
+
+    if (prompt.question && hasOpenAskUserEvent(timeline, prompt)) {
+      return timeline;
+    }
+  }
+
+  if (event?.type === "userAnswer") {
+    const lastEvent = timeline[timeline.length - 1];
+    if (
+      lastEvent?.type === "userAnswer"
+      && normalizePromptText(lastEvent?.data?.answer || "") === normalizePromptText(event?.data?.answer || "")
+    ) {
+      return timeline;
+    }
+  }
+
+  return [...timeline, { ...event, timestamp: event?.timestamp || new Date().toISOString() }];
+}
+
+function ensurePromptTimelineEvent(events: any[] | undefined, prompt: PendingQuestionPrompt | null | undefined): any[] {
+  if (!prompt?.question) return events ?? [];
+  if (hasOpenAskUserEvent(events, prompt)) return events ?? [];
+
+  return appendTimelineEvent(events, {
+    type: "askUser",
+    data: {
+      question: prompt.question,
+      options: prompt.options || [],
+      context: prompt.context || "",
+      questions: prompt.questions || [],
+    },
+  });
+}
+
+function PendingQuestionCard({
+  prompt,
+  promptKey,
+  onSubmit,
+}: {
+  prompt: PendingQuestionPrompt;
+  promptKey: string;
+  onSubmit: (answer: string) => Promise<void>;
+}) {
+  const questionnaire = buildGuidedQuestionnaire(prompt);
+  const hasQuestionnaire = Boolean(questionnaire && questionnaire.questions.length > 0);
+  const quickBypassOptions = hasQuestionnaire
+    ? (prompt.options ?? []).filter((option) => DEFAULTS_PATTERN.test(option))
+    : [];
+  const [customAnswer, setCustomAnswer] = useState("");
+  const [responses, setResponses] = useState<Record<string, { choice?: string; detail: string }>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    setCustomAnswer("");
+    setResponses({});
+    setIsSubmitting(false);
+  }, [promptKey]);
+
+  const submitAnswer = useCallback(async (answer: string) => {
+    if (!answer.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onSubmit(answer.trim());
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [isSubmitting, onSubmit]);
+
+  const canSubmitGuided = questionnaire
+    ? questionnaire.questions.every((question) => {
+      const response = responses[question.id];
+      return Boolean(response?.choice || response?.detail.trim());
+    })
+    : false;
+
+  return (
+    <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-warning">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Agent needs your input
+      </div>
+      {prompt.context && (
+        <p className="text-xs text-fg/50">{prompt.context}</p>
+      )}
+
+      {!hasQuestionnaire && (
+        <>
+          <div className="rounded-md border border-line/50 bg-bg/30 p-3 text-sm text-fg/85">
+            <MarkdownRenderer content={prompt.question} />
+          </div>
+
+          {prompt.options && prompt.options.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {prompt.options.map((option, index) => (
+                <button
+                  key={`${option}-${index}`}
+                  type="button"
+                  disabled={isSubmitting}
+                  onClick={() => void submitAnswer(option)}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                    DEFAULTS_PATTERN.test(option)
+                      ? "border-line/60 bg-bg/40 text-fg/75 hover:bg-bg/60"
+                      : "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10",
+                  )}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Textarea
+              value={customAnswer}
+              onChange={(e) => setCustomAnswer(e.target.value)}
+              placeholder="Type your answer..."
+              className="min-h-24 text-xs"
+            />
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => void submitAnswer(customAnswer)}
+                disabled={isSubmitting || !customAnswer.trim()}
+              >
+                {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Send Answer
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {hasQuestionnaire && questionnaire && (
+        <div className="space-y-3">
+          <div className="rounded-md border border-line/50 bg-bg/30 p-3 text-sm text-fg/85">
+            <MarkdownRenderer content={questionnaire.summary} />
+          </div>
+
+          {questionnaire.questions.map((question, index) => {
+            const response = responses[question.id] ?? { detail: "" };
+            return (
+              <div key={question.id} className="rounded-md border border-line/50 bg-bg/20 p-3 space-y-2">
+                <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">
+                  Question {index + 1}
+                </div>
+                <p className="text-sm text-fg/90">{question.prompt}</p>
+                {question.context && (
+                  <p className="text-xs text-fg/50">{question.context}</p>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {question.options.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      disabled={isSubmitting}
+                      onClick={() => {
+                        setResponses((prev) => ({
+                          ...prev,
+                          [question.id]: {
+                            ...prev[question.id],
+                            choice: option,
+                            detail: prev[question.id]?.detail ?? "",
+                          },
+                        }));
+                      }}
+                      className={cn(
+                        "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
+                        response.choice === option
+                          ? "border-accent bg-accent text-white"
+                          : "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10",
+                      )}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+                <Textarea
+                  value={response.detail}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setResponses((prev) => ({
+                      ...prev,
+                      [question.id]: {
+                        ...prev[question.id],
+                        choice: prev[question.id]?.choice,
+                        detail: value,
+                      },
+                    }));
+                  }}
+                  placeholder={question.placeholder}
+                  className="min-h-20 text-xs"
+                />
+              </div>
+            );
+          })}
+
+          {quickBypassOptions.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">
+                Quick actions
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {quickBypassOptions.map((option, index) => (
+                  <button
+                    key={`${option}-${index}`}
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={() => void submitAnswer(option)}
+                    className="rounded-md border border-line/60 bg-bg/40 px-3 py-1.5 text-xs font-medium text-fg/75 transition-colors hover:bg-bg/60"
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              size="sm"
+              onClick={() => void submitAnswer(compileGuidedAnswer(questionnaire, responses))}
+              disabled={isSubmitting || !canSubmitGuided}
+            >
+              {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Submit Answers
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuestionTranscriptCard({
+  prompt,
+  answer,
+}: {
+  prompt: PendingQuestionPrompt;
+  answer?: string | null;
+}) {
+  const questionnaire = buildGuidedQuestionnaire(prompt);
+
+  return (
+    <div className="rounded-lg border border-warning/25 bg-warning/[0.04] p-4 space-y-3">
+      <div className="flex items-center gap-2 text-xs font-medium text-warning">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Agent asked for input
+      </div>
+      {prompt.context && (
+        <p className="text-xs text-fg/50">{prompt.context}</p>
+      )}
+      <div className="rounded-md border border-line/50 bg-bg/30 p-3 text-sm text-fg/85">
+        <MarkdownRenderer content={questionnaire?.summary || prompt.question} />
+      </div>
+      {questionnaire && questionnaire.questions.length > 0 && (
+        <div className="space-y-2">
+          {questionnaire.questions.map((question, index) => (
+            <div key={question.id} className="rounded-md border border-line/40 bg-bg/20 px-3 py-2">
+              <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">
+                Question {index + 1}
+              </div>
+              <p className="mt-1 text-sm text-fg/90">{question.prompt}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="rounded-md border border-line/50 bg-bg/30 p-3">
+        <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">
+          {answer ? "Your answer" : "Status"}
+        </div>
+        {answer ? (
+          <div className="mt-1 text-sm text-fg/85 whitespace-pre-wrap">
+            <MarkdownRenderer content={answer} />
+          </div>
+        ) : (
+          <p className="mt-1 text-sm text-warning">Waiting for answer</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 interface IngestionDoc {
   id: string;
   fileName: string;
@@ -313,10 +913,11 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
   const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
-  const [cliPendingQuestion, setCliPendingQuestion] = useState<{ question: string; options?: string[]; context?: string } | null>(null);
+  const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
+  const [intakeScope, setIntakeScope] = useState("");
   const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -326,6 +927,32 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const eventSourceRef = useRef<EventSource | null>(null);
   const sseReconnectCount = useRef(0);
   const pollFailCount = useRef(0);
+  const intakeScopeEditedRef = useRef(false);
+
+  const recordCliPrompt = useCallback((prompt: PendingQuestionPrompt) => {
+    setCliPendingQuestion(prompt);
+    setIntakeStatus((prev) => prev ? {
+      ...(prev as any),
+      status: "waiting_for_user",
+      events: ensurePromptTimelineEvent(((prev as any).events ?? []) as any[], prompt),
+    } as any : prev);
+  }, []);
+
+  const recordCliAnswer = useCallback((answer: string, prompt?: PendingQuestionPrompt | null) => {
+    if (!answer.trim()) return;
+    setIntakeStatus((prev) => {
+      if (!prev) return prev;
+      const eventsWithPrompt = ensurePromptTimelineEvent(((prev as any).events ?? []) as any[], prompt);
+      return {
+        ...(prev as any),
+        status: "running",
+        events: appendTimelineEvent(eventsWithPrompt, {
+          type: "userAnswer",
+          data: { answer },
+        }),
+      } as any;
+    });
+  }, []);
 
   // Load default provider/model from org settings + detect CLIs
   useEffect(() => {
@@ -354,6 +981,16 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       }).catch(() => {}),
     ]).finally(() => setSettingsReady(true));
   }, []);
+
+  useEffect(() => {
+    intakeScopeEditedRef.current = false;
+    getProjectWorkspace(projectId)
+      .then((workspace) => {
+        if (intakeScopeEditedRef.current) return;
+        setIntakeScope(workspace.workspace.project.scope || "");
+      })
+      .catch(() => {});
+  }, [projectId]);
 
   // Poll ingestion status to show document extraction progress
   useEffect(() => {
@@ -608,7 +1245,13 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         // CLI-based intake (preferred)
         // Use the agent model from org settings, falling back to sensible defaults
         const cliModel = cliAgentModel || (cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4");
-        const result = await startCliSession({ projectId, runtime: cliRuntime, model: cliModel, personaId: selectedPersonaId || undefined });
+        const result = await startCliSession({
+          projectId,
+          runtime: cliRuntime,
+          model: cliModel,
+          scope: intakeScope.trim() || undefined,
+          personaId: selectedPersonaId || undefined,
+        });
         setIntakeSessionId(result.sessionId);
         setIntakeStatus({
           sessionId: result.sessionId, projectId, scope: "", status: "running",
@@ -633,6 +1276,48 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     } finally {
       setIntakeLoading(false);
     }
+  }
+
+  async function retryIntakeSession() {
+    setSessionError(null);
+
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setSseConnected(false);
+    setCliPendingQuestion(null);
+
+    if (cliRuntime) {
+      setIntakeLoading(true);
+      try {
+        const resumed = await resumeCliSession(projectId);
+        setIntakeSessionId(resumed.sessionId || intakeSessionId);
+        setIntakeStatus((prev) => prev ? {
+          ...prev,
+          status: "running",
+        } : {
+          sessionId: resumed.sessionId || intakeSessionId || "",
+          projectId,
+          scope: "",
+          status: "running",
+          toolCallCount: 0,
+          messageCount: 0,
+          summary: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          recentToolCalls: [],
+        } as any);
+        connectToSseStream(projectId);
+        return;
+      } catch {
+        // Fall back to a clean restart if the prior CLI session cannot be resumed.
+      } finally {
+        setIntakeLoading(false);
+      }
+    }
+
+    await handleStartIntake();
   }
 
   // SSE stream connection for CLI runtime
@@ -720,13 +1405,24 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       try {
         const data = JSON.parse(e.data);
         if (data.question) {
-          setCliPendingQuestion({ question: data.question, options: data.options, context: data.context });
+          recordCliPrompt({
+            question: data.question,
+            options: data.options,
+            context: data.context,
+            questions: data.questions,
+          });
         }
       } catch {}
     });
 
-    es.addEventListener("userAnswer", () => {
+    es.addEventListener("userAnswer", (e) => {
       setCliPendingQuestion(null);
+      try {
+        const data = JSON.parse(e.data);
+        recordCliAnswer(data.answer);
+      } catch {
+        setIntakeStatus((prev) => prev ? { ...(prev as any), status: "running" } as any : prev);
+      }
     });
 
     es.addEventListener("status", (e) => {
@@ -869,9 +1565,17 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         try {
           const q = await getCliPendingQuestion(projectId);
           if (q.pending && q.question) {
-            setCliPendingQuestion({ question: q.question, options: q.options, context: q.context });
+            recordCliPrompt({
+              question: q.question,
+              options: q.options,
+              context: q.context,
+              questions: q.questions,
+            });
           } else {
             setCliPendingQuestion(null);
+            setIntakeStatus((prev) => prev && (prev as any).status === "waiting_for_user"
+              ? { ...(prev as any), status: data.status as any } as any
+              : prev);
           }
         } catch { /* ignore question poll failures */ }
 
@@ -995,6 +1699,14 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const isIntakeComplete = intakeStatus?.status === "completed";
   const isIntakeFailed = intakeStatus?.status === "failed";
   const isWaitingForUser = intakeStatus?.status === "waiting_for_user";
+  const timelineEvents: any[] = (intakeStatus as any)?.events ?? [];
+  const hasInlineCliPendingQuestion = Boolean(
+    cliPendingQuestion && timelineEvents.some((evt, index) =>
+      evt.type === "askUser"
+      && normalizePromptText(evt.data?.question || "") === normalizePromptText(cliPendingQuestion.question)
+      && !findAnswerForAskUser(timelineEvents, index),
+    ),
+  );
 
   return (
     <AnimatePresence>
@@ -1044,7 +1756,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <Button
                 size="xs"
                 variant="secondary"
-                onClick={() => { setSessionError(null); createSession(); }}
+                onClick={() => { void retryIntakeSession(); }}
               >
                 <RefreshCw className="h-3 w-3" />
                 Retry
@@ -1099,6 +1811,23 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     </Select>
                   </div>
                 )}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                    Estimator Brief
+                  </label>
+                  <Textarea
+                    value={intakeScope}
+                    onChange={(e) => {
+                      intakeScopeEditedRef.current = true;
+                      setIntakeScope(e.target.value);
+                    }}
+                    placeholder="Commercial or scope instructions for this estimate. Example: subcontract rigging and electrical; shop fab is already quoted at $43,000; mechanical install only."
+                    className="min-h-24 text-xs"
+                  />
+                  <div className="text-[10px] text-fg/35">
+                    Passed into the AI estimate workflow as authoritative scope and commercial direction.
+                  </div>
+                </div>
                 <button
                   onClick={handleStartIntake}
                   disabled={intakeLoading}
@@ -1197,17 +1926,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 )}
                 {(intakeStatus.status === "stopped" || isIntakeFailed) && (
                   <button
-                    onClick={async () => {
-                      if (cliRuntime) {
-                        try {
-                          await resumeCliSession(projectId);
-                          setIntakeStatus((prev) => prev ? { ...prev, status: "running" } : prev);
-                          connectToSseStream(projectId);
-                        } catch { handleStartIntake(); }
-                      } else {
-                        handleStartIntake();
-                      }
-                    }}
+                    onClick={() => { void retryIntakeSession(); }}
                     className="ml-auto rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent"
                     title="Resume / Restart"
                   >
@@ -1219,66 +1938,17 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
             {/* Pending question from agent */}
             {isWaitingForUser && intakeStatus?.pendingQuestion && (
-              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
-                {intakeStatus.pendingQuestion.context && (
-                  <p className="text-xs text-fg/50">{intakeStatus.pendingQuestion.context}</p>
-                )}
-                <p className="text-sm font-medium whitespace-pre-wrap">{intakeStatus.pendingQuestion.question}</p>
-                {intakeStatus.pendingQuestion.options && intakeStatus.pendingQuestion.options.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {intakeStatus.pendingQuestion.options.map((opt, i) => (
-                      <button
-                        key={i}
-                        onClick={async () => {
-                          if (!intakeSessionId) return;
-                          try {
-                            await answerIntake(intakeSessionId, opt);
-                            setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
-                          } catch {}
-                        }}
-                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Type your answer..."
-                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter" && intakeSessionId) {
-                        const input = e.currentTarget;
-                        const val = input.value.trim();
-                        if (!val) return;
-                        try {
-                          await answerIntake(intakeSessionId, val);
-                          input.value = "";
-                          setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
-                        } catch {}
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={async () => {
-                      const input = document.querySelector<HTMLInputElement>("[placeholder='Type your answer...']");
-                      if (!input || !intakeSessionId) return;
-                      const val = input.value.trim();
-                      if (!val) return;
-                      try {
-                        await answerIntake(intakeSessionId, val);
-                        input.value = "";
-                        setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
-                      } catch {}
-                    }}
-                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
-                  >
-                    <Send className="h-3 w-3" />
-                  </button>
-                </div>
-              </div>
+              <PendingQuestionCard
+                prompt={intakeStatus.pendingQuestion as PendingQuestionPrompt}
+                promptKey={`intake-${intakeSessionId}-${intakeStatus.pendingQuestion.question}`}
+                onSubmit={async (answer) => {
+                  if (!intakeSessionId) return;
+                  try {
+                    await answerIntake(intakeSessionId, answer);
+                    setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
+                  } catch {}
+                }}
+              />
             )}
 
             {/* CLI pending question moved to bottom — see before messagesEndRef */}
@@ -1286,7 +1956,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             {/* Unified chronological stream — all events from DB in order */}
             {(() => {
               // Build timeline from ALL event types, in order (DB events are chronological)
-              const events: any[] = (intakeStatus as any)?.events ?? [];
+              const events: any[] = timelineEvents;
 
               return events.map((evt: any, i: number) => {
                 const t = evt.type;
@@ -1318,6 +1988,41 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                       </div>
                     </div>
                   );
+                }
+
+                if (t === "askUser") {
+                  const prompt = evt.data as PendingQuestionPrompt;
+                  if (!prompt?.question) return null;
+                  if (isDuplicateAskUserEvent(events, i)) return null;
+                  const answer = findAnswerForAskUser(events, i);
+                  const isCurrentPending = !answer
+                    && cliRuntime
+                    && cliPendingQuestion
+                    && normalizePromptText(cliPendingQuestion.question) === normalizePromptText(prompt.question);
+
+                  if (isCurrentPending) {
+                    return (
+                      <PendingQuestionCard
+                        key={key}
+                        prompt={cliPendingQuestion}
+                        promptKey={`cli-inline-${projectId}-${cliPendingQuestion.question}`}
+                        onSubmit={async (submittedAnswer) => {
+                          const pendingPrompt = cliPendingQuestion;
+                          try {
+                            await answerCliQuestion(projectId, submittedAnswer);
+                            recordCliAnswer(submittedAnswer, pendingPrompt);
+                            setCliPendingQuestion(null);
+                          } catch {}
+                        }}
+                      />
+                    );
+                  }
+
+                  return <QuestionTranscriptCard key={key} prompt={prompt} answer={answer} />;
+                }
+
+                if (t === "userAnswer") {
+                  return null;
                 }
 
                 // Tool call
@@ -1381,70 +2086,20 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             )}
 
             {/* Pending question from CLI agent (askUser MCP tool) — rendered at bottom so auto-scroll keeps it visible */}
-            {cliRuntime && cliPendingQuestion && (
-              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                <div className="flex items-center gap-2 text-xs font-medium text-warning">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  Agent needs your input
-                </div>
-                {cliPendingQuestion.context && (
-                  <p className="text-xs text-fg/50">{cliPendingQuestion.context}</p>
-                )}
-                <p className="text-sm whitespace-pre-wrap">{cliPendingQuestion.question}</p>
-                {cliPendingQuestion.options && cliPendingQuestion.options.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {cliPendingQuestion.options.map((opt, i) => (
-                      <button
-                        key={i}
-                        onClick={async () => {
-                          try {
-                            await answerCliQuestion(projectId, opt);
-                            setCliPendingQuestion(null);
-                          } catch {}
-                        }}
-                        className="rounded-md border border-accent/30 bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 transition-colors"
-                      >
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Type your answer..."
-                    className="flex-1 rounded-md border border-border bg-bg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-                    id="cli-question-input"
-                    autoFocus
-                    onKeyDown={async (e) => {
-                      if (e.key === "Enter") {
-                        const val = e.currentTarget.value.trim();
-                        if (!val) return;
-                        try {
-                          await answerCliQuestion(projectId, val);
-                          e.currentTarget.value = "";
-                          setCliPendingQuestion(null);
-                        } catch {}
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={async () => {
-                      const input = document.getElementById("cli-question-input") as HTMLInputElement;
-                      if (!input) return;
-                      const val = input.value.trim();
-                      if (!val) return;
-                      try {
-                        await answerCliQuestion(projectId, val);
-                        input.value = "";
-                        setCliPendingQuestion(null);
-                      } catch {}
-                    }}
-                    className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90"
-                  >
-                    <Send className="h-3 w-3" />
-                  </button>
-                </div>
+            {cliRuntime && cliPendingQuestion && !hasInlineCliPendingQuestion && (
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <PendingQuestionCard
+                  prompt={cliPendingQuestion}
+                  promptKey={`cli-${projectId}-${cliPendingQuestion.question}`}
+                  onSubmit={async (answer) => {
+                    const pendingPrompt = cliPendingQuestion;
+                    try {
+                      await answerCliQuestion(projectId, answer);
+                      recordCliAnswer(answer, pendingPrompt);
+                      setCliPendingQuestion(null);
+                    } catch {}
+                  }}
+                />
               </div>
             )}
 

@@ -452,7 +452,7 @@ Do NOT create other worksheets. Only add items to worksheet "${ws.id}".`;
         const finalLoop = new AgentLoop({
           llm: adapter, maxIterations: Math.min(10, Math.floor(maxIterations * 0.05)),
           maxTokens: 4096, temperature: 0, abortSignal: abortController.signal,
-          systemPrompt: `You are finalizing the estimate for "${(project as any).name}". Add conditions (exclusions, clarifications, assumptions), save the final reconcile with quote.saveEstimateReconcile, finalize the strategy with quote.finalizeEstimateStrategy, and write a completion summary to memory. Use quote.createCondition and system.writeMemory.`,
+          systemPrompt: `You are finalizing the estimate for "${(project as any).name}". Add conditions (exclusions, clarifications, assumptions), configure the quote summary breakout with quote.applySummaryPreset using the best-fit preset for the actual quote structure, save the final reconcile with quote.saveEstimateReconcile, finalize the strategy with quote.finalizeEstimateStrategy, and write a completion summary to memory. Use quote.createCondition and system.writeMemory.`,
           onToolCall, onMessage,
         }, planningTools);
 

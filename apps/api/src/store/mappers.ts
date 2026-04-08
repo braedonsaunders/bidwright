@@ -60,7 +60,22 @@ export const DEFAULT_BRAND: AppSettings["brand"] = {
 export const DEFAULT_SETTINGS: AppSettings = {
   general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "", authMethod: "smtp", oauth2TenantId: "", oauth2ClientId: "", oauth2ClientSecret: "" },
-  defaults: { defaultMarkup: 15, breakoutStyle: "category", quoteType: "Firm", timezone: "America/New_York", currency: "USD", dateFormat: "MM/DD/YYYY", fiscalYearStart: 1, maxAgentIterations: 200 },
+  defaults: {
+    defaultMarkup: 15,
+    breakoutStyle: "category",
+    quoteType: "Firm",
+    timezone: "America/New_York",
+    currency: "USD",
+    dateFormat: "MM/DD/YYYY",
+    fiscalYearStart: 1,
+    maxAgentIterations: 200,
+    benchmarkingEnabled: true,
+    benchmarkMinimumSimilarity: 0.55,
+    benchmarkMaximumComparables: 5,
+    benchmarkLowerHoursRatio: 0.75,
+    benchmarkUpperHoursRatio: 1.25,
+    requireHumanReviewForBenchmarkOutliers: true,
+  },
   integrations: { openaiKey: "", anthropicKey: "", openrouterKey: "", geminiKey: "", llmProvider: "anthropic", llmModel: "claude-sonnet-4-20250514", azureDiEndpoint: "", azureDiKey: "", agentRuntime: undefined, agentModel: undefined, maxConcurrentSubAgents: 2 },
   brand: DEFAULT_BRAND,
   termsAndConditions: "",
@@ -113,6 +128,7 @@ export function mapProject(p: any): Project {
     name: p.name,
     clientName: p.clientName,
     location: p.location,
+    scope: p.scope ?? "",
     packageName: p.packageName,
     packageUploadedAt: p.packageUploadedAt,
     ingestionStatus: p.ingestionStatus as Project["ingestionStatus"],
@@ -149,6 +165,7 @@ export function mapQuote(q: any): Quote {
     currentRevisionId: q.currentRevisionId,
     customerExistingNew: q.customerExistingNew as Quote["customerExistingNew"],
     customerId: q.customerId ?? null,
+    customerName: q.customer?.name ?? null,
     customerString: q.customerString,
     customerContactId: q.customerContactId ?? null,
     customerContactString: q.customerContactString,
@@ -393,7 +410,18 @@ export function mapTravelPolicy(t: any): TravelPolicy {
 }
 
 export function mapActivity(a: any): Activity {
-  return { id: a.id, projectId: a.projectId, revisionId: a.revisionId ?? null, type: a.type, data: (a.data as Record<string, unknown>) ?? {}, userId: a.userId ?? null, userName: a.user?.name ?? null, revertible: false, createdAt: toISO(a.createdAt) };
+  const data = (a.data as Record<string, unknown>) ?? {};
+  return {
+    id: a.id,
+    projectId: a.projectId,
+    revisionId: a.revisionId ?? null,
+    type: a.type,
+    data,
+    userId: a.userId ?? (data.actorId as string | null) ?? null,
+    userName: a.user?.name ?? (data.actorName as string | null) ?? null,
+    revertible: false,
+    createdAt: toISO(a.createdAt),
+  };
 }
 
 export function mapReportSection(s: any): ReportSection {

@@ -96,6 +96,14 @@ type ContextMenuState = {
   y: number;
 } | null;
 
+type EntityDropdownPosition = {
+  left: number;
+  top?: number;
+  bottom?: number;
+  maxHeight: number;
+  listMaxHeight: number;
+} | null;
+
 type SortDirection = "asc" | "desc";
 type SortState = { column: ColumnId; direction: SortDirection } | null;
 
@@ -230,6 +238,12 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "margin",
   "phaseId",
 ];
+
+const ENTITY_DROPDOWN_WIDTH = 320;
+const ENTITY_DROPDOWN_GAP = 4;
+const ENTITY_DROPDOWN_MARGIN = 8;
+const ENTITY_DROPDOWN_HEADER_HEIGHT = 44;
+const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 256;
 
 /* ─── Helpers ─── */
 
@@ -487,8 +501,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
-  const [entityDropdownPos, setEntityDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const [entityDropdownPos, setEntityDropdownPos] = useState<EntityDropdownPosition>(null);
   const entityCellRef = useRef<HTMLTableCellElement | null>(null);
+  const entityDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Scroll to highlighted item from global search
   useEffect(() => {
@@ -556,6 +571,45 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   const [catalogSearchTerm, setCatalogSearchTerm] = useState("");
   const [selectedCatalogItemIds, setSelectedCatalogItemIds] = useState<Set<string>>(new Set());
 
+  const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null) => {
+    const anchor = anchorEl ?? entityCellRef.current;
+    if (!anchor || typeof window === "undefined") return;
+
+    const rect = anchor.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const viewportWidth = window.innerWidth;
+    const dropdownWidth = entityDropdownRef.current?.offsetWidth ?? ENTITY_DROPDOWN_WIDTH;
+    const preferredHeight = ENTITY_DROPDOWN_HEADER_HEIGHT + ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT;
+    const spaceBelow = Math.max(
+      0,
+      viewportHeight - rect.bottom - ENTITY_DROPDOWN_GAP - ENTITY_DROPDOWN_MARGIN
+    );
+    const spaceAbove = Math.max(0, rect.top - ENTITY_DROPDOWN_GAP - ENTITY_DROPDOWN_MARGIN);
+    const openAbove = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
+    const availableHeight = openAbove ? spaceAbove : spaceBelow;
+    const maxHeight =
+      availableHeight > ENTITY_DROPDOWN_HEADER_HEIGHT
+        ? Math.min(preferredHeight, availableHeight)
+        : availableHeight;
+    const listMaxHeight = Math.max(
+      0,
+      maxHeight - ENTITY_DROPDOWN_HEADER_HEIGHT
+    );
+    const maxLeft = Math.max(
+      ENTITY_DROPDOWN_MARGIN,
+      viewportWidth - dropdownWidth - ENTITY_DROPDOWN_MARGIN
+    );
+    const left = Math.min(Math.max(rect.left, ENTITY_DROPDOWN_MARGIN), maxLeft);
+
+    setEntityDropdownPos({
+      left,
+      top: openAbove ? undefined : rect.bottom + ENTITY_DROPDOWN_GAP,
+      bottom: openAbove ? viewportHeight - rect.top + ENTITY_DROPDOWN_GAP : undefined,
+      maxHeight,
+      listMaxHeight,
+    });
+  }, []);
+
   // Load entity categories on mount
   useEffect(() => {
     let cancelled = false;
@@ -582,6 +636,21 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       setTimeout(() => entitySearchRef.current?.focus(), 0);
     }
   }, [entityDropdownRowId]);
+
+  useEffect(() => {
+    if (!entityDropdownRowId) return;
+
+    positionEntityDropdown();
+
+    const handleViewportChange = () => positionEntityDropdown();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [entityDropdownRowId, positionEntityDropdown]);
 
   // Focus inline rename input
   useEffect(() => {
@@ -952,6 +1021,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     itemId?: string,
   ) {
     setEntityDropdownRowId(null);
+    setEntityDropdownPos(null);
     setEntitySearchTerm("");
 
     const row = visibleRows.find((r) => r.id === rowId);
@@ -1732,8 +1802,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
               setEntityDropdownRowId(null);
               setEntityDropdownPos(null);
             } else {
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              setEntityDropdownPos({ top: rect.bottom + 4, left: rect.left });
+              positionEntityDropdown(e.currentTarget as HTMLTableCellElement);
               setEntityDropdownRowId(row.id);
               setEntitySearchTerm("");
               setSelectedRowId(row.id);
@@ -1792,12 +1861,18 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
             return createPortal(
               <motion.div
+                ref={entityDropdownRef}
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
                 transition={{ duration: 0.12 }}
-                className="fixed z-[200] w-80 rounded-lg border border-line bg-panel shadow-xl"
-                style={{ top: entityDropdownPos.top, left: entityDropdownPos.left }}
+                className="fixed z-[200] flex w-80 flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
+                style={{
+                  top: entityDropdownPos.top,
+                  bottom: entityDropdownPos.bottom,
+                  left: entityDropdownPos.left,
+                  maxHeight: entityDropdownPos.maxHeight,
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="p-2 border-b border-line">
@@ -1811,11 +1886,15 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                     onKeyDown={(e) => {
                       if (e.key === "Escape") {
                         setEntityDropdownRowId(null);
+                        setEntityDropdownPos(null);
                       }
                     }}
                   />
                 </div>
-                <div className="max-h-64 overflow-y-auto py-1">
+                <div
+                  className="overflow-y-auto py-1"
+                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
+                >
                   {/* Matching category first */}
                   {matchingGroups.map((group) => {
                     const filtered = q
