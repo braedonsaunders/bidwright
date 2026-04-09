@@ -4,8 +4,18 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { buildProjectWorkspace, summarizeProjectTotals, computeSummaryRows, generateSummaryPreset } from "@bidwright/domain";
-import type { SummaryPreset } from "@bidwright/domain";
+import {
+  buildProjectWorkspace,
+  buildSummaryBuilderConfig,
+  computeSummaryRows,
+  createSummaryBuilderPreset,
+  deriveSummaryBuilderFromLegacy,
+  inferSummaryPresetFromBuilder,
+  materializeSummaryRowsFromBuilder,
+  normalizeSummaryBuilderConfig,
+  summarizeProjectTotals,
+} from "@bidwright/domain";
+import type { SummaryBuilderConfig, SummaryPreset } from "@bidwright/domain";
 import type {
   Activity,
   Adjustment,
@@ -944,21 +954,36 @@ export class PrismaApiStore {
     return order[nextStage] > order[current] ? nextStage : current;
   }
 
-  private normalizeEstimateCategory(value: string | null | undefined) {
-    if (!value) return "Uncategorized";
-    const trimmed = value.trim();
-    if (!trimmed) return "Uncategorized";
-    return trimmed === "Materials" ? "Material" : trimmed;
+  private normalizeEstimateCategory(value: string | null | undefined, entityType?: string | null | undefined) {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    const trimmedEntityType = typeof entityType === "string" ? entityType.trim() : "";
+    const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
+
+    if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
+      return "Material";
+    }
+    if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
+      return "Labour";
+    }
+    if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
+      return "Subcontractors";
+    }
+    if (candidates.some((candidate) => candidate === "rental equipment")) {
+      return "Rental Equipment";
+    }
+
+    return trimmed || trimmedEntityType || "Uncategorized";
   }
 
   private estimateItemExtendedHours(item: {
     category?: string | null;
+    entityType?: string | null;
     quantity?: number | null;
     unit1?: number | null;
     unit2?: number | null;
     unit3?: number | null;
   }) {
-    const category = this.normalizeEstimateCategory(item.category);
+    const category = this.normalizeEstimateCategory(item.category, item.entityType);
     if (category !== "Labour") {
       return 0;
     }
@@ -969,22 +994,23 @@ export class PrismaApiStore {
 
   private estimateItemExtendedCost(item: {
     category?: string | null;
+    entityType?: string | null;
     quantity?: number | null;
     cost?: number | null;
   }) {
-    const category = this.normalizeEstimateCategory(item.category);
+    const category = this.normalizeEstimateCategory(item.category, item.entityType);
     const quantity = Number(item.quantity ?? 1);
     const cost = Number(item.cost ?? 0);
     return DIRECT_COST_ESTIMATE_CATEGORIES.has(category) ? quantity * cost : cost;
   }
 
-  private categoryShareMetrics(items: Array<{ category?: string | null; quantity?: number | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
+  private categoryShareMetrics(items: Array<{ category?: string | null; entityType?: string | null; quantity?: number | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
     const totalsByCategory = new Map<string, { value: number; hours: number }>();
     let totalValue = 0;
     let totalHours = 0;
 
     for (const item of items) {
-      const category = this.normalizeEstimateCategory(item.category);
+      const category = this.normalizeEstimateCategory(item.category, item.entityType);
       const value = Number(item.price ?? 0);
       const hours = this.estimateItemExtendedHours(item);
       totalValue += value;
@@ -1057,7 +1083,7 @@ export class PrismaApiStore {
     const categoryTotals = new Map<string, { lineItemCount: number; hours: number; cost: number; price: number }>();
 
     for (const item of items) {
-      const category = this.normalizeEstimateCategory(item.category);
+      const category = this.normalizeEstimateCategory(item.category, item.entityType);
       const existing = categoryTotals.get(category) ?? { lineItemCount: 0, hours: 0, cost: 0, price: 0 };
       existing.lineItemCount += 1;
       existing.hours += this.estimateItemExtendedHours(item);
@@ -1094,7 +1120,7 @@ export class PrismaApiStore {
       const entity = String(item.entityName ?? "").trim().toLowerCase();
       const description = String(item.description ?? "").trim().toLowerCase();
       if (!entity && !description) continue;
-      const signature = `${this.normalizeEstimateCategory(item.category)}|${entity}|${description}`;
+      const signature = `${this.normalizeEstimateCategory(item.category, item.entityType)}|${entity}|${description}`;
       duplicateGroups.set(signature, (duplicateGroups.get(signature) ?? 0) + 1);
     }
     const duplicateEntries = Array.from(duplicateGroups.values()).filter((count) => count > 1);
@@ -1112,12 +1138,27 @@ export class PrismaApiStore {
         acc.price += totals.price;
         return acc;
       }, { lineItemCount: 0, hours: 0, cost: 0, price: 0 });
+    const totalHours = Number(workspace.currentRevision.totalHours ?? workspace.estimate.totals.totalHours ?? 0);
+    const subtotal = Number(workspace.currentRevision.subtotal ?? workspace.estimate.totals.subtotal ?? 0);
+    const worksheetCount = workspace.worksheets.length;
+    const lineItemCount = workspace.estimate.lineItems.length;
+    const benchmarkProfile = strategy && typeof strategy.benchmarkProfile === "object"
+      ? { ...(strategy.benchmarkProfile as Record<string, unknown>) }
+      : {};
+    benchmarkProfile.current = {
+      ...this.asEstimateObject(benchmarkProfile.current),
+      totalHours,
+      subtotal,
+      hoursPerItem: lineItemCount > 0 ? Number((totalHours / lineItemCount).toFixed(2)) : 0,
+      hoursPerWorksheet: worksheetCount > 0 ? Number((totalHours / worksheetCount).toFixed(2)) : 0,
+      pricePerHour: totalHours > 0 ? Number((subtotal / totalHours).toFixed(2)) : 0,
+    };
 
     return {
-      totalHours: Number(workspace.currentRevision.totalHours ?? workspace.estimate.totals.totalHours ?? 0),
-      subtotal: Number(workspace.currentRevision.subtotal ?? workspace.estimate.totals.subtotal ?? 0),
-      worksheetCount: workspace.worksheets.length,
-      lineItemCount: workspace.estimate.lineItems.length,
+      totalHours,
+      subtotal,
+      worksheetCount,
+      lineItemCount,
       totalLabourMH: Number(labour.hours.toFixed(2)),
       labourPrice: Number(labour.price.toFixed(2)),
       labourCost: Number(labour.cost.toFixed(2)),
@@ -1133,7 +1174,7 @@ export class PrismaApiStore {
       duplicateGroupCount: duplicateEntries.length,
       duplicateItemCount: duplicateEntries.reduce((sum, count) => sum + count, 0),
       categoryBreakdown,
-      benchmarkProfile: strategy && typeof strategy.benchmarkProfile === "object" ? strategy.benchmarkProfile : {},
+      benchmarkProfile,
       capturedAt: new Date().toISOString(),
     };
   }
@@ -1246,7 +1287,7 @@ export class PrismaApiStore {
           const worksheetNameMatch = worksheetNames.length === 0 || worksheetNames.some((target) =>
             normalizedWorksheetName === target || normalizedWorksheetName.includes(target) || target.includes(normalizedWorksheetName),
           );
-          const categoryMatch = categories.length === 0 || categories.includes(this.normalizeEstimateCategory(item.category));
+          const categoryMatch = categories.length === 0 || categories.includes(this.normalizeEstimateCategory(item.category, item.entityType));
           const textMatch = textMatchers.length === 0 || textMatchers.some((matcher) => textHaystack.includes(matcher));
           return worksheetIdMatch && worksheetNameMatch && categoryMatch && textMatch;
         })
@@ -1270,13 +1311,20 @@ export class PrismaApiStore {
       }
 
       const labourHours = matchedItems.reduce((sum, item) => sum + this.estimateItemExtendedHours(item), 0);
-      const categoriesPresent = new Set(matchedItems.map((item) => this.normalizeEstimateCategory(item.category)));
+      const categoriesPresent = new Set(matchedItems.map((item) => this.normalizeEstimateCategory(item.category, item.entityType)));
+      const hasLabourLine = categoriesPresent.has("Labour");
       const hasSubcontractorLine = categoriesPresent.has("Subcontractors");
       const hasAllowanceLine = Array.from(categoriesPresent).some((category) => /allowance|contingency/i.test(category));
+      const hasCommercialCarryLine = matchedItems.some((item) =>
+        !hasLabourLine &&
+        (/allowance|contingency/i.test(this.normalizeEstimateCategory(item.category, item.entityType))
+          || Number(item.price ?? 0) !== 0
+          || Number(item.cost ?? 0) !== 0),
+      );
       const hasDetailedExecutionLine = Array.from(categoriesPresent).some((category) => directExecutionCategories.has(category)) || labourHours > 0;
 
       if (pricingMode === "subcontract") {
-        if (labourHours > 0) {
+        if (labourHours > 0 || hasLabourLine) {
           issues.push({
             code: "package_mode_conflict",
             packageId,
@@ -1296,23 +1344,23 @@ export class PrismaApiStore {
           });
         }
       } else if (pricingMode === "allowance" || pricingMode === "historical_allowance") {
-        if (labourHours > 0) {
+        if (labourHours > 0 || hasLabourLine) {
           issues.push({
             code: "package_mode_conflict",
             packageId,
             packageName,
             pricingMode,
             labourHours: Number(labourHours.toFixed(2)),
-            message: "Allowance packages cannot carry detailed labour hours in persisted worksheet rows.",
+            message: "Allowance packages cannot carry labour-bearing execution rows in persisted worksheet items.",
           });
         }
-        if (!hasAllowanceLine && !hasSubcontractorLine) {
+        if (!hasAllowanceLine && !hasSubcontractorLine && !hasCommercialCarryLine) {
           issues.push({
             code: "package_mode_conflict",
             packageId,
             packageName,
             pricingMode,
-            message: "Allowance packages must resolve to allowance-style or subcontract-style worksheet rows, not detailed execution rows.",
+            message: "Allowance packages must resolve to zero-hour commercial carry rows, not only detailed execution rows.",
           });
         }
       } else if (pricingMode === "detailed" && !hasDetailedExecutionLine) {
@@ -1376,7 +1424,7 @@ export class PrismaApiStore {
 
     for (const worksheet of workspace.worksheets ?? []) {
       for (const item of worksheet.items ?? []) {
-        if (this.normalizeEstimateCategory(item.category) !== "Labour") continue;
+      if (this.normalizeEstimateCategory(item.category, item.entityType) !== "Labour") continue;
         const text = `${item.entityName ?? ""} ${item.description ?? ""}`;
         if (!supervisionPattern.test(text)) continue;
         if (overheadWorksheetPattern.test(String(worksheet.name ?? ""))) {
@@ -1993,6 +2041,11 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
     return summarizeProjectTotals(store, projectId);
+  }
+
+  async recalculateProjectEstimate(projectId: string) {
+    await this.requireProject(projectId);
+    return this.syncProjectEstimate(projectId);
   }
 
   async getEstimateStrategy(projectId: string, revisionId?: string): Promise<EstimateStrategy | null> {
@@ -4834,6 +4887,111 @@ export class PrismaApiStore {
     return rows.map(mapSummaryRow);
   }
 
+  async getSummaryBuilder(projectId: string): Promise<SummaryBuilderConfig | null> {
+    const workspace = await this.getWorkspace(projectId);
+    return workspace?.summaryBuilder ?? null;
+  }
+
+  private async syncSummaryBuilderFromStoredRows(projectId: string, revisionId: string) {
+    const store = await this.buildStoreSnapshot(projectId);
+    const totals = summarizeProjectTotals(store, projectId);
+    if (!totals) {
+      return null;
+    }
+
+    const revision = store.revisions.find((entry) => entry.id === revisionId);
+    if (!revision) {
+      return null;
+    }
+
+    const rows = (store.summaryRows ?? [])
+      .filter((row) => row.revisionId === revisionId)
+      .sort((left, right) => left.order - right.order);
+    const config = deriveSummaryBuilderFromLegacy(rows, revision.summaryLayoutPreset as SummaryPreset, totals);
+    const currentPreferences = (revision.pdfPreferences as Record<string, unknown> | undefined) ?? {};
+
+    await this.db.quoteRevision.update({
+      where: { id: revisionId },
+      data: {
+        pdfPreferences: {
+          ...currentPreferences,
+          summaryBuilder: config,
+        } as any,
+      },
+    });
+
+    return config;
+  }
+
+  private async persistSummaryBuilder(
+    projectId: string,
+    revisionId: string,
+    config: SummaryBuilderConfig,
+    totals: ReturnType<typeof summarizeProjectTotals>,
+  ) {
+    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    if (!revision) {
+      throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+    }
+    if (!totals) {
+      throw new Error(`Unable to resolve totals for summary builder on project ${projectId}`);
+    }
+
+    const materializedRows = materializeSummaryRowsFromBuilder(config, totals);
+    const currentPreferences = (revision.pdfPreferences as Record<string, unknown> | undefined) ?? {};
+    const preset = inferSummaryPresetFromBuilder(config);
+
+    await this.db.$transaction(async (tx) => {
+      await tx.summaryRow.deleteMany({ where: { revisionId } });
+      for (const row of materializedRows) {
+        await tx.summaryRow.create({
+          data: {
+            id: createId("sr"),
+            revisionId,
+            type: row.type,
+            label: row.label,
+            order: row.order,
+            visible: row.visible,
+            style: row.style,
+            sourceCategory: row.sourceCategoryLabel ?? null,
+            sourcePhase: null,
+            sourceCategoryId: row.sourceCategoryId ?? null,
+            sourceCategoryLabel: row.sourceCategoryLabel ?? null,
+            sourcePhaseId: row.sourcePhaseId ?? null,
+            sourceAdjustmentId: row.sourceAdjustmentId ?? null,
+          },
+        });
+      }
+
+      await tx.quoteRevision.update({
+        where: { id: revisionId },
+        data: {
+          summaryLayoutPreset: preset,
+          pdfPreferences: {
+            ...currentPreferences,
+            summaryBuilder: config,
+          } as any,
+        },
+      });
+    });
+
+    await this.syncProjectEstimate(projectId);
+    return config;
+  }
+
+  async saveSummaryBuilder(projectId: string, input: SummaryBuilderConfig): Promise<SummaryBuilderConfig> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const store = await this.buildStoreSnapshot(projectId);
+    const totals = summarizeProjectTotals(store, projectId);
+    if (!totals) {
+      throw new Error(`Unable to resolve totals for project ${projectId}`);
+    }
+
+    const normalized = normalizeSummaryBuilderConfig(input, totals);
+    return this.persistSummaryBuilder(projectId, revision.id, normalized, totals);
+  }
+
   async createSummaryRow(projectId: string, revisionId: string, input: CreateSummaryRowInput): Promise<SummaryRow> {
     await this.requireProject(projectId);
     const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
@@ -4871,6 +5029,7 @@ export class PrismaApiStore {
         where: { id: revisionId },
         data: { summaryLayoutPreset: "custom" },
       });
+      await this.syncSummaryBuilderFromStoredRows(projectId, revisionId);
       await this.syncProjectEstimate(projectId);
       return mapSummaryRow(row);
     }
@@ -4899,6 +5058,7 @@ export class PrismaApiStore {
       where: { id: existing.revisionId },
       data: { summaryLayoutPreset: "custom" },
     });
+    await this.syncSummaryBuilderFromStoredRows(projectId, existing.revisionId);
     await this.syncProjectEstimate(projectId);
     return mapSummaryRow(updated);
   }
@@ -4913,6 +5073,7 @@ export class PrismaApiStore {
       where: { id: row.revisionId },
       data: { summaryLayoutPreset: "custom" },
     });
+    await this.syncSummaryBuilderFromStoredRows(projectId, row.revisionId);
     await this.syncProjectEstimate(projectId);
     return mapSummaryRow(row);
   }
@@ -4929,6 +5090,7 @@ export class PrismaApiStore {
       where: { id: revision.id },
       data: { summaryLayoutPreset: "custom" },
     });
+    await this.syncSummaryBuilderFromStoredRows(projectId, revision.id);
     await this.syncProjectEstimate(projectId);
     return { reordered: orderedIds.length };
   }
@@ -4943,6 +5105,7 @@ export class PrismaApiStore {
         where: { id: revision.id },
         data: { summaryLayoutPreset: "custom" },
       });
+      await this.syncSummaryBuilderFromStoredRows(projectId, revision.id);
       await this.syncProjectEstimate(projectId);
       return this.listSummaryRows(projectId);
     }
@@ -4951,37 +5114,8 @@ export class PrismaApiStore {
     const totals = summarizeProjectTotals(store, projectId);
     if (!totals) throw new Error(`Unable to generate summary preset for project ${projectId}`);
 
-    const templates = generateSummaryPreset(preset, totals);
-
-    await this.db.$transaction(async (tx) => {
-      await tx.summaryRow.deleteMany({ where: { revisionId: revision.id } });
-      for (const template of templates) {
-        await tx.summaryRow.create({
-          data: {
-            id: createId("sr"),
-            revisionId: revision.id,
-            type: template.type,
-            label: template.label,
-            order: template.order,
-            visible: template.visible,
-            style: template.style,
-            sourceCategory: template.sourceCategoryLabel ?? null,
-            sourcePhase: null,
-            sourceCategoryId: template.sourceCategoryId ?? null,
-            sourceCategoryLabel: template.sourceCategoryLabel ?? null,
-            sourcePhaseId: template.sourcePhaseId ?? null,
-            sourceAdjustmentId: template.sourceAdjustmentId ?? null,
-          },
-        });
-      }
-
-      await tx.quoteRevision.update({
-        where: { id: revision.id },
-        data: { summaryLayoutPreset: preset },
-      });
-    });
-
-    await this.syncProjectEstimate(projectId);
+    const config = createSummaryBuilderPreset(preset, totals);
+    await this.persistSummaryBuilder(projectId, revision.id, config, totals);
     return this.listSummaryRows(projectId);
   }
 

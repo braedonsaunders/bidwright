@@ -8,7 +8,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { copyFile, readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
@@ -36,8 +36,128 @@ export interface SSEEventData {
   data: unknown;
 }
 
+function buildDefaultResumePrompt(runtime: AgentRuntime): string {
+  if (runtime === "codex") {
+    return "Resume the previous estimate session. Read AGENTS.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
+  }
+  return "Resume the previous estimate session. Read CLAUDE.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
+}
+
 // Active sessions: one per project
 const sessions = new Map<string, CliSession>();
+const BENIGN_CODEX_STDERR_PATTERNS = [
+  /codex_core::plugins::startup_sync:/,
+  /codex_core::plugins::manager: failed to warm featured plugin ids cache/,
+  /codex_core::plugins::manifest: ignoring interface\.defaultPrompt/,
+  /codex_core::shell_snapshot: Failed to create shell snapshot for powershell/,
+  /^Reading additional input from stdin\.\.\.$/,
+];
+
+function getCliCandidates(runtime: AgentRuntime, customCliPath?: string): string[] {
+  const candidates: string[] = [];
+  if (customCliPath?.trim()) candidates.push(customCliPath.trim());
+
+  const isWin = process.platform === "win32";
+  if (runtime === "codex" && isWin) {
+    const appData = process.env.APPDATA || join(process.env.USERPROFILE || "", "AppData", "Roaming");
+    const npmShim = join(appData, "npm", "codex.cmd");
+    if (existsSync(npmShim)) candidates.push(npmShim);
+  }
+
+  candidates.push(runtime === "claude-code" ? "claude" : "codex");
+  return [...new Set(candidates)];
+}
+
+function resolveCliCommand(runtime: AgentRuntime, customCliPath?: string): string {
+  const whichCmd = process.platform === "win32" ? "where" : "which";
+  for (const candidate of getCliCandidates(runtime, customCliPath)) {
+    if (candidate.includes("\\") || candidate.includes("/") || /^[A-Za-z]:/.test(candidate)) {
+      if (existsSync(candidate)) return candidate;
+      continue;
+    }
+    try {
+      const resolved = execSync(`${whichCmd} ${candidate}`, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
+      if (resolved) return resolved;
+    } catch {
+      // Try next candidate
+    }
+  }
+  return runtime === "claude-code" ? "claude" : "codex";
+}
+
+function getCliVersion(command: string): string | undefined {
+  try {
+    const executable = command.includes(" ") ? `"${command}"` : command;
+    return execSync(`${executable} --version`, { encoding: "utf-8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function quoteWindowsArg(arg: string): string {
+  if (arg.includes(" ") || arg.includes("\\") || arg.includes('"')) return `"${arg}"`;
+  return arg;
+}
+
+async function prepareCodexHome(
+  projectDir: string,
+  mcpRunner: string,
+  mcpArgs: string[],
+  mcpEnv: Record<string, string>,
+): Promise<string> {
+  const codexHome = join(projectDir, ".codex");
+  await mkdir(codexHome, { recursive: true });
+
+  const defaultHome = process.env.HOME || process.env.USERPROFILE || "";
+  const sourceCodexHome = process.env.CODEX_HOME || join(defaultHome, ".codex");
+
+  for (const fileName of ["auth.json", "cap_sid"]) {
+    const sourcePath = join(sourceCodexHome, fileName);
+    if (existsSync(sourcePath)) {
+      await copyFile(sourcePath, join(codexHome, fileName));
+    }
+  }
+
+  const sourceConfigPath = join(sourceCodexHome, "config.toml");
+  const baseConfig = existsSync(sourceConfigPath)
+    ? (await readFile(sourceConfigPath, "utf-8")).trim()
+    : "";
+  const envSection = Object.entries(mcpEnv)
+    .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
+    .join("\n");
+  const bidwrightConfig = [
+    "[mcp_servers.bidwright]",
+    `command = ${JSON.stringify(mcpRunner)}`,
+    `args = ${JSON.stringify(mcpArgs)}`,
+    "",
+    "[mcp_servers.bidwright.env]",
+    envSection,
+    "",
+  ].join("\n");
+
+  const configContent = [baseConfig, bidwrightConfig].filter(Boolean).join("\n\n");
+  await writeFile(join(codexHome, "config.toml"), configContent, "utf-8");
+
+  return codexHome;
+}
+
+async function persistSessionState(session: CliSession, extra: Record<string, unknown> = {}) {
+  const projectDir = typeof session._spawnOpts?.projectDir === "string"
+    ? session._spawnOpts.projectDir
+    : null;
+  if (!projectDir) return;
+
+  const sessionJsonDir = join(projectDir, ".bidwright");
+  await mkdir(sessionJsonDir, { recursive: true });
+  await writeFile(join(sessionJsonDir, "session.json"), JSON.stringify({
+    pid: session.process.pid,
+    runtime: session.runtime,
+    sessionId: session.sessionId,
+    startedAt: session.startedAt,
+    status: session.status,
+    ...extra,
+  }));
+}
 
 /** Cross-platform process kill — on Windows, child.kill() doesn't kill the process tree */
 function killProcess(child: ChildProcess, signal: "SIGINT" | "SIGKILL" = "SIGINT"): void {
@@ -97,16 +217,11 @@ export function checkCliAuth(runtime: AgentRuntime, apiKey?: string): { authenti
 /**
  * Check if a CLI is available on the system
  */
-export function detectCli(runtime: AgentRuntime): { available: boolean; path: string; version?: string } {
-  const cmd = runtime === "claude-code" ? "claude" : "codex";
-  const whichCmd = process.platform === "win32" ? "where" : "which";
+export function detectCli(runtime: AgentRuntime, customCliPath?: string): { available: boolean; path: string; version?: string } {
   try {
-    const path = execSync(`${whichCmd} ${cmd}`, { encoding: "utf-8" }).trim().split(/\r?\n/)[0];
-    let version: string | undefined;
-    try {
-      version = execSync(`${cmd} --version`, { encoding: "utf-8" }).trim();
-    } catch {}
-    return { available: true, path, version };
+    const path = resolveCliCommand(runtime, customCliPath);
+    if (!path) return { available: false, path: "" };
+    return { available: true, path, version: getCliVersion(path) };
   } catch {
     return { available: false, path: "" };
   }
@@ -217,7 +332,7 @@ export async function spawnSession(opts: {
   const cliEnv: Record<string, string> = { ...mcpEnv };
 
   if (runtime === "claude-code") {
-    cliCmd = customCliPath || "claude";
+    cliCmd = resolveCliCommand(runtime, customCliPath);
 
     // Build MCP config — write to a temp file to avoid shell escaping issues on Windows
     const mcpConfigObj = {
@@ -252,9 +367,11 @@ export async function spawnSession(opts: {
     }
   } else {
     // Codex CLI
-    cliCmd = customCliPath || "codex";
+    cliCmd = resolveCliCommand(runtime, customCliPath);
+    cliEnv.CODEX_HOME = await prepareCodexHome(projectDir, mcpRunner, mcpArgs, mcpEnv);
     cliArgs = [
       "exec", // Non-interactive mode
+      "--dangerously-bypass-approvals-and-sandbox",
       "--model", model || "gpt-5.4",
       "--json", // Structured output
       prompt,
@@ -281,20 +398,26 @@ export async function spawnSession(opts: {
 
     // Write prompt to a file (avoids quoting issues with special chars)
     const promptFile = join(projectDir, ".bidwright-prompt.txt");
+    let usePromptStdin = false;
     const promptIdx = cliArgs.indexOf("-p");
     if (promptIdx >= 0 && promptIdx + 1 < cliArgs.length) {
       await writeFile(promptFile, cliArgs[promptIdx + 1]);
       // Replace the prompt in args with a short reference
       cliArgs[promptIdx + 1] = "Execute the instructions in .bidwright-prompt.txt";
+    } else if (runtime === "codex" && cliArgs.length > 0) {
+      await writeFile(promptFile, prompt, "utf-8");
+      cliArgs[cliArgs.length - 1] = "-";
+      usePromptStdin = true;
     }
 
     // Write a .bat file that calls the CLI with all args properly quoted
     const batLines = ["@echo off"];
-    const quotedArgs = cliArgs.map(a => {
-      if (a.includes(" ") || a.includes("\\") || a.includes('"')) return `"${a}"`;
-      return a;
-    });
-    batLines.push(`call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
+    const quotedArgs = cliArgs.map(quoteWindowsArg);
+    if (usePromptStdin) {
+      batLines.push(`type "${promptFile}" | call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
+    } else {
+      batLines.push(`call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
+    }
     const batFile = join(projectDir, ".bidwright-run.bat");
     await writeFile(batFile, batLines.join("\r\n") + "\r\n");
 
@@ -315,6 +438,7 @@ export async function spawnSession(opts: {
     session._recoveryCount = 0;
     sessions.set(projectId, session);
     wireChildProcess(child, session, runtime, events);
+    await persistSessionState(session);
     return session;
   }
 
@@ -420,13 +544,7 @@ export async function spawnSession(opts: {
   // Save session state to disk for recovery
   const sessionJsonDir = join(projectDir, ".bidwright");
   await mkdir(sessionJsonDir, { recursive: true });
-  await writeFile(join(sessionJsonDir, "session.json"), JSON.stringify({
-    pid: child.pid,
-    runtime,
-    sessionId: session.sessionId,
-    startedAt: session.startedAt,
-    status: "running",
-  }));
+  await persistSessionState(session);
 
   return session;
 }
@@ -442,6 +560,8 @@ function wireChildProcess(
   events: EventEmitter,
   opts?: { onStdoutLine?: () => void },
 ) {
+  let suppressCodexHtmlWarning = false;
+
   if (child.stdout) {
     const rl = createInterface({ input: child.stdout });
     rl.on("line", (line) => {
@@ -454,6 +574,11 @@ function wireChildProcess(
           events.emit("event", evt);
           if (parsed.type === "system" && parsed.subtype === "init" && parsed.session_id) {
             session.sessionId = parsed.session_id;
+            persistSessionState(session).catch(() => {});
+          }
+          if (runtime === "codex" && parsed.type === "thread.started" && parsed.thread_id) {
+            session.sessionId = parsed.thread_id;
+            persistSessionState(session).catch(() => {});
           }
         }
       } catch {
@@ -468,6 +593,20 @@ function wireChildProcess(
     const rl = createInterface({ input: child.stderr });
     rl.on("line", (line) => {
       if (line.trim()) {
+        if (runtime === "codex") {
+          const trimmed = line.trim();
+          if (suppressCodexHtmlWarning) {
+            if (trimmed.includes("</html>")) suppressCodexHtmlWarning = false;
+            return;
+          }
+          if (BENIGN_CODEX_STDERR_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+            if (trimmed.includes("<html>")) suppressCodexHtmlWarning = true;
+            return;
+          }
+          if (trimmed.startsWith("<html>") || trimmed.startsWith("<head>") || trimmed.startsWith("<body>") || trimmed.startsWith("<div") || trimmed.startsWith("<meta") || trimmed.startsWith("<style") || trimmed.startsWith("<script") || trimmed.startsWith("</")) {
+            return;
+          }
+        }
         console.error(`[cli:stderr:${session.projectId}]`, line.trim());
         events.emit("event", { type: "error", data: { message: line.trim() } });
       }
@@ -477,6 +616,7 @@ function wireChildProcess(
   child.on("exit", (code, signal) => {
     console.log(`[cli:exit:${session.projectId}] code=${code} signal=${signal}`);
     session.status = signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
+    persistSessionState(session).catch(() => {});
     // Emit a final summary message so the user sees closure in the chat
     const completionMsg = session.status === "completed"
       ? "Intake complete. Review the estimate worksheets and adjust pricing as needed."
@@ -572,16 +712,73 @@ function parseClaudeCodeOutput(msg: any): SSEEventData[] {
 }
 
 function parseCodexOutput(msg: any): SSEEventData[] {
-  // Codex output format differs — adapt as needed
   const events: SSEEventData[] = [];
 
-  if (msg.type === "message" || msg.type === "response") {
+  if (msg.type === "thread.started") {
+    events.push({ type: "status", data: { status: "running", sessionId: msg.thread_id } });
+  } else if (msg.type === "turn.started") {
+    events.push({ type: "progress", data: { phase: "Running", detail: "Turn started" } });
+  } else if (msg.type === "item.started" && msg.item?.type === "command_execution") {
+    if (msg.item?.id) toolStartTimes.set(msg.item.id, Date.now());
+    events.push({
+      type: "tool_call",
+      data: {
+        toolId: "command_execution",
+        toolUseId: msg.item?.id,
+        input: { command: msg.item?.command || "" },
+      },
+    });
+  } else if (msg.type === "item.completed" && msg.item?.type === "command_execution") {
+    const toolUseId = msg.item?.id;
+    let duration_ms = 0;
+    if (toolUseId && toolStartTimes.has(toolUseId)) {
+      duration_ms = Date.now() - toolStartTimes.get(toolUseId)!;
+      toolStartTimes.delete(toolUseId);
+    }
+    events.push({
+      type: "tool_result",
+      data: {
+        toolUseId,
+        success: (msg.item?.exit_code ?? 0) === 0,
+        duration_ms,
+        content: msg.item?.aggregated_output || "",
+        exitCode: msg.item?.exit_code,
+      },
+    });
+  } else if (msg.type === "item.completed" && msg.item?.type === "agent_message") {
+    events.push({ type: "message", data: { role: "assistant", content: msg.item.text || "" } });
+  } else if (msg.type === "item.completed" && (msg.item?.type === "tool_call" || msg.item?.type === "function_call")) {
+    if (msg.item?.id) toolStartTimes.set(msg.item.id, Date.now());
+    events.push({ type: "tool_call", data: { toolId: msg.item.name || msg.item.function, toolUseId: msg.item.id, input: msg.item.arguments || msg.item.input } });
+  } else if (msg.type === "item.completed" && (msg.item?.type === "tool_result" || msg.item?.type === "function_result")) {
+    const toolUseId = msg.item?.id || msg.item?.call_id;
+    let duration_ms = 0;
+    if (toolUseId && toolStartTimes.has(toolUseId)) {
+      duration_ms = Date.now() - toolStartTimes.get(toolUseId)!;
+      toolStartTimes.delete(toolUseId);
+    }
+    events.push({ type: "tool_result", data: { toolUseId, duration_ms, content: msg.item.output || msg.item.result } });
+  } else if (msg.type === "turn.completed") {
+    events.push({ type: "progress", data: { phase: "Turn complete", detail: "Codex turn completed" } });
+  } else if (msg.type === "item.started" && msg.item?.type === "reasoning") {
+    events.push({ type: "thinking", data: { content: msg.item.text || msg.item.summary || "Thinking..." } });
+  } else if (msg.type === "message" || msg.type === "response") {
     events.push({ type: "message", data: { role: "assistant", content: msg.content || msg.text || JSON.stringify(msg) } });
   } else if (msg.type === "function_call" || msg.type === "tool_call") {
-    events.push({ type: "tool_call", data: { toolId: msg.name || msg.function, input: msg.arguments || msg.input } });
+    if (msg.id) toolStartTimes.set(msg.id, Date.now());
+    events.push({ type: "tool_call", data: { toolId: msg.name || msg.function, toolUseId: msg.id, input: msg.arguments || msg.input } });
   } else if (msg.type === "function_result" || msg.type === "tool_result") {
-    events.push({ type: "tool_result", data: { content: msg.output || msg.result } });
+    const toolUseId = msg.id || msg.call_id;
+    let duration_ms = 0;
+    if (toolUseId && toolStartTimes.has(toolUseId)) {
+      duration_ms = Date.now() - toolStartTimes.get(toolUseId)!;
+      toolStartTimes.delete(toolUseId);
+    }
+    events.push({ type: "tool_result", data: { toolUseId, duration_ms, content: msg.output || msg.result } });
   } else {
+    if (msg.type === "item.started" || msg.type === "item.completed") {
+      return events;
+    }
     // Unknown event type — forward as message
     events.push({ type: "message", data: { role: "system", content: JSON.stringify(msg) } });
   }
@@ -614,20 +811,25 @@ export function stopSession(projectId: string): boolean {
 }
 
 /**
- * Resume a stopped session (Claude Code only)
+ * Resume a stopped session
  */
 export async function resumeSession(opts: {
   projectId: string;
   projectDir: string;
+  runtime?: AgentRuntime;
   prompt?: string;
   authToken?: string;
   apiBaseUrl?: string;
+  revisionId?: string;
+  quoteId?: string;
   model?: string;
   customCliPath?: string;
   anthropicApiKey?: string;
+  openaiApiKey?: string;
 }): Promise<CliSession> {
   const session = sessions.get(opts.projectId);
   const sessionId = session?.sessionId;
+  const runtime = opts.runtime || session?.runtime;
 
   if (!sessionId) {
     // No session to resume — try reading from disk
@@ -635,39 +837,110 @@ export async function resumeSession(opts: {
     if (existsSync(sessionJsonPath)) {
       const saved = JSON.parse(await readFile(sessionJsonPath, "utf-8"));
       if (saved.sessionId) {
-        return spawnResumedSession(opts, saved.sessionId);
+        return spawnResumedSession({ ...opts, runtime: saved.runtime || runtime || "claude-code" }, saved.sessionId);
       }
     }
     throw new Error("No session to resume for this project");
   }
 
-  return spawnResumedSession(opts, sessionId);
+  return spawnResumedSession({ ...opts, runtime: runtime || "claude-code" }, sessionId);
 }
 
 async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSession> {
-  const { projectId, projectDir, model, customCliPath, anthropicApiKey } = opts;
-  const runtime: AgentRuntime = "claude-code";
-  const cliCmd = customCliPath || "claude";
+  const {
+    projectId,
+    projectDir,
+    model,
+    customCliPath,
+    anthropicApiKey,
+    openaiApiKey,
+    authToken,
+    apiBaseUrl,
+    revisionId,
+    quoteId,
+  } = opts;
+  const runtime: AgentRuntime = opts.runtime === "codex" ? "codex" : "claude-code";
+  const resumePrompt = typeof opts.prompt === "string" && opts.prompt.trim()
+    ? opts.prompt.trim()
+    : buildDefaultResumePrompt(runtime);
+  const cliCmd = resolveCliCommand(runtime, customCliPath);
+  const isWin = process.platform === "win32";
+  const mcpServerPath = getMcpServerPath();
+  const npxCmd = isWin ? "npx.cmd" : "npx";
+  const nodeCmd = isWin ? "node.exe" : "node";
+  const mcpRunner = existsSync(mcpServerPath) && mcpServerPath.endsWith(".ts") ? npxCmd : nodeCmd;
+  const mcpArgs = mcpServerPath.endsWith(".ts") ? ["tsx", mcpServerPath] : [mcpServerPath];
+  const mcpEnv: Record<string, string> = {
+    BIDWRIGHT_API_URL: apiBaseUrl || "http://localhost:4001",
+    BIDWRIGHT_AUTH_TOKEN: authToken || "",
+    BIDWRIGHT_PROJECT_ID: projectId,
+    BIDWRIGHT_REVISION_ID: revisionId || "",
+    BIDWRIGHT_QUOTE_ID: quoteId || "",
+  };
+  const cliEnv: Record<string, string> = { ...mcpEnv };
 
-  // Build args with --resume to continue the existing session
-  const cliArgs = [
-    "--resume", sessionId,
-    "--output-format", "stream-json",
-    "--dangerously-skip-permissions",
-    "--verbose",
-    "--max-turns", "200",
-  ];
-  if (opts.prompt) cliArgs.push("-p", opts.prompt);
-  if (model) cliArgs.push("--model", model);
+  let cliArgs: string[];
+  if (runtime === "claude-code") {
+    cliArgs = [
+      "--resume", sessionId,
+      "--output-format", "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--max-turns", "200",
+    ];
+    if (resumePrompt) cliArgs.push("-p", resumePrompt);
+    if (model) cliArgs.push("--model", model);
+    if (anthropicApiKey) cliEnv.ANTHROPIC_API_KEY = anthropicApiKey;
+  } else {
+    cliEnv.CODEX_HOME = await prepareCodexHome(projectDir, mcpRunner, mcpArgs, mcpEnv);
+    cliArgs = [
+      "exec",
+      "resume",
+      "--dangerously-bypass-approvals-and-sandbox",
+    ];
+    if (model) cliArgs.push("--model", model);
+    cliArgs.push("--json");
+    cliArgs.push(sessionId);
+    cliArgs.push(resumePrompt);
+    if (openaiApiKey) cliEnv.CODEX_API_KEY = openaiApiKey;
+  }
 
-  const cliEnv: Record<string, string> = {};
-  if (anthropicApiKey) cliEnv.ANTHROPIC_API_KEY = anthropicApiKey;
-
-  const child = spawn(cliCmd, cliArgs, {
-    cwd: projectDir,
-    env: { ...process.env, ...cliEnv },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  let child: ChildProcess;
+  if (isWin) {
+    const promptFile = join(projectDir, ".bidwright-prompt.txt");
+    let usePromptStdin = false;
+    if (runtime === "codex") {
+      await writeFile(promptFile, resumePrompt, "utf-8");
+      cliArgs[cliArgs.length - 1] = "-";
+      usePromptStdin = true;
+    } else if (runtime === "claude-code") {
+      const promptIdx = cliArgs.indexOf("-p");
+      if (promptIdx >= 0 && promptIdx + 1 < cliArgs.length) {
+        await writeFile(promptFile, cliArgs[promptIdx + 1], "utf-8");
+        cliArgs[promptIdx + 1] = "Execute the instructions in .bidwright-prompt.txt";
+      }
+    }
+    const batLines = ["@echo off"];
+    const quotedArgs = cliArgs.map(quoteWindowsArg);
+    const batFile = join(projectDir, ".bidwright-resume.bat");
+    if (usePromptStdin) {
+      batLines.push(`type "${promptFile}" | call "${cliCmd}" ${quotedArgs.join(" ")}`);
+    } else {
+      batLines.push(`call "${cliCmd}" ${quotedArgs.join(" ")}`);
+    }
+    await writeFile(batFile, batLines.join("\r\n") + "\r\n");
+    child = spawn("cmd.exe", ["/c", batFile], {
+      cwd: projectDir,
+      env: { ...process.env, ...cliEnv },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } else {
+    child = spawn(cliCmd, cliArgs, {
+      cwd: projectDir,
+      env: { ...process.env, ...cliEnv },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
 
   const events = new EventEmitter();
   const session: CliSession = {
@@ -680,23 +953,14 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
     startedAt: new Date().toISOString(),
     pid: child.pid || 0,
   };
+  session._spawnOpts = { ...opts, projectDir, runtime, customCliPath, anthropicApiKey, openaiApiKey };
 
   sessions.set(projectId, session);
 
   // Wire up stdout/stderr/exit handlers (shared helper)
   wireChildProcess(child, session, runtime, events);
 
-  // Update session.json on disk
-  const sessionJsonDir = join(projectDir, ".bidwright");
-  await mkdir(sessionJsonDir, { recursive: true });
-  await writeFile(join(sessionJsonDir, "session.json"), JSON.stringify({
-    pid: child.pid,
-    runtime,
-    sessionId,
-    startedAt: session.startedAt,
-    status: "running",
-    resumed: true,
-  }));
+  await persistSessionState(session, { resumed: true });
 
   return session;
 }

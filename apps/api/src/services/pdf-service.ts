@@ -3,6 +3,9 @@ export interface PdfDataPackage {
   revisionNumber: number;
   title: string;
   description: string;
+  orgName: string;
+  orgLogoUrl: string;
+  orgWebsite: string;
   clientName: string;
   location: string;
   type: string;
@@ -44,6 +47,20 @@ export interface PdfDataPackage {
     amount: number | null;
     show: string;
   }>;
+  summaryBuilder?: {
+    mode: "total" | "grouped" | "pivot";
+    rowDimension: "none" | "phase" | "category";
+    columnDimension: "none" | "phase" | "category";
+    rows: Array<{ key: string; sourceId: string | null; label: string; visible: boolean; order: number }>;
+    columns: Array<{ key: string; sourceId: string | null; label: string; visible: boolean; order: number }>;
+    totals: { label: string; visible: boolean };
+  } | null;
+  summaryTotals?: {
+    categoryTotals: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
+    phaseTotals: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
+    phaseCategoryTotals: Array<{ id: string; phaseId?: string | null; label: string; value: number; cost: number; margin: number }>;
+    adjustmentTotals: Array<{ id: string; label: string; show: string; value: number; cost: number; margin: number }>;
+  };
   summaryRows: Array<{
     id: string;
     type: string;
@@ -106,16 +123,13 @@ export interface PdfLayoutOptions {
   };
   // Cover page options
   coverPageOptions: {
-    companyName: string;
-    tagline: string;
-    logoUrl: string;
+    showLogo: boolean;
+    backgroundStyle: "minimal" | "accent" | "grid";
   };
   // Header/footer
   headerFooter: {
     showHeader: boolean;
     showFooter: boolean;
-    headerText: string;
-    footerText: string;
     showPageNumbers: boolean;
   };
   // Customer-facing mode: hides cost, markup, margin, and profit everywhere
@@ -152,7 +166,7 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
     lineItemOptions: {
       showCostColumn: true,
       showMarkupColumn: true,
-      groupBy: "none",
+      groupBy: "worksheet",
     },
     branding: {
       accentColor: "#3b82f6",
@@ -164,15 +178,12 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
       pageSize: "letter",
     },
     coverPageOptions: {
-      companyName: "",
-      tagline: "",
-      logoUrl: "",
+      showLogo: true,
+      backgroundStyle: "accent",
     },
     headerFooter: {
       showHeader: true,
       showFooter: true,
-      headerText: "",
-      footerText: "",
       showPageNumbers: true,
     },
     customerFacing: true,
@@ -193,7 +204,16 @@ function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>
   return result;
 }
 
-export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], orgTermsAndConditions = ""): PdfDataPackage {
+export function buildPdfDataPackage(
+  workspace: any,
+  reportSections: any[] = [],
+  organization: {
+    termsAndConditions?: string;
+    companyName?: string;
+    logoUrl?: string;
+    website?: string;
+  } = {},
+): PdfDataPackage {
   const rev = workspace.currentRevision;
   const lineItems = (workspace.worksheets ?? []).flatMap((ws: any) =>
     (ws.items ?? []).map((item: any) => ({
@@ -210,6 +230,9 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], 
     revisionNumber: rev?.revisionNumber ?? 0,
     title: rev?.title ?? "",
     description: rev?.description ?? "",
+    orgName: organization.companyName ?? "",
+    orgLogoUrl: organization.logoUrl ?? "",
+    orgWebsite: organization.website ?? "",
     clientName: workspace.project?.clientName ?? "",
     location: workspace.project?.location ?? "",
     type: rev?.type ?? "Firm",
@@ -228,6 +251,13 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], 
       name: p.name,
       description: p.description,
     })),
+    summaryBuilder: workspace.summaryBuilder ?? null,
+    summaryTotals: {
+      categoryTotals: workspace.estimate?.totals?.categoryTotals ?? [],
+      phaseTotals: workspace.estimate?.totals?.phaseTotals ?? [],
+      phaseCategoryTotals: workspace.estimate?.totals?.phaseCategoryTotals ?? [],
+      adjustmentTotals: workspace.estimate?.totals?.adjustmentTotals ?? [],
+    },
     summaryRows: (workspace.summaryRows ?? []).map((r: any) => ({
       id: r.id,
       type: r.type,
@@ -254,7 +284,7 @@ export function buildPdfDataPackage(workspace: any, reportSections: any[] = [], 
       order: s.order ?? 0,
       parentSectionId: s.parentSectionId ?? null,
     })),
-    orgTermsAndConditions,
+    orgTermsAndConditions: organization.termsAndConditions ?? "",
   };
 }
 
@@ -272,6 +302,29 @@ const FONT_STACKS: Record<PdfLayoutOptions["branding"]["fontFamily"], string> = 
   serif: '"Georgia", "Times New Roman", serif',
   mono: '"SF Mono", "Fira Code", monospace',
 };
+
+const PDF_PAGE_MARGINS_MM = {
+  top: 12,
+  right: 10,
+  bottom: 12,
+  left: 10,
+} as const;
+
+const PDF_BODY_PADDING_PX = 24;
+
+const CUSTOM_SECTION_PREFIX = "custom:";
+
+function getCustomSectionId(sectionKey: string) {
+  return sectionKey.startsWith(CUSTOM_SECTION_PREFIX)
+    ? sectionKey.slice(CUSTOM_SECTION_PREFIX.length)
+    : null;
+}
+
+function insertCustomSectionBeforePricing(order: string[], key: string) {
+  const pricingIndex = order.indexOf("pricingSummary");
+  if (pricingIndex === -1) order.push(key);
+  else order.splice(pricingIndex, 0, key);
+}
 
 export function generatePdfHtml(
   data: PdfDataPackage,
@@ -291,9 +344,18 @@ export function generatePdfHtml(
     }
   }
 
+  for (const customSection of opts.customSections) {
+    const sectionKey = `${CUSTOM_SECTION_PREFIX}${customSection.id}`;
+    if (!opts.sectionOrder.includes(sectionKey)) {
+      insertCustomSectionBeforePricing(opts.sectionOrder, sectionKey);
+    }
+  }
+
   const fontStack = FONT_STACKS[opts.branding.fontFamily];
   const accent = opts.branding.accentColor;
   const headerBg = opts.branding.headerBgColor;
+  const headerText = data.orgName || "Proposal";
+  const footerText = data.orgWebsite || data.orgName || data.quoteNumber;
 
   const inclusions = data.conditions.filter((c) =>
     c.type.toLowerCase().includes("inclusion")
@@ -312,31 +374,35 @@ export function generatePdfHtml(
   // --- Section renderers ---
 
   const renderCoverPage = (): string => {
-    const companyName = opts.coverPageOptions.companyName || "Proposal";
-    const tagline = opts.coverPageOptions.tagline;
-    const logoUrl = opts.coverPageOptions.logoUrl;
+    const companyName = data.orgName || "Proposal";
+    const logoUrl = opts.coverPageOptions.showLogo ? data.orgLogoUrl : "";
+    const coverStyleClass = opts.coverPageOptions.backgroundStyle === "grid"
+      ? "cover-grid"
+      : opts.coverPageOptions.backgroundStyle === "accent"
+        ? "cover-accent"
+        : "cover-minimal";
     const dateStr = data.dateQuote
       ? new Date(data.dateQuote).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
       : new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
-    let coverHtml = `<div class="cover-page">`;
+    let coverHtml = `<div class="cover-page ${coverStyleClass}"><div class="cover-page-inner">`;
+    coverHtml += `<div class="cover-top">`;
     if (logoUrl) {
-      coverHtml += `<img src="${escapeHtml(logoUrl)}" alt="Logo" style="max-width:180px;max-height:80px;margin-bottom:24px" />`;
+      coverHtml += `<img class="cover-logo" src="${escapeHtml(logoUrl)}" alt="Logo" />`;
     }
     coverHtml += `<div class="cover-company">${escapeHtml(companyName)}</div>`;
-    if (tagline) {
-      coverHtml += `<div class="cover-tagline">${escapeHtml(tagline)}</div>`;
-    }
+    coverHtml += `</div>`;
+    coverHtml += `<div class="cover-body">`;
     coverHtml += `<div class="cover-divider"></div>`;
     coverHtml += `<div class="cover-title">${escapeHtml(data.title || data.quoteNumber)}</div>`;
     coverHtml += `<div class="cover-meta">Prepared for <strong>${escapeHtml(data.clientName)}</strong></div>`;
     coverHtml += `<div class="cover-meta">${escapeHtml(data.location)}</div>`;
+    coverHtml += `</div>`;
     coverHtml += `<div class="cover-details">`;
-    coverHtml += `<span>Quote ${escapeHtml(data.quoteNumber)}</span>`;
-    coverHtml += `<span>&middot;</span>`;
-    coverHtml += `<span>Revision ${data.revisionNumber}</span>`;
-    coverHtml += `<span>&middot;</span>`;
-    coverHtml += `<span>${dateStr}</span>`;
+    coverHtml += `<span class="cover-detail">Quote ${escapeHtml(data.quoteNumber)}</span>`;
+    coverHtml += `<span class="cover-detail">Revision ${data.revisionNumber}</span>`;
+    coverHtml += `<span class="cover-detail">${dateStr}</span>`;
+    coverHtml += `</div>`;
     coverHtml += `</div>`;
     coverHtml += `</div>`;
     return coverHtml;
@@ -355,10 +421,100 @@ export function generatePdfHtml(
   };
 
   const renderPricingSummary = (): string => {
+    const showCost = !opts.customerFacing;
+    const builder = data.summaryBuilder;
+    const summaryTotals = data.summaryTotals;
+
+    if (builder && summaryTotals) {
+      const axisTotal = (dimension: "none" | "phase" | "category", sourceId: string | null) => {
+        if (!sourceId) return null;
+        if (dimension === "phase") return summaryTotals.phaseTotals.find((entry) => entry.id === sourceId) ?? null;
+        if (dimension === "category") return summaryTotals.categoryTotals.find((entry) => entry.id === sourceId) ?? null;
+        return null;
+      };
+      const adjustmentTotals = summaryTotals.adjustmentTotals.filter((entry) => entry.show !== "No");
+
+      if (builder.mode === "pivot") {
+        const rows = [...builder.rows].filter((row) => row.visible).sort((a, b) => a.order - b.order);
+        const columns = [...builder.columns].filter((column) => column.visible).sort((a, b) => a.order - b.order);
+        if (rows.length === 0 || columns.length === 0) {
+          return "";
+        }
+
+        const resolveCell = (rowSourceId: string | null, columnSourceId: string | null) => {
+          const phaseId = builder.rowDimension === "phase" ? rowSourceId : columnSourceId;
+          const categoryId = builder.rowDimension === "category" ? rowSourceId : columnSourceId;
+          const key = `${phaseId ?? "__unphased__"}::${categoryId ?? ""}`;
+          return summaryTotals.phaseCategoryTotals.find((entry) => entry.id === key) ?? { value: 0, cost: 0, margin: 0 };
+        };
+
+        let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">${escapeHtml(builder.rowDimension === "phase" ? "Phase" : "Category")}</th>`;
+        for (const column of columns) {
+          result += `<th class="num">${escapeHtml(column.label)}</th>`;
+        }
+        result += `${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
+
+        for (const row of rows) {
+          const total = axisTotal(builder.rowDimension, row.sourceId);
+          result += `<tr><td>${escapeHtml(row.label)}</td>`;
+          for (const column of columns) {
+            result += `<td class="num">${formatMoney(resolveCell(row.sourceId, column.sourceId).value)}</td>`;
+          }
+          if (showCost) {
+            result += `<td class="num">${formatMoney(total?.cost ?? 0)}</td>`;
+          }
+          result += `<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
+        }
+
+        for (const adjustment of adjustmentTotals) {
+          result += `<tr><td colspan="${columns.length + (showCost ? 1 : 0) + 1}" style="text-align:left">${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
+        }
+
+        if (builder.totals.visible) {
+          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>${escapeHtml(builder.totals.label)}</td>`;
+          for (const column of columns) {
+            const total = axisTotal(builder.columnDimension, column.sourceId);
+            result += `<td class="num">${formatMoney(total?.value ?? 0)}</td>`;
+          }
+          if (showCost) {
+            result += `<td class="num">${formatMoney(data.cost)}</td>`;
+          }
+          result += `<td class="num">${formatMoney(data.subtotal)}</td></tr>`;
+        }
+
+        result += `</tbody></table>`;
+        return result;
+      }
+
+      if (builder.mode === "grouped") {
+        const rows = [...builder.rows].filter((row) => row.visible).sort((a, b) => a.order - b.order);
+        let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
+
+        for (const row of rows) {
+          const total = axisTotal(builder.rowDimension, row.sourceId);
+          result += `<tr><td>${escapeHtml(row.label)}</td>${showCost ? `<td class="num">${formatMoney(total?.cost ?? 0)}</td>` : ""}<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
+        }
+
+        for (const adjustment of adjustmentTotals) {
+          result += `<tr><td>${escapeHtml(adjustment.label)}</td>${showCost ? `<td class="num">${formatMoney(adjustment.cost)}</td>` : ""}<td class="num">${formatMoney(adjustment.value)}</td></tr>`;
+        }
+
+        if (builder.totals.visible) {
+          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>${escapeHtml(builder.totals.label)}</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(data.subtotal)}</td></tr>`;
+        }
+
+        result += `</tbody></table>`;
+        return result;
+      }
+
+      if (builder.mode === "total") {
+        return `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody><tr style="font-weight:700"><td>${escapeHtml(builder.totals.label)}</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(data.subtotal)}</td></tr></tbody></table>`;
+      }
+    }
+
     const visibleRows = data.summaryRows.filter((r) => r.visible).sort((a, b) => a.order - b.order);
     if (visibleRows.length === 0) return "";
 
-    const showCost = !opts.customerFacing;
     const colCount = showCost ? 3 : 2;
     let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
 
@@ -389,77 +545,78 @@ export function generatePdfHtml(
     const showCost = opts.customerFacing ? false : opts.lineItemOptions.showCostColumn;
     const showMarkup = opts.customerFacing ? false : opts.lineItemOptions.showMarkupColumn;
     const groupBy = opts.lineItemOptions.groupBy;
+    const showWorksheetColumn = backupCol && groupBy !== "worksheet";
+    const descriptorColumnCount = showWorksheetColumn ? 6 : 5;
+    const getItemHours = (item: PdfDataPackage["lineItems"][0]) => item.unit1 + item.unit2 + item.unit3;
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
-      const hours = item.unit1 + item.unit2 + item.unit3;
+      const hours = getItemHours(item);
       let row = `<tr>
         <td>${item.lineOrder}</td>
         <td><strong>${escapeHtml(item.entityName)}</strong>${item.description ? `<br><span style="color:#888">${escapeHtml(item.description)}</span>` : ""}</td>
         <td>${escapeHtml(item.category)}</td>
-        ${backupCol ? `<td>${escapeHtml(item.worksheetName)}</td>` : ""}
+        ${showWorksheetColumn ? `<td>${escapeHtml(item.worksheetName)}</td>` : ""}
         <td class="num">${item.quantity}</td>
         <td>${escapeHtml(item.uom)}</td>
         ${showCost ? `<td class="num">${formatMoney(item.cost)}</td>` : ""}
         ${showMarkup ? `<td class="num">${formatPct(item.markup)}</td>` : ""}
-        <td class="num"><strong>${formatMoney(item.price)}</strong></td>
         <td class="num">${hours > 0 ? hours.toLocaleString() : ""}</td>
+        <td class="num"><strong>${formatMoney(item.price)}</strong></td>
       </tr>`;
       return row;
     };
 
-    const renderGroupHeader = (label: string, count: number) =>
-      `<tr style="background:#f0f4ff"><td colspan="100%" style="font-weight:600;font-size:11px;color:${accent};padding:8px">${escapeHtml(label)} <span style="font-weight:400;color:#888">(${count} items)</span></td></tr>`;
+    const renderTotalsRow = (items: PdfDataPackage["lineItems"], label = `Total (${items.length} items)`) => {
+      const totalCost = items.reduce((sum, item) => sum + item.cost, 0);
+      const totalPrice = items.reduce((sum, item) => sum + item.price, 0);
+      const totalHrs = items.reduce((sum, item) => sum + getItemHours(item), 0);
+      let row = `<tr class="totals"><td colspan="${descriptorColumnCount}">${escapeHtml(label)}</td>`;
+      if (showCost) row += `<td class="num">${formatMoney(totalCost)}</td>`;
+      if (showMarkup) row += `<td></td>`;
+      row += `<td class="num">${totalHrs.toLocaleString()}</td><td class="num">${formatMoney(totalPrice)}</td></tr>`;
+      return row;
+    };
 
-    let result = `<h2>Line Items</h2><table>
-      <thead><tr>
-        <th>#</th><th>Item</th><th>Category</th>
-        ${backupCol ? "<th>Worksheet</th>" : ""}
-        <th class="num">Qty</th><th>UOM</th>
-        ${showCost ? '<th class="num">Cost</th>' : ""}
-        ${showMarkup ? '<th class="num">Markup</th>' : ""}
-        <th class="num">Price</th><th class="num">Hours</th>
-      </tr></thead><tbody>`;
+    const renderTable = (items: PdfDataPackage["lineItems"], label?: string) => {
+      let table = label
+        ? `<div class="line-item-group"><h3 class="line-item-group-title">${escapeHtml(label)}</h3><div class="line-item-group-meta">${items.length} items</div>`
+        : "";
+      table += `<table>
+        <thead><tr>
+          <th>#</th><th>Item</th><th>Category</th>
+          ${showWorksheetColumn ? "<th>Worksheet</th>" : ""}
+          <th class="num">Qty</th><th>UOM</th>
+          ${showCost ? '<th class="num">Cost</th>' : ""}
+          ${showMarkup ? '<th class="num">Markup</th>' : ""}
+          <th class="num">Hours</th><th class="num">Price</th>
+        </tr></thead><tbody>`;
+      for (const item of items) table += renderItemRow(item);
+      table += renderTotalsRow(items);
+      table += `</tbody></table>`;
+      if (label) table += `</div>`;
+      return table;
+    };
 
-    if (groupBy === "phase") {
-      const groups = new Map<string, PdfDataPackage["lineItems"]>();
-      for (const item of data.lineItems) {
-        const key = item.phaseName || "Unphased";
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(item);
-      }
-      for (const [phaseName, items] of groups) {
-        result += renderGroupHeader(phaseName, items.length);
-        for (const item of items) result += renderItemRow(item);
-      }
-    } else if (groupBy === "worksheet") {
-      const groups = new Map<string, PdfDataPackage["lineItems"]>();
-      for (const item of data.lineItems) {
-        const key = item.worksheetName || "Default";
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key)!.push(item);
-      }
-      for (const [wsName, items] of groups) {
-        result += renderGroupHeader(wsName, items.length);
-        for (const item of items) result += renderItemRow(item);
-      }
-    } else {
-      for (const item of data.lineItems) result += renderItemRow(item);
+    let result = `<h2>Line Items</h2>`;
+
+    if (groupBy === "none") {
+      result += renderTable(data.lineItems);
+      return result;
     }
 
-    // Totals row
-    const totalCost = data.lineItems.reduce((s, i) => s + i.cost, 0);
-    const totalPrice = data.lineItems.reduce((s, i) => s + i.price, 0);
-    const totalHrs = data.lineItems.reduce(
-      (s, i) => s + i.unit1 + i.unit2 + i.unit3,
-      0
-    );
-    const baseCols = backupCol ? 6 : 5;
-    const skipCols = baseCols + (showCost ? 0 : -1) + (showMarkup ? 0 : -1);
-    result += `<tr class="totals"><td colspan="${skipCols}">Total (${data.lineItems.length} items)</td>`;
-    if (showCost) result += `<td class="num">${formatMoney(totalCost)}</td>`;
-    if (showMarkup) result += `<td></td>`;
-    result += `<td class="num">${formatMoney(totalPrice)}</td><td class="num">${totalHrs.toLocaleString()}</td></tr>`;
-    result += `</tbody></table>`;
+    const groups = new Map<string, PdfDataPackage["lineItems"]>();
+    for (const item of data.lineItems) {
+      const key = groupBy === "phase"
+        ? item.phaseName || "Unphased"
+        : item.worksheetName || "Default";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(item);
+    }
+
+    for (const [label, items] of groups) {
+      result += renderTable(items, label);
+    }
+
     return result;
   };
 
@@ -625,18 +782,32 @@ export function generatePdfHtml(
   const pageSizeMap: Record<string, string> = { letter: "letter", a4: "A4", legal: "legal" };
   const pageSize = pageSizeMap[opts.pageSetup.pageSize] || "letter";
   const orientation = opts.pageSetup.orientation;
+  const hasCoverPage = opts.sections.coverPage && opts.sectionOrder.includes("coverPage");
+  const pageDimensionsMm: Record<PdfLayoutOptions["pageSetup"]["pageSize"], { width: number; height: number }> = {
+    letter: { width: 215.9, height: 279.4 },
+    a4: { width: 210, height: 297 },
+    legal: { width: 215.9, height: 355.6 },
+  };
+  const pageDimensions = pageDimensionsMm[opts.pageSetup.pageSize] ?? pageDimensionsMm.letter;
+  const sheetHeightMm = orientation === "landscape" ? pageDimensions.width : pageDimensions.height;
+  const coverMinHeight = `${Math.max(sheetHeightMm - PDF_PAGE_MARGINS_MM.top - PDF_PAGE_MARGINS_MM.bottom, 140)}mm`;
 
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   @page {
     size: ${pageSize} ${orientation};
-    margin: 20mm 15mm;
+    margin: ${PDF_PAGE_MARGINS_MM.top}mm ${PDF_PAGE_MARGINS_MM.right}mm ${PDF_PAGE_MARGINS_MM.bottom}mm ${PDF_PAGE_MARGINS_MM.left}mm;
     ${opts.headerFooter.showPageNumbers ? `@bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 9px; color: #999; }` : ""}
-    ${opts.headerFooter.headerText ? `@top-center { content: "${opts.headerFooter.headerText}"; font-size: 9px; color: #666; }` : ""}
-    ${opts.headerFooter.footerText ? `@bottom-center { content: "${opts.headerFooter.footerText}"; font-size: 9px; color: #666; }` : ""}
+    ${opts.headerFooter.showHeader && headerText ? `@top-center { content: "${escapeForCssContent(headerText)}"; font-size: 9px; color: #666; }` : ""}
+    ${opts.headerFooter.showFooter && footerText ? `@bottom-center { content: "${escapeForCssContent(footerText)}"; font-size: 9px; color: #666; }` : ""}
   }
+  ${hasCoverPage ? `@page :first {
+    ${opts.headerFooter.showPageNumbers ? `@bottom-right { content: ""; }` : ""}
+    ${opts.headerFooter.showHeader && headerText ? `@top-center { content: ""; }` : ""}
+    ${opts.headerFooter.showFooter && footerText ? `@bottom-center { content: ""; }` : ""}
+  }` : ""}
   * { box-sizing: border-box; }
-  body { font-family: ${fontStack}; color: #1a1a1a; margin: 0; padding: 40px; font-size: 12px; line-height: 1.6; }
+  body { font-family: ${fontStack}; color: #1a1a1a; margin: 0; padding: ${PDF_BODY_PADDING_PX}px; font-size: 12px; line-height: 1.6; }
   h1 { font-size: 24px; margin: 0 0 4px; color: #111; letter-spacing: -0.02em; }
   h2 { font-size: 15px; margin: 28px 0 10px; border-bottom: 2px solid ${accent}; padding-bottom: 6px; color: #111; text-transform: uppercase; letter-spacing: 0.04em; }
   h3 { font-size: 13px; margin: 16px 0 4px; color: #333; }
@@ -648,6 +819,9 @@ export function generatePdfHtml(
   .meta { color: #666; font-size: 11px; }
   .badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; background: ${accent}18; color: ${accent}; }
   .totals { background: #f5f5f5; font-weight: 600; }
+  .line-item-group { margin: 18px 0 24px; page-break-inside: avoid; }
+  .line-item-group-title { margin: 0 0 2px; color: #111; }
+  .line-item-group-meta { margin-bottom: 8px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: #666; }
   .section-body { color: #444; line-height: 1.7; margin-bottom: 8px; }
   .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
   .summary-card { background: #fff; border: 1px solid #e5e5e5; border-left: 3px solid ${accent}; border-radius: 6px; padding: 14px 16px; }
@@ -656,17 +830,25 @@ export function generatePdfHtml(
   .conditions li { margin-bottom: 4px; }
 
   /* Cover page */
-  .cover-page { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 85vh; text-align: center; page-break-after: always; }
-  .cover-company { font-size: 14px; text-transform: uppercase; letter-spacing: 0.15em; color: ${accent}; font-weight: 600; margin-bottom: 4px; }
-  .cover-tagline { font-size: 12px; color: #888; margin-bottom: 24px; }
-  .cover-divider { width: 60px; height: 3px; background: ${accent}; margin: 16px auto 24px; border-radius: 2px; }
-  .cover-title { font-size: 32px; font-weight: 700; color: #111; margin-bottom: 16px; letter-spacing: -0.02em; line-height: 1.2; }
-  .cover-meta { font-size: 14px; color: #555; margin-bottom: 4px; }
-  .cover-details { display: flex; gap: 12px; align-items: center; font-size: 12px; color: #888; margin-top: 24px; }
+  .cover-page { margin: -${PDF_BODY_PADDING_PX}px -${PDF_BODY_PADDING_PX}px -${PDF_BODY_PADDING_PX}px; page-break-after: always; overflow: hidden; }
+  .cover-page-inner { min-height: ${coverMinHeight}; padding: 30px ${PDF_BODY_PADDING_PX}px 36px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .cover-page.cover-accent { background: linear-gradient(155deg, ${accent}28 0%, ${accent}08 38%, transparent 58%), linear-gradient(320deg, ${headerBg}18 0%, transparent 46%), linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
+  .cover-page.cover-grid { background-color: #f8fafc; background-image: linear-gradient(to right, rgba(148, 163, 184, 0.18) 1px, transparent 1px), linear-gradient(to bottom, rgba(148, 163, 184, 0.18) 1px, transparent 1px), radial-gradient(circle at top right, ${accent}18 0%, transparent 34%); background-size: 24px 24px, 24px 24px, auto; }
+  .cover-page.cover-minimal { background: linear-gradient(180deg, #ffffff 0%, #f9fafb 100%); }
+  .cover-top { width: 100%; display: flex; flex-direction: column; align-items: center; }
+  .cover-logo { max-width: 180px; max-height: 80px; margin-bottom: 18px; object-fit: contain; }
+  .cover-body { width: 100%; max-width: 560px; margin: auto 0; }
+  .cover-company { font-size: 13px; text-transform: uppercase; letter-spacing: 0.15em; color: ${accent}; font-weight: 600; margin-bottom: 0; }
+  .cover-divider { width: 72px; height: 3px; background: ${accent}; margin: 0 auto 24px; border-radius: 2px; }
+  .cover-title { font-size: 34px; font-weight: 700; color: #111; margin-bottom: 18px; letter-spacing: -0.02em; line-height: 1.15; }
+  .cover-meta { font-size: 14px; color: #4b5563; margin-bottom: 6px; }
+  .cover-details { width: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 14px; align-items: center; padding-top: 22px; border-top: 1px solid rgba(15, 23, 42, 0.08); }
+  .cover-detail { border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 999px; padding: 6px 12px; background: rgba(255, 255, 255, 0.72); font-size: 11px; color: #6b7280; }
 
   /* Header/footer bars */
-  .html-header { background: ${headerBg}; color: #fff; padding: 8px 20px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; margin: -40px -40px 24px; }
-  .html-footer { margin: 32px -40px -40px; padding: 12px 20px; background: #f5f5f5; border-top: 2px solid #e5e5e5; font-size: 10px; color: #666; display: flex; justify-content: space-between; align-items: center; }
+  .html-header { background: ${headerBg}; color: #fff; padding: 8px 16px; font-size: 10px; display: flex; justify-content: space-between; align-items: center; margin: -${PDF_BODY_PADDING_PX}px -${PDF_BODY_PADDING_PX}px 20px; }
+  .html-footer { margin: 28px -${PDF_BODY_PADDING_PX}px -${PDF_BODY_PADDING_PX}px; padding: 10px 16px; background: #f5f5f5; border-top: 2px solid #e5e5e5; font-size: 10px; color: #666; display: flex; justify-content: space-between; align-items: center; }
+  .post-cover-header { margin: -${PDF_BODY_PADDING_PX}px -${PDF_BODY_PADDING_PX}px 20px; padding: 18px ${PDF_BODY_PADDING_PX}px 14px; background: linear-gradient(180deg, #f8fafc 0%, #ffffff 72%); }
 
   /* Report sections */
   .report-section { margin: 16px 0; border-radius: 8px; overflow: hidden; border: 1px solid #e5e5e5; page-break-inside: avoid; }
@@ -690,16 +872,19 @@ export function generatePdfHtml(
   .report-nested .report-section-icon { width: 26px; height: 26px; font-size: 12px; }
   .report-nested .report-section-title { font-size: 13px; }
 
-  @media print { body { margin: 0; padding: 20px; } .html-header, .html-footer { margin: 0; } }
+  @media print { body { margin: 0; padding: ${PDF_BODY_PADDING_PX}px; } }
 </style></head><body>`;
-
-  // HTML header bar
-  if (opts.headerFooter.showHeader && opts.headerFooter.headerText) {
-    html += `<div class="html-header"><span>${escapeHtml(opts.headerFooter.headerText)}</span><span>${escapeHtml(data.quoteNumber)}</span></div>`;
-  }
 
   // Render ordered sections
   for (const sectionKey of opts.sectionOrder) {
+    const customSectionId = getCustomSectionId(sectionKey);
+    if (customSectionId) {
+      const customSection = opts.customSections.find((section) => section.id === customSectionId);
+      if (!customSection) continue;
+      html += `<h2>${escapeHtml(customSection.title)}</h2><div class="section-body">${customSection.content}</div>`;
+      continue;
+    }
+
     const sectionFlag = (opts.sections as Record<string, boolean>)[sectionKey];
     if (sectionFlag === false) continue;
 
@@ -714,7 +899,7 @@ export function generatePdfHtml(
     // After cover page, add the header info block
     if (sectionKey === "coverPage") {
       // Header and summary cards follow the cover page
-      html += `<div class="header">
+      html += `<div class="header post-cover-header">
         <div>
           <h1>${escapeHtml(data.title || data.quoteNumber)}</h1>
           <div class="meta">${escapeHtml(data.clientName)} &middot; ${escapeHtml(data.location)}</div>
@@ -747,8 +932,8 @@ export function generatePdfHtml(
     const bodyIdx = html.indexOf(bodyTag);
     if (bodyIdx !== -1) {
       const afterBody = bodyIdx + bodyTag.length;
-      const headerBlock = (opts.headerFooter.showHeader && opts.headerFooter.headerText
-        ? `<div class="html-header"><span>${escapeHtml(opts.headerFooter.headerText)}</span><span>${escapeHtml(data.quoteNumber)}</span></div>`
+      const headerBlock = (opts.headerFooter.showHeader && headerText
+        ? `<div class="html-header"><span>${escapeHtml(headerText)}</span><span>${escapeHtml(data.quoteNumber)}</span></div>`
         : "") +
         `<div class="header">
           <div>
@@ -772,17 +957,8 @@ export function generatePdfHtml(
     }
   }
 
-  // Custom sections
-  if (opts.customSections.length > 0) {
-    const sorted = [...opts.customSections].sort((a, b) => a.order - b.order);
-    for (const cs of sorted) {
-      html += `<h2>${escapeHtml(cs.title)}</h2><div class="section-body">${cs.content}</div>`;
-    }
-  }
-
   // HTML footer bar
   if (opts.headerFooter.showFooter) {
-    const footerText = opts.headerFooter.footerText || "Generated by Bidwright";
     html += `<div class="html-footer"><span>${escapeHtml(footerText)}</span><span>${new Date().toLocaleDateString()}</span></div>`;
   }
 
@@ -854,6 +1030,13 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function escapeForCssContent(str: string): string {
+  return str
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, " ");
 }
 
 /* ─── Schedule PDF ─── */
@@ -1113,7 +1296,12 @@ export async function generatePdfBuffer(
       format: format as any,
       landscape,
       printBackground: true,
-      margin: { top: "20mm", bottom: "20mm", left: "15mm", right: "15mm" },
+      margin: {
+        top: `${PDF_PAGE_MARGINS_MM.top}mm`,
+        right: `${PDF_PAGE_MARGINS_MM.right}mm`,
+        bottom: `${PDF_PAGE_MARGINS_MM.bottom}mm`,
+        left: `${PDF_PAGE_MARGINS_MM.left}mm`,
+      },
     });
     await page.close();
     return { buffer: Buffer.from(pdfBuffer), contentType: "application/pdf" };

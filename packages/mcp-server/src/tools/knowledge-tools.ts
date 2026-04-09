@@ -192,6 +192,59 @@ export function registerKnowledgeTools(server: McpServer) {
 
   // ── getDocumentStructured ─────────────────────────────────
   server.tool(
+    "listKnowledgeBooks",
+    "List the available knowledge books for this project and organization. Use this before reading handbook/reference content so you know the IDs to pass into readDocumentText.",
+    {},
+    async () => {
+      const params = new URLSearchParams({ projectId: getProjectId() });
+      const data = await apiGet(`/knowledge/books?${params}`);
+      const books = (Array.isArray(data) ? data : []).map((book: any) => ({
+        id: book.id,
+        name: book.name,
+        sourceFileName: book.sourceFileName,
+        category: book.category,
+        pageCount: book.pageCount,
+        scope: book.scope,
+        projectId: book.projectId,
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify(books, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "readDocumentText",
+    "Read extracted text for a project document or knowledge book by ID. Use this for PDFs, DOCX, TXT, CSV, and OCR-backed document text. Pass the document ID from the project manifest or listKnowledgeBooks. For spreadsheets, use readSpreadsheet instead. For table-heavy PDFs, pair this with getDocumentStructured.",
+    {
+      documentId: z.string().describe("SourceDocument ID or KnowledgeBook ID"),
+      pages: z.string().optional().describe("Optional page range like '1-5' or single page like '12'"),
+    },
+    async ({ documentId, pages }) => {
+      const params = pages ? `?pages=${encodeURIComponent(pages)}` : "";
+      const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}${params}`);
+      const doc = data.document || data;
+      const sections = Array.isArray(doc.chunks)
+        ? [...new Set(doc.chunks.map((chunk: any) => chunk.sectionTitle).filter(Boolean))]
+        : [];
+      const header = [
+        `File: ${doc.fileName || doc.bookName || documentId}`,
+        doc.documentType ? `Type: ${doc.documentType}` : null,
+        doc.category ? `Category: ${doc.category}` : null,
+        doc.pageCount ? `Pages: ${doc.pageCount}` : null,
+        pages ? `Requested pages: ${pages}` : null,
+      ].filter(Boolean).join("\n");
+      const content = typeof doc.content === "string" ? doc.content.trim() : "";
+
+      let output = `${header}\n\n`;
+      if (sections.length > 0) {
+        output += `Sections: ${sections.join(", ")}\n\n`;
+      }
+      output += content || "(No extracted text available for this document.)";
+
+      return { content: [{ type: "text" as const, text: output }] };
+    }
+  );
+
+  server.tool(
     "getDocumentStructured",
     "Get the Azure Document Intelligence structured extraction for a project document — tables (as markdown), key-value pairs, section headings, page-by-page text. Use this when you need parsed table data or form fields from a PDF.",
     {

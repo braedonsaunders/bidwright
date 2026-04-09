@@ -9,6 +9,11 @@ const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
 
 // Timeout for waiting for user answer (5 minutes)
 const ASK_USER_TIMEOUT_MS = 5 * 60 * 1000;
+const ASK_USER_POLL_MS = 1500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function registerSystemTools(server: McpServer) {
   const askUserQuestionSchema = z.object({
@@ -36,28 +41,47 @@ export function registerSystemTools(server: McpServer) {
       }
 
       try {
-        // POST the question to the API — this will long-poll until the user answers
-        const resp = await fetch(`${process.env.BIDWRIGHT_API_URL || "http://localhost:4001"}/api/cli/${projectId}/question`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(process.env.BIDWRIGHT_AUTH_TOKEN ? { "Authorization": `Bearer ${process.env.BIDWRIGHT_AUTH_TOKEN}` } : {}),
-          },
-          body: JSON.stringify({ question, options, context, questions }),
-          signal: AbortSignal.timeout(ASK_USER_TIMEOUT_MS),
+        const created = await apiPost<{ ok: boolean; questionId: string }>(`/api/cli/${projectId}/question`, {
+          question,
+          options,
+          context,
+          questions,
         });
 
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          return { content: [{ type: "text" as const, text: `Error asking user: ${resp.status} ${text}` }] };
+        const questionId = created.questionId;
+        const deadline = Date.now() + ASK_USER_TIMEOUT_MS;
+
+        while (Date.now() < deadline) {
+          await sleep(ASK_USER_POLL_MS);
+          const status = await apiGet<{
+            pending: boolean;
+            answered?: boolean;
+            answer?: string;
+            questionId?: string | null;
+          }>(`/api/cli/${projectId}/pending-question?questionId=${encodeURIComponent(questionId)}`);
+
+          if (status.answered && typeof status.answer === "string") {
+            return { content: [{ type: "text" as const, text: `User answered: ${status.answer}` }] };
+          }
         }
 
-        const data = await resp.json() as { answer: string };
-        return { content: [{ type: "text" as const, text: `User answered: ${data.answer}` }] };
-      } catch (err: any) {
-        if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-          return { content: [{ type: "text" as const, text: "User did not respond within 5 minutes. Proceed with your best judgment and note assumptions." }] };
+        const finalStatus = await apiGet<{
+          pending: boolean;
+          answered?: boolean;
+          answer?: string;
+          questionId?: string | null;
+        }>(`/api/cli/${projectId}/pending-question?questionId=${encodeURIComponent(questionId)}`).catch(() => null);
+
+        if (finalStatus?.answered && typeof finalStatus.answer === "string") {
+          return { content: [{ type: "text" as const, text: `User answered: ${finalStatus.answer}` }] };
         }
+
+        await apiPost(`/api/cli/${projectId}/question-timeout`, {
+          questionId,
+        }).catch(() => {});
+
+        return { content: [{ type: "text" as const, text: "User did not respond within 5 minutes. Proceed with your best judgment and note assumptions." }] };
+      } catch (err: any) {
         return { content: [{ type: "text" as const, text: `Error: ${err?.message || "Failed to ask user"}` }] };
       }
     }

@@ -451,7 +451,8 @@ export function registerQuoteTools(server: McpServer) {
           }
 
           // Validate calculationType requirements
-          if (calcType === "auto_labour" && !rest.unit1 && !rest.unit2 && !rest.unit3) {
+          const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
+          if (calcType === "auto_labour" && !hasTierUnits && !rest.unit1 && !rest.unit2 && !rest.unit3) {
             return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — unit values are required. Set unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
           }
 
@@ -624,7 +625,7 @@ export function registerQuoteTools(server: McpServer) {
       order: z.number().optional().describe("Sort order"),
     },
     async (input) => {
-      await apiPost(projectPath("/schedule/tasks"), input);
+      await apiPost(projectPath("/schedule-tasks"), input);
       return { content: [{ type: "text" as const, text: `Created schedule task: ${input.name}` }] };
     }
   );
@@ -635,7 +636,7 @@ export function registerQuoteTools(server: McpServer) {
     "List all schedule tasks and milestones for the project.",
     {},
     async () => {
-      const data = await apiGet(projectPath("/schedule/tasks"));
+      const data = await apiGet(projectPath("/schedule-tasks"));
       const tasks = (Array.isArray(data) ? data : data.tasks || []).map((t: any) => ({
         id: t.id, name: t.name, phaseId: t.phaseId, taskType: t.taskType,
         startDate: t.startDate, endDate: t.endDate, duration: t.duration, order: t.order,

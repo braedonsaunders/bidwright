@@ -14,6 +14,7 @@ import type {
   Worksheet,
   WorksheetItem,
 } from "./models.js";
+import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder.js";
 
 const directCostCategories = new Set([
   "Material",
@@ -33,12 +34,22 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-function normalizeCategoryName(value: string) {
-  if (value === "Materials") {
+function normalizeCategoryName(value: string, entityType?: string | null) {
+  const trimmed = value.trim();
+  const trimmedEntityType = entityType?.trim() ?? "";
+  const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
+
+  if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
     return "Material";
   }
+  if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
+    return "Labour";
+  }
+  if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
+    return "Subcontractors";
+  }
 
-  return value;
+  return trimmed || trimmedEntityType;
 }
 
 function categoryIdForName(value: string) {
@@ -54,12 +65,15 @@ function categoryIdForName(value: string) {
 function normalizeModifierTarget(appliesTo: string) {
   switch (appliesTo) {
     case "LaborClass":
+    case "Labor":
       return "Labour";
     case "EquipmentRate":
       return "Equipment";
     case "Material":
     case "Materials":
       return "Material";
+    case "Subcontractor":
+      return "Subcontractors";
     default:
       return appliesTo;
   }
@@ -131,7 +145,7 @@ function getQuoteByProjectId(store: BidwrightStore, projectId: string) {
 }
 
 function computeItemCost(item: WorksheetItem) {
-  const category = normalizeCategoryName(item.category);
+  const category = normalizeCategoryName(item.category, item.entityType);
 
   if (directCostCategories.has(category)) {
     return item.quantity * item.cost;
@@ -141,7 +155,7 @@ function computeItemCost(item: WorksheetItem) {
 }
 
 function computeItemHours(item: WorksheetItem) {
-  const category = normalizeCategoryName(item.category);
+  const category = normalizeCategoryName(item.category, item.entityType);
 
   if (category !== "Labour") {
     return {
@@ -889,9 +903,16 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     .filter((entry) => entry.revisionId === revision.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const totals = calculateTotals(revision, worksheets, phases, adjustments);
+  const summaryBuilder = buildSummaryBuilderConfig(
+    (revision.pdfPreferences as Record<string, unknown> | undefined)?.summaryBuilder as any,
+    summaryRows,
+    revision.summaryLayoutPreset,
+    totals,
+  );
   const lineItems = worksheets.flatMap((worksheet) => worksheet.items);
   const modifiers = adjustments.map(adjustmentToLegacyModifier).filter(isDefined);
   const additionalLineItems = adjustments.map(adjustmentToLegacyAdditionalLineItem).filter(isDefined);
+  const materializedSummaryRows = materializeSummaryRowsFromBuilder(summaryBuilder, totals);
 
   return {
     project,
@@ -911,7 +932,18 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     adjustments,
     modifiers,
     additionalLineItems,
-    summaryRows: summaryRows.length > 0 ? computeSummaryRows(summaryRows, totals) : summaryRows,
+    summaryBuilder,
+    summaryRows: computeSummaryRows(
+      materializedSummaryRows.map((row, index) => ({
+        ...row,
+        id: summaryRows[index]?.id ?? `summary-builder-${index}`,
+        revisionId: revision.id,
+        computedValue: 0,
+        computedCost: 0,
+        computedMargin: 0,
+      })),
+      totals,
+    ),
     conditions: store.conditions.filter((condition) => condition.revisionId === revision.id),
     catalogs: getCatalogs(store, projectId),
     aiRuns,

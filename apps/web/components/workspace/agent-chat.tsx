@@ -50,6 +50,7 @@ interface PendingQuestionStep {
 }
 
 interface PendingQuestionPrompt {
+  id?: string | null;
   question: string;
   options?: string[];
   context?: string;
@@ -66,6 +67,37 @@ function authHeaders(): Record<string, string> {
 
 function intakeStorageKey(projectId: string) {
   return `bw_intake_${projectId}`;
+}
+
+type CliRuntime = "claude-code" | "codex";
+
+function isCliRuntime(value: unknown): value is CliRuntime {
+  return value === "claude-code" || value === "codex";
+}
+
+function isClaudeCliModel(model: string) {
+  return ["sonnet", "opus", "haiku"].includes(model) || model.startsWith("claude-");
+}
+
+function isCodexCliModel(model: string) {
+  return model.startsWith("gpt-");
+}
+
+function defaultCliModel(runtime: CliRuntime) {
+  return runtime === "codex" ? "gpt-5.4" : "sonnet";
+}
+
+function normalizeCliModel(runtime: CliRuntime, model: string | null | undefined) {
+  if (runtime === "codex") {
+    return model && isCodexCliModel(model) ? model : defaultCliModel(runtime);
+  }
+  return model && isClaudeCliModel(model) ? model : defaultCliModel(runtime);
+}
+
+function getAutoCliRuntime(availability: { claude: boolean; codex: boolean }): CliRuntime | null {
+  if (availability.claude) return "claude-code";
+  if (availability.codex) return "codex";
+  return null;
 }
 
 const MUTATING_TOOL_PATTERNS = /^(quote\.(create|update|delete)|knowledge\.(add|update|remove|ingest|index)|system\.logActivity|mcp__bidwright__(create|update|delete|import|recalculate))/;
@@ -546,15 +578,21 @@ function compileGuidedAnswer(questionnaire: GuidedQuestionnaire, responses: Reco
 }
 
 function promptMatchesAskUserEvent(prompt: PendingQuestionPrompt, event: any): boolean {
+  const eventId = event?.data?.questionId || event?.data?.id || null;
+  if (prompt.id && eventId) return eventId === prompt.id;
   return normalizePromptText(event?.data?.question || "") === normalizePromptText(prompt.question || "");
 }
 
 function findAnswerForAskUser(events: any[], askIndex: number): string | null {
+  const askEvent = events[askIndex];
+  const askId = askEvent?.data?.questionId || askEvent?.data?.id || null;
   for (let i = askIndex + 1; i < events.length; i += 1) {
     const event = events[i];
     if (!event) continue;
     if (event.type === "askUser" || event.type === "run_divider") break;
     if (event.type === "userAnswer") {
+      const answerId = event?.data?.questionId || null;
+      if (askId && answerId && answerId !== askId) continue;
       return typeof event.data?.answer === "string" ? event.data.answer : null;
     }
   }
@@ -564,8 +602,9 @@ function findAnswerForAskUser(events: any[], askIndex: number): string | null {
 
 function isDuplicateAskUserEvent(events: any[], askIndex: number): boolean {
   const current = events[askIndex];
+  const currentId = current?.data?.questionId || current?.data?.id || null;
   const currentQuestion = normalizePromptText(current?.data?.question || "");
-  if (!currentQuestion) return false;
+  if (!currentQuestion && !currentId) return false;
 
   for (let i = askIndex - 1; i >= 0; i -= 1) {
     const event = events[i];
@@ -573,8 +612,10 @@ function isDuplicateAskUserEvent(events: any[], askIndex: number): boolean {
     if (event.type === "userAnswer" || event.type === "run_divider") break;
     if (event.type !== "askUser") continue;
 
+    const priorId = event?.data?.questionId || event?.data?.id || null;
+    if (currentId && priorId && priorId !== currentId) continue;
     const priorQuestion = normalizePromptText(event?.data?.question || "");
-    if (priorQuestion !== currentQuestion) continue;
+    if (!currentId && priorQuestion !== currentQuestion) continue;
 
     return !findAnswerForAskUser(events, i);
   }
@@ -597,6 +638,7 @@ function appendTimelineEvent(events: any[] | undefined, event: any): any[] {
 
   if (event?.type === "askUser") {
     const prompt: PendingQuestionPrompt = {
+      id: (event?.data?.questionId as string | undefined) || (event?.data?.id as string | undefined) || null,
       question: event?.data?.question || "",
       options: event?.data?.options || [],
       context: event?.data?.context || "",
@@ -628,6 +670,8 @@ function ensurePromptTimelineEvent(events: any[] | undefined, prompt: PendingQue
   return appendTimelineEvent(events, {
     type: "askUser",
     data: {
+      questionId: prompt.id || undefined,
+      id: prompt.id || undefined,
       question: prompt.question,
       options: prompt.options || [],
       context: prompt.context || "",
@@ -911,7 +955,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
   const [docsExpanded, setDocsExpanded] = useState(false);
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
-  const [cliRuntime, setCliRuntime] = useState<"claude-code" | "codex" | null>(null);
+  const [cliRuntime, setCliRuntime] = useState<CliRuntime | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
   const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
@@ -928,6 +972,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const sseReconnectCount = useRef(0);
   const pollFailCount = useRef(0);
   const intakeScopeEditedRef = useRef(false);
+  const effectiveCliModel = cliRuntime ? normalizeCliModel(cliRuntime, cliAgentModel) : null;
 
   const recordCliPrompt = useCallback((prompt: PendingQuestionPrompt) => {
     setCliPendingQuestion(prompt);
@@ -956,30 +1001,54 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
   // Load default provider/model from org settings + detect CLIs
   useEffect(() => {
-    Promise.all([
-      getSettings().then((s) => {
-        const integ = s?.integrations as Record<string, any> | undefined;
-        if (integ?.llmProvider) setProvider(integ.llmProvider);
-        if (integ?.llmModel) setModel(integ.llmModel);
-        // Use configured runtime and model if set
-        if (integ?.agentRuntime) setCliRuntime(integ.agentRuntime);
-        if (integ?.agentModel) setCliAgentModel(integ.agentModel);
-      }).catch(() => {}),
-      detectCli().then((result) => {
-        setCliAvailable({ claude: result.claude.available, codex: result.codex.available });
-        // Auto-select best available runtime
-        if (!cliRuntime) {
-          if (result.claude.available) setCliRuntime("claude-code");
-          else if (result.codex.available) setCliRuntime("codex");
-        }
-      }).catch(() => {}),
-      listPersonas().then((list) => {
-        const enabled = list.filter(p => p.enabled);
+    let active = true;
+
+    Promise.allSettled([
+      getSettings(),
+      detectCli(),
+      listPersonas(),
+    ]).then((results) => {
+      if (!active) return;
+
+      const [settingsResult, cliResult, personasResult] = results;
+
+      const integ =
+        settingsResult.status === "fulfilled"
+          ? (settingsResult.value?.integrations as Record<string, any> | undefined)
+          : undefined;
+      if (integ?.llmProvider) setProvider(integ.llmProvider);
+      if (integ?.llmModel) setModel(integ.llmModel);
+
+      const availability = {
+        claude: cliResult.status === "fulfilled" ? cliResult.value.claude.available : false,
+        codex: cliResult.status === "fulfilled" ? cliResult.value.codex.available : false,
+      };
+      setCliAvailable(availability);
+
+      const configuredRuntime = isCliRuntime(integ?.agentRuntime)
+        ? integ.agentRuntime
+        : cliResult.status === "fulfilled" && isCliRuntime(cliResult.value.configured?.runtime)
+          ? cliResult.value.configured.runtime
+          : null;
+      const configuredModel = integ?.agentModel
+        ?? (cliResult.status === "fulfilled" ? cliResult.value.configured?.model : null);
+      const resolvedRuntime = configuredRuntime ?? getAutoCliRuntime(availability);
+      setCliRuntime(resolvedRuntime);
+      setCliAgentModel(resolvedRuntime ? normalizeCliModel(resolvedRuntime, configuredModel) : null);
+
+      if (personasResult.status === "fulfilled") {
+        const enabled = personasResult.value.filter(p => p.enabled);
         setPersonas(enabled);
         const defaultP = enabled.find(p => p.isDefault);
         if (defaultP) setSelectedPersonaId(defaultP.id);
-      }).catch(() => {}),
-    ]).finally(() => setSettingsReady(true));
+      }
+    }).finally(() => {
+      if (active) setSettingsReady(true);
+    });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -1244,7 +1313,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       if (cliRuntime) {
         // CLI-based intake (preferred)
         // Use the agent model from org settings, falling back to sensible defaults
-        const cliModel = cliAgentModel || (cliRuntime === "claude-code" ? "sonnet" : "gpt-5.4");
+        const cliModel = normalizeCliModel(cliRuntime, cliAgentModel);
         const result = await startCliSession({
           projectId,
           runtime: cliRuntime,
@@ -1406,6 +1475,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         const data = JSON.parse(e.data);
         if (data.question) {
           recordCliPrompt({
+            id: data.questionId || data.id || null,
             question: data.question,
             options: data.options,
             context: data.context,
@@ -1566,6 +1636,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           const q = await getCliPendingQuestion(projectId);
           if (q.pending && q.question) {
             recordCliPrompt({
+              id: q.questionId || null,
               question: q.question,
               options: q.options,
               context: q.context,
@@ -1699,11 +1770,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const isIntakeComplete = intakeStatus?.status === "completed";
   const isIntakeFailed = intakeStatus?.status === "failed";
   const isWaitingForUser = intakeStatus?.status === "waiting_for_user";
+  const showIntakeSetupCard = messages.length === 0 || Boolean(intakeStatus) || intakeLoading;
   const timelineEvents: any[] = (intakeStatus as any)?.events ?? [];
   const hasInlineCliPendingQuestion = Boolean(
     cliPendingQuestion && timelineEvents.some((evt, index) =>
       evt.type === "askUser"
-      && normalizePromptText(evt.data?.question || "") === normalizePromptText(cliPendingQuestion.question)
+      && promptMatchesAskUserEvent(cliPendingQuestion, evt)
       && !findAnswerForAskUser(timelineEvents, index),
     ),
   );
@@ -1727,7 +1799,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div>
                 <div className="text-sm font-semibold">Bidwright AI</div>
                 <div className="text-[10px] text-fg/35">
-                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI · ${cliAgentModel || "sonnet"}` : `${provider} / ${model.split("/").pop()}`}
+                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI · ${effectiveCliModel}` : `${provider} / ${model.split("/").pop()}`}
                   {sseConnected && <span className="ml-1 text-success">connected</span>}
                 </div>
               </div>
@@ -1766,9 +1838,24 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
           {/* Unified chronological stream */}
           <div className="relative flex-1 overflow-y-auto p-4 space-y-2" ref={scrollContainerRef} onScroll={handleScroll}>
-            {/* Start button — show when no active intake */}
-            {messages.length === 0 && !intakeStatus && (
-              <div className="space-y-3">
+            {/* Intake setup */}
+            {showIntakeSetupCard && (
+              <div className="space-y-3 rounded-lg border border-line bg-bg/20 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-wider text-fg/40">
+                      Estimate Setup
+                    </div>
+                    <div className="text-[10px] text-fg/30">
+                      Persona and scope instructions used for AI estimating.
+                    </div>
+                  </div>
+                  {(isIntakeRunning || intakeLoading) && (
+                    <Badge tone="info" className="text-[10px]">
+                      In progress
+                    </Badge>
+                  )}
+                </div>
                 {/* Persona selection */}
                 {personas.length > 0 && (
                   <div className="space-y-1.5">
@@ -1802,7 +1889,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     </label>
                     <Select
                       className="h-8 text-xs"
-                      value={cliAgentModel || "sonnet"}
+                      value={effectiveCliModel || "sonnet"}
                       onChange={(e) => setCliAgentModel(e.target.value)}
                     >
                       <option value="sonnet">Claude Sonnet 4.6 (Recommended)</option>
@@ -1828,23 +1915,31 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     Passed into the AI estimate workflow as authoritative scope and commercial direction.
                   </div>
                 </div>
-                <button
-                  onClick={handleStartIntake}
-                  disabled={intakeLoading}
-                  className="w-full rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-left transition-colors hover:bg-accent/10 disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2">
-                    {intakeLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
-                    ) : (
-                      <Sparkles className="h-4 w-4 text-accent" />
-                    )}
-                    <span className="text-sm font-medium text-accent">Start AI Estimating</span>
+                {isIntakeRunning ? (
+                  <div className="rounded-lg border border-line/60 bg-panel2/40 px-3 py-2 text-[11px] text-fg/45">
+                    Changes here do not affect the current run. They stay visible so you can review or adjust them before retrying.
                   </div>
-                  <div className="mt-1 text-[11px] text-fg/40">
-                    Automatically review bid documents and build a complete estimate
-                  </div>
-                </button>
+                ) : (
+                  <button
+                    onClick={handleStartIntake}
+                    disabled={intakeLoading}
+                    className="w-full rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-left transition-colors hover:bg-accent/10 disabled:opacity-50"
+                  >
+                    <div className="flex items-center gap-2">
+                      {intakeLoading ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                      ) : (
+                        <Sparkles className="h-4 w-4 text-accent" />
+                      )}
+                      <span className="text-sm font-medium text-accent">
+                        {intakeStatus ? "Start New AI Run" : "Start AI Estimating"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-fg/40">
+                      Automatically review bid documents and build a complete estimate
+                    </div>
+                  </button>
+                )}
               </div>
             )}
 
@@ -1998,21 +2093,23 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                   const isCurrentPending = !answer
                     && cliRuntime
                     && cliPendingQuestion
-                    && normalizePromptText(cliPendingQuestion.question) === normalizePromptText(prompt.question);
+                    && promptMatchesAskUserEvent(cliPendingQuestion, evt);
 
                   if (isCurrentPending) {
                     return (
                       <PendingQuestionCard
                         key={key}
                         prompt={cliPendingQuestion}
-                        promptKey={`cli-inline-${projectId}-${cliPendingQuestion.question}`}
+                        promptKey={`cli-inline-${projectId}-${cliPendingQuestion.id || cliPendingQuestion.question}`}
                         onSubmit={async (submittedAnswer) => {
                           const pendingPrompt = cliPendingQuestion;
                           try {
-                            await answerCliQuestion(projectId, submittedAnswer);
+                            await answerCliQuestion(projectId, submittedAnswer, pendingPrompt?.id);
                             recordCliAnswer(submittedAnswer, pendingPrompt);
                             setCliPendingQuestion(null);
-                          } catch {}
+                          } catch (err) {
+                            setSessionError(err instanceof Error ? err.message : "Failed to deliver answer to agent");
+                          }
                         }}
                       />
                     );
@@ -2090,14 +2187,16 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <PendingQuestionCard
                   prompt={cliPendingQuestion}
-                  promptKey={`cli-${projectId}-${cliPendingQuestion.question}`}
+                  promptKey={`cli-${projectId}-${cliPendingQuestion.id || cliPendingQuestion.question}`}
                   onSubmit={async (answer) => {
                     const pendingPrompt = cliPendingQuestion;
                     try {
-                      await answerCliQuestion(projectId, answer);
+                      await answerCliQuestion(projectId, answer, pendingPrompt?.id);
                       recordCliAnswer(answer, pendingPrompt);
                       setCliPendingQuestion(null);
-                    } catch {}
+                    } catch (err) {
+                      setSessionError(err instanceof Error ? err.message : "Failed to deliver answer to agent");
+                    }
                   }}
                 />
               </div>

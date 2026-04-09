@@ -44,18 +44,19 @@ export interface ClaudeMdParams {
   maxConcurrentSubAgents?: number;
 }
 
+async function prepareInstructionWorkspace(params: ClaudeMdParams): Promise<void> {
+  const { projectDir } = params;
+  await mkdir(join(projectDir, "documents"), { recursive: true });
+  await mkdir(join(projectDir, ".bidwright"), { recursive: true });
+  await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
+}
+
 /**
  * Generate CLAUDE.md and related config files in the project directory
  */
 export async function generateClaudeMd(params: ClaudeMdParams): Promise<void> {
   const { projectDir } = params;
-
-  // Ensure directories exist
-  await mkdir(join(projectDir, "documents"), { recursive: true });
-  await mkdir(join(projectDir, ".bidwright"), { recursive: true });
-
-  // Symlink source documents into documents/ so the CLI can read them
-  await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
+  await prepareInstructionWorkspace(params);
 
   // Build the CLAUDE.md content
   const content = buildClaudeMdContent(params);
@@ -200,12 +201,12 @@ ${commercialScopeSection}
 The project documents are in the \`documents/\` folder as real files on disk.
 
 **How to read documents:**
-- PDFs: Use the \`Read\` tool on \`documents/<filename>.pdf\` — it reads PDFs natively (use \`pages\` param for large PDFs, e.g. pages: "1-5"). This is faster and gives you the full content.
-- Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID from the manifest below — this parses the binary file server-side and returns markdown tables. The Read tool CANNOT open xlsx files (it rejects binary files with an error). You MUST use \`readSpreadsheet\` instead.
-- CSV/TSV: Use the \`Read\` tool directly (these are text files)
-- Images: Use the \`Read\` tool (you are multimodal and can see images)
-- \`getDocumentStructured\` — use this for Azure Form Recognizer extracted tables and structured data (useful for tabular content)
-- **Do NOT use renderDrawingPage to read document text.** That tool renders a PDF page as an image — it's for visual drawing inspection and symbol counting, not for reading specs. Use \`Read\` instead.
+- PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID from the manifest below. It returns Bidwright's extracted text and supports an optional \`pages\` range for long PDFs.
+- Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID from the manifest below — this parses the binary file server-side and returns markdown tables.
+- Table-heavy PDFs and forms: Use \`getDocumentStructured\` to inspect structured tables, key-value pairs, and section headings.
+- Images: Use the vision/drawing tools only when you need visual inspection or symbol counting.
+- **Do NOT install local parsers or shell utilities just to read Bidwright project files.** Use the MCP document tools first.
+- **Do NOT use renderDrawingPage to read document text.** That tool is for visual drawing inspection and symbol counting, not for spec/RFQ text extraction.
 
 ${docManifest}
 
@@ -213,7 +214,7 @@ ${docManifest}
 - You MUST read EVERY document listed above. No skipping, no shortcuts, no "estimated from primary documents."
 - **Every P&ID must be individually read** — secondary P&IDs (e.g. POLY-0002, PENTANE-0003, ISO-0002) contain additional equipment, piping runs, and connections NOT shown on the primary P&ID. Skipping them means missing scope.
 - **Every spreadsheet must be read** using the \`readSpreadsheet\` tool — spreadsheets often contain BOMs, quantity takeoffs, or quotation details that are CRITICAL to accurate pricing.
-- **Every specification section must be read** — use the \`pages\` parameter to read large PDFs in chunks (e.g. pages: "1-20", then "21-40", etc.) until you've covered the entire document.
+- **Every specification section must be read** — use the \`pages\` parameter with \`readDocumentText\` to read large PDFs in chunks (e.g. pages: "1-20", then "21-40", etc.) until you've covered the entire document.
 - If a document cannot be read (corrupted, format issue), log it as a HIGH-impact assumption and flag it to the user — do NOT silently skip it.
 - **Estimation accuracy is directly proportional to document thoroughness.** An estimate built from 60% of the documents will be 30-40% inaccurate.
 
@@ -222,16 +223,17 @@ ${docManifest}
 ## Knowledge Books (Reference Manuals)
 
 ${params.knowledgeBookFiles && params.knowledgeBookFiles.length > 0
-  ? `The organization's reference manuals and estimating handbooks are available as **real PDF files** in the \`knowledge/\` folder:
+  ? `The organization's reference manuals and estimating handbooks are available through Bidwright knowledge tools:
 
 ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 
 **HOW TO USE KNOWLEDGE BOOKS:**
-- Use the \`Read\` tool to read these PDFs directly — e.g. \`Read("knowledge/${params.knowledgeBookFiles[0]}", pages: "1-10")\`
+- Call \`listKnowledgeBooks\` first to get the knowledge book IDs available to this project.
+- Use \`readDocumentText\` with a knowledge book ID and optional \`pages\` range to read the actual handbook text.
 - These are FULL books (100-300+ pages). Read the TABLE OF CONTENTS first (usually pages 1-5) to find relevant chapters.
 - Then read the specific chapters/tables you need for THIS project's scope.
 - **This is your PRIMARY source for man-hour data, production rates, and correction factors.** Reading these books directly gives you full context that chunk-based search cannot.
-- The MCP tools (searchBooks, queryKnowledge) still work for quick lookups, but for deep research, READ THE ACTUAL BOOK.
+- The MCP search tools (\`searchBooks\`, \`queryKnowledge\`) still work for quick lookups, but for deep research, read the actual handbook text through \`readDocumentText\`.
 - When citing in sourceNotes, reference the book name, chapter, table number, and page.`
   : `No knowledge books are available in the project directory. Use the MCP tools (searchBooks, queryKnowledge, queryDataset) to search the knowledge base.`}
 
@@ -257,6 +259,8 @@ ${benchmarkToolLine}
 - **importRateSchedule** — Import an org rate schedule into the current quote revision
 - **queryKnowledge** — Search the knowledge base for man-hour data, pricing references, standards
 - **queryGlobalLibrary** — Search global knowledge books (estimating manuals, productivity data)
+- **listKnowledgeBooks** — List available knowledge books and their IDs
+- **readDocumentText** — Read extracted text for project documents and knowledge books by ID
 - **searchBooks** — Search knowledge books by keyword
 - **queryDataset / searchDataset / listDatasets** — Search structured datasets (rate tables, historical data)
 - **searchCatalogs** — Search equipment/material catalogs for items with pricing
@@ -274,12 +278,12 @@ ${benchmarkToolLine}
 
 ### Vision & Drawing Takeoff Tools (for symbol counting ONLY)
 
-These tools are for **automated symbol counting on construction drawings**, NOT for reading documents. To read documents, use the Read tool on files in documents/.
+These tools are for **automated symbol counting on construction drawings**, NOT for reading documents. To read document text, use \`readDocumentText\` / \`getDocumentStructured\`.
 
 - **scanDrawingSymbols** — Scans a drawing page and returns an inventory of repeating symbols with counts and locations
 - **countSymbols** — Refine a count with a specific bounding box and threshold
 - **countSymbolsAllPages** — Count a symbol across ALL pages of a document
-- **renderDrawingPage** — Render a drawing page as an image for visual symbol inspection (NOT for reading spec text — use Read tool instead)
+- **renderDrawingPage** — Render a drawing page as an image for visual symbol inspection (NOT for reading spec text — use \`readDocumentText\` instead)
 - **zoomDrawingRegion** — Zoom into a small region for tiny text or symbol details
 - **listDrawingPages** — List all PDF drawings with page counts
 
@@ -320,9 +324,15 @@ ${stageGateSequence}
 - If evidence is weak, price that scope as an allowance or subcontract budget instead of pretending you have a precise self-perform takeoff.
 - Every package-plan entry must include explicit bindings to persisted rows: use \`bindings.worksheetNames\` or \`bindings.worksheetIds\`, plus \`bindings.categories\` or \`bindings.textMatchers\` when needed, so the server can validate commercialization against the final workspace.
 - Each package-plan entry must also declare \`commercialModel.executionMode\` and \`commercialModel.supervisionMode\` when the persona has a defined preference.
+- Use the exact package-plan enums accepted by the API. Do NOT invent synonyms:
+  - \`pricingMode\`: \`detailed\` | \`allowance\` | \`subcontract\` | \`historical_allowance\`
+  - \`commercialModel.executionMode\`: \`self_perform\` | \`subcontract\` | \`allowance\` | \`historical_allowance\` | \`mixed\`
+  - \`commercialModel.supervisionMode\`: \`single_source\` | \`embedded\` | \`general_conditions\` | \`hybrid\`
+  - \`scopeGraph.alternates[].status\`: \`included\` | \`excluded\` | \`unclear\`
+  - \`reconcileReport.coverageChecks[].status\`: \`ok\` | \`warning\` | \`missing\`
 ${benchmarkGateNarrative}
 
-1. **Read the main spec/RFQ** — find and read the primary specification document using the Read tool on the documents/ folder
+1. **Read the main spec/RFQ** — find the primary specification document in the manifest and read it with \`readDocumentText\`
 2. **IMMEDIATELY update the quote — THIS IS YOUR #1 PRIORITY, DO IT BEFORE ANYTHING ELSE.** As soon as you read the main spec, call \`updateQuote\` with:
    - \`projectName\`: The real project name from the spec
    - \`description\`: A PROFESSIONAL estimator-quality scope of work (see below)
@@ -348,10 +358,10 @@ ${benchmarkGateNarrative}
    You MUST do ALL of the following BEFORE creating ANY worksheets or items:
 
    **a. READ the knowledge books directly** (PRIMARY method — gives you full context):
-   - Open each PDF in \`knowledge/\` using the Read tool
+   - Call \`listKnowledgeBooks\` to get the relevant book IDs
    - Read the Table of Contents first (pages 1-5) to find relevant chapters
    - Then read the specific tables/chapters for THIS project (pipe welding hours, valve MH, equipment setting, correction factors, etc.)
-   - Example: \`Read("knowledge/Estimators-Piping-Man-Hour.pdf", pages: "1-5")\` then \`Read("knowledge/Estimators-Piping-Man-Hour.pdf", pages: "42-55")\` for the specific data tables
+   - Example: \`readDocumentText(bookId, pages: "1-5")\` then \`readDocumentText(bookId, pages: "42-55")\` for the specific data tables
 
    **b. \`listDatasets\`** — review all available structured datasets
    **c. \`queryDataset\`** — query at least 2 relevant datasets for production rates
@@ -489,14 +499,14 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
    - Worksheet ID, phase ID, rate schedule item IDs, tier IDs
    - Scope description for that worksheet (what systems, equipment, pipe sizes, counts)
    - Spec section references to read
-   - Instructions to Read specific knowledge book pages (e.g. "Read knowledge/Estimators-Piping-Man-Hour.pdf pages 42-55") and call \`queryDataset\` for production rates BEFORE creating items
+   - Instructions to read specific knowledge book pages with \`readDocumentText\` (e.g. "readDocumentText bookId=... pages=42-55") and call \`queryDataset\` for production rates BEFORE creating items
    - The correction factors identified in the main agent's research (material, elevation, congestion, etc.)
    - Instruction to populate sourceNotes with the actual knowledge reference used
 
 4. **DO NOT do this:** "tierUnits: {Regular: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
 
-5. **Sub-agents have access to ALL tools** including the Read tool for knowledge/ PDFs, queryDataset, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
-6. **Tell sub-agents which knowledge book pages to read.** Example: "Read knowledge/Estimators-Piping-Man-Hour.pdf pages 42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
+5. **Sub-agents have access to ALL tools** including \`readDocumentText\`, \`queryDataset\`, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
+6. **Tell sub-agents which knowledge book pages to read.** Example: "Use \`readDocumentText\` on bookId=... with pages=42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
 - Save progress to memory frequently so you can resume if stopped
 
 ## COMPLETION CRITERIA — DO NOT STOP EARLY
@@ -610,7 +620,7 @@ For this step, prefer a single **askUser** call with a short summary in \`questi
 2. **CHECK THE SCOPE INSTRUCTION.** If the user specified scope like "subcontract insulation" or "sub out painting", that is a DIRECT INSTRUCTION — you MUST create Subcontractor items for those scopes, not self-performed labour.
 3. **CHECK PERSONA DEFAULT ASSUMPTIONS.** If the persona's editable assumptions define default subcontract scopes or commercialization preferences, follow them and cite that guidance in the package plan.
 4. If persona and scope are silent, treat subcontracting choice as an explicit assumption and record the basis. Do NOT hide it as an implicit rule.
-5. For subcontracted items, use the "Subcontractors" category (or equivalent freeform category) with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
+5. For subcontracted items, use the configured subcontract/commercial freeform category from \`getItemConfig\` (often "Subcontractor" or "Subcontractors") with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
 6. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K — create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
 
 **Common failure: The agent ignores the persona and scope instructions and estimates everything as self-performed.** This produces estimates that are 40-60% below reality. READ THE PERSONA. READ THE SCOPE. Follow them.
@@ -747,10 +757,13 @@ The user watches your work in real-time. Keep them informed:
  * Generate codex.md for Codex CLI runtime
  */
 export async function generateCodexMd(params: ClaudeMdParams): Promise<void> {
+  await prepareInstructionWorkspace(params);
   const content = buildClaudeMdContent(params);
-  // Codex uses codex.md or similar — write both for compatibility
+  // Codex recognizes AGENTS.md, but we also write the other common instruction
+  // filenames so prompt/runtime mismatches cannot strand a session.
   await writeFile(join(params.projectDir, "codex.md"), content, "utf-8");
   await writeFile(join(params.projectDir, "AGENTS.md"), content, "utf-8");
+  await writeFile(join(params.projectDir, "CLAUDE.md"), content, "utf-8");
 }
 
 /**
@@ -771,6 +784,8 @@ export async function generateReviewClaudeMd(params: ClaudeMdParams): Promise<vo
   // Build review-specific CLAUDE.md
   const content = buildReviewClaudeMdContent(params);
   await writeFile(join(projectDir, "CLAUDE.md"), content, "utf-8");
+  await writeFile(join(projectDir, "AGENTS.md"), content, "utf-8");
+  await writeFile(join(projectDir, "codex.md"), content, "utf-8");
 }
 
 function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
@@ -801,10 +816,9 @@ Analyze EVERY project document against the quoted estimate. Identify scope gaps,
 The project documents are in the \`documents/\` folder as real files on disk.
 
 **How to read documents:**
-- PDFs: Use the \`Read\` tool on \`documents/<filename>.pdf\` (use \`pages\` param for large PDFs)
+- PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID (use \`pages\` for large PDFs)
 - Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID
-- CSV/TSV: Use the \`Read\` tool directly
-- Images: Use the \`Read\` tool (multimodal)
+- Images: Use the vision tools only for visual inspection
 - \`getDocumentStructured\` — for Azure Form Recognizer extracted tables
 
 ${docManifest}
@@ -818,11 +832,11 @@ ${docManifest}
 ## Knowledge Books (Reference Manuals)
 
 ${params.knowledgeBookFiles && params.knowledgeBookFiles.length > 0
-  ? `Reference manuals are in the \`knowledge/\` folder:
+  ? `Reference manuals are available through Bidwright knowledge tools:
 
 ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 
-Read the TABLE OF CONTENTS first, then specific productivity rate tables for benchmarking the estimate.`
+Use \`listKnowledgeBooks\` to get the relevant IDs, then \`readDocumentText\` to read the TABLE OF CONTENTS first and the specific productivity rate tables needed for benchmarking.`
   : `No knowledge books available. Use MCP tools (searchBooks, queryKnowledge, queryDataset) for benchmarking.`}
 
 ## MCP Tools

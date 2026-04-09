@@ -99,6 +99,7 @@ export interface QuoteRevision {
   breakoutPackage: unknown[];
   calculatedCategoryTotals: unknown[];
   summaryLayoutPreset: SummaryPreset;
+  pdfPreferences: Record<string, unknown>;
   subtotal: number;
   cost: number;
   estimatedProfit: number;
@@ -243,6 +244,30 @@ export interface AdditionalLineItem {
 export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
 export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
+export type SummaryBuilderMode = "total" | "grouped" | "pivot";
+export type SummaryBuilderDimension = "none" | "phase" | "category";
+
+export interface SummaryBuilderAxisItem {
+  key: string;
+  sourceId: string | null;
+  label: string;
+  visible: boolean;
+  order: number;
+}
+
+export interface SummaryBuilderConfig {
+  version: 1;
+  preset: SummaryPreset;
+  mode: SummaryBuilderMode;
+  rowDimension: SummaryBuilderDimension;
+  columnDimension: SummaryBuilderDimension;
+  rows: SummaryBuilderAxisItem[];
+  columns: SummaryBuilderAxisItem[];
+  totals: {
+    label: string;
+    visible: boolean;
+  };
+}
 
 export interface SummaryRowData {
   id: string;
@@ -513,6 +538,7 @@ export interface ProjectWorkspaceData {
   modifiers: ProjectModifier[];
   conditions: ProjectCondition[];
   additionalLineItems: AdditionalLineItem[];
+  summaryBuilder?: SummaryBuilderConfig | null;
   summaryRows: SummaryRowData[];
   rateSchedules: RateSchedule[];
   catalogs: CatalogSummary[];
@@ -1572,6 +1598,18 @@ export async function applySummaryPreset(projectId: string, preset: SummaryPrese
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ preset }),
+  });
+}
+
+export async function getSummaryBuilder(projectId: string) {
+  return apiRequest<{ summaryBuilder: SummaryBuilderConfig }>(`/projects/${projectId}/summary-builder`);
+}
+
+export async function saveSummaryBuilder(projectId: string, config: SummaryBuilderConfig) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/summary-builder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
   });
 }
 
@@ -3124,8 +3162,24 @@ export async function answerIntake(sessionId: string, answer: string) {
 
 export async function detectCli() {
   return apiRequest<{
-    claude: { available: boolean; path: string; version?: string };
-    codex: { available: boolean; path: string; version?: string };
+    claude: {
+      available: boolean;
+      path: string;
+      version?: string;
+      auth?: { authenticated: boolean; method: string };
+      models?: { id: string; name: string; description: string }[];
+    };
+    codex: {
+      available: boolean;
+      path: string;
+      version?: string;
+      auth?: { authenticated: boolean; method: string };
+      models?: { id: string; name: string; description: string }[];
+    };
+    configured: {
+      runtime: "claude-code" | "codex" | null;
+      model: string | null;
+    };
   }>("/api/cli/detect");
 }
 
@@ -3238,6 +3292,9 @@ export async function getCliStatus(projectId: string) {
 export async function getCliPendingQuestion(projectId: string) {
   return apiRequest<{
     pending: boolean;
+    answered?: boolean;
+    answer?: string;
+    questionId?: string | null;
     question?: string;
     options?: string[];
     context?: string;
@@ -3251,11 +3308,11 @@ export async function getCliPendingQuestion(projectId: string) {
   }>(`/api/cli/${projectId}/pending-question`);
 }
 
-export async function answerCliQuestion(projectId: string, answer: string) {
+export async function answerCliQuestion(projectId: string, answer: string, questionId?: string | null) {
   return apiRequest<{ ok: boolean; message: string }>(`/api/cli/${projectId}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ answer }),
+    body: JSON.stringify({ answer, questionId: questionId || undefined }),
   });
 }
 
