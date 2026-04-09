@@ -7,6 +7,34 @@ import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Select } f
 import { detectCli } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+type AgentRuntime = "claude-code" | "codex";
+
+function isAgentRuntime(value: unknown): value is AgentRuntime {
+  return value === "claude-code" || value === "codex";
+}
+
+function isClaudeCliModel(model: string) {
+  return ["sonnet", "opus", "haiku"].includes(model) || model.startsWith("claude-");
+}
+
+function isCodexCliModel(model: string) {
+  return model.startsWith("gpt-");
+}
+
+function getAutoRuntime(cliStatus: {
+  claude?: { available: boolean };
+  codex?: { available: boolean };
+} | null): AgentRuntime | null {
+  if (cliStatus?.claude?.available) return "claude-code";
+  if (cliStatus?.codex?.available) return "codex";
+  return null;
+}
+
+function isCompatibleModel(runtime: AgentRuntime | null, model: string | null | undefined) {
+  if (!runtime || !model) return true;
+  return runtime === "codex" ? isCodexCliModel(model) : isClaudeCliModel(model);
+}
+
 export function SearchableModelSelect({
   value,
   onChange,
@@ -185,8 +213,14 @@ export function AgentRuntimeSettings({
       .finally(() => setDetecting(false));
   }, []);
 
-  const currentRuntime = settings.integrations.agentRuntime || cliStatus?.configured?.runtime || "";
-  const currentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
+  const currentRuntime = isAgentRuntime(settings.integrations.agentRuntime)
+    ? settings.integrations.agentRuntime
+    : isAgentRuntime(cliStatus?.configured?.runtime)
+      ? cliStatus.configured.runtime
+      : "";
+  const effectiveRuntime = isAgentRuntime(currentRuntime) ? currentRuntime : getAutoRuntime(cliStatus);
+  const rawCurrentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
+  const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel) ? rawCurrentModel : "";
 
   return (
     <Card>
@@ -251,7 +285,14 @@ export function AgentRuntimeSettings({
           <Label>Preferred Runtime</Label>
           <Select
             value={currentRuntime}
-            onChange={(e) => onUpdate({ agentRuntime: e.target.value || null })}
+            onChange={(e) => {
+              const nextRuntime = isAgentRuntime(e.target.value) ? e.target.value : null;
+              const nextEffectiveRuntime = nextRuntime ?? getAutoRuntime(cliStatus);
+              onUpdate({
+                agentRuntime: nextRuntime,
+                agentModel: isCompatibleModel(nextEffectiveRuntime, rawCurrentModel) ? rawCurrentModel : null,
+              });
+            }}
           >
             <option value="">Auto-detect (best available)</option>
             <option value="claude-code" disabled={!cliStatus?.claude?.available}>
@@ -266,11 +307,11 @@ export function AgentRuntimeSettings({
         <div>
           <Label>Model</Label>
           {(() => {
-            const models = currentRuntime === "codex"
+            const models = effectiveRuntime === "codex"
               ? (cliStatus?.codex?.models || [])
-              : currentRuntime === "claude-code"
+              : effectiveRuntime === "claude-code"
               ? (cliStatus?.claude?.models || [])
-              : [...(cliStatus?.claude?.models || []), ...(cliStatus?.codex?.models || [])];
+              : [];
             const filtered = models.filter((m) => !m.id.startsWith("claude-") && !m.id.startsWith("gpt-5."));
             const displayModels = filtered.length > 0 ? filtered : models;
             return (
@@ -285,17 +326,17 @@ export function AgentRuntimeSettings({
               </Select>
             );
           })()}
-          <p className="text-[10px] text-fg/30 mt-1.5">Models detected from installed CLI runtimes. Change runtime above to see different models.</p>
+          <p className="text-[10px] text-fg/30 mt-1.5">Models are scoped to the selected runtime so Bidwright can’t save an invalid CLI/model pairing.</p>
         </div>
 
         <div>
           <Label>CLI Path Override (optional)</Label>
           <Input
             type="text"
-            placeholder={currentRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
-            value={currentRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
+            placeholder={effectiveRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
+            value={effectiveRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
             onChange={(e) => {
-              if (currentRuntime === "codex") {
+              if (effectiveRuntime === "codex") {
                 onUpdate({ codexPath: e.target.value || null });
               } else {
                 onUpdate({ claudeCodePath: e.target.value || null });

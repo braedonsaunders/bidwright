@@ -90,6 +90,23 @@ type PersistedCliEvent = {
   timestamp?: string;
 };
 
+type CliQuestionStep = {
+  id?: string;
+  prompt: string;
+  options?: string[];
+  placeholder?: string;
+  context?: string;
+};
+
+type PendingQuestionState = {
+  id: string;
+  question: string;
+  options?: string[];
+  context?: string;
+  questions?: CliQuestionStep[];
+  createdAt: string;
+};
+
 function cliEventFingerprint(event: PersistedCliEvent): string {
   return JSON.stringify({
     type: event.type || "",
@@ -137,11 +154,123 @@ async function appendCliEventsToLatestRun(projectId: string, incoming: Persisted
   });
 }
 
+async function getLatestCliRunEvents(projectId: string): Promise<PersistedCliEvent[]> {
+  const latestRun = await prisma.aiRun.findFirst({
+    where: { projectId, kind: "cli-intake" },
+    orderBy: { createdAt: "desc" },
+    select: { output: true },
+  });
+  return (((latestRun?.output as any)?.events || []) as PersistedCliEvent[]);
+}
+
+function makeCliQuestionId() {
+  return `ask-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function findCliQuestionAnswer(events: PersistedCliEvent[], questionId: string): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type !== "userAnswer") continue;
+    const data = (event.data || {}) as Record<string, unknown>;
+    if (data.questionId === questionId && typeof data.answer === "string") {
+      return data.answer;
+    }
+  }
+  return null;
+}
+
+function findPendingCliQuestionFromEvents(
+  events: PersistedCliEvent[],
+  questionId?: string,
+): PendingQuestionState | null {
+  let pending: PendingQuestionState | null = null;
+
+  for (const event of events) {
+    const data = (event.data || {}) as Record<string, unknown>;
+    if (event.type === "askUser") {
+      const id = typeof data.questionId === "string"
+        ? data.questionId
+        : typeof data.id === "string"
+          ? data.id
+          : null;
+      if (questionId && id !== questionId) continue;
+      if (!id && questionId) continue;
+      pending = {
+        id: id || "",
+        question: typeof data.question === "string" ? data.question : "",
+        options: Array.isArray(data.options) ? data.options as string[] : [],
+        context: typeof data.context === "string" ? data.context : "",
+        questions: Array.isArray(data.questions) ? data.questions as CliQuestionStep[] : [],
+        createdAt: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
+      };
+      continue;
+    }
+
+    if (!pending) continue;
+
+    if (event.type === "userAnswer") {
+      const answerQuestionId = typeof data.questionId === "string" ? data.questionId : null;
+      if (!pending.id || !answerQuestionId || answerQuestionId === pending.id) {
+        pending = null;
+      }
+      continue;
+    }
+
+    if (event.type === "askUserTimeout") {
+      const timeoutQuestionId = typeof data.questionId === "string" ? data.questionId : null;
+      if (!pending.id || !timeoutQuestionId || timeoutQuestionId === pending.id) {
+        pending = null;
+      }
+      continue;
+    }
+
+    // If the agent emitted any later activity after the question, it is no longer
+    // blocked on that prompt even if the original askUser never received a userAnswer.
+    pending = null;
+  }
+
+  return pending;
+}
+
+function hasCliQuestionEvent(events: PersistedCliEvent[], questionId: string): boolean {
+  return events.some((event) => {
+    if (event.type !== "askUser") return false;
+    const data = (event.data || {}) as Record<string, unknown>;
+    return data.questionId === questionId || data.id === questionId;
+  });
+}
+
+function isCliRuntime(value: unknown): value is AgentRuntime {
+  return value === "claude-code" || value === "codex";
+}
+
+function resolveCliRuntime(requestedRuntime: unknown, configuredRuntime?: unknown): AgentRuntime {
+  if (isCliRuntime(requestedRuntime)) return requestedRuntime;
+  if (isCliRuntime(configuredRuntime)) return configuredRuntime;
+  return "claude-code";
+}
+
+function isClaudeCliModel(model: string) {
+  return ["sonnet", "opus", "haiku"].includes(model) || model.startsWith("claude-");
+}
+
+function isCodexCliModel(model: string) {
+  return model.startsWith("gpt-");
+}
+
 function normalizeCliModel(runtime: AgentRuntime, model: string | null | undefined) {
   if (runtime === "claude-code") {
-    return !model || model.includes("/") ? "sonnet" : model;
+    return model && isClaudeCliModel(model) ? model : "sonnet";
   }
-  return !model || !model.startsWith("gpt") ? "gpt-5.4" : model;
+  return model && isCodexCliModel(model) ? model : "gpt-5.4";
+}
+
+function buildResumePrompt(runtime: AgentRuntime, prompt?: string) {
+  if (typeof prompt === "string" && prompt.trim()) return prompt.trim();
+  if (runtime === "codex") {
+    return "Resume the previous estimate session. Read AGENTS.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
+  }
+  return "Resume the previous estimate session. Read CLAUDE.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
 }
 
 async function bindEstimateStrategyRun(projectId: string, revisionId: string | null | undefined, aiRunId: string) {
@@ -227,9 +356,11 @@ export function registerCliRoutes(app: FastifyInstance) {
     const store = request.store!;
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
+    const configuredRuntime = isCliRuntime(integrations.agentRuntime) ? integrations.agentRuntime : null;
+    const configuredModel = configuredRuntime ? normalizeCliModel(configuredRuntime, integrations.agentModel) : null;
 
-    const claude = detectCli("claude-code");
-    const codex = detectCli("codex");
+    const claude = detectCli("claude-code", integrations.claudeCodePath || undefined);
+    const codex = detectCli("codex", integrations.codexPath || undefined);
     const claudeAuth = checkCliAuth("claude-code", integrations.anthropicKey);
     const codexAuth = checkCliAuth("codex", integrations.openaiKey);
 
@@ -252,8 +383,8 @@ export function registerCliRoutes(app: FastifyInstance) {
       claude: { ...claude, auth: claudeAuth, models: claudeModels },
       codex: { ...codex, auth: codexAuth, models: codexModels },
       configured: {
-        runtime: integrations.agentRuntime || null,
-        model: integrations.agentModel || null,
+        runtime: configuredRuntime,
+        model: configuredModel,
       },
     };
   });
@@ -269,9 +400,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       personaId?: string;
     };
 
-    const { projectId, runtime = "claude-code", scope, prompt } = body;
-    // Ensure model is valid for the chosen runtime — don't pass OpenRouter model IDs to Claude CLI
-    const model = normalizeCliModel(runtime, body.model);
+    const { projectId, scope, prompt } = body;
     const store = request.store!;
 
     // Get project context
@@ -321,6 +450,8 @@ export function registerCliRoutes(app: FastifyInstance) {
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
     const estimateDefaults = (settingsEarly as any)?.defaults || {};
+    const runtime = resolveCliRuntime(body.runtime, integrationsEarly.agentRuntime);
+    const model = normalizeCliModel(runtime, body.model ?? integrationsEarly.agentModel);
 
     // Generate CLAUDE.md / codex.md (includes knowledge book file list)
     const params = {
@@ -400,13 +531,14 @@ export function registerCliRoutes(app: FastifyInstance) {
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
     const benchmarkingEnabled = (settings as any)?.defaults?.benchmarkingEnabled !== false;
+    const instructionFile = runtime === "codex" ? "AGENTS.md" : "CLAUDE.md";
 
     // Spawn CLI
     const scopeDirective = effectiveScope
       ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${effectiveScope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
       : "";
 
-    const initialPrompt = prompt || `Read CLAUDE.md now.${scopeDirective} Then execute the staged estimate workflow in order:
+    const initialPrompt = prompt || `Read ${instructionFile} now.${scopeDirective} Then execute the staged estimate workflow in order:
 
 1. Read the documents and save the structured scope graph with saveEstimateScopeGraph.
 2. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
@@ -520,21 +652,34 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const latestRun = await prisma.aiRun.findFirst({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "desc" },
-      select: { id: true, model: true },
+      select: { id: true, model: true, input: true },
     });
-    const model = normalizeCliModel("claude-code", body.model ?? latestRun?.model ?? integrations.agentModel);
+    const latestRuntime = (latestRun?.input as any)?.runtime;
+    const runtime: AgentRuntime = latestRuntime === "codex" || latestRuntime === "claude-code"
+      ? latestRuntime
+      : integrations.agentRuntime === "codex"
+        ? "codex"
+        : "claude-code";
+    const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
+    const resumePrompt = buildResumePrompt(runtime, body.prompt);
     const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
     try {
       const session = await resumeSession({
         projectId,
         projectDir,
-        prompt: body.prompt,
+        runtime,
+        prompt: resumePrompt,
         model,
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
-        customCliPath: integrations.claudeCodePath || undefined,
+        revisionId: workspace.currentRevision.id,
+        quoteId: workspace.quote.id,
+        customCliPath: runtime === "claude-code"
+          ? integrations.claudeCodePath || undefined
+          : integrations.codexPath || undefined,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
+        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
       });
 
       await store.createAiRun({
@@ -545,8 +690,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         status: "running",
         model,
         input: {
-          runtime: "claude-code",
-          prompt: body.prompt ?? "",
+          runtime,
+          prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
           cliSessionId: session.sessionId || null,
@@ -566,8 +711,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         status: "failed",
         model,
         input: {
-          runtime: "claude-code",
-          prompt: body.prompt ?? "",
+          runtime,
+          prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
         } as any,
@@ -591,8 +736,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       return reply.code(409).send({ error: "Session is already running. Stop it first or wait for it to complete." });
     }
 
-    // Spawn a new session with the user's message as the prompt
-    // Claude Code will read CLAUDE.md + agent-memory.json for context
+    // Spawn a new session with the user's message as the prompt.
+    // The workspace instruction files and agent-memory.json provide context.
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
@@ -819,7 +964,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
 
   // ── Dataset Extraction from Knowledge Book ──────────────────
   app.post("/api/cli/extract-datasets", async (request) => {
-    const { bookId, runtime = "claude-code", model } = request.body as {
+    const { bookId, runtime: requestedRuntime, model } = request.body as {
       bookId: string;
       runtime?: AgentRuntime;
       model?: string;
@@ -832,6 +977,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     // Get Azure DI credentials
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
+    const runtime = resolveCliRuntime(requestedRuntime, integrations.agentRuntime);
+    const normalizedModel = normalizeCliModel(runtime, model ?? integrations.agentModel);
 
     // Create working directory for the extraction session
     const workDir = join(apiDataRoot, "dataset-extraction", bookId);
@@ -886,8 +1033,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       })),
     }, null, 2));
 
-    // Write CLAUDE.md for dataset extraction
-    // Build sections info for CLAUDE.md
+    // Write instruction file for dataset extraction
+    // Build sections info for the instruction file
     const sectionsInfo = [...sectionMap.entries()]
       .map(([name, info]) => `  - "${name}" (${info.chunkCount} chunks, pages: ${[...info.pages].sort((a,b) => a-b).join(", ") || "?"})`)
       .slice(0, 50)
@@ -911,15 +1058,17 @@ Merge tables that span multiple pages. Skip non-data pages.
 `;
 
     await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
+    await writeFile(join(workDir, "AGENTS.md"), claudeMd);
+    await writeFile(join(workDir, "codex.md"), claudeMd);
 
     // Spawn CLI session — spawnSession handles MCP config + auth token internally
     const token = extractAuthToken(request);
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,
-      prompt: `Read CLAUDE.md then extract all data tables from the PDF in book/. Call createDataset for each table.`,
+      prompt: `Read ${runtime === "codex" ? "AGENTS.md" : "CLAUDE.md"} then extract all data tables from the PDF in book/. Call createDataset for each table.`,
       runtime,
-      model,
+      model: normalizedModel,
       authToken: token,
       anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY,
       openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY,
@@ -947,83 +1096,127 @@ Merge tables that span multiple pages. Skip non-data pages.
 
   // ── askUser question/answer flow ───────────────────────────
   // In-memory store for pending questions per project
-  const pendingQuestions = new Map<string, {
-    question: string;
-    options?: string[];
-    context?: string;
-    questions?: Array<{
-      id?: string;
-      prompt: string;
-      options?: string[];
-      placeholder?: string;
-      context?: string;
-    }>;
-    resolve: (answer: string) => void;
-  }>();
+  const pendingQuestions = new Map<string, PendingQuestionState>();
 
-  // POST /api/cli/:projectId/question — MCP tool calls this, long-polls until user answers
+  // POST /api/cli/:projectId/question — MCP tool calls this to register a pending askUser prompt
   app.post("/api/cli/:projectId/question", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const { question, options, context, questions } = (request.body || {}) as {
       question: string;
       options?: string[];
       context?: string;
-      questions?: Array<{
-        id?: string;
-        prompt: string;
-        options?: string[];
-        placeholder?: string;
-        context?: string;
-      }>;
+      questions?: CliQuestionStep[];
     };
 
     if (!question) return reply.code(400).send({ error: "question required" });
 
-    // If there's already a pending question, reject old one
+    const questionId = makeCliQuestionId();
+    const timestamp = new Date().toISOString();
+
+    // If there's already a pending question, mark it as superseded so any waiter can move on.
     const existing = pendingQuestions.get(projectId);
     if (existing) {
-      existing.resolve("Previous question superseded by a new one.");
+      const supersededEvent: PersistedCliEvent = {
+        type: "userAnswer",
+        data: {
+          questionId: existing.id,
+          answer: "Previous question superseded by a new one.",
+          superseded: true,
+        },
+        timestamp,
+      };
+      const existingSession = getSession(projectId);
+      if (existingSession) {
+        existingSession.events.emit("event", supersededEvent);
+      }
+      await appendCliEventsToLatestRun(projectId, [supersededEvent]).catch(() => {});
       pendingQuestions.delete(projectId);
     }
 
     // Emit the question as an SSE event so the frontend sees it immediately
     const promptEvent: PersistedCliEvent = {
       type: "askUser",
-      data: { question, options: options || [], context: context || "", questions: questions || [] },
-      timestamp: new Date().toISOString(),
+      data: {
+        questionId,
+        id: questionId,
+        question,
+        options: options || [],
+        context: context || "",
+        questions: questions || [],
+      },
+      timestamp,
     };
     const session = getSession(projectId);
     if (session) {
       session.events.emit("event", promptEvent);
-    } else {
-      await appendCliEventsToLatestRun(projectId, [promptEvent]).catch(() => {});
     }
+    await appendCliEventsToLatestRun(projectId, [promptEvent]).catch(() => {});
 
-    // Block until the user answers via /answer endpoint (max 5 min)
-    const answer = await new Promise<string>((resolve) => {
-      pendingQuestions.set(projectId, { question, options, context, questions, resolve });
-
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        if (pendingQuestions.has(projectId)) {
-          pendingQuestions.delete(projectId);
-          resolve("No answer provided within timeout. Use your best judgment and document all assumptions.");
-        }
-      }, 5 * 60 * 1000);
+    pendingQuestions.set(projectId, {
+      id: questionId,
+      question,
+      options,
+      context,
+      questions,
+      createdAt: timestamp,
     });
 
-    return { answer };
+    return { ok: true, questionId };
   });
 
   // GET /api/cli/:projectId/pending-question — frontend polls for pending question
   app.get("/api/cli/:projectId/pending-question", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const pending = pendingQuestions.get(projectId);
+    const { questionId } = (request.query ?? {}) as { questionId?: string };
+    const latestEvents = await getLatestCliRunEvents(projectId);
+
+    if (questionId) {
+      const answered = findCliQuestionAnswer(latestEvents, questionId);
+      if (answered !== null) {
+        return {
+          pending: false,
+          answered: true,
+          questionId,
+          answer: answered,
+        };
+      }
+    }
+
+    const inMemory = pendingQuestions.get(projectId);
+    const exactInMemory = questionId
+      ? (inMemory?.id === questionId ? inMemory : null)
+      : inMemory;
+    let pending = exactInMemory;
+
+    if (pending?.id && hasCliQuestionEvent(latestEvents, pending.id)) {
+      const activeInHistory = findPendingCliQuestionFromEvents(latestEvents, pending.id);
+      if (!activeInHistory) {
+        pendingQuestions.delete(projectId);
+        pending = null;
+      }
+    }
+
     if (!pending) {
-      return { pending: false };
+      const derived = findPendingCliQuestionFromEvents(latestEvents, questionId);
+      if (!derived) {
+        return { pending: false, answered: false, questionId: questionId || null };
+      }
+      return {
+        pending: true,
+        questionId: derived.id || questionId || null,
+        question: derived.question,
+        options: derived.options || [],
+        context: derived.context || "",
+        questions: derived.questions || [],
+      };
+    }
+
+    if (!pending) {
+      return { pending: false, answered: false, questionId: questionId || null };
     }
     return {
       pending: true,
+      questionId: pending.id,
       question: pending.question,
       options: pending.options || [],
       context: pending.context || "",
@@ -1034,29 +1227,78 @@ Merge tables that span multiple pages. Skip non-data pages.
   // POST /api/cli/:projectId/answer — frontend submits the user's answer
   app.post("/api/cli/:projectId/answer", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { answer } = (request.body || {}) as { answer: string };
+    const { answer, questionId } = (request.body || {}) as { answer: string; questionId?: string };
 
     const pending = pendingQuestions.get(projectId);
-    if (!pending) {
+    const latestEvents = await getLatestCliRunEvents(projectId);
+    const resolvedQuestionId = typeof questionId === "string" && questionId
+      ? questionId
+      : pending?.id || findPendingCliQuestionFromEvents(latestEvents)?.id || "";
+
+    if (!resolvedQuestionId) {
       return reply.code(404).send({ error: "No pending question for this project" });
     }
 
-    pending.resolve(answer || "No specific answer provided. Use your best judgment.");
-    pendingQuestions.delete(projectId);
+    const normalizedAnswer = answer || "No specific answer provided. Use your best judgment.";
+
+    if (pending?.id === resolvedQuestionId) {
+      pendingQuestions.delete(projectId);
+    }
 
     // Emit answer event so the stream picks it up
     const answerEvent: PersistedCliEvent = {
       type: "userAnswer",
-      data: { answer },
+      data: {
+        questionId: resolvedQuestionId,
+        answer: normalizedAnswer,
+      },
       timestamp: new Date().toISOString(),
     };
     const session = getSession(projectId);
     if (session) {
       session.events.emit("event", answerEvent);
-    } else {
-      await appendCliEventsToLatestRun(projectId, [answerEvent]).catch(() => {});
     }
+    await appendCliEventsToLatestRun(projectId, [answerEvent]).catch(() => {});
 
     return { ok: true, message: "Answer delivered to agent" };
+  });
+
+  app.post("/api/cli/:projectId/question-timeout", async (request) => {
+    const { projectId } = request.params as { projectId: string };
+    const { questionId } = (request.body || {}) as { questionId?: string };
+    const latestEvents = await getLatestCliRunEvents(projectId);
+    const resolvedQuestionId = typeof questionId === "string" && questionId
+      ? questionId
+      : pendingQuestions.get(projectId)?.id || "";
+
+    if (!resolvedQuestionId) {
+      return { ok: true, cleared: false };
+    }
+
+    if (findCliQuestionAnswer(latestEvents, resolvedQuestionId) !== null) {
+      if (pendingQuestions.get(projectId)?.id === resolvedQuestionId) {
+        pendingQuestions.delete(projectId);
+      }
+      return { ok: true, cleared: false, alreadyAnswered: true };
+    }
+
+    if (pendingQuestions.get(projectId)?.id === resolvedQuestionId) {
+      pendingQuestions.delete(projectId);
+    }
+
+    const timeoutEvent: PersistedCliEvent = {
+      type: "askUserTimeout",
+      data: {
+        questionId: resolvedQuestionId,
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const session = getSession(projectId);
+    if (session) {
+      session.events.emit("event", timeoutEvent);
+    }
+    await appendCliEventsToLatestRun(projectId, [timeoutEvent]).catch(() => {});
+
+    return { ok: true, cleared: true };
   });
 }

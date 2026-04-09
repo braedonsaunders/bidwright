@@ -294,6 +294,30 @@ export interface AdditionalLineItem {
 export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
 export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
+export type SummaryBuilderMode = "total" | "grouped" | "pivot";
+export type SummaryBuilderDimension = "none" | "phase" | "category";
+
+export interface SummaryBuilderAxisItem {
+  key: string;
+  sourceId: string | null;
+  label: string;
+  visible: boolean;
+  order: number;
+}
+
+export interface SummaryBuilderConfig {
+  version: 1;
+  preset: SummaryPreset;
+  mode: SummaryBuilderMode;
+  rowDimension: SummaryBuilderDimension;
+  columnDimension: SummaryBuilderDimension;
+  rows: SummaryBuilderAxisItem[];
+  columns: SummaryBuilderAxisItem[];
+  totals: {
+    label: string;
+    visible: boolean;
+  };
+}
 
 export interface SummaryRow {
   id: string;
@@ -1275,6 +1299,7 @@ export interface ProjectWorkspace {
   adjustments: Adjustment[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
+  summaryBuilder?: SummaryBuilderConfig | null;
   summaryRows: SummaryRow[];
   conditions: Condition[];
   catalogs: Array<Catalog & { items: CatalogItem[] }>;

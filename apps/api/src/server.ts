@@ -1776,6 +1776,18 @@ export function buildServer() {
     return workspace.estimate;
   });
 
+  app.post("/projects/:projectId/recalculate", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    await request.store!.recalculateProjectEstimate(projectId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({
+        message: "Project workspace not found"
+      });
+    }
+    return payload;
+  });
+
   app.get("/projects/:projectId/packages", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const project = await request.store!.getProject(projectId);
@@ -2075,6 +2087,69 @@ export function buildServer() {
   });
 
   // ── Phase routes ──────────────────────────────────────────────────
+
+  app.get("/projects/:projectId/worksheet-items/search", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      q: z.string().optional(),
+      category: z.string().optional(),
+      worksheetId: z.string().optional(),
+      minCost: z.coerce.number().finite().optional(),
+      maxCost: z.coerce.number().finite().optional(),
+      limit: z.coerce.number().int().positive().max(500).optional(),
+    }).safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid worksheet item search query",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({
+        message: "Project workspace not found"
+      });
+    }
+
+    let items = (workspace.worksheets ?? []).flatMap((worksheet) =>
+      (worksheet.items ?? []).map((item) => ({
+        ...item,
+        worksheetId: worksheet.id,
+        worksheetName: worksheet.name,
+      })),
+    );
+
+    if (parsed.data.worksheetId) {
+      items = items.filter((item) => item.worksheetId === parsed.data.worksheetId);
+    }
+    if (parsed.data.q) {
+      const query = parsed.data.q.trim().toLowerCase();
+      items = items.filter((item) =>
+        String(item.entityName ?? "").toLowerCase().includes(query)
+        || String(item.description ?? "").toLowerCase().includes(query)
+        || String(item.category ?? "").toLowerCase().includes(query),
+      );
+    }
+    if (parsed.data.category) {
+      const category = parsed.data.category.trim().toLowerCase();
+      items = items.filter((item) => String(item.category ?? "").trim().toLowerCase() === category);
+    }
+    if (parsed.data.minCost !== undefined) {
+      items = items.filter((item) => Number(item.cost ?? 0) >= parsed.data.minCost!);
+    }
+    if (parsed.data.maxCost !== undefined) {
+      items = items.filter((item) => Number(item.cost ?? 0) <= parsed.data.maxCost!);
+    }
+
+    const totalMatches = items.length;
+    const limit = parsed.data.limit ?? 50;
+
+    return {
+      items: items.slice(0, limit),
+      totalMatches,
+    };
+  });
 
   app.post("/projects/:projectId/phases", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
@@ -2551,6 +2626,26 @@ export function buildServer() {
   });
 
   const summaryRowPatchSchema = summaryRowCreateSchema;
+  const summaryBuilderAxisItemSchema = z.object({
+    key: z.string(),
+    sourceId: z.string().nullable(),
+    label: z.string(),
+    visible: z.boolean(),
+    order: z.number().int(),
+  });
+  const summaryBuilderSchema = z.object({
+    version: z.literal(1),
+    preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]),
+    mode: z.enum(["total", "grouped", "pivot"]),
+    rowDimension: z.enum(["none", "phase", "category"]),
+    columnDimension: z.enum(["none", "phase", "category"]),
+    rows: z.array(summaryBuilderAxisItemSchema),
+    columns: z.array(summaryBuilderAxisItemSchema),
+    totals: z.object({
+      label: z.string(),
+      visible: z.boolean(),
+    }),
+  });
 
   app.get("/projects/:projectId/summary-rows", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
@@ -2628,6 +2723,30 @@ export function buildServer() {
     }
 
     await request.store!.applySummaryPreset(projectId, parsed.data.preset);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.get("/projects/:projectId/summary-builder", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const summaryBuilder = await request.store!.getSummaryBuilder(projectId);
+    if (!summaryBuilder) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return { summaryBuilder };
+  });
+
+  app.put("/projects/:projectId/summary-builder", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = summaryBuilderSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid summary builder payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.saveSummaryBuilder(projectId, parsed.data);
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) {
       return reply.code(404).send({ message: "Project workspace not found" });
@@ -3494,7 +3613,12 @@ export function buildServer() {
     }
 
     const orgSettings = await request.store!.getSettings();
-    const pdfData = buildPdfDataPackage(workspace, reportSections, orgSettings.termsAndConditions || "");
+    const pdfData = buildPdfDataPackage(workspace, reportSections, {
+      termsAndConditions: orgSettings.termsAndConditions || "",
+      companyName: orgSettings.general?.orgName || orgSettings.brand?.companyName || "",
+      logoUrl: orgSettings.general?.logoUrl || orgSettings.brand?.logoUrl || "",
+      website: orgSettings.general?.website || orgSettings.brand?.websiteUrl || "",
+    });
 
     // Parse layout options from query param if present
     let layoutOptions: Partial<PdfLayoutOptions> | undefined;
@@ -3527,7 +3651,12 @@ export function buildServer() {
     if (!workspace) return reply.code(404).send({ message: "Project not found" });
     const rev = workspace.currentRevision;
     if (!rev) return reply.code(404).send({ message: "No current revision" });
-    await request.store!.updateRevision(projectId, rev.id, { pdfPreferences: body } as any);
+    await request.store!.updateRevision(projectId, rev.id, {
+      pdfPreferences: {
+        ...((rev as any)?.pdfPreferences ?? {}),
+        ...body,
+      },
+    } as any);
     return { ok: true };
   };
   app.put("/projects/:projectId/pdf-preferences", handleSavePdfPreferences);

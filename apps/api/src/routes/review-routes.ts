@@ -126,7 +126,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
     });
 
     // Spawn CLI
-    const initialPrompt = `Read CLAUDE.md now. Execute the FULL review workflow:
+    const instructionFile = runtime === "codex" ? "AGENTS.md" : "CLAUDE.md";
+    const initialPrompt = `Read ${instructionFile} now. Execute the FULL review workflow:
 
 1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
 2. Read EVERY project document (specs, RFQs, BOMs, drawings) using Read tool on documents/ folder
@@ -157,7 +158,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: revision.id,
         quoteId: quote.id,
-        customCliPath: integrations.claudeCodePath || undefined,
+        customCliPath: runtime === "claude-code"
+          ? integrations.claudeCodePath || undefined
+          : integrations.codexPath || undefined,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
       });
