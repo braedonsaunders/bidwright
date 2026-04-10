@@ -11,11 +11,188 @@ if (typeof window !== "undefined") {
   ).toString();
 }
 
+interface PdfFocusTarget {
+  key: string;
+  pageNumber: number;
+  text: string;
+  query: string;
+}
+
+interface HighlightRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+interface PageTextLayoutEntry {
+  normalizedText: string;
+  start: number;
+  end: number;
+  rect: HighlightRect;
+}
+
+interface PageTextLayout {
+  normalizedText: string;
+  entries: PageTextLayoutEntry[];
+}
+
+type PdfTextItem = {
+  str: string;
+  transform: number[];
+  width: number;
+  height: number;
+};
+
+function isPdfTextItem(item: unknown): item is PdfTextItem {
+  if (!item || typeof item !== "object") return false;
+  const candidate = item as Partial<PdfTextItem>;
+  return (
+    typeof candidate.str === "string" &&
+    Array.isArray(candidate.transform) &&
+    typeof candidate.width === "number" &&
+    typeof candidate.height === "number"
+  );
+}
+
+function normalizePdfSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildSearchCandidates(text: string, query: string) {
+  const candidates: string[] = [];
+  const normalizedText = normalizePdfSearchText(text);
+  const normalizedQuery = normalizePdfSearchText(query);
+
+  if (normalizedText) {
+    candidates.push(normalizedText);
+
+    const words = normalizedText.split(" ").filter(Boolean);
+    for (const windowSize of [24, 18, 12, 8, 6, 4]) {
+      if (words.length < windowSize) continue;
+      const step = Math.max(1, Math.floor(windowSize / 2));
+      for (let index = 0; index <= words.length - windowSize; index += step) {
+        candidates.push(words.slice(index, index + windowSize).join(" "));
+      }
+    }
+  }
+
+  if (normalizedQuery) {
+    candidates.push(normalizedQuery);
+  }
+
+  return Array.from(new Set(candidates.filter((candidate) => candidate.length >= 3))).sort(
+    (left, right) => right.length - left.length,
+  );
+}
+
+function mergeHighlightRects(rects: HighlightRect[]) {
+  if (rects.length === 0) return [];
+
+  const sortedRects = [...rects].sort((left, right) => left.top - right.top || left.left - right.left);
+  const merged: HighlightRect[] = [];
+
+  for (const rect of sortedRects) {
+    const last = merged[merged.length - 1];
+    if (!last) {
+      merged.push({ ...rect });
+      continue;
+    }
+
+    const sameLine = Math.abs(last.top - rect.top) <= Math.max(4, Math.min(last.height, rect.height) * 0.5);
+    const touching = rect.left <= last.left + last.width + 12;
+
+    if (sameLine && touching) {
+      const rightEdge = Math.max(last.left + last.width, rect.left + rect.width);
+      last.top = Math.min(last.top, rect.top);
+      last.height = Math.max(last.height, rect.height);
+      last.width = rightEdge - last.left;
+      continue;
+    }
+
+    merged.push({ ...rect });
+  }
+
+  return merged;
+}
+
+function findTextMatch(layout: PageTextLayout, focusTarget: PdfFocusTarget) {
+  for (const candidate of buildSearchCandidates(focusTarget.text, focusTarget.query)) {
+    const matchStart = layout.normalizedText.indexOf(candidate);
+    if (matchStart === -1) {
+      continue;
+    }
+
+    const matchEnd = matchStart + candidate.length;
+    const rects = mergeHighlightRects(
+      layout.entries
+        .filter((entry) => entry.end > matchStart && entry.start < matchEnd)
+        .map((entry) => entry.rect),
+    );
+
+    if (rects.length > 0) {
+      return {
+        rects,
+        top: rects[0].top,
+      };
+    }
+  }
+
+  const terms = Array.from(
+    new Set(
+      `${focusTarget.query} ${focusTarget.text}`
+        .split(/\s+/)
+        .map((term) => normalizePdfSearchText(term))
+        .filter((term) => term.length >= 3),
+    ),
+  );
+
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  layout.entries.forEach((entry, index) => {
+    let score = 0;
+    for (const term of terms) {
+      if (entry.normalizedText.includes(term)) {
+        score += term.length;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  });
+
+  if (bestIndex === -1) {
+    return null;
+  }
+
+  const rects = mergeHighlightRects(
+    layout.entries
+      .slice(Math.max(0, bestIndex - 1), Math.min(layout.entries.length, bestIndex + 2))
+      .map((entry) => entry.rect),
+  );
+
+  if (rects.length === 0) {
+    return null;
+  }
+
+  return {
+    rects,
+    top: rects[0].top,
+  };
+}
+
 interface PdfCanvasViewerProps {
   documentUrl: string;
   pageNumber?: number;
   zoom: number;
   mode?: "single" | "continuous";
+  focusTarget?: PdfFocusTarget | null;
   onPageCount?: (count: number) => void;
   onPageChange?: (pageNumber: number) => void;
   onCanvasResize?: (width: number, height: number) => void;
@@ -27,6 +204,7 @@ export function PdfCanvasViewer({
   pageNumber = 1,
   zoom,
   mode = "single",
+  focusTarget,
   onPageCount,
   onPageChange,
   onCanvasResize,
@@ -39,6 +217,7 @@ export function PdfCanvasViewer({
   const [pageCount, setPageCount] = useState(0);
   const [basePageSize, setBasePageSize] = useState<{ width: number; height: number } | null>(null);
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
+  const [focusHighlight, setFocusHighlight] = useState<{ pageNumber: number; rects: HighlightRect[] } | null>(null);
   const renderTaskRef = useRef<pdfjs.RenderTask | null>(null);
   const continuousRenderTasksRef = useRef(new Map<number, pdfjs.RenderTask>());
   const renderedZoomRef = useRef(new Map<number, number>());
@@ -46,6 +225,54 @@ export function PdfCanvasViewer({
   const pageHostRefs = useRef(new Map<number, HTMLDivElement>());
   const visibilityRatiosRef = useRef(new Map<number, number>());
   const currentVisiblePageRef = useRef(1);
+
+  const buildPageTextLayout = useCallback(async (targetPageNumber: number) => {
+    const doc = pdfDocRef.current;
+    if (!doc) return null;
+
+    const page = await doc.getPage(targetPageNumber);
+    const viewport = page.getViewport({ scale: zoom });
+    const textContent = await page.getTextContent();
+    let normalizedText = "";
+    const entries: PageTextLayoutEntry[] = [];
+
+    for (const item of textContent.items) {
+      if (!isPdfTextItem(item)) continue;
+
+      const normalizedItemText = normalizePdfSearchText(item.str);
+      if (!normalizedItemText) continue;
+
+      if (normalizedText.length > 0) {
+        normalizedText += " ";
+      }
+      const start = normalizedText.length;
+      normalizedText += normalizedItemText;
+      const end = normalizedText.length;
+
+      const transform = pdfjs.Util.transform(viewport.transform, item.transform);
+      const left = transform[4];
+      const width = Math.max(item.width * viewport.scale, 1);
+      const height = Math.max(Math.abs(item.height * viewport.scale), Math.abs(transform[3]), 1);
+      const top = transform[5] - height;
+
+      entries.push({
+        normalizedText: normalizedItemText,
+        start,
+        end,
+        rect: {
+          left,
+          top,
+          width,
+          height,
+        },
+      });
+    }
+
+    return {
+      normalizedText,
+      entries,
+    } satisfies PageTextLayout;
+  }, [zoom]);
 
   /* Load the PDF document */
   useEffect(() => {
@@ -277,6 +504,59 @@ export function PdfCanvasViewer({
     });
   }, [error, loading, mode, pageCount, pageNumber]);
 
+  useEffect(() => {
+    setFocusHighlight(null);
+  }, [documentUrl]);
+
+  useEffect(() => {
+    if (!focusTarget || mode !== "continuous" || loading || error || pageCount === 0 || !containerRef.current) {
+      if (!focusTarget) {
+        setFocusHighlight(null);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    const targetPage = Math.max(1, Math.min(focusTarget.pageNumber, pageCount));
+
+    setVisiblePages((previous) => {
+      if (previous.includes(targetPage)) {
+        return previous;
+      }
+      return [...previous, targetPage].sort((left, right) => left - right);
+    });
+
+    const focusPage = async () => {
+      const layout = await buildPageTextLayout(targetPage);
+      if (cancelled || !layout) return;
+
+      const match = findTextMatch(layout, focusTarget);
+      if (cancelled) return;
+
+      setFocusHighlight({
+        pageNumber: targetPage,
+        rects: match?.rects ?? [],
+      });
+
+      const targetHost = pageHostRefs.current.get(targetPage);
+      if (!targetHost || !containerRef.current) {
+        return;
+      }
+
+      const topOffset = match ? Math.max(match.top - 32, 0) : 0;
+      containerRef.current.scrollTo({
+        top: Math.max(targetHost.offsetTop + topOffset - 16, 0),
+        behavior: "smooth",
+      });
+    };
+
+    void focusPage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [buildPageTextLayout, error, focusTarget, loading, mode, pageCount]);
+
   /* Cleanup */
   useEffect(() => {
     return () => {
@@ -330,7 +610,7 @@ export function PdfCanvasViewer({
                 }
               }}
               data-page-number={currentPage}
-              className="mx-auto overflow-hidden rounded-md bg-white shadow-sm"
+              className="relative mx-auto overflow-hidden rounded-md bg-white shadow-sm"
               style={{
                 width: fallbackWidth,
                 minHeight: fallbackHeight,
@@ -346,6 +626,22 @@ export function PdfCanvasViewer({
                 }}
                 className="block"
               />
+              {focusHighlight?.pageNumber === currentPage && focusHighlight.rects.length > 0 && (
+                <div className="pointer-events-none absolute inset-0">
+                  {focusHighlight.rects.map((rect, index) => (
+                    <div
+                      key={`${currentPage}-${index}`}
+                      className="absolute rounded-sm bg-amber-300/35 ring-1 ring-amber-500/30"
+                      style={{
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}

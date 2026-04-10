@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Check,
@@ -16,6 +16,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { EmptyState, Input } from "@/components/ui";
 import * as React from "react";
@@ -62,6 +63,9 @@ function buildHierarchy(flatNodes: TreeNode[]): TreeNode[] {
       child.children = attachChildren(child.id);
     }
     return children.sort((a, b) => {
+      const leftSortOrder = typeof a.data?.sortOrder === "number" ? a.data.sortOrder : 0;
+      const rightSortOrder = typeof b.data?.sortOrder === "number" ? b.data.sortOrder : 0;
+      if (leftSortOrder !== rightSortOrder) return leftSortOrder - rightSortOrder;
       if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
@@ -116,12 +120,30 @@ function ContextMenu({
   onDelete?: (nodeId: string) => void;
   onCreateFolder?: (parentId: string | null) => void;
 }) {
-  return (
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (!menu) return;
+
+    const rect = menu.getBoundingClientRect();
+    const margin = 8;
+    setPosition({
+      left: Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin)),
+      top: Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin)),
+    });
+  }, [x, y, node.id]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
+        ref={menuRef}
         className="fixed z-50 min-w-[140px] rounded-lg border border-line bg-panel shadow-lg py-1"
-        style={{ left: x, top: y }}
+        style={{ left: position.left, top: position.top }}
       >
         {node.type === "directory" && onCreateFolder && (
           <button
@@ -161,7 +183,8 @@ function ContextMenu({
           </button>
         )}
       </div>
-    </>
+    </>,
+    document.body,
   );
 }
 
@@ -428,6 +451,7 @@ export function TreeView({
 
   const handleContextMenu = useCallback(
     (e: React.MouseEvent, node: TreeNode) => {
+      if (node.data?.disableContextMenu) return;
       if (!onRename && !onDelete && !onCreateFolder) return;
       setContextMenu({ x: e.clientX, y: e.clientY, node });
     },

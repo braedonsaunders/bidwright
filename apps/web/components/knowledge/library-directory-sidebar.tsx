@@ -1,16 +1,18 @@
 "use client";
 
 import { useMemo } from "react";
-import { FolderPlus, Loader2, MoveRight, X } from "lucide-react";
+import { FolderPlus, Folders, Inbox, Loader2, MoveRight, X } from "lucide-react";
 import { Button, Card, CardBody, CardHeader, CardTitle, Label, ModalBackdrop, Select } from "@/components/ui";
 import { TreeView, type TreeNode } from "@/components/shared/tree-view";
 import type { KnowledgeLibraryCabinetRecord } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 export type LibraryDirectoryView =
   | { kind: "all" }
   | { kind: "unassigned" }
   | { kind: "cabinet"; cabinetId: string };
+
+const ALL_LIBRARY_NODE_ID = "__library_all__";
+const UNASSIGNED_LIBRARY_NODE_ID = "__library_unassigned__";
 
 export function cabinetPathLabel(
   cabinetId: string | null,
@@ -42,8 +44,6 @@ export function CabinetDirectorySidebar({
   onDeleteCabinet,
   onRenameCabinet,
   selectedView,
-  totalCount,
-  unassignedCount,
   onSelectView,
 }: {
   cabinets: KnowledgeLibraryCabinetRecord[];
@@ -53,25 +53,41 @@ export function CabinetDirectorySidebar({
   onDeleteCabinet: (cabinetId: string) => void;
   onRenameCabinet: (cabinetId: string, name: string) => void;
   selectedView: LibraryDirectoryView;
-  totalCount: number;
-  unassignedCount: number;
   onSelectView: (view: LibraryDirectoryView) => void;
 }) {
   const nodes = useMemo<TreeNode[]>(
     () =>
-      [...cabinets]
+      [
+        {
+          id: ALL_LIBRARY_NODE_ID,
+          parentId: null,
+          name: `All ${itemLabelPlural}`,
+          type: "file" as const,
+          icon: <Folders className="h-3.5 w-3.5 shrink-0 text-fg/45" />,
+          data: { disableContextMenu: true, sortOrder: -200 },
+        },
+        {
+          id: UNASSIGNED_LIBRARY_NODE_ID,
+          parentId: null,
+          name: "Unassigned",
+          type: "file" as const,
+          icon: <Inbox className="h-3.5 w-3.5 shrink-0 text-fg/45" />,
+          data: { disableContextMenu: true, sortOrder: -190 },
+        },
+        ...[...cabinets]
         .sort(compareByName)
         .map((cabinet) => ({
           id: cabinet.id,
           parentId: cabinet.parentId,
           name: cabinet.name,
-          type: "directory",
+          type: "directory" as const,
         })),
-    [cabinets],
+      ],
+    [cabinets, itemLabelPlural],
   );
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden">
       <CardHeader className="flex items-center justify-between gap-3 border-b border-line">
         <div>
           <CardTitle className="text-sm">{itemLabelPlural} Folders</CardTitle>
@@ -87,43 +103,29 @@ export function CabinetDirectorySidebar({
         </Button>
       </CardHeader>
 
-      <CardBody className="space-y-3 p-3">
-        <div className="grid gap-2">
-          <button
-            type="button"
-            onClick={() => onSelectView({ kind: "all" })}
-            className={cn(
-              "flex items-center justify-between rounded-lg border px-3 py-2 text-left text-xs transition-colors",
-              selectedView.kind === "all"
-                ? "border-accent/40 bg-accent/8 text-accent"
-                : "border-line bg-panel2/25 text-fg/70 hover:bg-panel2/40"
-            )}
-          >
-            <span>All {itemLabelPlural}</span>
-            <span className="rounded-full bg-panel px-1.5 py-0.5 text-[10px]">{totalCount}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onSelectView({ kind: "unassigned" })}
-            className={cn(
-              "flex items-center justify-between rounded-lg border px-3 py-2 text-left text-xs transition-colors",
-              selectedView.kind === "unassigned"
-                ? "border-accent/40 bg-accent/8 text-accent"
-                : "border-line bg-panel2/25 text-fg/70 hover:bg-panel2/40"
-            )}
-          >
-            <span>Unassigned</span>
-            <span className="rounded-full bg-panel px-1.5 py-0.5 text-[10px]">{unassignedCount}</span>
-          </button>
-        </div>
-
+      <CardBody className="flex min-h-0 flex-1 flex-col p-3">
         <TreeView
           nodes={nodes}
-          selectedId={selectedView.kind === "cabinet" ? selectedView.cabinetId : null}
+          selectedId={
+            selectedView.kind === "all"
+              ? ALL_LIBRARY_NODE_ID
+              : selectedView.kind === "unassigned"
+                ? UNASSIGNED_LIBRARY_NODE_ID
+                : selectedView.cabinetId
+          }
           searchable
-          className="min-h-[360px] rounded-lg border border-line bg-panel2/15"
-          onSelect={(node) => onSelectView({ kind: "cabinet", cabinetId: node.id })}
+          className="flex-1 min-h-0 rounded-lg border border-line bg-panel2/15"
+          onSelect={(node) => {
+            if (node.id === ALL_LIBRARY_NODE_ID) {
+              onSelectView({ kind: "all" });
+              return;
+            }
+            if (node.id === UNASSIGNED_LIBRARY_NODE_ID) {
+              onSelectView({ kind: "unassigned" });
+              return;
+            }
+            onSelectView({ kind: "cabinet", cabinetId: node.id });
+          }}
           onCreateFolder={onCreateCabinet}
           onRename={onRenameCabinet}
           onDelete={onDeleteCabinet}
