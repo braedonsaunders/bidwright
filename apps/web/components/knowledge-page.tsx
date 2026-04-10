@@ -168,6 +168,71 @@ function matchesLibraryView(cabinetId: string | null, view: LibraryDirectoryView
   return cabinetId === view.cabinetId;
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildSearchSnippet(text: string, query: string, maxLength = 240) {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  if (collapsed.length <= maxLength) return collapsed;
+
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const lowerText = collapsed.toLowerCase();
+  const firstMatchIndex = terms.reduce((best, term) => {
+    const index = lowerText.indexOf(term);
+    if (index === -1) return best;
+    if (best === -1) return index;
+    return Math.min(best, index);
+  }, -1);
+
+  if (firstMatchIndex === -1) {
+    return `${collapsed.slice(0, maxLength).trimEnd()}...`;
+  }
+
+  const start = Math.max(0, firstMatchIndex - Math.floor(maxLength * 0.3));
+  const end = Math.min(collapsed.length, start + maxLength);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < collapsed.length ? "..." : "";
+  return `${prefix}${collapsed.slice(start, end).trim()}${suffix}`;
+}
+
+function highlightSearchSnippet(text: string, query: string) {
+  const terms = Array.from(
+    new Set(
+      query
+        .trim()
+        .split(/\s+/)
+        .map((term) => term.trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (terms.length === 0 || !text) {
+    return text;
+  }
+
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join("|")})`, "ig");
+  const lowerTerms = new Set(terms.map((term) => term.toLowerCase()));
+
+  return text.split(pattern).map((part, index) => {
+    if (!part) return null;
+    if (!lowerTerms.has(part.toLowerCase())) {
+      return <span key={index}>{part}</span>;
+    }
+    return (
+      <mark key={index} className="rounded-sm bg-accent/15 px-0.5 text-fg">
+        {part}
+      </mark>
+    );
+  });
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Main component
 // ────────────────────────────────────────────────────────────────────
@@ -212,7 +277,7 @@ export function KnowledgePage({
   }, [refreshBooks, refreshCabinets, refreshDatasets]);
 
   return (
-    <div className="space-y-5">
+    <div className="flex h-full min-h-0 flex-col gap-5">
       <FadeIn>
       <div className="flex items-center justify-between">
         <div>
@@ -253,7 +318,7 @@ export function KnowledgePage({
       </div>
       </FadeIn>
 
-      <FadeIn delay={0.1}>
+      <FadeIn delay={0.1} className="min-h-0 flex-1">
       {tab === "books" && (
         <BooksTab
           books={books}
@@ -418,8 +483,8 @@ function BooksTab({
 
   return (
     <>
-    <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-      <div className="min-w-0">
+    <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="min-w-0 min-h-0">
           <CabinetDirectorySidebar
             cabinets={bookCabinets}
             emptyLabel="Organize books into folders on the left."
@@ -427,11 +492,9 @@ function BooksTab({
             onCreateCabinet={handleCreateCabinet}
             onDeleteCabinet={handleDeleteCabinet}
             onRenameCabinet={handleRenameCabinet}
-          selectedView={view}
-          totalCount={books.length}
-          unassignedCount={books.filter((book) => !book.cabinetId).length}
-          onSelectView={setView}
-        />
+            selectedView={view}
+            onSelectView={setView}
+          />
       </div>
 
       <div className="min-w-0 space-y-4">
@@ -646,6 +709,8 @@ function BookCard({
 }
 
 type DetailTab = "view" | "chunks" | "search" | "datasets";
+type BookSearchHit = { id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number };
+type PdfSearchTarget = { key: string; pageNumber: number; text: string; query: string };
 
 function BookDetailPanel({
   book,
@@ -677,11 +742,27 @@ function BookDetailPanel({
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Array<{ id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number }>>([]);
+  const [submittedSearchQuery, setSubmittedSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<BookSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
+  const [openingSearchHitId, setOpeningSearchHitId] = useState<string | null>(null);
+  const [highlightedChunkId, setHighlightedChunkId] = useState<string | null>(null);
+  const [pendingChunkScrollId, setPendingChunkScrollId] = useState<string | null>(null);
+  const [pdfSearchTarget, setPdfSearchTarget] = useState<PdfSearchTarget | null>(null);
   const [showGenerateDataset, setShowGenerateDataset] = useState(false);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const [pdfFullscreen, setPdfFullscreen] = useState(false);
+  const chunkItemRefs = useRef(new Map<string, HTMLDivElement>());
+  const chunksRef = useRef<KnowledgeChunkRecord[]>([]);
+  const totalChunksRef = useRef(0);
+
+  useEffect(() => {
+    chunksRef.current = chunks;
+  }, [chunks]);
+
+  useEffect(() => {
+    totalChunksRef.current = totalChunks;
+  }, [totalChunks]);
 
   useEffect(() => {
     setChunks([]);
@@ -697,6 +778,13 @@ function BookDetailPanel({
     setPageNumber(1);
     setPageInput("");
     setPageCount(0);
+    setSearchQuery("");
+    setSubmittedSearchQuery("");
+    setSearchResults([]);
+    setOpeningSearchHitId(null);
+    setHighlightedChunkId(null);
+    setPendingChunkScrollId(null);
+    setPdfSearchTarget(null);
   }, [book.id]);
 
   const loadMoreChunks = async () => {
@@ -710,14 +798,83 @@ function BookDetailPanel({
   };
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) return;
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) return;
+
+    setSubmittedSearchQuery(trimmedQuery);
     setSearching(true);
     try {
-      const res = await searchBookChunks(book.id, searchQuery);
+      const res = await searchBookChunks(book.id, trimmedQuery);
       setSearchResults(res.hits);
-    } catch { /* noop */ }
+    } catch {
+      setSearchResults([]);
+    }
     setSearching(false);
   };
+
+  const hasPdf = book.sourceFileName.toLowerCase().endsWith(".pdf") && !!book.storagePath;
+
+  const handleOpenSearchHit = useCallback(async (hit: BookSearchHit) => {
+    setOpeningSearchHitId(hit.id);
+    setHighlightedChunkId(hit.id);
+
+    try {
+      if (hasPdf && hit.pageNumber != null) {
+        setPageInput("");
+        setPageNumber(hit.pageNumber);
+        setPdfSearchTarget({
+          key: `${hit.id}:${Date.now()}`,
+          pageNumber: hit.pageNumber,
+          text: hit.text,
+          query: submittedSearchQuery,
+        });
+        setDetailTab("view");
+        return;
+      }
+
+      let loadedChunks = chunksRef.current;
+      let knownTotalChunks = totalChunksRef.current;
+
+      while (!loadedChunks.some((chunk) => chunk.id === hit.id) && loadedChunks.length < knownTotalChunks) {
+        const { chunks: moreChunks, total } = await listKnowledgeChunksPaginated(
+          book.id,
+          CHUNK_PAGE_SIZE,
+          loadedChunks.length,
+        );
+
+        if (moreChunks.length === 0) {
+          break;
+        }
+
+        loadedChunks = [...loadedChunks, ...moreChunks];
+        knownTotalChunks = total;
+        chunksRef.current = loadedChunks;
+        totalChunksRef.current = total;
+        setChunks(loadedChunks);
+        setTotalChunks(total);
+      }
+
+      setChunkSearch("");
+      setPendingChunkScrollId(hit.id);
+      setDetailTab("chunks");
+    } finally {
+      setOpeningSearchHitId((current) => (current === hit.id ? null : current));
+    }
+  }, [book.id, hasPdf]);
+
+  useEffect(() => {
+    if (detailTab !== "chunks" || !pendingChunkScrollId) {
+      return;
+    }
+
+    const target = chunkItemRefs.current.get(pendingChunkScrollId);
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    setPendingChunkScrollId(null);
+  }, [chunks, detailTab, pendingChunkScrollId]);
 
   const filteredChunks = chunkSearch
     ? chunks.filter(
@@ -726,8 +883,6 @@ function BookDetailPanel({
           c.text.toLowerCase().includes(chunkSearch.toLowerCase())
       )
     : chunks;
-
-  const hasPdf = book.sourceFileName.toLowerCase().endsWith(".pdf") && book.storagePath;
   const fileUrl = getBookFileUrl(book.id);
 
   const detailTabs: Array<{ key: DetailTab; label: string; icon: typeof Eye; count?: number }> = [
@@ -864,6 +1019,7 @@ function BookDetailPanel({
                 pageNumber={pageNumber}
                 mode="continuous"
                 zoom={zoom}
+                focusTarget={pdfSearchTarget}
                 onPageChange={setPageNumber}
                 onPageCount={setPageCount}
               />
@@ -900,7 +1056,18 @@ function BookDetailPanel({
             ) : (
               <div className="space-y-1.5">
                 {filteredChunks.map((chunk) => (
-                  <ChunkItem key={chunk.id} chunk={chunk} />
+                  <ChunkItem
+                    key={chunk.id}
+                    chunk={chunk}
+                    highlighted={chunk.id === highlightedChunkId}
+                    itemRef={(node) => {
+                      if (node) {
+                        chunkItemRefs.current.set(chunk.id, node);
+                      } else {
+                        chunkItemRefs.current.delete(chunk.id);
+                      }
+                    }}
+                  />
                 ))}
                 {!chunkSearch && chunks.length < totalChunks && (
                   <Button
@@ -946,34 +1113,83 @@ function BookDetailPanel({
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                 />
               </div>
-              <Button size="sm" onClick={handleSearch} disabled={searching}>
+              <Button size="sm" onClick={handleSearch} disabled={searching || !searchQuery.trim()}>
                 {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
                 Search
               </Button>
             </div>
 
-            {searchResults.length > 0 ? (
-              <div className="space-y-2">
-                {searchResults.map((hit) => (
-                  <div key={hit.id} className="rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      {hit.sectionTitle && (
-                        <span className="text-xs font-medium text-fg/70 truncate">{hit.sectionTitle}</span>
-                      )}
-                      {hit.pageNumber && (
-                        <span className="text-[10px] text-fg/30">p.{hit.pageNumber}</span>
-                      )}
-                      <span className="text-[10px] text-accent ml-auto">{(hit.score * 100).toFixed(0)}% match</span>
-                    </div>
-                    <p className="text-xs text-fg/50 line-clamp-3">{hit.text}</p>
-                  </div>
-                ))}
+            {submittedSearchQuery && (
+              <div className="flex items-center justify-between gap-3 text-[11px] text-fg/40">
+                <span>
+                  {searchResults.length} result{searchResults.length === 1 ? "" : "s"} for "{submittedSearchQuery}"
+                </span>
+                {searchQuery.trim() !== submittedSearchQuery && (
+                  <span className="text-fg/30">Press Search to update results.</span>
+                )}
               </div>
-            ) : searchQuery && !searching ? (
-              <p className="text-xs text-fg/40 py-4 text-center">No results. Try different search terms.</p>
+            )}
+
+            {searching ? (
+              <div className="rounded-lg border border-line bg-panel2/30 px-3 py-6">
+                <div className="flex items-center justify-center gap-2 text-xs text-fg/45">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Searching this book...
+                </div>
+              </div>
+            ) : searchResults.length > 0 ? (
+              <div className="space-y-2">
+                {searchResults.map((hit, index) => {
+                  const pageLabel = hit.pageNumber != null ? `Open page ${hit.pageNumber}` : "Open chunk";
+                  const snippet = buildSearchSnippet(hit.text, submittedSearchQuery);
+                  const isOpening = openingSearchHitId === hit.id;
+
+                  return (
+                    <button
+                      key={hit.id}
+                      type="button"
+                      onClick={() => void handleOpenSearchHit(hit)}
+                      className="w-full rounded-lg border border-line bg-panel2/50 px-3 py-2 text-left transition hover:border-accent/35 hover:bg-panel focus:outline-none focus:ring-2 focus:ring-accent/25"
+                    >
+                      <div className="mb-1 flex items-start gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+                              Result {index + 1}
+                            </span>
+                            {hit.sectionTitle ? (
+                              <span className="text-xs font-medium text-fg/75">{hit.sectionTitle}</span>
+                            ) : (
+                              <span className="text-xs text-fg/45">Matched passage</span>
+                            )}
+                            {hit.pageNumber != null && (
+                              <span className="text-[10px] text-fg/35">p.{hit.pageNumber}</span>
+                            )}
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-[11px] text-accent">
+                          {isOpening ? <Loader2 className="h-3 w-3 animate-spin" /> : <MoveRight className="h-3 w-3" />}
+                          {pageLabel}
+                        </span>
+                      </div>
+                      <p className="text-xs leading-5 text-fg/55">
+                        {highlightSearchSnippet(snippet, submittedSearchQuery)}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : submittedSearchQuery ? (
+              <p className="text-xs text-fg/40 py-4 text-center">
+                No results for "{submittedSearchQuery}". Try a different phrase.
+              </p>
+            ) : searchQuery.trim() ? (
+              <p className="text-xs text-fg/40 py-4 text-center">
+                Press Search or hit Enter to run the search.
+              </p>
             ) : (
               <p className="text-xs text-fg/40 py-4 text-center">
-                Search across this book using semantic similarity. Results are ranked by relevance.
+                Search across this book and open a result directly to its page or chunk.
               </p>
             )}
           </motion.div>
@@ -1080,6 +1296,7 @@ function BookDetailPanel({
               pageNumber={pageNumber}
               mode="continuous"
               zoom={zoom}
+              focusTarget={pdfSearchTarget}
               onPageChange={setPageNumber}
               onPageCount={setPageCount}
             />
@@ -1565,11 +1782,30 @@ function DatasetReviewCard({
   );
 }
 
-function ChunkItem({ chunk }: { chunk: KnowledgeChunkRecord }) {
+function ChunkItem({
+  chunk,
+  highlighted = false,
+  itemRef,
+}: {
+  chunk: KnowledgeChunkRecord;
+  highlighted?: boolean;
+  itemRef?: (node: HTMLDivElement | null) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (highlighted) {
+      setExpanded(true);
+    }
+  }, [highlighted]);
+
   return (
     <div
-      className="rounded-lg border border-line bg-panel2/50 px-3 py-2 cursor-pointer"
+      ref={itemRef}
+      className={cn(
+        "rounded-lg border bg-panel2/50 px-3 py-2 cursor-pointer transition-colors",
+        highlighted ? "border-accent/45 bg-accent/5" : "border-line",
+      )}
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-center gap-2">
@@ -2039,8 +2275,8 @@ function DatasetsTab({
 
   return (
     <>
-      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="min-w-0">
+      <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="min-w-0 min-h-0">
           <CabinetDirectorySidebar
             cabinets={datasetCabinets}
             emptyLabel="Organize datasets into folders on the left."
@@ -2049,8 +2285,6 @@ function DatasetsTab({
             onDeleteCabinet={handleDeleteCabinet}
             onRenameCabinet={handleRenameCabinet}
             selectedView={view}
-            totalCount={datasets.length}
-            unassignedCount={datasets.filter((dataset) => !dataset.cabinetId).length}
             onSelectView={setView}
           />
         </div>
