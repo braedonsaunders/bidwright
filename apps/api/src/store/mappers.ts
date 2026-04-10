@@ -20,6 +20,7 @@ import type {
   FileNode,
   Job,
   KnowledgeBook,
+  KnowledgeLibraryCabinet,
   KnowledgeChunk,
   LabourCostEntry,
   LabourCostTable,
@@ -630,6 +631,7 @@ export function mapPersona(row: any): any {
 export function mapKnowledgeBook(b: any): KnowledgeBook {
   return {
     id: b.id,
+    cabinetId: b.cabinetId ?? null,
     name: b.name,
     description: b.description,
     category: b.category as KnowledgeBook["category"],
@@ -644,6 +646,18 @@ export function mapKnowledgeBook(b: any): KnowledgeBook {
     metadata: (b.metadata as Record<string, unknown>) ?? {},
     createdAt: toISO(b.createdAt),
     updatedAt: toISO(b.updatedAt),
+  };
+}
+
+export function mapKnowledgeLibraryCabinet(c: any): KnowledgeLibraryCabinet {
+  return {
+    id: c.id,
+    organizationId: c.organizationId,
+    parentId: c.parentId ?? null,
+    itemType: c.itemType as KnowledgeLibraryCabinet["itemType"],
+    name: c.name,
+    createdAt: toISO(c.createdAt),
+    updatedAt: toISO(c.updatedAt),
   };
 }
 
@@ -663,6 +677,7 @@ export function mapKnowledgeChunk(c: any): KnowledgeChunk {
 export function mapDataset(d: any): Dataset & { tags?: string[]; sourceBookId?: string; sourcePages?: string } {
   return {
     id: d.id,
+    cabinetId: d.cabinetId ?? null,
     name: d.name,
     description: d.description,
     category: d.category as Dataset["category"],

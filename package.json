@@ -17,7 +17,6 @@
     "db:push": "pnpm --filter @bidwright/db db:push",
     "db:seed": "pnpm --filter @bidwright/db db:seed",
     "db:migrate": "pnpm --filter @bidwright/db db:migrate",
-    "migrate:data": "tsx scripts/migrate-json-to-postgres.ts",
     "seed": "tsx scripts/seed-db.ts"
   },
   "pnpm": {
@@ -28,7 +27,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "mssql": "^12.2.1",
     "pg": "^8.20.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"

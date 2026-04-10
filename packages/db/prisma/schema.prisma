@@ -25,6 +25,7 @@ model Organization {
   entityCategories EntityCategory[]
   conditionLibrary ConditionLibraryEntry[]
   knowledgeBooks   KnowledgeBook[]
+  knowledgeLibraryCabinets KnowledgeLibraryCabinet[]
   datasets         Dataset[]
   rateSchedules    RateSchedule[]
   customers        Customer[]
@@ -991,6 +992,8 @@ model KnowledgeBook {
   id             String       @id @default(cuid())
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cabinetId      String?
+  cabinet        KnowledgeLibraryCabinet? @relation("KnowledgeBookCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
   name           String
   description    String       @default("")
   category       String       @default("general")
@@ -1009,6 +1012,7 @@ model KnowledgeBook {
   chunks KnowledgeChunk[]
 
   @@index([organizationId])
+  @@index([cabinetId])
 }
 
 model KnowledgeChunk {
@@ -1025,12 +1029,34 @@ model KnowledgeChunk {
   @@index([bookId])
 }
 
+model KnowledgeLibraryCabinet {
+  id             String                   @id @default(cuid())
+  organizationId String
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parentId       String?
+  parent         KnowledgeLibraryCabinet? @relation("KnowledgeLibraryCabinetTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children       KnowledgeLibraryCabinet[] @relation("KnowledgeLibraryCabinetTree")
+  itemType       String
+  name           String
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  books    KnowledgeBook[] @relation("KnowledgeBookCabinet")
+  datasets Dataset[]       @relation("DatasetCabinet")
+
+  @@index([organizationId])
+  @@index([parentId])
+  @@index([organizationId, itemType])
+}
+
 // ── Datasets ──────────────────────────────────────────────────────────────
 
 model Dataset {
   id                String        @id @default(cuid())
   organizationId    String?
   organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cabinetId         String?
+  cabinet           KnowledgeLibraryCabinet? @relation("DatasetCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
   name              String
   description       String        @default("")
   category          String        @default("custom")
@@ -1052,6 +1078,7 @@ model Dataset {
 
   @@index([organizationId])
   @@index([isTemplate])
+  @@index([cabinetId])
 }
 
 model DatasetRow {
