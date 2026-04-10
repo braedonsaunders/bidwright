@@ -673,7 +673,7 @@ function BookDetailPanel({
   const [pageNumber, setPageNumber] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [zoom, setZoom] = useState(1.0);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [pageInput, setPageInput] = useState("");
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -682,7 +682,6 @@ function BookDetailPanel({
   const [showGenerateDataset, setShowGenerateDataset] = useState(false);
   const [confirmRerun, setConfirmRerun] = useState(false);
   const [pdfFullscreen, setPdfFullscreen] = useState(false);
-  const [pageInput, setPageInput] = useState("");
 
   useEffect(() => {
     setChunks([]);
@@ -692,6 +691,12 @@ function BookDetailPanel({
       .then(({ chunks: c, total }) => { setChunks(c); setTotalChunks(total); })
       .catch(() => {})
       .finally(() => setLoadingChunks(false));
+  }, [book.id]);
+
+  useEffect(() => {
+    setPageNumber(1);
+    setPageInput("");
+    setPageCount(0);
   }, [book.id]);
 
   const loadMoreChunks = async () => {
@@ -836,7 +841,7 @@ function BookDetailPanel({
                 />
                 <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
               </div>
-              <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+              <Button size="xs" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
@@ -857,9 +862,10 @@ function BookDetailPanel({
               <PdfCanvasViewer
                 documentUrl={fileUrl}
                 pageNumber={pageNumber}
+                mode="continuous"
                 zoom={zoom}
+                onPageChange={setPageNumber}
                 onPageCount={setPageCount}
-                canvasRef={canvasRef}
               />
             </div>
           </motion.div>
@@ -1050,7 +1056,7 @@ function BookDetailPanel({
                 }}
               />
               <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
-              <Button size="xs" variant="secondary" disabled={pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+              <Button size="xs" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
@@ -1072,9 +1078,10 @@ function BookDetailPanel({
             <PdfCanvasViewer
               documentUrl={fileUrl}
               pageNumber={pageNumber}
+              mode="continuous"
               zoom={zoom}
+              onPageChange={setPageNumber}
               onPageCount={setPageCount}
-              canvasRef={canvasRef}
             />
           </div>
         </div>,
