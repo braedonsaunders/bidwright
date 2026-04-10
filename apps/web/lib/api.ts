@@ -2536,6 +2536,7 @@ export async function pluginFetch(pluginId: string, request: PluginFetchRequest)
 
 export interface KnowledgeBookRecord {
   id: string;
+  cabinetId: string | null;
   name: string;
   description: string;
   category: "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general";
@@ -2563,9 +2564,53 @@ export interface KnowledgeChunkRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface KnowledgeLibraryCabinetRecord {
+  id: string;
+  organizationId: string;
+  parentId: string | null;
+  itemType: "book" | "dataset";
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function listKnowledgeBooks(projectId?: string) {
   const params = projectId ? `?projectId=${projectId}` : "";
   return apiRequest<KnowledgeBookRecord[]>(`/knowledge/books${params}`);
+}
+
+export async function listKnowledgeLibraryCabinets(itemType?: KnowledgeLibraryCabinetRecord["itemType"]) {
+  const params = itemType ? `?itemType=${itemType}` : "";
+  return apiRequest<KnowledgeLibraryCabinetRecord[]>(`/knowledge/cabinets${params}`);
+}
+
+export async function createKnowledgeLibraryCabinet(input: {
+  name: string;
+  itemType: KnowledgeLibraryCabinetRecord["itemType"];
+  parentId?: string | null;
+}) {
+  return apiRequest<KnowledgeLibraryCabinetRecord>("/knowledge/cabinets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateKnowledgeLibraryCabinet(
+  cabinetId: string,
+  patch: Partial<Pick<KnowledgeLibraryCabinetRecord, "name" | "parentId">>,
+) {
+  return apiRequest<KnowledgeLibraryCabinetRecord>(`/knowledge/cabinets/${cabinetId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteKnowledgeLibraryCabinet(cabinetId: string) {
+  return apiRequest<KnowledgeLibraryCabinetRecord>(`/knowledge/cabinets/${cabinetId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function getKnowledgeBook(bookId: string) {
@@ -2590,6 +2635,7 @@ export async function ingestKnowledgeFile(input: {
   category: string;
   scope?: string;
   projectId?: string;
+  cabinetId?: string | null;
 }): Promise<KnowledgeBookRecord> {
   const form = new FormData();
   form.append("file", input.file);
@@ -2597,6 +2643,7 @@ export async function ingestKnowledgeFile(input: {
   form.append("category", input.category);
   if (input.scope) form.append("scope", input.scope);
   if (input.projectId) form.append("projectId", input.projectId);
+  if (input.cabinetId) form.append("cabinetId", input.cabinetId);
 
   const response = await fetch(resolveApiUrl("/knowledge/ingest-file"), {
     method: "POST",
@@ -2691,6 +2738,7 @@ export interface DatasetColumnRecord {
 
 export interface DatasetRecord {
   id: string;
+  cabinetId: string | null;
   name: string;
   description: string;
   category: "labour_units" | "equipment_rates" | "material_prices" | "productivity" | "burden_rates" | "custom";
@@ -2732,6 +2780,7 @@ export async function createDataset(input: {
   name: string; description: string;
   category: DatasetRecord["category"]; scope: DatasetRecord["scope"];
   projectId?: string | null; columns: DatasetColumnRecord[];
+  cabinetId?: string | null;
   source?: DatasetRecord["source"]; sourceDescription?: string;
 }) {
   return apiRequest<DatasetRecord>("/datasets", {
@@ -3319,12 +3368,16 @@ export async function answerCliQuestion(projectId: string, answer: string, quest
 // ── Quote Review ────────────────────────────────────────────────────────
 
 export interface ReviewCoverageItem {
+  id: string;
   specRef: string;
   requirement: string;
   status: "YES" | "VERIFY" | "NO";
   worksheetName?: string;
   notes?: string;
 }
+
+export type ReviewLifecycleState = "open" | "resolved";
+export type ReviewItemState = "open" | "resolved" | "dismissed";
 
 export interface ReviewFinding {
   id: string;
@@ -3333,6 +3386,8 @@ export interface ReviewFinding {
   description: string;
   specRef?: string;
   estimatedImpact?: string;
+  status?: ReviewItemState;
+  resolutionNote?: string;
 }
 
 export interface ReviewOverestimate {
@@ -3343,9 +3398,12 @@ export interface ReviewOverestimate {
   currentValue?: string;
   benchmarkValue?: string;
   savingsRange: string;
+  status?: ReviewItemState;
+  resolutionNote?: string;
 }
 
 export interface ReviewBenchmarkStream {
+  id: string;
   name: string;
   footage?: number;
   hours: number;
@@ -3363,6 +3421,8 @@ export interface ReviewCompetitiveness {
     area: string;
     analysis: string;
     riskRange: string;
+    status?: ReviewItemState;
+    resolutionNote?: string;
   }>;
   benchmarking?: {
     description?: string;
@@ -3378,7 +3438,8 @@ export interface ReviewRecommendation {
   priority: "HIGH" | "MEDIUM" | "LOW";
   impact: string;
   category?: string;
-  status: "open" | "resolved" | "dismissed";
+  status: ReviewItemState;
+  reviewerNote?: string;
   resolution: {
     summary: string;
     actions: Array<{
@@ -3413,6 +3474,12 @@ export interface QuoteReview {
   revisionId: string;
   aiRunId?: string;
   status: "running" | "completed" | "failed";
+  reviewState: ReviewLifecycleState;
+  isOutdated: boolean;
+  outdatedReason?: string | null;
+  quoteUpdatedAt?: string | null;
+  reviewedQuoteUpdatedAt?: string | null;
+  currentRevisionId?: string | null;
   summary: ReviewSummary;
   coverage: ReviewCoverageItem[];
   findings: ReviewFinding[];
@@ -3431,6 +3498,25 @@ export async function startReview(projectId: string, options?: { runtime?: strin
 
 export async function getLatestReview(projectId: string) {
   return apiRequest<{ review: QuoteReview | null }>(`/api/review/${projectId}/latest`);
+}
+
+export async function updateManualReview(
+  projectId: string,
+  patch: {
+    coverage?: ReviewCoverageItem[];
+    findings?: ReviewFinding[];
+    competitiveness?: ReviewCompetitiveness;
+    recommendations?: ReviewRecommendation[];
+    summary?: Partial<ReviewSummary>;
+    reviewState?: ReviewLifecycleState;
+    refreshQuoteSnapshot?: boolean;
+  },
+) {
+  return apiRequest<{ review: QuoteReview }>(`/api/review/${projectId}/manual`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
 }
 
 export async function resolveRecommendation(projectId: string, recId: string) {

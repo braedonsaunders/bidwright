@@ -93,6 +93,7 @@ export interface IngestionRequest {
   category: KnowledgeBook["category"];
   scope: KnowledgeBook["scope"];
   projectId?: string;
+  cabinetId?: string;
   organizationId?: string;
   options?: {
     chunkStrategy?: "recursive" | "section-aware" | "page";
@@ -439,6 +440,7 @@ export class KnowledgeService {
       category: request.category,
       scope: request.scope,
       projectId: request.projectId ?? null,
+      cabinetId: request.cabinetId ?? null,
       sourceFileName,
       sourceFileSize,
       storagePath,

@@ -4227,6 +4227,44 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     }
   });
 
+  app.get("/knowledge/cabinets", async (request) => {
+    const { itemType } = (request.query ?? {}) as { itemType?: "book" | "dataset" };
+    return request.store!.listKnowledgeLibraryCabinets(itemType);
+  });
+
+  app.post("/knowledge/cabinets", async (request, reply) => {
+    const body = request.body as Parameters<PrismaApiStore["createKnowledgeLibraryCabinet"]>[0];
+    try {
+      const cabinet = await request.store!.createKnowledgeLibraryCabinet(body);
+      reply.code(201);
+      return cabinet;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create cabinet";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.patch("/knowledge/cabinets/:cabinetId", async (request, reply) => {
+    const { cabinetId } = request.params as { cabinetId: string };
+    const patch = request.body as Parameters<PrismaApiStore["updateKnowledgeLibraryCabinet"]>[1];
+    try {
+      return await request.store!.updateKnowledgeLibraryCabinet(cabinetId, patch);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update cabinet";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.delete("/knowledge/cabinets/:cabinetId", async (request, reply) => {
+    const { cabinetId } = request.params as { cabinetId: string };
+    try {
+      return await request.store!.deleteKnowledgeLibraryCabinet(cabinetId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete cabinet";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
   app.get("/knowledge/books/:bookId/chunks", async (request, reply) => {
     const { bookId } = request.params as { bookId: string };
     const book = await request.store!.getKnowledgeBook(bookId);

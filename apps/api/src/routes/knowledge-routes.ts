@@ -56,6 +56,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         category: fields.category as "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general",
         scope: (fields.scope as "global" | "project") ?? "global",
         projectId: fields.projectId || undefined,
+        cabinetId: fields.cabinetId || undefined,
         organizationId: request.user?.organizationId ?? undefined,
         options: {
           chunkStrategy: (fields.chunkStrategy as "recursive" | "section-aware" | "page") || undefined,
@@ -96,6 +97,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         category: string;
         scope?: string;
         projectId?: string;
+        cabinetId?: string;
         options?: {
           chunkStrategy?: string;
           chunkSize?: number;
@@ -120,6 +122,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         category: body.category as "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general",
         scope: (body.scope as "global" | "project") ?? "global",
         projectId: body.projectId || undefined,
+        cabinetId: body.cabinetId || undefined,
         organizationId: request.user?.organizationId ?? undefined,
         options: {
           chunkStrategy: (body.options?.chunkStrategy as "recursive" | "section-aware" | "page") || undefined,

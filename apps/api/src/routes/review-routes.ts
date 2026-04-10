@@ -7,12 +7,291 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateReviewClaudeMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
 import { resolveProjectDir, apiDataRoot } from "../paths.js";
 import { prisma } from "@bidwright/db";
 import { getSessionCookieToken } from "../services/session-cookie.js";
 import { buildWorkspaceResponse } from "../server.js";
+
+const REVIEW_META_KEY = "__reviewMeta";
+const REVIEW_STATES = new Set(["open", "resolved"]);
+const REVIEW_ITEM_STATES = new Set(["open", "resolved", "dismissed"]);
+const COVERAGE_STATES = new Set(["YES", "VERIFY", "NO"]);
+const FINDING_SEVERITIES = new Set(["CRITICAL", "WARNING", "INFO"]);
+const PRIORITY_LEVELS = new Set(["HIGH", "MEDIUM", "LOW"]);
+
+type ReviewLifecycleState = "open" | "resolved";
+type ReviewItemState = "open" | "resolved" | "dismissed";
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function asOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function pickEnum<T extends string>(value: unknown, allowed: Set<string>, fallback: T): T {
+  return typeof value === "string" && allowed.has(value) ? (value as T) : fallback;
+}
+
+function fallbackId(prefix: string, index: number) {
+  return `${prefix}-${index + 1}-${randomUUID().slice(0, 8)}`;
+}
+
+function stripReviewMeta(summary: unknown): Record<string, any> {
+  if (!isRecord(summary)) return {};
+  const clone = { ...summary };
+  delete clone[REVIEW_META_KEY];
+  return clone;
+}
+
+function extractReviewMeta(summary: unknown, fallbackSnapshot: string | null): {
+  state: ReviewLifecycleState;
+  quoteSnapshotUpdatedAt: string | null;
+  resolvedAt: string | null;
+} {
+  const meta = isRecord(summary) && isRecord(summary[REVIEW_META_KEY]) ? summary[REVIEW_META_KEY] : {};
+  return {
+    state: pickEnum<ReviewLifecycleState>(meta.state, REVIEW_STATES, "open"),
+    quoteSnapshotUpdatedAt: asOptionalString(meta.quoteSnapshotUpdatedAt) ?? fallbackSnapshot,
+    resolvedAt: asOptionalString(meta.resolvedAt) ?? null,
+  };
+}
+
+function attachReviewMeta(summary: unknown, meta: { state: ReviewLifecycleState; quoteSnapshotUpdatedAt: string | null; resolvedAt: string | null }) {
+  return {
+    ...stripReviewMeta(summary),
+    [REVIEW_META_KEY]: {
+      state: meta.state,
+      quoteSnapshotUpdatedAt: meta.quoteSnapshotUpdatedAt,
+      resolvedAt: meta.resolvedAt,
+    },
+  };
+}
+
+function normalizeCoverageItems(value: unknown) {
+  const items = Array.isArray(value) ? value : [];
+  return items.map((item, index) => {
+    const entry = isRecord(item) ? item : {};
+    return {
+      id: asOptionalString(entry.id) ?? fallbackId("coverage", index),
+      specRef: asString(entry.specRef),
+      requirement: asString(entry.requirement),
+      status: pickEnum<"YES" | "VERIFY" | "NO">(entry.status, COVERAGE_STATES, "VERIFY"),
+      worksheetName: asOptionalString(entry.worksheetName),
+      notes: asOptionalString(entry.notes),
+    };
+  });
+}
+
+function normalizeFindings(value: unknown) {
+  const items = Array.isArray(value) ? value : [];
+  return items.map((item, index) => {
+    const entry = isRecord(item) ? item : {};
+    return {
+      id: asOptionalString(entry.id) ?? fallbackId("finding", index),
+      severity: pickEnum<"CRITICAL" | "WARNING" | "INFO">(entry.severity, FINDING_SEVERITIES, "INFO"),
+      title: asString(entry.title),
+      description: asString(entry.description),
+      specRef: asOptionalString(entry.specRef),
+      estimatedImpact: asOptionalString(entry.estimatedImpact),
+      status: pickEnum<ReviewItemState>(entry.status, REVIEW_ITEM_STATES, "open"),
+      resolutionNote: asOptionalString(entry.resolutionNote),
+    };
+  });
+}
+
+function normalizeCompetitivenessEntries(value: unknown, kind: "overestimate" | "underestimate") {
+  const items = Array.isArray(value) ? value : [];
+  return items.map((item, index) => {
+    const entry = isRecord(item) ? item : {};
+    return {
+      id: asOptionalString(entry.id) ?? fallbackId(kind, index),
+      impact: pickEnum<"HIGH" | "MEDIUM" | "LOW">(entry.impact, PRIORITY_LEVELS, "MEDIUM"),
+      area: asString(entry.area),
+      analysis: asString(entry.analysis),
+      currentValue: asOptionalString(entry.currentValue),
+      benchmarkValue: asOptionalString(entry.benchmarkValue),
+      savingsRange: kind === "overestimate" ? asString(entry.savingsRange) : undefined,
+      riskRange: kind === "underestimate" ? asString(entry.riskRange) : undefined,
+      status: pickEnum<ReviewItemState>(entry.status, REVIEW_ITEM_STATES, "open"),
+      resolutionNote: asOptionalString(entry.resolutionNote),
+    };
+  });
+}
+
+function normalizeBenchmarkStreams(value: unknown) {
+  const streams = Array.isArray(value) ? value : [];
+  return streams.map((stream, index) => {
+    const entry = isRecord(stream) ? stream : {};
+    return {
+      id: asOptionalString(entry.id) ?? fallbackId("benchmark", index),
+      name: asString(entry.name),
+      footage: asOptionalNumber(entry.footage),
+      hours: asNumber(entry.hours, 0),
+      productionRate: asOptionalNumber(entry.productionRate),
+      unit: asOptionalString(entry.unit),
+      fmTlRatio: asOptionalNumber(entry.fmTlRatio),
+      assessment: asString(entry.assessment),
+    };
+  });
+}
+
+function normalizeCompetitiveness(value: unknown) {
+  const entry = isRecord(value) ? value : {};
+  const benchmarking = isRecord(entry.benchmarking) ? entry.benchmarking : {};
+  return {
+    totalSavingsRange: asOptionalString(entry.totalSavingsRange),
+    overestimates: normalizeCompetitivenessEntries(entry.overestimates, "overestimate").map((item) => ({
+      id: item.id,
+      impact: item.impact,
+      area: item.area,
+      analysis: item.analysis,
+      currentValue: item.currentValue,
+      benchmarkValue: item.benchmarkValue,
+      savingsRange: item.savingsRange ?? "",
+      status: item.status,
+      resolutionNote: item.resolutionNote,
+    })),
+    underestimates: normalizeCompetitivenessEntries(entry.underestimates, "underestimate").map((item) => ({
+      id: item.id,
+      impact: item.impact,
+      area: item.area,
+      analysis: item.analysis,
+      riskRange: item.riskRange ?? "",
+      status: item.status,
+      resolutionNote: item.resolutionNote,
+    })),
+    benchmarking: {
+      description: asOptionalString(benchmarking.description),
+      streams: normalizeBenchmarkStreams(benchmarking.streams),
+    },
+  };
+}
+
+function normalizeRecommendations(value: unknown) {
+  const items = Array.isArray(value) ? value : [];
+  return items.map((item, index) => {
+    const entry = isRecord(item) ? item : {};
+    const resolution = isRecord(entry.resolution) ? entry.resolution : {};
+    return {
+      id: asOptionalString(entry.id) ?? fallbackId("recommendation", index),
+      title: asString(entry.title),
+      description: asString(entry.description),
+      priority: pickEnum<"HIGH" | "MEDIUM" | "LOW">(entry.priority, PRIORITY_LEVELS, "MEDIUM"),
+      impact: asString(entry.impact),
+      category: asOptionalString(entry.category),
+      status: pickEnum<ReviewItemState>(entry.status, REVIEW_ITEM_STATES, "open"),
+      reviewerNote: asOptionalString(entry.reviewerNote),
+      resolution: {
+        summary: asString(resolution.summary),
+        actions: Array.isArray(resolution.actions) ? resolution.actions : [],
+      },
+    };
+  });
+}
+
+function normalizeSummary(value: unknown) {
+  const summary = stripReviewMeta(value);
+  const riskCount = isRecord(summary.riskCount) ? summary.riskCount : {};
+  return {
+    ...summary,
+    quoteTotal: asNumber(summary.quoteTotal, 0),
+    worksheetCount: asNumber(summary.worksheetCount, 0),
+    itemCount: asNumber(summary.itemCount, 0),
+    totalHours: asOptionalNumber(summary.totalHours),
+    coverageScore: asString(summary.coverageScore),
+    riskCount: {
+      critical: asNumber(riskCount.critical, 0),
+      warning: asNumber(riskCount.warning, 0),
+      info: asNumber(riskCount.info, 0),
+    },
+    potentialSavings: asOptionalString(summary.potentialSavings),
+    keyFindings: Array.isArray(summary.keyFindings) ? summary.keyFindings.map((item) => asString(item)).filter(Boolean) : [],
+    overallAssessment: asString(summary.overallAssessment),
+  };
+}
+
+async function getQuoteReviewContext(projectId: string) {
+  const quote = await prisma.quote.findFirst({
+    where: { projectId },
+    select: { updatedAt: true, currentRevisionId: true },
+  });
+  const currentRevisionId = quote?.currentRevisionId ?? null;
+  const revision = currentRevisionId
+    ? await prisma.quoteRevision.findFirst({
+        where: { id: currentRevisionId },
+        select: { updatedAt: true },
+      })
+    : null;
+  const scheduleAgg = currentRevisionId
+    ? await prisma.scheduleTask.aggregate({
+        where: { projectId, revisionId: currentRevisionId },
+        _max: { updatedAt: true },
+      })
+    : { _max: { updatedAt: null as Date | null } };
+
+  const timestamps = [quote?.updatedAt ?? null, revision?.updatedAt ?? null, scheduleAgg._max.updatedAt ?? null]
+    .filter((value): value is Date => value instanceof Date)
+    .sort((left, right) => left.getTime() - right.getTime());
+
+  return {
+    currentRevisionId,
+    quoteUpdatedAt: timestamps.length > 0 ? timestamps[timestamps.length - 1].toISOString() : null,
+  };
+}
+
+function serializeReview(review: any, context: { currentRevisionId: string | null; quoteUpdatedAt: string | null }) {
+  const fallbackSnapshot = review.createdAt instanceof Date ? review.createdAt.toISOString() : new Date().toISOString();
+  const meta = extractReviewMeta(review.summary, fallbackSnapshot);
+  const reviewedQuoteUpdatedAt = meta.quoteSnapshotUpdatedAt ?? fallbackSnapshot;
+  const currentQuoteMs = context.quoteUpdatedAt ? Date.parse(context.quoteUpdatedAt) : NaN;
+  const reviewedQuoteMs = reviewedQuoteUpdatedAt ? Date.parse(reviewedQuoteUpdatedAt) : NaN;
+  const revisionMismatch = !!(context.currentRevisionId && review.revisionId !== context.currentRevisionId);
+  const changedAfterReview =
+    Number.isFinite(currentQuoteMs) &&
+    Number.isFinite(reviewedQuoteMs) &&
+    currentQuoteMs > reviewedQuoteMs + 1000;
+  const isOutdated = revisionMismatch || changedAfterReview;
+
+  return {
+    ...review,
+    summary: normalizeSummary(review.summary),
+    coverage: normalizeCoverageItems(review.coverage),
+    findings: normalizeFindings(review.findings),
+    competitiveness: normalizeCompetitiveness(review.competitiveness),
+    recommendations: normalizeRecommendations(review.recommendations),
+    reviewState: meta.state,
+    reviewedQuoteUpdatedAt,
+    quoteUpdatedAt: context.quoteUpdatedAt,
+    currentRevisionId: context.currentRevisionId,
+    isOutdated,
+    outdatedReason: revisionMismatch
+      ? "This review belongs to an older revision."
+      : changedAfterReview
+        ? "The quote has changed since this review was last marked current."
+        : null,
+  };
+}
 
 /** Extract session token from Authorization header, cookie, or query param */
 function extractAuthToken(request: FastifyRequest): string {
@@ -58,6 +337,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
     }));
 
     const projectDir = resolveProjectDir(projectId);
+    const reviewContext = await getQuoteReviewContext(projectId);
 
     // Symlink global knowledge books
     const knowledgeBooks = await store.listKnowledgeBooks() || [];
@@ -96,7 +376,11 @@ export function registerReviewRoutes(app: FastifyInstance) {
         projectId,
         revisionId: revision.id || "",
         status: "running",
-        summary: {},
+        summary: attachReviewMeta({}, {
+          state: "open",
+          quoteSnapshotUpdatedAt: reviewContext.quoteUpdatedAt,
+          resolvedAt: null,
+        }),
         coverage: [],
         findings: [],
         competitiveness: {},
@@ -232,7 +516,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
       where: { projectId },
       orderBy: { createdAt: "desc" },
     });
-    return { review: review || null };
+    if (!review) return { review: null };
+    const context = await getQuoteReviewContext(projectId);
+    return { review: serializeReview(review, context) };
   });
 
   // ── SSE Stream (reuses CLI stream for the project) ────────
@@ -318,9 +604,13 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
       });
     } else {
       // Object-type sections (competitiveness, summary) — merge/replace
+      const nextValue =
+        section === "summary"
+          ? attachReviewMeta(data, extractReviewMeta(review.summary, review.createdAt.toISOString()))
+          : data;
       await prisma.quoteReview.update({
         where: { id: review.id },
-        data: { [section]: data },
+        data: { [section]: nextValue },
       });
       if (section === "summary") {
         const store = request.store;
@@ -331,6 +621,67 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
     }
 
     return { ok: true, section, reviewId: review.id };
+  });
+
+  app.put("/api/review/:projectId/manual", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = (request.body || {}) as {
+      coverage?: unknown;
+      findings?: unknown;
+      competitiveness?: unknown;
+      recommendations?: unknown;
+      summary?: unknown;
+      reviewState?: ReviewLifecycleState;
+      refreshQuoteSnapshot?: boolean;
+    };
+
+    const review = await prisma.quoteReview.findFirst({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!review) return reply.code(404).send({ error: "No review found" });
+    if (review.status === "running") {
+      return reply.code(409).send({ error: "Stop the running review before making manual edits." });
+    }
+
+    const context = await getQuoteReviewContext(projectId);
+    const fallbackSnapshot = review.createdAt.toISOString();
+    const currentMeta = extractReviewMeta(review.summary, fallbackSnapshot);
+    const nextMeta = { ...currentMeta };
+
+    if (body.reviewState) {
+      nextMeta.state = body.reviewState;
+      nextMeta.resolvedAt = body.reviewState === "resolved" ? new Date().toISOString() : null;
+    }
+
+    const shouldRefreshSnapshot = body.refreshQuoteSnapshot === true || body.reviewState === "resolved";
+    if (shouldRefreshSnapshot) {
+      if (context.currentRevisionId && review.revisionId !== context.currentRevisionId) {
+        return reply.code(409).send({ error: "This review was created on an older revision. Re-run the review instead of marking it current." });
+      }
+      nextMeta.quoteSnapshotUpdatedAt = context.quoteUpdatedAt ?? new Date().toISOString();
+    }
+
+    const currentSummary = stripReviewMeta(review.summary);
+    const nextSummaryBase =
+      body.summary !== undefined && isRecord(body.summary)
+        ? { ...currentSummary, ...stripReviewMeta(body.summary) }
+        : currentSummary;
+
+    const updated = await prisma.quoteReview.update({
+      where: { id: review.id },
+      data: {
+        ...(body.coverage !== undefined ? { coverage: normalizeCoverageItems(body.coverage) as any } : {}),
+        ...(body.findings !== undefined ? { findings: normalizeFindings(body.findings) as any } : {}),
+        ...(body.competitiveness !== undefined ? { competitiveness: normalizeCompetitiveness(body.competitiveness) as any } : {}),
+        ...(body.recommendations !== undefined ? { recommendations: normalizeRecommendations(body.recommendations) as any } : {}),
+        summary: attachReviewMeta(nextSummaryBase, nextMeta) as any,
+      },
+    });
+
+    const refreshedContext = await getQuoteReviewContext(projectId);
+    return { review: serializeReview(updated, refreshedContext) };
   });
 
   // ── Resolve Recommendation ────────────────────────────────

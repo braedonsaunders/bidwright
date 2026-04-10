@@ -1084,6 +1084,7 @@ export interface AppSettings {
 
 export interface KnowledgeBook {
   id: string;
+  cabinetId: string | null;
   name: string;
   description: string;
   category: "estimating" | "labour" | "equipment" | "materials" | "safety" | "standards" | "general";
@@ -1115,6 +1116,7 @@ export interface KnowledgeChunk {
 
 export interface Dataset {
   id: string;
+  cabinetId: string | null;
   name: string;
   description: string;
   category: "labour_units" | "equipment_rates" | "material_prices" | "productivity" | "burden_rates" | "custom";
@@ -1145,6 +1147,16 @@ export interface DatasetRow {
   data: Record<string, unknown>;  // keyed by column key
   order: number;
   metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeLibraryCabinet {
+  id: string;
+  organizationId: string;
+  parentId: string | null;
+  itemType: "book" | "dataset";
+  name: string;
   createdAt: string;
   updatedAt: string;
 }

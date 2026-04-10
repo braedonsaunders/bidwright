@@ -39,6 +39,7 @@ import type {
   FileNode,
   Job,
   KnowledgeBook,
+  KnowledgeLibraryCabinet,
   KnowledgeChunk,
   Modifier,
   RateSchedule,
@@ -126,6 +127,7 @@ import {
   mapIngestionJob,
   mapJob,
   mapKnowledgeBook,
+  mapKnowledgeLibraryCabinet,
   mapKnowledgeChunk,
   mapLabourCostEntry,
   mapLabourCostTable,
@@ -7456,6 +7458,120 @@ export class PrismaApiStore {
 
   // ── Knowledge Books ────────────────────────────────────────────────────
 
+  private async requireKnowledgeLibraryCabinet(cabinetId: string) {
+    const cabinet = await this.db.knowledgeLibraryCabinet.findFirst({
+      where: { id: cabinetId, organizationId: this.organizationId },
+    });
+    if (!cabinet) {
+      throw new Error(`Knowledge library cabinet ${cabinetId} not found`);
+    }
+    return cabinet;
+  }
+
+  private async validateKnowledgeLibraryParent(
+    parentId: string | null | undefined,
+    itemType: KnowledgeLibraryCabinet["itemType"],
+    cabinetId?: string,
+  ) {
+    if (parentId == null) return null;
+    const parent = await this.requireKnowledgeLibraryCabinet(parentId);
+    if (parent.itemType !== itemType) {
+      throw new Error(`Parent cabinet must be a ${itemType} cabinet`);
+    }
+    if (!cabinetId) return parent;
+
+    let cursor = parent;
+    while (cursor) {
+      if (cursor.id === cabinetId) {
+        throw new Error("Cabinet cannot be moved into itself");
+      }
+      if (!cursor.parentId) break;
+      cursor = await this.requireKnowledgeLibraryCabinet(cursor.parentId);
+    }
+    return parent;
+  }
+
+  private async validateKnowledgeLibraryItemCabinet(
+    cabinetId: string | null | undefined,
+    itemType: KnowledgeLibraryCabinet["itemType"],
+  ) {
+    if (cabinetId == null) return null;
+    const cabinet = await this.requireKnowledgeLibraryCabinet(cabinetId);
+    if (cabinet.itemType !== itemType) {
+      throw new Error(`Cabinet ${cabinetId} cannot store ${itemType} items`);
+    }
+    return cabinet;
+  }
+
+  async listKnowledgeLibraryCabinets(itemType?: KnowledgeLibraryCabinet["itemType"]): Promise<KnowledgeLibraryCabinet[]> {
+    const where: any = { organizationId: this.organizationId };
+    if (itemType) where.itemType = itemType;
+    const cabinets = await this.db.knowledgeLibraryCabinet.findMany({
+      where,
+      orderBy: [{ name: "asc" }],
+    });
+    return cabinets.map(mapKnowledgeLibraryCabinet);
+  }
+
+  async createKnowledgeLibraryCabinet(input: {
+    name: string;
+    itemType: KnowledgeLibraryCabinet["itemType"];
+    parentId?: string | null;
+  }): Promise<KnowledgeLibraryCabinet> {
+    const name = input.name.trim();
+    if (!name) throw new Error("Cabinet name is required");
+    await this.validateKnowledgeLibraryParent(input.parentId ?? null, input.itemType);
+
+    const cabinet = await this.db.knowledgeLibraryCabinet.create({
+      data: {
+        id: createId("klc"),
+        organizationId: this.organizationId,
+        parentId: input.parentId ?? null,
+        itemType: input.itemType,
+        name,
+      },
+    });
+    return mapKnowledgeLibraryCabinet(cabinet);
+  }
+
+  async updateKnowledgeLibraryCabinet(
+    cabinetId: string,
+    patch: Partial<Pick<KnowledgeLibraryCabinet, "name" | "parentId">>,
+  ): Promise<KnowledgeLibraryCabinet> {
+    const cabinet = await this.requireKnowledgeLibraryCabinet(cabinetId);
+    const data: any = {};
+
+    if (patch.name !== undefined) {
+      const name = patch.name.trim();
+      if (!name) throw new Error("Cabinet name is required");
+      data.name = name;
+    }
+    if (patch.parentId !== undefined) {
+      await this.validateKnowledgeLibraryParent(
+        patch.parentId ?? null,
+        cabinet.itemType as KnowledgeLibraryCabinet["itemType"],
+        cabinet.id,
+      );
+      data.parentId = patch.parentId ?? null;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return mapKnowledgeLibraryCabinet(cabinet);
+    }
+
+    const updated = await this.db.knowledgeLibraryCabinet.update({
+      where: { id: cabinetId },
+      data,
+    });
+    return mapKnowledgeLibraryCabinet(updated);
+  }
+
+  async deleteKnowledgeLibraryCabinet(cabinetId: string): Promise<KnowledgeLibraryCabinet> {
+    const cabinet = await this.requireKnowledgeLibraryCabinet(cabinetId);
+    await this.db.knowledgeLibraryCabinet.delete({ where: { id: cabinetId } });
+    return mapKnowledgeLibraryCabinet(cabinet);
+  }
+
   async listKnowledgeBooks(projectId?: string): Promise<KnowledgeBook[]> {
     const where: any = { organizationId: this.organizationId };
     if (projectId) {
@@ -7480,14 +7596,18 @@ export class PrismaApiStore {
     category: KnowledgeBook["category"];
     scope: KnowledgeBook["scope"];
     projectId?: string | null;
+    cabinetId?: string | null;
     sourceFileName: string;
     sourceFileSize: number;
     storagePath?: string | null;
   }): Promise<KnowledgeBook> {
+    await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "book");
+
     const book = await this.db.knowledgeBook.create({
       data: {
         id: createId("kb"),
         organizationId: this.organizationId,
+        cabinetId: input.cabinetId ?? null,
         name: input.name,
         description: input.description,
         category: input.category,
@@ -7504,7 +7624,7 @@ export class PrismaApiStore {
     return mapKnowledgeBook(book);
   }
 
-  async updateKnowledgeBook(bookId: string, patch: Partial<Pick<KnowledgeBook, "name" | "description" | "category" | "scope" | "projectId" | "status" | "pageCount" | "chunkCount" | "metadata">>): Promise<KnowledgeBook> {
+  async updateKnowledgeBook(bookId: string, patch: Partial<Pick<KnowledgeBook, "name" | "description" | "category" | "scope" | "projectId" | "cabinetId" | "status" | "pageCount" | "chunkCount" | "metadata">>): Promise<KnowledgeBook> {
     const book = await this.db.knowledgeBook.findFirst({ where: { id: bookId, organizationId: this.organizationId } });
     if (!book) throw new Error(`Knowledge book ${bookId} not found`);
 
@@ -7514,6 +7634,10 @@ export class PrismaApiStore {
     if (patch.category !== undefined) data.category = patch.category;
     if (patch.scope !== undefined) data.scope = patch.scope;
     if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.cabinetId !== undefined) {
+      await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "book");
+      data.cabinetId = patch.cabinetId ?? null;
+    }
     if (patch.status !== undefined) data.status = patch.status;
     if (patch.pageCount !== undefined) data.pageCount = patch.pageCount;
     if (patch.chunkCount !== undefined) data.chunkCount = patch.chunkCount;
@@ -7635,6 +7759,7 @@ export class PrismaApiStore {
     category: Dataset["category"];
     scope: Dataset["scope"];
     projectId?: string | null;
+    cabinetId?: string | null;
     columns: Dataset["columns"];
     source?: Dataset["source"];
     sourceDescription?: string;
@@ -7642,10 +7767,13 @@ export class PrismaApiStore {
     sourcePages?: string;
     tags?: string[];
   }): Promise<Dataset> {
+    await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "dataset");
+
     const dataset = await this.db.dataset.create({
       data: {
         id: createId("ds"),
         organizationId: this.organizationId,
+        cabinetId: input.cabinetId ?? null,
         name: input.name,
         description: input.description,
         category: input.category,
@@ -7664,7 +7792,7 @@ export class PrismaApiStore {
     return mapDataset(dataset);
   }
 
-  async updateDataset(datasetId: string, patch: Partial<Pick<Dataset, "name" | "description" | "category" | "scope" | "projectId" | "columns" | "source" | "sourceDescription">>): Promise<Dataset> {
+  async updateDataset(datasetId: string, patch: Partial<Pick<Dataset, "name" | "description" | "category" | "scope" | "projectId" | "cabinetId" | "columns" | "source" | "sourceDescription">>): Promise<Dataset> {
     const dataset = await this.db.dataset.findFirst({ where: { id: datasetId, organizationId: this.organizationId } });
     if (!dataset) throw new Error(`Dataset ${datasetId} not found`);
 
@@ -7674,6 +7802,10 @@ export class PrismaApiStore {
     if (patch.category !== undefined) data.category = patch.category;
     if (patch.scope !== undefined) data.scope = patch.scope;
     if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.cabinetId !== undefined) {
+      await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "dataset");
+      data.cabinetId = patch.cabinetId ?? null;
+    }
     if (patch.columns !== undefined) data.columns = patch.columns as any;
     if (patch.source !== undefined) data.source = patch.source;
     if (patch.sourceDescription !== undefined) data.sourceDescription = patch.sourceDescription;

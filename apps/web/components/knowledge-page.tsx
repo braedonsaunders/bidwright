@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   BookOpen,
@@ -15,6 +15,7 @@ import {
   Loader2,
   Maximize2,
   Minus,
+  MoveRight,
   Plus,
   Search,
   Sparkles,
@@ -44,8 +45,15 @@ import {
   Separator,
   Textarea,
 } from "@/components/ui";
+import {
+  CabinetDirectorySidebar,
+  cabinetPathLabel,
+  MoveToCabinetModal,
+  type LibraryDirectoryView,
+} from "@/components/knowledge/library-directory-sidebar";
 import type {
   KnowledgeBookRecord,
+  KnowledgeLibraryCabinetRecord,
   KnowledgeChunkRecord,
   DatasetRecord,
   DatasetRowRecord,
@@ -53,6 +61,10 @@ import type {
 } from "@/lib/api";
 import {
   listKnowledgeBooks,
+  listKnowledgeLibraryCabinets,
+  createKnowledgeLibraryCabinet,
+  updateKnowledgeLibraryCabinet,
+  deleteKnowledgeLibraryCabinet,
   createKnowledgeBook,
   deleteKnowledgeBook,
   updateKnowledgeBook,
@@ -62,6 +74,7 @@ import {
   listDatasets,
   createDataset,
   deleteDataset,
+  updateDataset,
   listDatasetRows,
   createDatasetRow,
   createDatasetRowsBatch,
@@ -145,19 +158,32 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function compareByName<T extends { name: string }>(left: T, right: T) {
+  return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
+}
+
+function matchesLibraryView(cabinetId: string | null, view: LibraryDirectoryView) {
+  if (view.kind === "all") return true;
+  if (view.kind === "unassigned") return !cabinetId;
+  return cabinetId === view.cabinetId;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Main component
 // ────────────────────────────────────────────────────────────────────
 
 export function KnowledgePage({
   initialBooks,
+  initialCabinets,
   initialDatasets,
 }: {
   initialBooks: KnowledgeBookRecord[];
+  initialCabinets: KnowledgeLibraryCabinetRecord[];
   initialDatasets: DatasetRecord[];
 }) {
   const [tab, setTab] = useState<Tab>("books");
   const [books, setBooks] = useState(initialBooks);
+  const [cabinets, setCabinets] = useState(initialCabinets);
   const [datasets, setDatasets] = useState(initialDatasets);
 
   const refreshBooks = useCallback(async () => {
@@ -172,11 +198,18 @@ export function KnowledgePage({
     } catch { /* noop */ }
   }, []);
 
+  const refreshCabinets = useCallback(async () => {
+    try {
+      setCabinets(await listKnowledgeLibraryCabinets());
+    } catch { /* noop */ }
+  }, []);
+
   // Fetch on mount since initialBooks may be empty due to race condition
   useEffect(() => {
     refreshBooks();
+    refreshCabinets();
     refreshDatasets();
-  }, [refreshBooks, refreshDatasets]);
+  }, [refreshBooks, refreshCabinets, refreshDatasets]);
 
   return (
     <div className="space-y-5">
@@ -222,10 +255,23 @@ export function KnowledgePage({
 
       <FadeIn delay={0.1}>
       {tab === "books" && (
-        <BooksTab books={books} datasets={datasets} onRefresh={refreshBooks} onDatasetsRefresh={refreshDatasets} />
+        <BooksTab
+          books={books}
+          cabinets={cabinets}
+          datasets={datasets}
+          onRefresh={refreshBooks}
+          onCabinetsRefresh={refreshCabinets}
+          onDatasetsRefresh={refreshDatasets}
+        />
       )}
       {tab === "datasets" && (
-        <DatasetsTab datasets={datasets} books={books} onRefresh={refreshDatasets} />
+        <DatasetsTab
+          datasets={datasets}
+          books={books}
+          cabinets={cabinets}
+          onRefresh={refreshDatasets}
+          onCabinetsRefresh={refreshCabinets}
+        />
       )}
       </FadeIn>
     </div>
@@ -236,10 +282,29 @@ export function KnowledgePage({
 // Books tab
 // ────────────────────────────────────────────────────────────────────
 
-function BooksTab({ books, datasets, onRefresh, onDatasetsRefresh }: { books: KnowledgeBookRecord[]; datasets: DatasetRecord[]; onRefresh: () => void; onDatasetsRefresh: () => void }) {
+function BooksTab({
+  books,
+  cabinets,
+  datasets,
+  onRefresh,
+  onCabinetsRefresh,
+  onDatasetsRefresh,
+}: {
+  books: KnowledgeBookRecord[];
+  cabinets: KnowledgeLibraryCabinetRecord[];
+  datasets: DatasetRecord[];
+  onRefresh: () => void;
+  onCabinetsRefresh: () => void;
+  onDatasetsRefresh: () => void;
+}) {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
+  const [movingBook, setMovingBook] = useState<KnowledgeBookRecord | null>(null);
+  const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
+  const [savingMove, setSavingMove] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Poll for status updates when any book is still processing
   const hasProcessing = books.some((b) => b.status === "uploading" || b.status === "processing");
@@ -249,71 +314,200 @@ function BooksTab({ books, datasets, onRefresh, onDatasetsRefresh }: { books: Kn
     return () => clearInterval(id);
   }, [hasProcessing, onRefresh]);
 
-  const filtered = searchQuery
-    ? books.filter(
-        (b) =>
-          b.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          b.description.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : books;
+  const bookCabinets = useMemo(
+    () => cabinets.filter((cabinet) => cabinet.itemType === "book").sort(compareByName),
+    [cabinets],
+  );
+
+  const cabinetsById = useMemo(
+    () => new Map(bookCabinets.map((cabinet) => [cabinet.id, cabinet])),
+    [bookCabinets],
+  );
+
+  useEffect(() => {
+    if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
+      setView({ kind: "all" });
+    }
+  }, [cabinetsById, view]);
+
+  useEffect(() => {
+    setSelectedBookId(null);
+  }, [view]);
+
+  const filtered = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return books
+      .filter((book) => matchesLibraryView(book.cabinetId, view))
+      .filter((book) => {
+        if (!query) return true;
+        return (
+          book.name.toLowerCase().includes(query) ||
+          book.description.toLowerCase().includes(query) ||
+          book.sourceFileName.toLowerCase().includes(query)
+        );
+      });
+  }, [books, searchQuery, view]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) ?? null;
+  const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
+
+  const activeFolderLabel =
+    view.kind === "all"
+      ? "All Books"
+      : view.kind === "unassigned"
+        ? "Unassigned Books"
+        : cabinetsById.get(view.cabinetId)?.name ?? "Book Folder";
+
+  const handleCreateCabinet = async (parentId: string | null) => {
+    try {
+      const cabinet = await createKnowledgeLibraryCabinet({
+        name: "New Folder",
+        itemType: "book",
+        parentId,
+      });
+      await onCabinetsRefresh();
+      setView({ kind: "cabinet", cabinetId: cabinet.id });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create folder");
+    }
+  };
+
+  const handleRenameCabinet = async (cabinetId: string, name: string) => {
+    try {
+      await updateKnowledgeLibraryCabinet(cabinetId, { name });
+      await onCabinetsRefresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rename folder");
+    }
+  };
+
+  const handleDeleteCabinet = async (cabinetId: string) => {
+    const cabinet = cabinetsById.get(cabinetId);
+    if (!cabinet) return;
+    if (!confirm(`Delete folder "${cabinet.name}"? Books inside will become unassigned.`)) return;
+    try {
+      await deleteKnowledgeLibraryCabinet(cabinetId);
+      await onCabinetsRefresh();
+      if (view.kind === "cabinet" && view.cabinetId === cabinetId) {
+        setView({ kind: "all" });
+      }
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete folder");
+    }
+  };
+
+  const handleMoveSave = async () => {
+    if (!movingBook) return;
+    setSavingMove(true);
+    try {
+      await updateKnowledgeBook(movingBook.id, {
+        cabinetId: moveTargetCabinetId === "__root__" ? null : moveTargetCabinetId,
+      });
+      await onRefresh();
+      setMovingBook(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to move book");
+    } finally {
+      setSavingMove(false);
+    }
+  };
 
   return (
     <>
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-          <Input
-            className="h-8 pl-8 text-xs"
-            placeholder="Search books..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        <Button size="sm" onClick={() => setShowCreateModal(true)}>
-          <Upload className="h-3.5 w-3.5" />
-          Upload Book
-        </Button>
+    <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="min-w-0">
+          <CabinetDirectorySidebar
+            cabinets={bookCabinets}
+            emptyLabel="Organize books into folders on the left."
+            itemLabelPlural="Books"
+            onCreateCabinet={handleCreateCabinet}
+            onDeleteCabinet={handleDeleteCabinet}
+            onRenameCabinet={handleRenameCabinet}
+          selectedView={view}
+          totalCount={books.length}
+          unassignedCount={books.filter((book) => !book.cabinetId).length}
+          onSelectView={setView}
+        />
       </div>
 
-      {filtered.length === 0 ? (
-        <EmptyState>
-          <BookOpen className="mx-auto h-8 w-8 text-fg/20 mb-2" />
-          <p className="text-sm text-fg/50">No knowledge books yet.</p>
-          <p className="text-xs text-fg/30 mt-1">
-            Upload reference books, standards, and guides to make them available to the AI agent.
-          </p>
-        </EmptyState>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((book) => (
-            <BookCard
-              key={book.id}
-              book={book}
-              selected={book.id === selectedBookId}
-              onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
-              onDelete={async () => {
-                await deleteKnowledgeBook(book.id);
-                if (selectedBookId === book.id) setSelectedBookId(null);
-                onRefresh();
-              }}
-            />
-          ))}
+      <div className="min-w-0 space-y-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-fg">{activeFolderLabel}</h2>
+            <p className="mt-0.5 text-xs text-fg/40">
+              {filtered.length} books
+              {view.kind === "cabinet" ? ` in ${activeFolderLabel}` : ""}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+              <Input
+                className="h-8 pl-8 text-xs"
+                placeholder="Search books..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <Button size="sm" onClick={() => setShowCreateModal(true)}>
+              <Upload className="h-3.5 w-3.5" />
+              Upload Book
+            </Button>
+          </div>
         </div>
-      )}
 
-      {showCreateModal && (
-        <CreateBookModal
-          onClose={() => setShowCreateModal(false)}
-          onCreated={() => {
-            setShowCreateModal(false);
-            onRefresh();
-          }}
-        />
-      )}
+        {error && (
+          <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+            {error}
+          </div>
+        )}
 
+        {filtered.length === 0 ? (
+          <EmptyState>
+            <BookOpen className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+            <p className="text-sm text-fg/50">No books in this folder.</p>
+            <p className="mt-1 text-xs text-fg/30">
+              Upload a reference book or move an existing one into this folder.
+            </p>
+          </EmptyState>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {filtered.map((book) => (
+              <BookCard
+                key={book.id}
+                book={book}
+                cabinetLabel={cabinetPathLabel(book.cabinetId, cabinetsById)}
+                selected={book.id === selectedBookId}
+                onMove={() => {
+                  setMovingBook(book);
+                  setMoveTargetCabinetId(book.cabinetId ?? "__root__");
+                }}
+                onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
+                onDelete={async () => {
+                  await deleteKnowledgeBook(book.id);
+                  if (selectedBookId === book.id) setSelectedBookId(null);
+                  onRefresh();
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {showCreateModal && (
+          <CreateBookModal
+            defaultCabinetId={defaultCabinetId}
+            onClose={() => setShowCreateModal(false)}
+            onCreated={() => {
+              setShowCreateModal(false);
+              onRefresh();
+            }}
+          />
+        )}
+      </div>
     </div>
 
     {typeof document !== "undefined" && createPortal(
@@ -331,17 +525,35 @@ function BooksTab({ books, datasets, onRefresh, onDatasetsRefresh }: { books: Kn
       </AnimatePresence>,
       document.body,
     )}
+
+    {typeof document !== "undefined" && movingBook && createPortal(
+      <MoveToCabinetModal
+        activeType="book"
+        cabinets={bookCabinets}
+        itemName={movingBook.name}
+        onClose={() => setMovingBook(null)}
+        onConfirm={handleMoveSave}
+        onValueChange={setMoveTargetCabinetId}
+        saving={savingMove}
+        value={moveTargetCabinetId}
+      />,
+      document.body,
+    )}
     </>
   );
 }
 
 function BookCard({
+  cabinetLabel,
   book,
+  onMove,
   selected,
   onSelect,
   onDelete,
 }: {
+  cabinetLabel?: string | null;
   book: KnowledgeBookRecord;
+  onMove?: () => void;
   selected: boolean;
   onSelect: () => void;
   onDelete: () => void;
@@ -390,26 +602,43 @@ function BookCard({
       <div className="px-3 py-2.5">
         <h3 className="text-sm font-medium text-fg truncate">{book.name}</h3>
         <p className="text-[11px] text-fg/40 mt-0.5 truncate">{book.sourceFileName}</p>
+        {cabinetLabel && (
+          <p className="mt-1 truncate text-[11px] text-fg/35">{cabinetLabel}</p>
+        )}
         <div className="flex flex-wrap items-center gap-1.5 mt-2">
           <Badge tone="default">{categoryLabel(book.category)}</Badge>
           <Badge tone={scopeTone(book.scope)}>{book.scope}</Badge>
         </div>
-        <div className="flex items-center justify-between mt-2">
+        <div className="flex items-center justify-between mt-2 gap-2">
           <span className="text-[10px] text-fg/30">
             {book.pageCount} pages · {book.chunkCount} chunks · {formatBytes(book.sourceFileSize)}
           </span>
-          <Button
-            variant="danger"
-            size="xs"
-            onClick={(e) => {
-              e.stopPropagation();
-              setDeleting(true);
-              onDelete();
-            }}
-            disabled={deleting}
-          >
-            <Trash2 className="h-3 w-3" />
-          </Button>
+          <div className="flex items-center gap-1">
+            {onMove && (
+              <Button
+                variant="secondary"
+                size="xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMove();
+                }}
+              >
+                <MoveRight className="h-3 w-3" />
+              </Button>
+            )}
+            <Button
+              variant="danger"
+              size="xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDeleting(true);
+                onDelete();
+              }}
+              disabled={deleting}
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
         </div>
       </div>
     </Card>
@@ -1422,9 +1651,11 @@ function AddChunkForm({
 }
 
 function CreateBookModal({
+  defaultCabinetId,
   onClose,
   onCreated,
 }: {
+  defaultCabinetId?: string | null;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -1464,6 +1695,7 @@ function CreateBookModal({
         file,
         title: name.trim(),
         category,
+        cabinetId: defaultCabinetId ?? null,
         scope: "global",
       });
       // Close modal immediately — processing continues in the background.
@@ -1591,18 +1823,26 @@ function CreateBookModal({
 // Paginated dataset list
 // ────────────────────────────────────────────────────────────────────
 function DatasetListPaginated({
+  cabinetsById,
   datasets,
-  onSelect,
   onDelete,
+  onMove,
+  onSelect,
 }: {
+  cabinetsById: Map<string, KnowledgeLibraryCabinetRecord>;
   datasets: DatasetRecord[];
-  onSelect: (id: string) => void;
   onDelete: (id: string) => void;
+  onMove: (dataset: DatasetRecord) => void;
+  onSelect: (id: string) => void;
 }) {
   const [page, setPage] = useState(0);
   const pageSize = 20;
   const totalPages = Math.ceil(datasets.length / pageSize);
   const visible = datasets.slice(page * pageSize, (page + 1) * pageSize);
+
+  useEffect(() => {
+    setPage(0);
+  }, [datasets]);
 
   return (
     <div className="space-y-2">
@@ -1633,9 +1873,11 @@ function DatasetListPaginated({
       {visible.map((dataset) => (
         <DatasetListItem
           key={dataset.id}
+          cabinetLabel={cabinetPathLabel(dataset.cabinetId, cabinetsById)}
           dataset={dataset}
           onClick={() => onSelect(dataset.id)}
           onDelete={async () => onDelete(dataset.id)}
+          onMove={() => onMove(dataset)}
         />
       ))}
       {totalPages > 1 && (
@@ -1666,11 +1908,15 @@ function DatasetListPaginated({
 function DatasetsTab({
   datasets,
   books,
+  cabinets,
   onRefresh,
+  onCabinetsRefresh,
 }: {
   datasets: DatasetRecord[];
   books: KnowledgeBookRecord[];
+  cabinets: KnowledgeLibraryCabinetRecord[];
   onRefresh: () => void;
+  onCabinetsRefresh: () => void;
 }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1678,41 +1924,173 @@ function DatasetsTab({
   const [libraryDatasets, setLibraryDatasets] = useState<DatasetRecord[]>([]);
   const [adopting, setAdopting] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
+  const [movingDataset, setMovingDataset] = useState<DatasetRecord | null>(null);
+  const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
+  const [savingMove, setSavingMove] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = searchQuery
-    ? datasets.filter(
-        (d) =>
-          d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          d.description.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : datasets;
+  const datasetCabinets = useMemo(
+    () => cabinets.filter((cabinet) => cabinet.itemType === "dataset").sort(compareByName),
+    [cabinets],
+  );
+
+  const cabinetsById = useMemo(
+    () => new Map(datasetCabinets.map((cabinet) => [cabinet.id, cabinet])),
+    [datasetCabinets],
+  );
+
+  useEffect(() => {
+    if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
+      setView({ kind: "all" });
+    }
+  }, [cabinetsById, view]);
+
+  useEffect(() => {
+    setSelectedDatasetId(null);
+  }, [view]);
+
+  const filtered = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return datasets
+      .filter((dataset) => matchesLibraryView(dataset.cabinetId, view))
+      .filter((dataset) => {
+        if (!query) return true;
+        return (
+          dataset.name.toLowerCase().includes(query) ||
+          dataset.description.toLowerCase().includes(query)
+        );
+      });
+  }, [datasets, searchQuery, view]);
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
+  const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
+  const activeFolderLabel =
+    view.kind === "all"
+      ? "All Datasets"
+      : view.kind === "unassigned"
+        ? "Unassigned Datasets"
+        : cabinetsById.get(view.cabinetId)?.name ?? "Dataset Folder";
+
+  const handleCreateCabinet = async (parentId: string | null) => {
+    try {
+      const cabinet = await createKnowledgeLibraryCabinet({
+        name: "New Folder",
+        itemType: "dataset",
+        parentId,
+      });
+      await onCabinetsRefresh();
+      setView({ kind: "cabinet", cabinetId: cabinet.id });
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create folder");
+    }
+  };
+
+  const handleRenameCabinet = async (cabinetId: string, name: string) => {
+    try {
+      await updateKnowledgeLibraryCabinet(cabinetId, { name });
+      await onCabinetsRefresh();
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to rename folder");
+    }
+  };
+
+  const handleDeleteCabinet = async (cabinetId: string) => {
+    const cabinet = cabinetsById.get(cabinetId);
+    if (!cabinet) return;
+    if (!confirm(`Delete folder "${cabinet.name}"? Datasets inside will become unassigned.`)) return;
+    try {
+      await deleteKnowledgeLibraryCabinet(cabinetId);
+      await onCabinetsRefresh();
+      if (view.kind === "cabinet" && view.cabinetId === cabinetId) {
+        setView({ kind: "all" });
+      }
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete folder");
+    }
+  };
+
+  const handleMoveSave = async () => {
+    if (!movingDataset) return;
+    setSavingMove(true);
+    try {
+      await updateDataset(movingDataset.id, {
+        cabinetId: moveTargetCabinetId === "__root__" ? null : moveTargetCabinetId,
+      });
+      await onRefresh();
+      setMovingDataset(null);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to move dataset");
+    } finally {
+      setSavingMove(false);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-          <Input
-            className="h-8 pl-8 text-xs"
-            placeholder="Search datasets..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+    <>
+      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="min-w-0">
+          <CabinetDirectorySidebar
+            cabinets={datasetCabinets}
+            emptyLabel="Organize datasets into folders on the left."
+            itemLabelPlural="Datasets"
+            onCreateCabinet={handleCreateCabinet}
+            onDeleteCabinet={handleDeleteCabinet}
+            onRenameCabinet={handleRenameCabinet}
+            selectedView={view}
+            totalCount={datasets.length}
+            unassignedCount={datasets.filter((dataset) => !dataset.cabinetId).length}
+            onSelectView={setView}
           />
         </div>
-        <Button size="sm" variant="secondary" onClick={async () => {
-          try { setLibraryDatasets(await listDatasetLibrary()); } catch { /* noop */ }
-          setShowLibrary(true);
-        }}>
-          <Library className="h-3.5 w-3.5" />
-          Browse Library
-        </Button>
-        <Button size="sm" onClick={() => setShowCreateModal(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          Create Dataset
-        </Button>
-      </div>
+
+        <div className="min-w-0 space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-fg">{activeFolderLabel}</h2>
+              <p className="mt-0.5 text-xs text-fg/40">
+                {filtered.length} datasets
+                {view.kind === "cabinet" ? ` in ${activeFolderLabel}` : ""}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+                <Input
+                  className="h-8 pl-8 text-xs"
+                  placeholder="Search datasets..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <Button size="sm" variant="secondary" onClick={async () => {
+                try {
+                  setLibraryDatasets(await listDatasetLibrary());
+                  setError(null);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Failed to load dataset library");
+                }
+                setShowLibrary(true);
+              }}>
+                <Library className="h-3.5 w-3.5" />
+                Browse Library
+              </Button>
+              <Button size="sm" onClick={() => setShowCreateModal(true)}>
+                <Plus className="h-3.5 w-3.5" />
+                Create Dataset
+              </Button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+              {error}
+            </div>
+          )}
 
       {selectedDataset ? (
         <DatasetDetail
@@ -1723,25 +2101,33 @@ function DatasetsTab({
         />
       ) : filtered.length === 0 ? (
         <EmptyState>
-          <Database className="mx-auto h-8 w-8 text-fg/20 mb-2" />
-          <p className="text-sm text-fg/50">No datasets yet.</p>
-          <p className="text-xs text-fg/30 mt-1">
+          <Database className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+          <p className="text-sm text-fg/50">No datasets in this folder.</p>
+          <p className="mt-1 text-xs text-fg/30">
             Create structured datasets for labour units, equipment rates, and more.
           </p>
         </EmptyState>
       ) : (
         <DatasetListPaginated
+          cabinetsById={cabinetsById}
           datasets={filtered}
           onSelect={(id) => setSelectedDatasetId(id)}
           onDelete={async (id) => {
             await deleteDataset(id);
             onRefresh();
           }}
+          onMove={(dataset) => {
+            setMovingDataset(dataset);
+            setMoveTargetCabinetId(dataset.cabinetId ?? "__root__");
+          }}
         />
       )}
+        </div>
+      </div>
 
       {typeof document !== "undefined" && showCreateModal && createPortal(
         <CreateDatasetModal
+          defaultCabinetId={defaultCabinetId}
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
@@ -1754,12 +2140,12 @@ function DatasetsTab({
       {typeof document !== "undefined" && showLibrary && createPortal(
         <ModalBackdrop open={showLibrary} onClose={() => setShowLibrary(false)} size="lg">
           <div className="bg-panel border border-line rounded-xl shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-fg">Dataset Library</h3>
-                <p className="text-xs text-fg/40 mt-0.5">Add standard datasets to your organization</p>
+                <p className="mt-0.5 text-xs text-fg/40">Add standard datasets to your organization</p>
               </div>
-              <button onClick={() => setShowLibrary(false)} className="rounded p-1 hover:bg-panel2 text-fg/40">
+              <button onClick={() => setShowLibrary(false)} className="rounded p-1 text-fg/40 hover:bg-panel2">
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -1769,24 +2155,24 @@ function DatasetsTab({
                 No datasets available in the library yet.
               </div>
             ) : (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+              <div className="max-h-[60vh] space-y-3 overflow-y-auto">
                 {libraryDatasets.map((tmpl) => {
                   const alreadyAdopted = datasets.some((d) => d.sourceTemplateId === tmpl.id);
                   return (
-                    <div key={tmpl.id} className="rounded-lg border border-line p-4 hover:border-accent/30 transition-colors">
+                    <div key={tmpl.id} className="rounded-lg border border-line p-4 transition-colors hover:border-accent/30">
                       <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <Database className="h-4 w-4 text-accent shrink-0" />
+                            <Database className="h-4 w-4 shrink-0 text-accent" />
                             <span className="text-sm font-medium text-fg">{tmpl.name}</span>
                             <Badge tone="info" className="text-[10px]">{categoryLabel(tmpl.category)}</Badge>
                           </div>
-                          <p className="text-xs text-fg/50 mt-1 ml-6">{tmpl.description}</p>
-                          <div className="text-xs text-fg/30 mt-1 ml-6">
+                          <p className="ml-6 mt-1 text-xs text-fg/50">{tmpl.description}</p>
+                          <div className="ml-6 mt-1 text-xs text-fg/30">
                             {tmpl.rowCount.toLocaleString()} rows · {tmpl.columns.length} columns
                           </div>
                         </div>
-                        <div className="shrink-0 ml-4">
+                        <div className="ml-4 shrink-0">
                           {alreadyAdopted ? (
                             <Badge tone="success" className="text-[10px]">Added</Badge>
                           ) : (
@@ -1797,10 +2183,17 @@ function DatasetsTab({
                               onClick={async () => {
                                 setAdopting(tmpl.id);
                                 try {
-                                  await adoptDatasetTemplate(tmpl.id);
-                                  onRefresh();
-                                } catch { /* noop */ }
-                                finally { setAdopting(null); }
+                                  const adopted = await adoptDatasetTemplate(tmpl.id);
+                                  if (defaultCabinetId) {
+                                    await updateDataset(adopted.id, { cabinetId: defaultCabinetId });
+                                  }
+                                  await onRefresh();
+                                  setError(null);
+                                } catch (err) {
+                                  setError(err instanceof Error ? err.message : "Failed to add dataset from library");
+                                } finally {
+                                  setAdopting(null);
+                                }
                               }}
                             >
                               {adopting === tmpl.id ? (
@@ -1821,18 +2214,36 @@ function DatasetsTab({
         </ModalBackdrop>,
         document.body,
       )}
-    </div>
+
+      {typeof document !== "undefined" && movingDataset && createPortal(
+        <MoveToCabinetModal
+          activeType="dataset"
+          cabinets={datasetCabinets}
+          itemName={movingDataset.name}
+          onClose={() => setMovingDataset(null)}
+          onConfirm={handleMoveSave}
+          onValueChange={setMoveTargetCabinetId}
+          saving={savingMove}
+          value={moveTargetCabinetId}
+        />,
+        document.body,
+      )}
+    </>
   );
 }
 
 function DatasetListItem({
+  cabinetLabel,
   dataset,
   onClick,
   onDelete,
+  onMove,
 }: {
+  cabinetLabel?: string | null;
   dataset: DatasetRecord;
   onClick: () => void;
   onDelete: () => void;
+  onMove?: () => void;
 }) {
   return (
     <Card className="cursor-pointer hover:border-accent/30 transition-colors" onClick={onClick}>
@@ -1846,6 +2257,9 @@ function DatasetListItem({
             <Badge tone="default">{dataset.source}</Badge>
           </div>
           <p className="text-xs text-fg/50 mt-0.5 line-clamp-1">{dataset.description}</p>
+          {cabinetLabel && (
+            <p className="mt-1 truncate text-[11px] text-fg/35">{cabinetLabel}</p>
+          )}
           {dataset.tags && dataset.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1">
               {dataset.tags.slice(0, 5).map((tag) => (
@@ -1867,6 +2281,18 @@ function DatasetListItem({
           <span className="text-[10px] text-fg/30">
             {dataset.columns.length} cols
           </span>
+          {onMove && (
+            <Button
+              variant="secondary"
+              size="xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMove();
+              }}
+            >
+              <MoveRight className="h-3 w-3" />
+            </Button>
+          )}
           <Button
             variant="danger"
             size="xs"
@@ -2307,9 +2733,11 @@ function AddRowForm({
 }
 
 function CreateDatasetModal({
+  defaultCabinetId,
   onClose,
   onCreated,
 }: {
+  defaultCabinetId?: string | null;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -2359,6 +2787,7 @@ function CreateDatasetModal({
         name: name.trim(),
         description: description.trim(),
         category,
+        cabinetId: defaultCabinetId ?? null,
         scope: "global",
         columns: columns.filter((c) => c.name.trim()),
       });
