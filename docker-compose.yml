@@ -45,7 +45,7 @@ services:
       DATA_DIR: /data
       API_PORT: "3001"
     volumes:
-      - filedata:/data
+      - ./data/bidwright-api:/data
     ports:
       - "3001:3001"
 
@@ -57,7 +57,7 @@ services:
     depends_on:
       - api
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}"
     ports:
       - "3000:3000"
 
@@ -77,7 +77,7 @@ services:
       DATA_DIR: /data
       API_PORT: "3001"
     volumes:
-      - filedata:/data
+      - ./data/bidwright-api:/data
 
   ollama:
     image: ollama/ollama
@@ -95,5 +95,4 @@ services:
 volumes:
   pgdata:
   redisdata:
-  filedata:
   ollama_data:

@@ -90,6 +90,12 @@ pnpm dev
 
 `pnpm dev` does more than start the apps. It brings up Postgres, Redis, and Ollama in Docker, generates Prisma client code, pushes the schema, sets up `pgvector`, and launches the web app, API, and worker together.
 
+On Windows, the native launcher is also exposed as:
+
+```powershell
+pnpm dev:windows
+```
+
 After startup:
 
 - Web: `http://localhost:3000`
@@ -109,17 +115,31 @@ pnpm lint
 pnpm db:generate
 pnpm db:push
 pnpm db:seed
+pnpm docker:up
+pnpm docker:down
 ```
+
+### Script layout
+
+- `scripts/dev/` contains local hot-reload launchers.
+- `scripts/db/` contains database bootstrap and seed helpers.
+- `scripts/launch/` contains one-click Docker launchers.
+- `scripts/ad-hoc/` contains one-off maintenance and extraction scripts.
 
 ### Docker-style run
 
 For a fuller containerized run:
 
 ```bash
-docker compose -f docker-compose.prod.yml up --build
+pnpm docker:up
 ```
 
-On macOS, `./start.command` wraps that flow and opens the app once it is ready.
+You can also use the launch wrappers:
+
+- macOS: `./scripts/launch/start-docker.command`
+- Windows: `.\scripts\launch\start-docker.bat`
+
+For an Ubuntu deployment and data migration checklist, see [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
 
 ## Core Environment Variables
 
@@ -129,6 +149,8 @@ REDIS_URL="redis://localhost:6379"
 DATA_DIR="./data/bidwright-api"
 API_PORT="4001"
 NEXT_PUBLIC_API_BASE_URL="http://localhost:4001"
+WEB_PUBLIC_PORT="3000"
+API_PUBLIC_PORT="3001"
 
 OPENAI_API_KEY=""
 OPENAI_MODEL="gpt-5"
@@ -150,6 +172,8 @@ SMTP_PASS=""
 SMTP_FROM=""
 SMTP_FROM_NAME="Bidwright"
 ```
+
+For Docker or server deployments, set `NEXT_PUBLIC_API_BASE_URL` to the public API URL that a browser can reach. `http://localhost:3001` only works for local single-machine runs.
 
 ## Tech Stack
 

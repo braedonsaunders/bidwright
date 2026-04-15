@@ -3,8 +3,8 @@
  * Usage: pnpm seed
  */
 
-import { prisma } from '../packages/db/src/client.js';
-import { mockStore } from '../packages/domain/src/mock-data.js';
+import { prisma } from '../../packages/db/src/client.js';
+import { mockStore } from '../../packages/domain/src/mock-data.js';
 
 async function main() {
   console.log('[seed] Starting database seed...');

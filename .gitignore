@@ -4,12 +4,17 @@ dist
 .DS_Store
 .env
 .env.*
+!.env.example
 .env.local
 coverage
 .turbo
 .prisma
 *.log
 *.tsbuildinfo
+*-extract-output.txt
+backups/
+tmp/
+temp/
 data/
 packages/db/seed-datasets/
 packages/db/seed-items/
