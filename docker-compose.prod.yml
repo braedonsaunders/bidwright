@@ -8,14 +8,12 @@ services:
       POSTGRES_DB: bidwright
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./scripts/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+      - ./scripts/db/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bidwright -d bidwright"]
       interval: 5s
       timeout: 5s
       retries: 5
-    ports:
-      - "5432:5432"
 
   redis:
     image: redis:7-alpine
@@ -27,8 +25,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    ports:
-      - "6379:6379"
 
   ollama:
     image: ollama/ollama
@@ -40,8 +36,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    ports:
-      - "11434:11434"
 
   # Pulls the embedding model on first run, then exits
   ollama-init:
@@ -93,9 +87,9 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
     volumes:
-      - filedata:/data
+      - ./data/bidwright-api:/data
     ports:
-      - "3001:3001"
+      - "${API_PUBLIC_PORT:-3001}:3001"
 
   web:
     build:
@@ -105,9 +99,9 @@ services:
     depends_on:
       - api
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:3001
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}"
     ports:
-      - "3000:3000"
+      - "${WEB_PUBLIC_PORT:-3000}:3000"
 
   worker:
     build:
@@ -133,10 +127,9 @@ services:
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
-      - filedata:/data
+      - ./data/bidwright-api:/data
 
 volumes:
   pgdata:
   redisdata:
-  filedata:
   ollama_data:

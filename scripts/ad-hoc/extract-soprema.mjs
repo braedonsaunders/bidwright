@@ -1,8 +1,12 @@
-// Extract all worksheet items for the Soprema Tillsonburg project
-import { PrismaClient } from './packages/db/node_modules/@prisma/client/index.js';
+// Extract all worksheet items for the Soprema Tillsonburg project.
+import { PrismaClient } from '../../packages/db/node_modules/@prisma/client/index.js';
 
 const prisma = new PrismaClient({
-  datasources: { db: { url: 'postgresql://bidwright:bidwright@localhost:5432/bidwright' } },
+  datasources: {
+    db: {
+      url: process.env.DATABASE_URL || 'postgresql://bidwright:bidwright@localhost:5432/bidwright',
+    },
+  },
 });
 
 const PROJECT_ID = 'project-eb609d00-becb-4197-a0fd-a37554798f03';

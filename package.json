@@ -5,7 +5,8 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.30.3",
   "scripts": {
-    "dev": "bash scripts/dev-start.sh",
+    "dev": "bash scripts/dev/start-dev.sh",
+    "dev:windows": "powershell -ExecutionPolicy Bypass -File scripts/dev/dev.ps1",
     "dev:apps": "pnpm --parallel --filter @bidwright/web --filter @bidwright/api --filter @bidwright/worker dev",
     "dev:web": "pnpm --filter @bidwright/web dev",
     "dev:api": "pnpm --filter @bidwright/api dev",
@@ -17,7 +18,10 @@
     "db:push": "pnpm --filter @bidwright/db db:push",
     "db:seed": "pnpm --filter @bidwright/db db:seed",
     "db:migrate": "pnpm --filter @bidwright/db db:migrate",
-    "seed": "tsx scripts/seed-db.ts"
+    "seed": "tsx scripts/db/seed-db.ts",
+    "docker:up": "docker compose -f docker-compose.prod.yml up --build -d",
+    "docker:down": "docker compose -f docker-compose.prod.yml down",
+    "docker:logs": "docker compose -f docker-compose.prod.yml logs -f"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
