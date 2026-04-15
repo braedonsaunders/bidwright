@@ -5,6 +5,9 @@ import * as React from "react";
 import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
+import * as SelectPrimitive from "@radix-ui/react-select";
+import * as TabsPrimitive from "@radix-ui/react-tabs";
+import { Check, ChevronDown } from "lucide-react";
 
 /* ─────────────────────── Button ─────────────────────── */
 
@@ -155,6 +158,79 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
   );
 }
 
+export interface CompactSelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+export function CompactSelect({
+  value,
+  onValueChange,
+  options,
+  placeholder = "Select...",
+  className,
+  triggerClassName,
+  disabled = false,
+  "data-testid": dataTestId,
+  title,
+  ariaLabel,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  options: CompactSelectOption[];
+  placeholder?: string;
+  className?: string;
+  triggerClassName?: string;
+  disabled?: boolean;
+  "data-testid"?: string;
+  title?: string;
+  ariaLabel?: string;
+}) {
+  return (
+    <SelectPrimitive.Root value={value} onValueChange={onValueChange} disabled={disabled}>
+      <SelectPrimitive.Trigger
+        data-testid={dataTestId}
+        title={title}
+        aria-label={ariaLabel}
+        className={cn(
+          "inline-flex h-7 w-full items-center justify-between gap-2 rounded-md border border-line bg-bg/45 px-2 text-[11px] font-medium text-fg outline-none transition-colors hover:border-accent/30 focus-visible:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
+          triggerClassName,
+          className
+        )}
+      >
+        <SelectPrimitive.Value placeholder={placeholder} />
+        <SelectPrimitive.Icon className="text-fg/35">
+          <ChevronDown className="h-3.5 w-3.5" />
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content
+          position="popper"
+          sideOffset={6}
+          className="z-50 min-w-[180px] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
+        >
+          <SelectPrimitive.Viewport className="p-1">
+            {options.map((option) => (
+              <SelectPrimitive.Item
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled}
+                className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-35 data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
+              >
+                <SelectPrimitive.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
+                  <Check className="h-3.5 w-3.5" />
+                </SelectPrimitive.ItemIndicator>
+                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  );
+}
+
 /* ─────────────────────── Textarea ─────────────────────── */
 
 export function Textarea({ className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -260,9 +336,9 @@ export function ModalBackdrop({
   open: boolean;
   onClose: () => void;
   children: React.ReactNode;
-  size?: "sm" | "md" | "lg" | "xl";
+  size?: "sm" | "md" | "lg" | "xl" | "2xl";
 }) {
-  const widths = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg", xl: "max-w-3xl" };
+  const widths = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-lg", xl: "max-w-3xl", "2xl": "max-w-6xl" };
 
   if (!open) return null;
 
@@ -305,6 +381,33 @@ export function FadeIn({
       {children}
     </div>
   );
+}
+
+export const Tabs = TabsPrimitive.Root;
+
+export function TabsList({ className, ...props }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.List>) {
+  return (
+    <TabsPrimitive.List
+      className={cn("inline-flex h-8 items-center gap-1 rounded-lg bg-panel2/45 p-1", className)}
+      {...props}
+    />
+  );
+}
+
+export function TabsTrigger({ className, ...props }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.Trigger>) {
+  return (
+    <TabsPrimitive.Trigger
+      className={cn(
+        "inline-flex h-6 items-center justify-center rounded-md px-2.5 text-[11px] font-medium text-fg/45 transition-colors hover:text-fg/75 data-[state=active]:bg-panel data-[state=active]:text-fg data-[state=active]:shadow-sm",
+        className
+      )}
+      {...props}
+    />
+  );
+}
+
+export function TabsContent({ className, ...props }: React.ComponentPropsWithoutRef<typeof TabsPrimitive.Content>) {
+  return <TabsPrimitive.Content className={cn("outline-none", className)} {...props} />;
 }
 
 /* ─────────────────────── SlideIn ─────────────────────── */

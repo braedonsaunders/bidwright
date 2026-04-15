@@ -209,15 +209,94 @@ export interface Phase {
 
 // ── Schedule Tasks ──────────────────────────────────────────────────────
 
-export type ScheduleTaskType = "task" | "milestone";
+export type ScheduleTaskType = "task" | "milestone" | "summary";
 export type ScheduleTaskStatus = "not_started" | "in_progress" | "complete" | "on_hold";
 export type DependencyType = "FS" | "SS" | "FF" | "SF";
+export type ScheduleConstraintType =
+  | "asap"
+  | "alap"
+  | "snet"
+  | "snlt"
+  | "fnet"
+  | "fnlt"
+  | "mso"
+  | "mfo";
+export type ScheduleBaselineKind = "primary" | "secondary" | "tertiary" | "snapshot" | "custom";
+export type ScheduleResourceKind = "labor" | "crew" | "equipment" | "subcontractor";
+
+export interface ScheduleCalendar {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  workingDays: Record<string, boolean>;
+  shiftStartMinutes: number;
+  shiftEndMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleResource {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  calendarId: string | null;
+  name: string;
+  role: string;
+  kind: ScheduleResourceKind;
+  color: string;
+  defaultUnits: number;
+  capacityPerDay: number;
+  costRate: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleTaskAssignment {
+  id: string;
+  taskId: string;
+  resourceId: string;
+  units: number;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleBaseline {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  name: string;
+  description: string;
+  kind: ScheduleBaselineKind;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleBaselineTask {
+  id: string;
+  baselineId: string;
+  taskId: string;
+  taskName: string;
+  phaseId: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  duration: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface ScheduleTask {
   id: string;
   projectId: string;
   revisionId: string;
   phaseId: string | null;
+  calendarId: string | null;
+  parentTaskId: string | null;
+  outlineLevel: number;
   name: string;
   description: string;
   taskType: ScheduleTaskType;
@@ -228,6 +307,11 @@ export interface ScheduleTask {
   progress: number;
   assignee: string;
   order: number;
+  constraintType: ScheduleConstraintType;
+  constraintDate: string | null;
+  deadlineDate: string | null;
+  actualStart: string | null;
+  actualEnd: string | null;
   baselineStart: string | null;
   baselineEnd: string | null;
   createdAt: string;
@@ -1235,6 +1319,11 @@ export interface BidwrightStore {
   entityCategories: EntityCategory[];
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
+  scheduleCalendars: ScheduleCalendar[];
+  scheduleBaselines: ScheduleBaseline[];
+  scheduleBaselineTasks: ScheduleBaselineTask[];
+  scheduleResources: ScheduleResource[];
+  scheduleTaskAssignments: ScheduleTaskAssignment[];
   rateSchedules: RateSchedule[];
   rateScheduleTiers: RateScheduleTier[];
   rateScheduleItems: RateScheduleItem[];
@@ -1319,6 +1408,11 @@ export interface ProjectWorkspace {
   citations: Citation[];
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
+  scheduleCalendars: ScheduleCalendar[];
+  scheduleBaselines: ScheduleBaseline[];
+  scheduleBaselineTasks: ScheduleBaselineTask[];
+  scheduleResources: ScheduleResource[];
+  scheduleTaskAssignments: ScheduleTaskAssignment[];
   takeoffLinks: TakeoffLink[];
   estimateStrategy?: EstimateStrategy | null;
   estimateFeedback?: EstimateCalibrationFeedback[];

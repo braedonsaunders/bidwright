@@ -13,12 +13,58 @@ Write-Host "    Bidwright - Dev Mode (Windows)" -ForegroundColor Cyan
 Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 
-docker info 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: Docker is not running. Please start Docker Desktop and try again." -ForegroundColor Red
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: Docker CLI is not installed or not on PATH. Install Docker Desktop and try again." -ForegroundColor Red
     Read-Host "Press Enter to exit"
     exit 1
 }
+
+function Test-DockerReady {
+    docker info 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
+function Ensure-DockerRunning {
+    if (Test-DockerReady) {
+        return
+    }
+
+    $dockerDesktopExe = @(
+        (Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Docker\Docker\Docker Desktop.exe")
+    ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+
+    if (-not $dockerDesktopExe) {
+        Write-Host "ERROR: Docker Desktop is not installed in the usual location. Install Docker Desktop and try again." -ForegroundColor Red
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+
+    $dockerProcesses = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like "*Docker*" }
+    if ($dockerProcesses) {
+        Write-Host '(*) Docker Desktop is running but the engine is still starting. Waiting...' -ForegroundColor Yellow
+    } else {
+        Write-Host '(*) Docker is not running. Starting Docker Desktop...' -ForegroundColor Yellow
+        Start-Process -FilePath $dockerDesktopExe | Out-Null
+    }
+
+    Write-Host -NoNewline '(*) Waiting for Docker'
+    for ($elapsed = 0; $elapsed -lt 120; $elapsed += 2) {
+        Start-Sleep -Seconds 2
+        Write-Host -NoNewline "."
+        if (Test-DockerReady) {
+            Write-Host " ready!" -ForegroundColor Green
+            return
+        }
+    }
+
+    Write-Host ""
+    Write-Host "ERROR: Docker did not become ready within 120 seconds. Open Docker Desktop and check its status." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
+Ensure-DockerRunning
 
 pnpm --version 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
@@ -83,9 +129,9 @@ function Stop-AppProcesses {
     foreach ($port in @(3000, 4001)) {
         $connections = netstat -ano 2>$null | Select-String ":$port\s.*LISTENING"
         foreach ($conn in $connections) {
-            $pid = ($conn -split '\s+')[-1]
-            if ($pid -and $pid -ne "0") {
-                Stop-Process -Id ([int]$pid) -Force -ErrorAction SilentlyContinue
+            $processId = ($conn -split '\s+')[-1]
+            if ($processId -and $processId -ne "0") {
+                Stop-Process -Id ([int]$processId) -Force -ErrorAction SilentlyContinue
             }
         }
     }

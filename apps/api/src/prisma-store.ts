@@ -59,8 +59,13 @@ import type {
   Quote,
   QuoteRevision,
   ReportSection,
+  ScheduleBaseline,
+  ScheduleBaselineTask,
+  ScheduleCalendar,
   ScheduleDependency,
+  ScheduleResource,
   ScheduleTask,
+  ScheduleTaskAssignment,
   SourceDocument,
   SummaryRow,
   User,
@@ -145,8 +150,13 @@ import {
   mapRateScheduleWithChildren,
   mapReportSection,
   mapRevision,
+  mapScheduleBaseline,
+  mapScheduleBaselineTask,
+  mapScheduleCalendar,
   mapScheduleDependency,
+  mapScheduleResource,
   mapScheduleTask,
+  mapScheduleTaskAssignment,
   mapSourceDocument,
   mapStoredPackage,
   mapSummaryRow,
@@ -172,6 +182,40 @@ const DIRECT_COST_ESTIMATE_CATEGORIES = new Set([
   "Travel & Per Diem",
   "Subcontractors",
 ]);
+
+const DEFAULT_SCHEDULE_WORKING_DAYS: Record<string, boolean> = {
+  monday: true,
+  tuesday: true,
+  wednesday: true,
+  thursday: true,
+  friday: true,
+  saturday: false,
+  sunday: false,
+};
+
+function createScheduleDate(year: number, monthIndex: number, day: number) {
+  return new Date(year, monthIndex, day, 12, 0, 0, 0);
+}
+
+function parseScheduleDate(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return createScheduleDate(Number.parseInt(year, 10), Number.parseInt(month, 10) - 1, Number.parseInt(day, 10));
+}
+
+function formatScheduleDate(date: Date) {
+  const normalized = createScheduleDate(date.getFullYear(), date.getMonth(), date.getDate());
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${normalized.getFullYear()}-${pad(normalized.getMonth() + 1)}-${pad(normalized.getDate())}`;
+}
+
+function diffScheduleDays(a: Date, b: Date) {
+  const aMidnight = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const bMidnight = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((aMidnight - bMidnight) / 86_400_000);
+}
 
 function isActivityRevertible(activity: { type: string; data: any }): boolean {
   if (activity.type.startsWith("revert:")) return false;
@@ -435,9 +479,12 @@ export interface PhasePatchInput {
 
 export interface CreateScheduleTaskInput {
   phaseId?: string | null;
+  calendarId?: string | null;
+  parentTaskId?: string | null;
+  outlineLevel?: number;
   name?: string;
   description?: string;
-  taskType?: "task" | "milestone";
+  taskType?: "task" | "milestone" | "summary";
   status?: string;
   startDate?: string | null;
   endDate?: string | null;
@@ -445,13 +492,26 @@ export interface CreateScheduleTaskInput {
   progress?: number;
   assignee?: string;
   order?: number;
+  constraintType?: ScheduleTask["constraintType"];
+  constraintDate?: string | null;
+  deadlineDate?: string | null;
+  actualStart?: string | null;
+  actualEnd?: string | null;
+  resourceAssignments?: Array<{
+    resourceId: string;
+    units?: number;
+    role?: string;
+  }>;
 }
 
 export interface ScheduleTaskPatchInput {
   phaseId?: string | null;
+  calendarId?: string | null;
+  parentTaskId?: string | null;
+  outlineLevel?: number;
   name?: string;
   description?: string;
-  taskType?: "task" | "milestone";
+  taskType?: "task" | "milestone" | "summary";
   status?: string;
   startDate?: string | null;
   endDate?: string | null;
@@ -459,6 +519,16 @@ export interface ScheduleTaskPatchInput {
   progress?: number;
   assignee?: string;
   order?: number;
+  constraintType?: ScheduleTask["constraintType"];
+  constraintDate?: string | null;
+  deadlineDate?: string | null;
+  actualStart?: string | null;
+  actualEnd?: string | null;
+  resourceAssignments?: Array<{
+    resourceId: string;
+    units?: number;
+    role?: string;
+  }>;
 }
 
 export interface CreateDependencyInput {
@@ -466,6 +536,53 @@ export interface CreateDependencyInput {
   successorId: string;
   type?: "FS" | "SS" | "FF" | "SF";
   lagDays?: number;
+}
+
+export interface CreateScheduleCalendarInput {
+  name?: string;
+  description?: string;
+  isDefault?: boolean;
+  workingDays?: Record<string, boolean>;
+  shiftStartMinutes?: number;
+  shiftEndMinutes?: number;
+}
+
+export interface ScheduleCalendarPatchInput {
+  name?: string;
+  description?: string;
+  isDefault?: boolean;
+  workingDays?: Record<string, boolean>;
+  shiftStartMinutes?: number;
+  shiftEndMinutes?: number;
+}
+
+export interface CreateScheduleResourceInput {
+  calendarId?: string | null;
+  name?: string;
+  role?: string;
+  kind?: ScheduleResource["kind"];
+  color?: string;
+  defaultUnits?: number;
+  capacityPerDay?: number;
+  costRate?: number;
+}
+
+export interface ScheduleResourcePatchInput {
+  calendarId?: string | null;
+  name?: string;
+  role?: string;
+  kind?: ScheduleResource["kind"];
+  color?: string;
+  defaultUnits?: number;
+  capacityPerDay?: number;
+  costRate?: number;
+}
+
+export interface CreateScheduleBaselineInput {
+  name?: string;
+  description?: string;
+  kind?: ScheduleBaseline["kind"];
+  isPrimary?: boolean;
 }
 
 export interface CreateModifierInput {
@@ -815,6 +932,16 @@ export class PrismaApiStore {
     const scheduleDependencies = scheduleTaskIds.length > 0
       ? await this.db.scheduleDependency.findMany({ where: { predecessorId: { in: scheduleTaskIds } } })
       : [];
+    const scheduleCalendars = await this.db.scheduleCalendar.findMany({ where: { projectId } });
+    const scheduleBaselines = await this.db.scheduleBaseline.findMany({ where: { projectId } });
+    const scheduleBaselineIds = scheduleBaselines.map((baseline) => baseline.id);
+    const scheduleBaselineTasks = scheduleBaselineIds.length > 0
+      ? await this.db.scheduleBaselineTask.findMany({ where: { baselineId: { in: scheduleBaselineIds } } })
+      : [];
+    const scheduleResources = await this.db.scheduleResource.findMany({ where: { projectId } });
+    const scheduleTaskAssignments = scheduleTaskIds.length > 0
+      ? await this.db.scheduleTaskAssignment.findMany({ where: { taskId: { in: scheduleTaskIds } } })
+      : [];
 
     // Global entities for the org
     const catalogs = await this.db.catalog.findMany({ where: { organizationId: this.organizationId } });
@@ -879,6 +1006,11 @@ export class PrismaApiStore {
       entityCategories: entityCategories.map(mapEntityCategory) as any,
       scheduleTasks: scheduleTasks.map(mapScheduleTask),
       scheduleDependencies: scheduleDependencies.map(mapScheduleDependency),
+      scheduleCalendars: scheduleCalendars.map(mapScheduleCalendar),
+      scheduleBaselines: scheduleBaselines.map(mapScheduleBaseline),
+      scheduleBaselineTasks: scheduleBaselineTasks.map(mapScheduleBaselineTask),
+      scheduleResources: scheduleResources.map(mapScheduleResource),
+      scheduleTaskAssignments: scheduleTaskAssignments.map(mapScheduleTaskAssignment),
       rateSchedules: rateSchedules.map(mapRateSchedule),
       rateScheduleTiers: rateSchedules.flatMap((s) => (s.tiers ?? []).map(mapRateScheduleTier)),
       rateScheduleItems: rateSchedules.flatMap((s) => (s.items ?? []).map(mapRateScheduleItem)),
@@ -941,6 +1073,338 @@ export class PrismaApiStore {
       throw new Error(`Project ${projectId} does not have an active revision`);
     }
     return { quote, revision };
+  }
+
+  private async ensureDefaultScheduleCalendar(projectId: string, revisionId: string) {
+    const existing = await this.db.scheduleCalendar.findFirst({
+      where: { projectId, revisionId },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    });
+    if (existing) {
+      if (!existing.isDefault) {
+        await this.db.scheduleCalendar.update({ where: { id: existing.id }, data: { isDefault: true } });
+        return { ...existing, isDefault: true };
+      }
+      return existing;
+    }
+
+    return this.db.scheduleCalendar.create({
+      data: {
+        id: createId("schcal"),
+        projectId,
+        revisionId,
+        name: "Standard 5-Day",
+        description: "Default Monday-Friday schedule calendar",
+        isDefault: true,
+        workingDays: DEFAULT_SCHEDULE_WORKING_DAYS as any,
+        shiftStartMinutes: 480,
+        shiftEndMinutes: 1020,
+      },
+    });
+  }
+
+  private async syncTaskAssignments(
+    projectId: string,
+    taskId: string,
+    assignments?: Array<{ resourceId: string; units?: number; role?: string }>
+  ) {
+    if (assignments === undefined) {
+      return;
+    }
+
+    const cleaned = Array.from(
+      new Map(
+        assignments
+          .filter((assignment) => assignment.resourceId?.trim())
+          .map((assignment) => [
+            assignment.resourceId,
+            {
+              resourceId: assignment.resourceId,
+              units: assignment.units ?? 1,
+              role: assignment.role ?? "",
+            },
+          ])
+      ).values()
+    );
+
+    if (cleaned.length > 0) {
+      const validResourceIds = new Set(
+        (
+          await this.db.scheduleResource.findMany({
+            where: { projectId, id: { in: cleaned.map((assignment) => assignment.resourceId) } },
+            select: { id: true },
+          })
+        ).map((resource) => resource.id)
+      );
+      const invalid = cleaned.find((assignment) => !validResourceIds.has(assignment.resourceId));
+      if (invalid) {
+        throw new Error(`Schedule resource ${invalid.resourceId} not found`);
+      }
+    }
+
+    await this.db.scheduleTaskAssignment.deleteMany({ where: { taskId } });
+    if (cleaned.length > 0) {
+      await this.db.scheduleTaskAssignment.createMany({
+        data: cleaned.map((assignment) => ({
+          id: createId("schasg"),
+          taskId,
+          resourceId: assignment.resourceId,
+          units: assignment.units,
+          role: assignment.role,
+        })),
+      });
+    }
+  }
+
+  private async enforceSingleDefaultScheduleCalendar(projectId: string, revisionId: string, calendarId: string) {
+    await this.db.scheduleCalendar.updateMany({
+      where: { projectId, revisionId, id: { not: calendarId } },
+      data: { isDefault: false },
+    });
+  }
+
+  private async enforceSinglePrimaryBaseline(projectId: string, revisionId: string, baselineId: string) {
+    await this.db.scheduleBaseline.updateMany({
+      where: { projectId, revisionId, id: { not: baselineId } },
+      data: { isPrimary: false },
+    });
+  }
+
+  private async syncPrimaryBaselineFields(projectId: string, revisionId: string) {
+    const primary = await this.db.scheduleBaseline.findFirst({
+      where: { projectId, revisionId, isPrimary: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    const tasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId },
+      select: { id: true },
+    });
+
+    if (!primary) {
+      for (const task of tasks) {
+        await this.db.scheduleTask.update({
+          where: { id: task.id },
+          data: { baselineStart: null, baselineEnd: null },
+        });
+      }
+      return;
+    }
+
+    const items = await this.db.scheduleBaselineTask.findMany({ where: { baselineId: primary.id } });
+    const itemByTaskId = new Map(items.map((item) => [item.taskId, item]));
+
+    for (const task of tasks) {
+      const snapshot = itemByTaskId.get(task.id);
+      await this.db.scheduleTask.update({
+        where: { id: task.id },
+        data: {
+          baselineStart: snapshot?.startDate ?? null,
+          baselineEnd: snapshot?.endDate ?? null,
+        },
+      });
+    }
+  }
+
+  private async captureScheduleBaseline(
+    projectId: string,
+    revisionId: string,
+    input: CreateScheduleBaselineInput
+  ) {
+    const isPrimary = !!input.isPrimary || input.kind === "primary";
+    const tasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId },
+      orderBy: { order: "asc" },
+    });
+
+    let baseline = isPrimary
+      ? await this.db.scheduleBaseline.findFirst({ where: { projectId, revisionId, isPrimary: true } })
+      : null;
+
+    if (baseline) {
+      baseline = await this.db.scheduleBaseline.update({
+        where: { id: baseline.id },
+        data: {
+          name: input.name ?? baseline.name,
+          description: input.description ?? baseline.description,
+          kind: input.kind ?? "primary",
+          isPrimary: true,
+        },
+      });
+      await this.db.scheduleBaselineTask.deleteMany({ where: { baselineId: baseline.id } });
+    } else {
+      baseline = await this.db.scheduleBaseline.create({
+        data: {
+          id: createId("schbase"),
+          projectId,
+          revisionId,
+          name: input.name ?? (isPrimary ? "Primary Baseline" : "Schedule Snapshot"),
+          description: input.description ?? "",
+          kind: input.kind ?? (isPrimary ? "primary" : "custom"),
+          isPrimary,
+        },
+      });
+    }
+
+    if (tasks.length > 0) {
+      await this.db.scheduleBaselineTask.createMany({
+        data: tasks.map((task) => ({
+          id: createId("schbitem"),
+          baselineId: baseline.id,
+          taskId: task.id,
+          taskName: task.name,
+          phaseId: task.phaseId ?? null,
+          startDate: task.startDate ?? null,
+          endDate: task.endDate ?? null,
+          duration: task.duration ?? 0,
+        })),
+      });
+    }
+
+    if (isPrimary) {
+      await this.enforceSinglePrimaryBaseline(projectId, revisionId, baseline.id);
+      await this.syncPrimaryBaselineFields(projectId, revisionId);
+    }
+
+    return baseline;
+  }
+
+  private async syncScheduleSummaryTaskRollups(projectId: string, revisionId: string) {
+    const tasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId },
+      orderBy: { order: "asc" },
+    });
+    if (tasks.length === 0) return;
+
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const childrenByParent = new Map<string, typeof tasks>();
+    for (const task of tasks) {
+      const parentId =
+        task.parentTaskId && task.parentTaskId !== task.id && taskById.has(task.parentTaskId)
+          ? task.parentTaskId
+          : null;
+      if (!parentId) continue;
+      if (!childrenByParent.has(parentId)) {
+        childrenByParent.set(parentId, []);
+      }
+      childrenByParent.get(parentId)!.push(task);
+    }
+
+    const rolledById = new Map<string, (typeof tasks)[number]>();
+    const rollTask = (taskId: string): (typeof tasks)[number] => {
+      const cached = rolledById.get(taskId);
+      if (cached) return cached;
+
+      const task = taskById.get(taskId)!;
+      const rolledChildren = (childrenByParent.get(taskId) ?? []).map((child) => rollTask(child.id));
+      if (rolledChildren.length === 0) {
+        rolledById.set(taskId, task);
+        return task;
+      }
+
+      const startCandidates = rolledChildren
+        .map((child) => parseScheduleDate(child.startDate ?? child.endDate))
+        .filter((value): value is Date => !!value);
+      const endCandidates = rolledChildren
+        .map((child) => parseScheduleDate(child.endDate ?? child.startDate))
+        .filter((value): value is Date => !!value);
+      const actualStartCandidates = rolledChildren
+        .map((child) => parseScheduleDate(child.actualStart))
+        .filter((value): value is Date => !!value);
+      const actualEndCandidates = rolledChildren
+        .map((child) => parseScheduleDate(child.actualEnd))
+        .filter((value): value is Date => !!value);
+
+      const earliestStart =
+        startCandidates.length > 0
+          ? new Date(Math.min(...startCandidates.map((value) => value.getTime())))
+          : null;
+      const latestEnd =
+        endCandidates.length > 0
+          ? new Date(Math.max(...endCandidates.map((value) => value.getTime())))
+          : null;
+      const earliestActualStart =
+        actualStartCandidates.length > 0
+          ? new Date(Math.min(...actualStartCandidates.map((value) => value.getTime())))
+          : null;
+      const latestActualEnd =
+        actualEndCandidates.length === rolledChildren.length && actualEndCandidates.length > 0
+          ? new Date(Math.max(...actualEndCandidates.map((value) => value.getTime())))
+          : null;
+      const weightedDuration = rolledChildren.reduce((sum, child) => sum + Math.max(1, child.duration ?? 0), 0);
+      const progress =
+        weightedDuration > 0
+          ? Math.max(
+              0,
+              Math.min(
+                1,
+                rolledChildren.reduce(
+                  (sum, child) => sum + (child.progress ?? 0) * Math.max(1, child.duration ?? 0),
+                  0
+                ) / weightedDuration
+              )
+            )
+          : 0;
+      const anyStarted = rolledChildren.some(
+        (child) =>
+          child.status === "in_progress" ||
+          child.status === "complete" ||
+          (child.progress ?? 0) > 0 ||
+          !!child.actualStart ||
+          !!child.actualEnd
+      );
+      const status =
+        rolledChildren.every((child) => child.status === "complete")
+          ? "complete"
+          : rolledChildren.every((child) => child.status === "on_hold")
+            ? "on_hold"
+            : anyStarted
+              ? "in_progress"
+              : rolledChildren.some((child) => child.status === "on_hold")
+                ? "on_hold"
+                : "not_started";
+
+      const rolledTask = {
+        ...task,
+        taskType: "summary",
+        startDate: earliestStart ? formatScheduleDate(earliestStart) : task.startDate,
+        endDate: latestEnd ? formatScheduleDate(latestEnd) : task.endDate,
+        duration: earliestStart && latestEnd ? Math.max(0, diffScheduleDays(latestEnd, earliestStart)) : task.duration,
+        progress,
+        status,
+        actualStart: earliestActualStart ? formatScheduleDate(earliestActualStart) : null,
+        actualEnd: latestActualEnd ? formatScheduleDate(latestActualEnd) : null,
+      } as (typeof tasks)[number];
+      rolledById.set(taskId, rolledTask);
+      return rolledTask;
+    };
+
+    const updates: Prisma.PrismaPromise<unknown>[] = [];
+    for (const task of tasks) {
+      if (!(childrenByParent.get(task.id)?.length)) continue;
+      const rolled = rollTask(task.id);
+      const patch: Prisma.ScheduleTaskUpdateInput = {};
+      if ((task.taskType ?? "task") !== "summary") patch.taskType = "summary";
+      if ((task.startDate ?? null) !== (rolled.startDate ?? null)) patch.startDate = rolled.startDate ?? null;
+      if ((task.endDate ?? null) !== (rolled.endDate ?? null)) patch.endDate = rolled.endDate ?? null;
+      if ((task.duration ?? 0) !== (rolled.duration ?? 0)) patch.duration = rolled.duration ?? 0;
+      if (Math.abs((task.progress ?? 0) - (rolled.progress ?? 0)) > 0.0001) patch.progress = rolled.progress ?? 0;
+      if ((task.status ?? "not_started") !== (rolled.status ?? "not_started")) patch.status = rolled.status;
+      if ((task.actualStart ?? null) !== (rolled.actualStart ?? null)) patch.actualStart = rolled.actualStart ?? null;
+      if ((task.actualEnd ?? null) !== (rolled.actualEnd ?? null)) patch.actualEnd = rolled.actualEnd ?? null;
+
+      if (Object.keys(patch).length > 0) {
+        updates.push(
+          this.db.scheduleTask.update({
+            where: { id: task.id },
+            data: patch,
+          })
+        );
+      }
+    }
+
+    if (updates.length > 0) {
+      await this.db.$transaction(updates);
+    }
   }
 
   private advanceStrategyStage(currentStage: string | null | undefined, nextStage: string) {
@@ -4457,11 +4921,27 @@ export class PrismaApiStore {
 
   async createScheduleTask(projectId: string, revisionId: string, input: CreateScheduleTaskInput) {
     await this.requireProject(projectId);
+    let parentTask: Awaited<ReturnType<typeof this.db.scheduleTask.findFirst>> | null = null;
+    if (input.parentTaskId) {
+      parentTask = await this.db.scheduleTask.findFirst({
+        where: { id: input.parentTaskId, projectId, revisionId },
+      });
+      if (!parentTask) {
+        throw new Error(`Parent schedule task ${input.parentTaskId} not found`);
+      }
+      if ((parentTask.phaseId ?? null) !== (input.phaseId ?? null)) {
+        throw new Error("Parent task must be in the same phase.");
+      }
+    }
     const maxOrder = await this.db.scheduleTask.aggregate({
       where: { projectId, revisionId },
       _max: { order: true },
     });
     const order = input.order ?? (maxOrder._max.order ?? 0) + 1;
+    const defaultCalendarId =
+      input.calendarId === undefined
+        ? (await this.ensureDefaultScheduleCalendar(projectId, revisionId)).id
+        : input.calendarId ?? null;
 
     const task = await this.db.scheduleTask.create({
       data: {
@@ -4469,6 +4949,12 @@ export class PrismaApiStore {
         projectId,
         revisionId,
         phaseId: input.phaseId ?? null,
+        calendarId: defaultCalendarId,
+        parentTaskId: parentTask?.id ?? null,
+        outlineLevel: Math.max(
+          0,
+          Math.min(12, input.outlineLevel ?? (parentTask ? (parentTask.outlineLevel ?? 0) + 1 : 0))
+        ),
         name: input.name ?? "",
         description: input.description ?? "",
         taskType: input.taskType ?? "task",
@@ -4479,19 +4965,36 @@ export class PrismaApiStore {
         progress: input.progress ?? 0,
         assignee: input.assignee ?? "",
         order,
+        constraintType: input.constraintType ?? "asap",
+        constraintDate: input.constraintDate ?? null,
+        deadlineDate: input.deadlineDate ?? null,
+        actualStart: input.actualStart ?? null,
+        actualEnd: input.actualEnd ?? null,
       },
     });
+    await this.syncTaskAssignments(projectId, task.id, input.resourceAssignments);
+    await this.syncScheduleSummaryTaskRollups(projectId, revisionId);
     await this.pushActivity(projectId, revisionId, "schedule_task_created", { taskId: task.id, name: task.name, before: null, after: mapScheduleTask(task) });
     return mapScheduleTask(task);
   }
 
-  async updateScheduleTask(projectId: string, taskId: string, patch: ScheduleTaskPatchInput) {
+  async updateScheduleTask(
+    projectId: string,
+    taskId: string,
+    patch: ScheduleTaskPatchInput,
+    options?: { skipSummarySync?: boolean; explicitHierarchyUpdateIds?: Set<string> }
+  ) {
     await this.requireProject(projectId);
     const task = await this.db.scheduleTask.findFirst({ where: { id: taskId, projectId } });
     if (!task) throw new Error(`Schedule task ${taskId} not found`);
+    const revisionTasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId: task.revisionId },
+      orderBy: { order: "asc" },
+    });
 
     const data: any = {};
     if (patch.phaseId !== undefined) data.phaseId = patch.phaseId;
+    if (patch.calendarId !== undefined) data.calendarId = patch.calendarId;
     if (typeof patch.name === "string") data.name = patch.name;
     if (typeof patch.description === "string") data.description = patch.description;
     if (patch.taskType) data.taskType = patch.taskType;
@@ -4502,10 +5005,102 @@ export class PrismaApiStore {
     if (typeof patch.progress === "number") data.progress = patch.progress;
     if (typeof patch.assignee === "string") data.assignee = patch.assignee;
     if (typeof patch.order === "number") data.order = patch.order;
+    if (patch.constraintType) data.constraintType = patch.constraintType;
+    if (patch.constraintDate !== undefined) data.constraintDate = patch.constraintDate;
+    if (patch.deadlineDate !== undefined) data.deadlineDate = patch.deadlineDate;
+    if (patch.actualStart !== undefined) data.actualStart = patch.actualStart;
+    if (patch.actualEnd !== undefined) data.actualEnd = patch.actualEnd;
+
+    const descendants = new Map<string, typeof revisionTasks[number]>();
+    const stack = [taskId];
+    while (stack.length > 0) {
+      const currentId = stack.pop()!;
+      for (const candidate of revisionTasks) {
+        if (candidate.parentTaskId === currentId && !descendants.has(candidate.id)) {
+          descendants.set(candidate.id, candidate);
+          stack.push(candidate.id);
+        }
+      }
+    }
+
+    if (patch.phaseId !== undefined && patch.parentTaskId === undefined && task.parentTaskId) {
+      data.parentTaskId = null;
+      data.outlineLevel = 0;
+    }
+
+    if (patch.parentTaskId !== undefined || patch.outlineLevel !== undefined) {
+      const nextParentTaskId =
+        patch.parentTaskId !== undefined ? patch.parentTaskId : (data.parentTaskId ?? task.parentTaskId ?? null);
+      const effectivePhaseId =
+        patch.phaseId !== undefined ? patch.phaseId : (data.phaseId ?? task.phaseId ?? null);
+
+      if (nextParentTaskId === taskId) {
+        throw new Error("A task cannot be its own parent.");
+      }
+      if (nextParentTaskId && descendants.has(nextParentTaskId)) {
+        throw new Error("A task cannot be nested under one of its descendants.");
+      }
+
+      let parentTask: typeof revisionTasks[number] | null = null;
+      if (nextParentTaskId) {
+        parentTask = revisionTasks.find((candidate) => candidate.id === nextParentTaskId) ?? null;
+        if (!parentTask) {
+          throw new Error(`Parent schedule task ${nextParentTaskId} not found`);
+        }
+        if ((parentTask.phaseId ?? null) !== (effectivePhaseId ?? null)) {
+          throw new Error("Parent task must be in the same phase.");
+        }
+      }
+
+      data.parentTaskId = nextParentTaskId;
+      data.outlineLevel = Math.max(
+        0,
+        Math.min(12, patch.outlineLevel ?? (parentTask ? (parentTask.outlineLevel ?? 0) + 1 : 0))
+      );
+    }
 
     const taskPatchKeys = Object.keys(data);
     const taskBefore = this.pick(task as any, taskPatchKeys);
-    const updated = await this.db.scheduleTask.update({ where: { id: taskId }, data });
+    const nextOutlineLevel = typeof data.outlineLevel === "number" ? data.outlineLevel : task.outlineLevel ?? 0;
+    const previousOutlineLevel = task.outlineLevel ?? 0;
+    const outlineDelta = nextOutlineLevel - previousOutlineLevel;
+    const descendantUpdates: Prisma.PrismaPromise<unknown>[] = [];
+    if (outlineDelta !== 0 || patch.phaseId !== undefined) {
+      for (const descendant of descendants.values()) {
+        if (options?.explicitHierarchyUpdateIds?.has(descendant.id)) {
+          continue;
+        }
+        const descendantData: any = {};
+        if (outlineDelta !== 0) {
+          descendantData.outlineLevel = Math.max(0, Math.min(12, (descendant.outlineLevel ?? 0) + outlineDelta));
+        }
+        if (patch.phaseId !== undefined) {
+          descendantData.phaseId = patch.phaseId;
+        }
+        if (Object.keys(descendantData).length > 0) {
+          descendantUpdates.push(
+            this.db.scheduleTask.update({
+              where: { id: descendant.id },
+              data: descendantData,
+            })
+          );
+        }
+      }
+    }
+
+    const transactionResult = await this.db.$transaction([
+      ...descendantUpdates,
+      this.db.scheduleTask.update({ where: { id: taskId }, data }),
+    ]);
+    let updated = transactionResult[transactionResult.length - 1] as typeof task;
+    await this.syncTaskAssignments(projectId, taskId, patch.resourceAssignments);
+    if (!options?.skipSummarySync) {
+      await this.syncScheduleSummaryTaskRollups(projectId, task.revisionId);
+      updated =
+        (await this.db.scheduleTask.findFirst({
+          where: { id: taskId, projectId },
+        })) ?? updated;
+    }
     const taskAfter = this.pick(updated as any, taskPatchKeys);
     await this.pushActivity(projectId, task.revisionId, "schedule_task_updated", { taskId, name: updated.name, patch: taskPatchKeys, before: taskBefore, after: taskAfter });
     return mapScheduleTask(updated);
@@ -4514,10 +5109,28 @@ export class PrismaApiStore {
   async batchUpdateScheduleTasks(projectId: string, updates: Array<{ id: string } & ScheduleTaskPatchInput>) {
     await this.requireProject(projectId);
     const results: ScheduleTask[] = [];
+    const touchedRevisionIds = new Set<string>();
+    const explicitHierarchyUpdateIds = new Set(
+      updates
+        .filter(
+          (update) =>
+            update.phaseId !== undefined ||
+            update.parentTaskId !== undefined ||
+            update.outlineLevel !== undefined
+        )
+        .map((update) => update.id)
+    );
     for (const upd of updates) {
       const { id, ...patch } = upd;
-      const result = await this.updateScheduleTask(projectId, id, patch);
+      const result = await this.updateScheduleTask(projectId, id, patch, {
+        skipSummarySync: true,
+        explicitHierarchyUpdateIds,
+      });
       results.push(result);
+      touchedRevisionIds.add(result.revisionId);
+    }
+    for (const revisionId of touchedRevisionIds) {
+      await this.syncScheduleSummaryTaskRollups(projectId, revisionId);
     }
     return results;
   }
@@ -4526,11 +5139,43 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const task = await this.db.scheduleTask.findFirst({ where: { id: taskId, projectId } });
     if (!task) throw new Error(`Schedule task ${taskId} not found`);
-
-    await this.db.scheduleDependency.deleteMany({
-      where: { OR: [{ predecessorId: taskId }, { successorId: taskId }] },
+    const revisionTasks = await this.db.scheduleTask.findMany({
+      where: { projectId, revisionId: task.revisionId },
+      orderBy: { order: "asc" },
     });
-    await this.db.scheduleTask.delete({ where: { id: taskId } });
+    const descendants = new Map<string, typeof revisionTasks[number]>();
+    const stack = [taskId];
+    while (stack.length > 0) {
+      const currentId = stack.pop()!;
+      for (const candidate of revisionTasks) {
+        if (candidate.parentTaskId === currentId && !descendants.has(candidate.id)) {
+          descendants.set(candidate.id, candidate);
+          stack.push(candidate.id);
+        }
+      }
+    }
+
+    const rebalanceUpdates: Prisma.PrismaPromise<unknown>[] = [];
+    for (const descendant of descendants.values()) {
+      rebalanceUpdates.push(
+        this.db.scheduleTask.update({
+          where: { id: descendant.id },
+          data: {
+            parentTaskId: descendant.parentTaskId === taskId ? task.parentTaskId ?? null : descendant.parentTaskId,
+            outlineLevel: Math.max(0, (descendant.outlineLevel ?? 0) - 1),
+          },
+        })
+      );
+    }
+
+    await this.db.$transaction([
+      ...rebalanceUpdates,
+      this.db.scheduleDependency.deleteMany({
+        where: { OR: [{ predecessorId: taskId }, { successorId: taskId }] },
+      }),
+      this.db.scheduleTask.delete({ where: { id: taskId } }),
+    ]);
+    await this.syncScheduleSummaryTaskRollups(projectId, task.revisionId);
     await this.pushActivity(projectId, task.revisionId, "schedule_task_deleted", { taskId, name: task.name, before: mapScheduleTask(task), after: null });
     return mapScheduleTask(task);
   }
@@ -4559,29 +5204,251 @@ export class PrismaApiStore {
     return mapScheduleDependency(dep);
   }
 
+  async listScheduleCalendars(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const calendars = await this.db.scheduleCalendar.findMany({
+      where: { projectId, revisionId: revision.id },
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }, { createdAt: "asc" }],
+    });
+    if (calendars.length > 0) return calendars.map(mapScheduleCalendar);
+    const created = await this.ensureDefaultScheduleCalendar(projectId, revision.id);
+    return [mapScheduleCalendar(created)];
+  }
+
+  async createScheduleCalendar(projectId: string, input: CreateScheduleCalendarInput) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const existingCount = await this.db.scheduleCalendar.count({
+      where: { projectId, revisionId: revision.id },
+    });
+    const calendar = await this.db.scheduleCalendar.create({
+      data: {
+        id: createId("schcal"),
+        projectId,
+        revisionId: revision.id,
+        name: input.name ?? `Calendar ${existingCount + 1}`,
+        description: input.description ?? "",
+        isDefault: input.isDefault ?? existingCount === 0,
+        workingDays: toPrismaJson(input.workingDays ?? DEFAULT_SCHEDULE_WORKING_DAYS),
+        shiftStartMinutes: input.shiftStartMinutes ?? 480,
+        shiftEndMinutes: input.shiftEndMinutes ?? 1020,
+      },
+    });
+    if (calendar.isDefault) {
+      await this.enforceSingleDefaultScheduleCalendar(projectId, revision.id, calendar.id);
+      await this.db.scheduleTask.updateMany({
+        where: { projectId, revisionId: revision.id, calendarId: null },
+        data: { calendarId: calendar.id },
+      });
+    }
+    return mapScheduleCalendar(calendar);
+  }
+
+  async updateScheduleCalendar(projectId: string, calendarId: string, patch: ScheduleCalendarPatchInput) {
+    await this.requireProject(projectId);
+    const calendar = await this.db.scheduleCalendar.findFirst({ where: { id: calendarId, projectId } });
+    if (!calendar) throw new Error(`Schedule calendar ${calendarId} not found`);
+
+    const data: Prisma.ScheduleCalendarUpdateInput = {};
+    if (typeof patch.name === "string") data.name = patch.name;
+    if (typeof patch.description === "string") data.description = patch.description;
+    if (typeof patch.isDefault === "boolean") data.isDefault = patch.isDefault;
+    if (patch.workingDays !== undefined) data.workingDays = toPrismaJson(patch.workingDays);
+    if (typeof patch.shiftStartMinutes === "number") data.shiftStartMinutes = patch.shiftStartMinutes;
+    if (typeof patch.shiftEndMinutes === "number") data.shiftEndMinutes = patch.shiftEndMinutes;
+
+    let updated = await this.db.scheduleCalendar.update({
+      where: { id: calendarId },
+      data,
+    });
+    if (updated.isDefault) {
+      await this.enforceSingleDefaultScheduleCalendar(projectId, calendar.revisionId, updated.id);
+    } else if (calendar.isDefault) {
+      updated = await this.db.scheduleCalendar.update({
+        where: { id: calendarId },
+        data: { isDefault: true },
+      });
+    }
+    return mapScheduleCalendar(updated);
+  }
+
+  async deleteScheduleCalendar(projectId: string, calendarId: string) {
+    await this.requireProject(projectId);
+    const calendar = await this.db.scheduleCalendar.findFirst({ where: { id: calendarId, projectId } });
+    if (!calendar) throw new Error(`Schedule calendar ${calendarId} not found`);
+
+    let fallback = await this.db.scheduleCalendar.findFirst({
+      where: { projectId, revisionId: calendar.revisionId, id: { not: calendarId } },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    });
+    if (!fallback) {
+      fallback = await this.db.scheduleCalendar.create({
+        data: {
+          id: createId("schcal"),
+          projectId,
+          revisionId: calendar.revisionId,
+          name: "Standard 5-Day",
+          description: "Default Monday-Friday schedule calendar",
+          isDefault: true,
+          workingDays: DEFAULT_SCHEDULE_WORKING_DAYS as any,
+          shiftStartMinutes: 480,
+          shiftEndMinutes: 1020,
+        },
+      });
+    }
+
+    await this.db.scheduleTask.updateMany({
+      where: { projectId, revisionId: calendar.revisionId, calendarId },
+      data: { calendarId: fallback.id },
+    });
+    await this.db.scheduleResource.updateMany({
+      where: { projectId, revisionId: calendar.revisionId, calendarId },
+      data: { calendarId: fallback.id },
+    });
+    await this.db.scheduleCalendar.delete({ where: { id: calendarId } });
+    await this.enforceSingleDefaultScheduleCalendar(projectId, calendar.revisionId, fallback.id);
+    await this.db.scheduleCalendar.update({ where: { id: fallback.id }, data: { isDefault: true } });
+    return mapScheduleCalendar(calendar);
+  }
+
+  async listScheduleResources(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const resources = await this.db.scheduleResource.findMany({
+      where: { projectId, revisionId: revision.id },
+      orderBy: [{ name: "asc" }, { createdAt: "asc" }],
+    });
+    return resources.map(mapScheduleResource);
+  }
+
+  async createScheduleResource(projectId: string, input: CreateScheduleResourceInput) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+
+    let calendarId = input.calendarId ?? null;
+    if (calendarId) {
+      const calendar = await this.db.scheduleCalendar.findFirst({
+        where: { id: calendarId, projectId, revisionId: revision.id },
+      });
+      if (!calendar) throw new Error(`Schedule calendar ${calendarId} not found`);
+    } else {
+      calendarId = (await this.ensureDefaultScheduleCalendar(projectId, revision.id)).id;
+    }
+
+    const resource = await this.db.scheduleResource.create({
+      data: {
+        id: createId("schres"),
+        projectId,
+        revisionId: revision.id,
+        calendarId,
+        name: input.name ?? "New Resource",
+        role: input.role ?? "",
+        kind: input.kind ?? "labor",
+        color: input.color ?? "",
+        defaultUnits: input.defaultUnits ?? 1,
+        capacityPerDay: input.capacityPerDay ?? 1,
+        costRate: input.costRate ?? 0,
+      },
+    });
+    return mapScheduleResource(resource);
+  }
+
+  async updateScheduleResource(projectId: string, resourceId: string, patch: ScheduleResourcePatchInput) {
+    await this.requireProject(projectId);
+    const resource = await this.db.scheduleResource.findFirst({ where: { id: resourceId, projectId } });
+    if (!resource) throw new Error(`Schedule resource ${resourceId} not found`);
+
+    if (patch.calendarId) {
+      const calendar = await this.db.scheduleCalendar.findFirst({
+        where: { id: patch.calendarId, projectId, revisionId: resource.revisionId },
+      });
+      if (!calendar) throw new Error(`Schedule calendar ${patch.calendarId} not found`);
+    }
+
+    const data: Prisma.ScheduleResourceUpdateInput = {};
+    if (patch.calendarId !== undefined) {
+      data.calendar = patch.calendarId ? { connect: { id: patch.calendarId } } : { disconnect: true };
+    }
+    if (typeof patch.name === "string") data.name = patch.name;
+    if (typeof patch.role === "string") data.role = patch.role;
+    if (patch.kind) data.kind = patch.kind;
+    if (typeof patch.color === "string") data.color = patch.color;
+    if (typeof patch.defaultUnits === "number") data.defaultUnits = patch.defaultUnits;
+    if (typeof patch.capacityPerDay === "number") data.capacityPerDay = patch.capacityPerDay;
+    if (typeof patch.costRate === "number") data.costRate = patch.costRate;
+
+    const updated = await this.db.scheduleResource.update({
+      where: { id: resourceId },
+      data,
+    });
+    return mapScheduleResource(updated);
+  }
+
+  async deleteScheduleResource(projectId: string, resourceId: string) {
+    await this.requireProject(projectId);
+    const resource = await this.db.scheduleResource.findFirst({ where: { id: resourceId, projectId } });
+    if (!resource) throw new Error(`Schedule resource ${resourceId} not found`);
+    await this.db.scheduleResource.delete({ where: { id: resourceId } });
+    return mapScheduleResource(resource);
+  }
+
+  async listScheduleBaselines(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const baselines = await this.db.scheduleBaseline.findMany({
+      where: { projectId, revisionId: revision.id },
+      orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+    });
+    return baselines.map(mapScheduleBaseline);
+  }
+
+  async createScheduleBaseline(projectId: string, input: CreateScheduleBaselineInput) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const baseline = await this.captureScheduleBaseline(projectId, revision.id, input);
+    return mapScheduleBaseline(baseline);
+  }
+
+  async deleteScheduleBaseline(projectId: string, baselineId: string) {
+    await this.requireProject(projectId);
+    const baseline = await this.db.scheduleBaseline.findFirst({ where: { id: baselineId, projectId } });
+    if (!baseline) throw new Error(`Schedule baseline ${baselineId} not found`);
+    await this.db.scheduleBaseline.delete({ where: { id: baselineId } });
+    if (baseline.isPrimary) {
+      await this.syncPrimaryBaselineFields(projectId, baseline.revisionId);
+    }
+    return mapScheduleBaseline(baseline);
+  }
+
   // ── Schedule Baseline ──────────────────────────────────────────────────
 
   async saveBaseline(projectId: string) {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) return;
-    const tasks = await this.db.scheduleTask.findMany({ where: { projectId, revisionId: revision.id } });
-    for (const t of tasks) {
-      await this.db.scheduleTask.update({
-        where: { id: t.id },
-        data: { baselineStart: t.startDate, baselineEnd: t.endDate },
-      });
-    }
+    await this.captureScheduleBaseline(projectId, revision.id, {
+      name: "Primary Baseline",
+      description: "Current committed schedule baseline",
+      kind: "primary",
+      isPrimary: true,
+    });
   }
 
   async clearBaseline(projectId: string) {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) return;
-    await this.db.scheduleTask.updateMany({
-      where: { projectId, revisionId: revision.id },
-      data: { baselineStart: null, baselineEnd: null },
+    const primaryBaselines = await this.db.scheduleBaseline.findMany({
+      where: { projectId, revisionId: revision.id, isPrimary: true },
+      select: { id: true },
     });
+    if (primaryBaselines.length > 0) {
+      await this.db.scheduleBaseline.deleteMany({
+        where: { id: { in: primaryBaselines.map((baseline) => baseline.id) } },
+      });
+    }
+    await this.syncPrimaryBaselineFields(projectId, revision.id);
   }
 
   // ── Modifier CRUD ──────────────────────────────────────────────────────
@@ -6300,7 +7167,32 @@ export class PrismaApiStore {
     } else if (type === "schedule_task_deleted") {
       const snapshot = before!;
       revertBefore = null;
-      await this.db.scheduleTask.create({ data: { id: snapshot.id as string, projectId, revisionId: snapshot.revisionId as string, phaseId: (snapshot.phaseId as string) ?? null, name: (snapshot.name as string) ?? "", description: (snapshot.description as string) ?? "", taskType: (snapshot.taskType as string) ?? "task", status: (snapshot.status as string) ?? "not_started", startDate: (snapshot.startDate as string) ?? null, endDate: (snapshot.endDate as string) ?? null, duration: (snapshot.duration as number) ?? 0, progress: (snapshot.progress as number) ?? 0, assignee: (snapshot.assignee as string) ?? "", order: (snapshot.order as number) ?? 0 } });
+      await this.db.scheduleTask.create({
+        data: {
+          id: snapshot.id as string,
+          projectId,
+          revisionId: snapshot.revisionId as string,
+          phaseId: (snapshot.phaseId as string) ?? null,
+          calendarId: (snapshot.calendarId as string) ?? null,
+          name: (snapshot.name as string) ?? "",
+          description: (snapshot.description as string) ?? "",
+          taskType: (snapshot.taskType as string) ?? "task",
+          status: (snapshot.status as string) ?? "not_started",
+          startDate: (snapshot.startDate as string) ?? null,
+          endDate: (snapshot.endDate as string) ?? null,
+          duration: (snapshot.duration as number) ?? 0,
+          progress: (snapshot.progress as number) ?? 0,
+          assignee: (snapshot.assignee as string) ?? "",
+          order: (snapshot.order as number) ?? 0,
+          constraintType: (snapshot.constraintType as string) ?? "asap",
+          constraintDate: (snapshot.constraintDate as string) ?? null,
+          deadlineDate: (snapshot.deadlineDate as string) ?? null,
+          actualStart: (snapshot.actualStart as string) ?? null,
+          actualEnd: (snapshot.actualEnd as string) ?? null,
+          baselineStart: (snapshot.baselineStart as string) ?? null,
+          baselineEnd: (snapshot.baselineEnd as string) ?? null,
+        },
+      });
       revertAfter = snapshot;
     } else {
       throw Object.assign(new Error(`Unknown activity type "${type}" cannot be reverted`), { statusCode: 400 });

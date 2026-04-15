@@ -156,15 +156,86 @@ export interface ProjectPhase {
 
 // ── Schedule Types ──────────────────────────────────────────────────────
 
-export type ScheduleTaskType = "task" | "milestone";
+export type ScheduleTaskType = "task" | "milestone" | "summary";
 export type ScheduleTaskStatus = "not_started" | "in_progress" | "complete" | "on_hold";
 export type DependencyType = "FS" | "SS" | "FF" | "SF";
+export type ScheduleConstraintType = "asap" | "alap" | "snet" | "snlt" | "fnet" | "fnlt" | "mso" | "mfo";
+export type ScheduleBaselineKind = "primary" | "secondary" | "tertiary" | "snapshot" | "custom";
+export type ScheduleResourceKind = "labor" | "crew" | "equipment" | "subcontractor";
+
+export interface ScheduleCalendar {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  name: string;
+  description: string;
+  isDefault: boolean;
+  workingDays: Record<string, boolean>;
+  shiftStartMinutes: number;
+  shiftEndMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleBaseline {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  name: string;
+  description: string;
+  kind: ScheduleBaselineKind;
+  isPrimary: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleBaselineTask {
+  id: string;
+  baselineId: string;
+  taskId: string;
+  taskName: string;
+  phaseId: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  duration: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleResource {
+  id: string;
+  projectId: string;
+  revisionId: string;
+  calendarId: string | null;
+  name: string;
+  role: string;
+  kind: ScheduleResourceKind;
+  color: string;
+  defaultUnits: number;
+  capacityPerDay: number;
+  costRate: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduleTaskAssignment {
+  id: string;
+  taskId: string;
+  resourceId: string;
+  units: number;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface ScheduleTask {
   id: string;
   projectId: string;
   revisionId: string;
   phaseId: string | null;
+  calendarId: string | null;
+  parentTaskId: string | null;
+  outlineLevel: number;
   name: string;
   description: string;
   taskType: ScheduleTaskType;
@@ -175,6 +246,11 @@ export interface ScheduleTask {
   progress: number;
   assignee: string;
   order: number;
+  constraintType: ScheduleConstraintType;
+  constraintDate: string | null;
+  deadlineDate: string | null;
+  actualStart: string | null;
+  actualEnd: string | null;
   baselineStart: string | null;
   baselineEnd: string | null;
   createdAt: string;
@@ -546,6 +622,11 @@ export interface ProjectWorkspaceData {
   citations: Citation[];
   scheduleTasks: ScheduleTask[];
   scheduleDependencies: ScheduleDependency[];
+  scheduleCalendars: ScheduleCalendar[];
+  scheduleBaselines: ScheduleBaseline[];
+  scheduleBaselineTasks: ScheduleBaselineTask[];
+  scheduleResources: ScheduleResource[];
+  scheduleTaskAssignments: ScheduleTaskAssignment[];
   estimate: EstimateData;
   takeoffLinks?: TakeoffLinkRecord[];
   estimateStrategy?: EstimateStrategy | null;
@@ -1239,6 +1320,9 @@ export async function deletePhase(projectId: string, phaseId: string) {
 
 export interface CreateScheduleTaskInput {
   phaseId?: string | null;
+  calendarId?: string | null;
+  parentTaskId?: string | null;
+  outlineLevel?: number;
   name?: string;
   description?: string;
   taskType?: ScheduleTaskType;
@@ -1249,10 +1333,23 @@ export interface CreateScheduleTaskInput {
   progress?: number;
   assignee?: string;
   order?: number;
+  constraintType?: ScheduleConstraintType;
+  constraintDate?: string | null;
+  deadlineDate?: string | null;
+  actualStart?: string | null;
+  actualEnd?: string | null;
+  resourceAssignments?: Array<{
+    resourceId: string;
+    units?: number;
+    role?: string;
+  }>;
 }
 
 export interface ScheduleTaskPatchInput {
   phaseId?: string | null;
+  calendarId?: string | null;
+  parentTaskId?: string | null;
+  outlineLevel?: number;
   name?: string;
   description?: string;
   taskType?: ScheduleTaskType;
@@ -1263,6 +1360,16 @@ export interface ScheduleTaskPatchInput {
   progress?: number;
   assignee?: string;
   order?: number;
+  constraintType?: ScheduleConstraintType;
+  constraintDate?: string | null;
+  deadlineDate?: string | null;
+  actualStart?: string | null;
+  actualEnd?: string | null;
+  resourceAssignments?: Array<{
+    resourceId: string;
+    units?: number;
+    role?: string;
+  }>;
 }
 
 export interface CreateDependencyInput {
@@ -1270,6 +1377,37 @@ export interface CreateDependencyInput {
   successorId: string;
   type?: DependencyType;
   lagDays?: number;
+}
+
+export interface CreateScheduleCalendarInput {
+  name?: string;
+  description?: string;
+  isDefault?: boolean;
+  workingDays?: Record<string, boolean>;
+  shiftStartMinutes?: number;
+  shiftEndMinutes?: number;
+}
+
+export interface ScheduleCalendarPatchInput extends CreateScheduleCalendarInput {}
+
+export interface CreateScheduleResourceInput {
+  calendarId?: string | null;
+  name?: string;
+  role?: string;
+  kind?: ScheduleResourceKind;
+  color?: string;
+  defaultUnits?: number;
+  capacityPerDay?: number;
+  costRate?: number;
+}
+
+export interface ScheduleResourcePatchInput extends CreateScheduleResourceInput {}
+
+export interface CreateScheduleBaselineInput {
+  name?: string;
+  description?: string;
+  kind?: ScheduleBaselineKind;
+  isPrimary?: boolean;
 }
 
 export async function createScheduleTask(projectId: string, input: CreateScheduleTaskInput) {
@@ -1312,6 +1450,64 @@ export async function createScheduleDependency(projectId: string, input: CreateD
 
 export async function deleteScheduleDependency(projectId: string, depId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-dependencies/${depId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createScheduleCalendar(projectId: string, input: CreateScheduleCalendarInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-calendars`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateScheduleCalendar(projectId: string, calendarId: string, patch: ScheduleCalendarPatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-calendars/${calendarId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteScheduleCalendar(projectId: string, calendarId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-calendars/${calendarId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createScheduleResource(projectId: string, input: CreateScheduleResourceInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-resources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateScheduleResource(projectId: string, resourceId: string, patch: ScheduleResourcePatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-resources/${resourceId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteScheduleResource(projectId: string, resourceId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-resources/${resourceId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createScheduleBaseline(projectId: string, input: CreateScheduleBaselineInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-baselines`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteScheduleBaseline(projectId: string, baselineId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/schedule-baselines/${baselineId}`, {
     method: "DELETE",
   });
 }

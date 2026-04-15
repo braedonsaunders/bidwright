@@ -163,6 +163,9 @@ model Project {
   takeoffAnnotations TakeoffAnnotation[]
   takeoffLinks       TakeoffLink[]
   scheduleTasks      ScheduleTask[]
+  scheduleCalendars  ScheduleCalendar[]
+  scheduleBaselines  ScheduleBaseline[]
+  scheduleResources  ScheduleResource[]
   quoteReviews       QuoteReview[]
   estimateStrategies EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
@@ -275,6 +278,9 @@ model QuoteRevision {
   conditions      Condition[]
   reportSections  ReportSection[]
   scheduleTasks   ScheduleTask[]
+  scheduleCalendars ScheduleCalendar[]
+  scheduleBaselines ScheduleBaseline[]
+  scheduleResources ScheduleResource[]
   rateSchedules   RateSchedule[]
   estimateStrategies EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
@@ -352,6 +358,12 @@ model ScheduleTask {
   revisionId    String
   revision      QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
   phaseId       String?
+  calendarId    String?
+  calendar      ScheduleCalendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
+  parentTaskId  String?
+  parentTask    ScheduleTask? @relation("ScheduleTaskTree", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  childTasks    ScheduleTask[] @relation("ScheduleTaskTree")
+  outlineLevel  Int           @default(0)
   name          String        @default("")
   description   String        @default("")
   taskType      String        @default("task")
@@ -362,6 +374,11 @@ model ScheduleTask {
   progress      Float         @default(0)
   assignee      String        @default("")
   order         Int           @default(0)
+  constraintType String       @default("asap")
+  constraintDate String?
+  deadlineDate  String?
+  actualStart   String?
+  actualEnd     String?
   baselineStart String?
   baselineEnd   String?
   createdAt     DateTime      @default(now())
@@ -369,10 +386,13 @@ model ScheduleTask {
 
   predecessors  ScheduleDependency[] @relation("successorTask")
   successors    ScheduleDependency[] @relation("predecessorTask")
+  assignments   ScheduleTaskAssignment[]
 
   @@index([projectId])
   @@index([revisionId])
   @@index([phaseId])
+  @@index([calendarId])
+  @@index([parentTaskId])
 }
 
 model ScheduleDependency {
@@ -387,6 +407,104 @@ model ScheduleDependency {
   @@unique([predecessorId, successorId])
   @@index([predecessorId])
   @@index([successorId])
+}
+
+model ScheduleCalendar {
+  id                String        @id @default(cuid())
+  projectId         String
+  project           Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId        String
+  revision          QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name              String        @default("")
+  description       String        @default("")
+  isDefault         Boolean       @default(false)
+  workingDays       Json          @default("{}")
+  shiftStartMinutes Int           @default(480)
+  shiftEndMinutes   Int           @default(1020)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  tasks             ScheduleTask[]
+  resources         ScheduleResource[]
+
+  @@index([projectId])
+  @@index([revisionId])
+}
+
+model ScheduleBaseline {
+  id          String        @id @default(cuid())
+  projectId   String
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId  String
+  revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  name        String        @default("")
+  description String        @default("")
+  kind        String        @default("custom")
+  isPrimary   Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  items       ScheduleBaselineTask[]
+
+  @@index([projectId])
+  @@index([revisionId])
+}
+
+model ScheduleBaselineTask {
+  id         String           @id @default(cuid())
+  baselineId String
+  baseline   ScheduleBaseline @relation(fields: [baselineId], references: [id], onDelete: Cascade)
+  taskId     String
+  taskName   String           @default("")
+  phaseId    String?
+  startDate  String?
+  endDate    String?
+  duration   Int              @default(0)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@unique([baselineId, taskId])
+  @@index([taskId])
+}
+
+model ScheduleResource {
+  id             String            @id @default(cuid())
+  projectId      String
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId     String
+  revision       QuoteRevision     @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  calendarId     String?
+  calendar       ScheduleCalendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
+  name           String            @default("")
+  role           String            @default("")
+  kind           String            @default("labor")
+  color          String            @default("")
+  defaultUnits   Float             @default(1)
+  capacityPerDay Float             @default(1)
+  costRate       Float             @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  assignments    ScheduleTaskAssignment[]
+
+  @@index([projectId])
+  @@index([revisionId])
+  @@index([calendarId])
+}
+
+model ScheduleTaskAssignment {
+  id         String           @id @default(cuid())
+  taskId      String
+  task        ScheduleTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  resourceId  String
+  resource    ScheduleResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  units       Float            @default(1)
+  role        String           @default("")
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([taskId, resourceId])
+  @@index([resourceId])
 }
 
 // ── Modifiers ─────────────────────────────────────────────────────────────

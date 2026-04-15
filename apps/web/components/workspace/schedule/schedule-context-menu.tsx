@@ -1,10 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
-import { Pencil, Trash2, Copy, ArrowUp, ArrowDown, CheckCircle2, Clock, Pause, Circle } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  Clock,
+  Copy,
+  Diamond,
+  Pause,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { ScheduleTask, ScheduleTaskPatchInput } from "@/lib/api";
-import type { ScheduleTaskStatus } from "@/lib/api";
+import type { ScheduleTask, ScheduleTaskPatchInput, ScheduleTaskStatus } from "@/lib/api";
 
 interface ContextMenuState {
   x: number;
@@ -19,6 +31,11 @@ interface ScheduleContextMenuProps {
   onDelete: (taskId: string) => void;
   onUpdate: (taskId: string, patch: ScheduleTaskPatchInput) => void;
   onDuplicate?: (task: ScheduleTask) => void;
+  onCreateSibling?: (task: ScheduleTask) => void;
+  onCreateChild?: (task: ScheduleTask) => void;
+  onIndent?: (taskId: string) => void;
+  onOutdent?: (taskId: string) => void;
+  onMove?: (taskId: string, direction: "up" | "down") => void;
 }
 
 const STATUS_OPTIONS: { value: ScheduleTaskStatus; label: string; icon: typeof Circle }[] = [
@@ -37,29 +54,33 @@ export function ScheduleContextMenu({
   onDelete,
   onUpdate,
   onDuplicate,
+  onCreateSibling,
+  onCreateChild,
+  onIndent,
+  onOutdent,
+  onMove,
 }: ScheduleContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [statusOpen, setStatusOpen] = useState(false);
 
   useEffect(() => {
     if (!menu) return;
-    const handle = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+    const handlePointer = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
         onClose();
       }
     };
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
-    document.addEventListener("mousedown", handle);
+    document.addEventListener("mousedown", handlePointer);
     document.addEventListener("keydown", handleKey);
     return () => {
-      document.removeEventListener("mousedown", handle);
+      document.removeEventListener("mousedown", handlePointer);
       document.removeEventListener("keydown", handleKey);
     };
   }, [menu, onClose]);
 
-  // Reset submenu when menu changes
   useEffect(() => {
     setStatusOpen(false);
   }, [menu]);
@@ -67,60 +88,103 @@ export function ScheduleContextMenu({
   if (!menu) return null;
 
   const { x, y, task } = menu;
-
-  // Clamp position to viewport
-  const menuWidth = 200;
-  const menuHeight = 260;
+  const menuWidth = 220;
+  const menuHeight = 430;
   const clampedX = Math.min(x, window.innerWidth - menuWidth - 8);
   const clampedY = Math.min(y, window.innerHeight - menuHeight - 8);
 
   return (
     <div
       ref={ref}
-      className="fixed z-[100] min-w-[180px] rounded-lg border border-line bg-panel shadow-xl py-1 text-xs animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-[100] min-w-[220px] rounded-lg border border-line bg-panel py-1 text-xs shadow-xl"
       style={{ left: clampedX, top: clampedY }}
     >
-      {/* Edit */}
-      <MenuItem
-        icon={Pencil}
-        label="Edit Task"
-        onClick={() => { onEdit(task); onClose(); }}
-      />
+      <MenuItem icon={Pencil} label="Edit Task" onClick={() => { onEdit(task); onClose(); }} />
+      {onCreateSibling && <MenuItem icon={Plus} label="Add Sibling Task" onClick={() => { onCreateSibling(task); onClose(); }} />}
+      {onCreateChild && <MenuItem icon={Plus} label="Add Child Task" onClick={() => { onCreateChild(task); onClose(); }} />}
 
-      {/* Status submenu */}
-      <div
-        className="relative"
-        onMouseEnter={() => setStatusOpen(true)}
-        onMouseLeave={() => setStatusOpen(false)}
-      >
-        <div className="flex items-center gap-2 px-3 py-1.5 hover:bg-panel2/50 cursor-pointer transition-colors text-fg/70">
-          <ArrowUp className="h-3.5 w-3.5 text-fg/40" />
+      <div className="my-1 border-t border-line" />
+
+      {onIndent && <MenuItem icon={ChevronRight} label="Indent" onClick={() => { onIndent(task.id); onClose(); }} />}
+      {onOutdent && <MenuItem icon={ChevronRight} label="Outdent" iconClassName="rotate-180" onClick={() => { onOutdent(task.id); onClose(); }} />}
+      {onMove && <MenuItem icon={ArrowUp} label="Move Up" onClick={() => { onMove(task.id, "up"); onClose(); }} />}
+      {onMove && <MenuItem icon={ArrowDown} label="Move Down" onClick={() => { onMove(task.id, "down"); onClose(); }} />}
+
+      <div className="my-1 border-t border-line" />
+
+      {task.taskType !== "task" ? (
+        <MenuItem
+          icon={Diamond}
+          label="Convert to Task"
+          onClick={() => {
+            onUpdate(task.id, {
+              taskType: "task",
+              duration: Math.max(task.duration, 1),
+            });
+            onClose();
+          }}
+        />
+      ) : null}
+      {task.taskType !== "milestone" ? (
+        <MenuItem
+          icon={Diamond}
+          label="Convert to Milestone"
+          onClick={() => {
+            onUpdate(task.id, {
+              taskType: "milestone",
+              duration: 0,
+              progress: 0,
+              endDate: task.startDate,
+            });
+            onClose();
+          }}
+        />
+      ) : null}
+      {task.taskType !== "summary" ? (
+        <MenuItem
+          icon={Diamond}
+          label="Convert to Summary Task"
+          onClick={() => {
+            onUpdate(task.id, {
+              taskType: "summary",
+              duration: Math.max(task.duration, 1),
+            });
+            onClose();
+          }}
+        />
+      ) : null}
+
+      <div className="my-1 border-t border-line" />
+
+      <div className="relative" onMouseEnter={() => setStatusOpen(true)} onMouseLeave={() => setStatusOpen(false)}>
+        <div className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-fg/70 transition-colors hover:bg-panel2/50">
+          <Clock className="h-3.5 w-3.5 text-fg/40" />
           <span className="flex-1">Set Status</span>
-          <span className="text-fg/30 text-[10px]">▸</span>
+          <ChevronRight className="h-3.5 w-3.5 text-fg/30" />
         </div>
         {statusOpen && (
-          <div className="absolute left-full top-0 ml-1 min-w-[160px] rounded-lg border border-line bg-panel shadow-xl py-1 animate-in fade-in zoom-in-95 duration-75">
-            {STATUS_OPTIONS.map((opt) => {
-              const Icon = opt.icon;
-              const isActive = task.status === opt.value;
+          <div className="absolute left-full top-0 ml-1 min-w-[170px] rounded-lg border border-line bg-panel py-1 shadow-xl">
+            {STATUS_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              const isActive = task.status === option.value;
               return (
                 <div
-                  key={opt.value}
+                  key={option.value}
                   className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
+                    "flex cursor-pointer items-center gap-2 px-3 py-1.5 transition-colors",
                     isActive ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2/50"
                   )}
                   onClick={() => {
                     onUpdate(task.id, {
-                      status: opt.value,
-                      ...(opt.value === "complete" ? { progress: 1 } : {}),
+                      status: option.value,
+                      ...(option.value === "complete" ? { progress: 1 } : {}),
                     });
                     onClose();
                   }}
                 >
                   <Icon className="h-3.5 w-3.5" />
-                  <span>{opt.label}</span>
-                  {isActive && <span className="ml-auto text-[10px]">✓</span>}
+                  <span>{option.label}</span>
+                  {isActive ? <span className="ml-auto text-[10px]">OK</span> : null}
                 </div>
               );
             })}
@@ -128,25 +192,11 @@ export function ScheduleContextMenu({
         )}
       </div>
 
-      {/* Duplicate */}
-      {onDuplicate && (
-        <MenuItem
-          icon={Copy}
-          label="Duplicate"
-          onClick={() => { onDuplicate(task); onClose(); }}
-        />
-      )}
+      {onDuplicate && <MenuItem icon={Copy} label="Duplicate" onClick={() => { onDuplicate(task); onClose(); }} />}
 
-      {/* Separator */}
       <div className="my-1 border-t border-line" />
 
-      {/* Delete */}
-      <MenuItem
-        icon={Trash2}
-        label="Delete Task"
-        danger
-        onClick={() => { onDelete(task.id); onClose(); }}
-      />
+      <MenuItem icon={Trash2} label="Delete Task" danger onClick={() => { onDelete(task.id); onClose(); }} />
     </div>
   );
 }
@@ -156,42 +206,36 @@ function MenuItem({
   label,
   onClick,
   danger,
+  iconClassName,
 }: {
   icon: typeof Pencil;
   label: string;
   onClick: () => void;
   danger?: boolean;
+  iconClassName?: string;
 }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
-        danger
-          ? "text-danger hover:bg-danger/10"
-          : "text-fg/70 hover:bg-panel2/50"
+        "flex cursor-pointer items-center gap-2 px-3 py-1.5 transition-colors",
+        danger ? "text-danger hover:bg-danger/10" : "text-fg/70 hover:bg-panel2/50"
       )}
       onClick={onClick}
     >
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className={cn("h-3.5 w-3.5", iconClassName)} />
       <span>{label}</span>
     </div>
   );
 }
 
-/**
- * Hook to manage context menu state.
- */
 export function useContextMenu() {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
 
-  const handleContextMenu = useCallback(
-    (e: React.MouseEvent, task: ScheduleTask) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setMenu({ x: e.clientX, y: e.clientY, task });
-    },
-    []
-  );
+  const handleContextMenu = useCallback((event: React.MouseEvent, task: ScheduleTask) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenu({ x: event.clientX, y: event.clientY, task });
+  }, []);
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
