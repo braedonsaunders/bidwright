@@ -37,8 +37,13 @@ import type {
   RateScheduleTier,
   RateScheduleWithChildren,
   ReportSection,
+  ScheduleBaseline,
+  ScheduleBaselineTask,
+  ScheduleCalendar,
   ScheduleDependency,
+  ScheduleResource,
   ScheduleTask,
+  ScheduleTaskAssignment,
   SourceDocument,
   SummaryRow,
   TravelPolicy,
@@ -261,10 +266,16 @@ export function mapPhase(p: any): Phase {
 
 export function mapScheduleTask(t: any): ScheduleTask {
   return {
-    id: t.id, projectId: t.projectId, revisionId: t.revisionId, phaseId: t.phaseId ?? null,
+    id: t.id, projectId: t.projectId, revisionId: t.revisionId, phaseId: t.phaseId ?? null, calendarId: t.calendarId ?? null,
+    parentTaskId: t.parentTaskId ?? null, outlineLevel: t.outlineLevel ?? 0,
     name: t.name, description: t.description, taskType: t.taskType as ScheduleTask["taskType"],
     status: t.status as ScheduleTask["status"], startDate: t.startDate ?? null, endDate: t.endDate ?? null,
     duration: t.duration, progress: t.progress, assignee: t.assignee, order: t.order,
+    constraintType: (t.constraintType ?? "asap") as ScheduleTask["constraintType"],
+    constraintDate: t.constraintDate ?? null,
+    deadlineDate: t.deadlineDate ?? null,
+    actualStart: t.actualStart ?? null,
+    actualEnd: t.actualEnd ?? null,
     baselineStart: t.baselineStart ?? null, baselineEnd: t.baselineEnd ?? null,
     createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
   };
@@ -272,6 +283,81 @@ export function mapScheduleTask(t: any): ScheduleTask {
 
 export function mapScheduleDependency(d: any): ScheduleDependency {
   return { id: d.id, predecessorId: d.predecessorId, successorId: d.successorId, type: d.type as ScheduleDependency["type"], lagDays: d.lagDays };
+}
+
+export function mapScheduleCalendar(c: any): ScheduleCalendar {
+  return {
+    id: c.id,
+    projectId: c.projectId,
+    revisionId: c.revisionId,
+    name: c.name,
+    description: c.description ?? "",
+    isDefault: !!c.isDefault,
+    workingDays: (c.workingDays as Record<string, boolean>) ?? {},
+    shiftStartMinutes: c.shiftStartMinutes ?? 480,
+    shiftEndMinutes: c.shiftEndMinutes ?? 1020,
+    createdAt: toISO(c.createdAt),
+    updatedAt: toISO(c.updatedAt),
+  };
+}
+
+export function mapScheduleBaseline(b: any): ScheduleBaseline {
+  return {
+    id: b.id,
+    projectId: b.projectId,
+    revisionId: b.revisionId,
+    name: b.name,
+    description: b.description ?? "",
+    kind: (b.kind ?? "custom") as ScheduleBaseline["kind"],
+    isPrimary: !!b.isPrimary,
+    createdAt: toISO(b.createdAt),
+    updatedAt: toISO(b.updatedAt),
+  };
+}
+
+export function mapScheduleBaselineTask(item: any): ScheduleBaselineTask {
+  return {
+    id: item.id,
+    baselineId: item.baselineId,
+    taskId: item.taskId,
+    taskName: item.taskName ?? "",
+    phaseId: item.phaseId ?? null,
+    startDate: item.startDate ?? null,
+    endDate: item.endDate ?? null,
+    duration: item.duration ?? 0,
+    createdAt: toISO(item.createdAt),
+    updatedAt: toISO(item.updatedAt),
+  };
+}
+
+export function mapScheduleResource(r: any): ScheduleResource {
+  return {
+    id: r.id,
+    projectId: r.projectId,
+    revisionId: r.revisionId,
+    calendarId: r.calendarId ?? null,
+    name: r.name,
+    role: r.role ?? "",
+    kind: (r.kind ?? "labor") as ScheduleResource["kind"],
+    color: r.color ?? "",
+    defaultUnits: r.defaultUnits ?? 1,
+    capacityPerDay: r.capacityPerDay ?? 1,
+    costRate: r.costRate ?? 0,
+    createdAt: toISO(r.createdAt),
+    updatedAt: toISO(r.updatedAt),
+  };
+}
+
+export function mapScheduleTaskAssignment(a: any): ScheduleTaskAssignment {
+  return {
+    id: a.id,
+    taskId: a.taskId,
+    resourceId: a.resourceId,
+    units: a.units ?? 1,
+    role: a.role ?? "",
+    createdAt: toISO(a.createdAt),
+    updatedAt: toISO(a.updatedAt),
+  };
 }
 
 export function mapAdjustment(a: any): Adjustment {

@@ -913,6 +913,14 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
   const modifiers = adjustments.map(adjustmentToLegacyModifier).filter(isDefined);
   const additionalLineItems = adjustments.map(adjustmentToLegacyAdditionalLineItem).filter(isDefined);
   const materializedSummaryRows = materializeSummaryRowsFromBuilder(summaryBuilder, totals);
+  const scheduleTasks = (store.scheduleTasks || []).filter(
+    (task) => task.projectId === projectId && task.revisionId === revision.id,
+  );
+  const scheduleTaskIds = new Set(scheduleTasks.map((task) => task.id));
+  const scheduleBaselines = (store.scheduleBaselines || []).filter(
+    (baseline) => baseline.projectId === projectId && baseline.revisionId === revision.id,
+  );
+  const scheduleBaselineIds = new Set(scheduleBaselines.map((baseline) => baseline.id));
 
   return {
     project,
@@ -948,17 +956,24 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     catalogs: getCatalogs(store, projectId),
     aiRuns,
     citations,
-    scheduleTasks: (store.scheduleTasks || []).filter(
-      (task) => task.projectId === projectId && task.revisionId === revision.id,
+    scheduleTasks,
+    scheduleDependencies: (store.scheduleDependencies || []).filter(
+      (dependency) =>
+        scheduleTaskIds.has(dependency.predecessorId) && scheduleTaskIds.has(dependency.successorId),
     ),
-    scheduleDependencies: (store.scheduleDependencies || []).filter((dependency) => {
-      const taskIds = new Set(
-        (store.scheduleTasks || [])
-          .filter((task) => task.projectId === projectId && task.revisionId === revision.id)
-          .map((task) => task.id),
-      );
-      return taskIds.has(dependency.predecessorId) || taskIds.has(dependency.successorId);
-    }),
+    scheduleCalendars: (store.scheduleCalendars || []).filter(
+      (calendar) => calendar.projectId === projectId && calendar.revisionId === revision.id,
+    ),
+    scheduleBaselines,
+    scheduleBaselineTasks: (store.scheduleBaselineTasks || []).filter((baselineTask) =>
+      scheduleBaselineIds.has(baselineTask.baselineId),
+    ),
+    scheduleResources: (store.scheduleResources || []).filter(
+      (resource) => resource.projectId === projectId && resource.revisionId === revision.id,
+    ),
+    scheduleTaskAssignments: (store.scheduleTaskAssignments || []).filter((assignment) =>
+      scheduleTaskIds.has(assignment.taskId),
+    ),
     takeoffLinks: (store.takeoffLinks || []).filter((link) => link.projectId === projectId),
     estimateStrategy,
     estimateFeedback,

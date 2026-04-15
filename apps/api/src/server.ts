@@ -51,7 +51,12 @@ import {
   type TakeoffAnnotationPatchInput,
   type CreateScheduleTaskInput,
   type ScheduleTaskPatchInput,
-  type CreateDependencyInput
+  type CreateDependencyInput,
+  type CreateScheduleCalendarInput,
+  type ScheduleCalendarPatchInput,
+  type CreateScheduleResourceInput,
+  type ScheduleResourcePatchInput,
+  type CreateScheduleBaselineInput
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
 import {
@@ -207,46 +212,82 @@ const phasePatchSchema = z.object({
   color: z.string().optional()
 });
 
+const scheduleConstraintTypeSchema = z.enum(["asap", "alap", "snet", "snlt", "fnet", "fnlt", "mso", "mfo"]);
+const scheduleResourceAssignmentSchema = z.object({
+  resourceId: z.string().min(1),
+  units: z.number().finite().positive().optional(),
+  role: z.string().optional(),
+});
+
 const createScheduleTaskSchema = z.object({
   phaseId: z.string().nullable().optional(),
+  calendarId: z.string().nullable().optional(),
+  parentTaskId: z.string().nullable().optional(),
+  outlineLevel: z.number().int().min(0).max(12).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
-  taskType: z.enum(["task", "milestone"]).optional(),
+  taskType: z.enum(["task", "milestone", "summary"]).optional(),
   status: z.enum(["not_started", "in_progress", "complete", "on_hold"]).optional(),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
   duration: z.number().int().min(0).optional(),
   progress: z.number().min(0).max(1).optional(),
   assignee: z.string().optional(),
-  order: z.number().int().optional()
+  order: z.number().int().optional(),
+  constraintType: scheduleConstraintTypeSchema.optional(),
+  constraintDate: z.string().nullable().optional(),
+  deadlineDate: z.string().nullable().optional(),
+  actualStart: z.string().nullable().optional(),
+  actualEnd: z.string().nullable().optional(),
+  resourceAssignments: z.array(scheduleResourceAssignmentSchema).optional(),
 });
 
 const scheduleTaskPatchSchema = z.object({
   phaseId: z.string().nullable().optional(),
+  calendarId: z.string().nullable().optional(),
+  parentTaskId: z.string().nullable().optional(),
+  outlineLevel: z.number().int().min(0).max(12).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
-  taskType: z.enum(["task", "milestone"]).optional(),
+  taskType: z.enum(["task", "milestone", "summary"]).optional(),
   status: z.enum(["not_started", "in_progress", "complete", "on_hold"]).optional(),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
   duration: z.number().int().min(0).optional(),
   progress: z.number().min(0).max(1).optional(),
   assignee: z.string().optional(),
-  order: z.number().int().optional()
+  order: z.number().int().optional(),
+  constraintType: scheduleConstraintTypeSchema.optional(),
+  constraintDate: z.string().nullable().optional(),
+  deadlineDate: z.string().nullable().optional(),
+  actualStart: z.string().nullable().optional(),
+  actualEnd: z.string().nullable().optional(),
+  resourceAssignments: z.array(scheduleResourceAssignmentSchema).optional(),
 });
 
 const batchUpdateScheduleTasksSchema = z.object({
   updates: z.array(z.object({
     id: z.string().min(1),
     phaseId: z.string().nullable().optional(),
+    calendarId: z.string().nullable().optional(),
+    parentTaskId: z.string().nullable().optional(),
+    outlineLevel: z.number().int().min(0).max(12).optional(),
     name: z.string().optional(),
+    description: z.string().optional(),
+    taskType: z.enum(["task", "milestone", "summary"]).optional(),
     startDate: z.string().nullable().optional(),
     endDate: z.string().nullable().optional(),
     duration: z.number().int().min(0).optional(),
     progress: z.number().min(0).max(1).optional(),
     status: z.enum(["not_started", "in_progress", "complete", "on_hold"]).optional(),
     assignee: z.string().optional(),
-    order: z.number().int().optional()
+    order: z.number().int().optional(),
+    constraintType: scheduleConstraintTypeSchema.optional(),
+    constraintDate: z.string().nullable().optional(),
+    deadlineDate: z.string().nullable().optional(),
+    actualStart: z.string().nullable().optional(),
+    actualEnd: z.string().nullable().optional(),
+    resourceAssignments: z.array(scheduleResourceAssignmentSchema).optional(),
   }))
 });
 
@@ -255,6 +296,33 @@ const createDependencySchema = z.object({
   successorId: z.string().min(1),
   type: z.enum(["FS", "SS", "FF", "SF"]).optional(),
   lagDays: z.number().int().optional()
+});
+
+const scheduleCalendarSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  isDefault: z.boolean().optional(),
+  workingDays: z.record(z.boolean()).optional(),
+  shiftStartMinutes: z.number().int().min(0).max(24 * 60).optional(),
+  shiftEndMinutes: z.number().int().min(0).max(24 * 60).optional(),
+});
+
+const scheduleResourceSchema = z.object({
+  calendarId: z.string().nullable().optional(),
+  name: z.string().optional(),
+  role: z.string().optional(),
+  kind: z.enum(["labor", "crew", "equipment", "subcontractor"]).optional(),
+  color: z.string().optional(),
+  defaultUnits: z.number().finite().positive().optional(),
+  capacityPerDay: z.number().finite().positive().optional(),
+  costRate: z.number().finite().optional(),
+});
+
+const scheduleBaselineSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  kind: z.enum(["primary", "secondary", "tertiary", "snapshot", "custom"]).optional(),
+  isPrimary: z.boolean().optional(),
 });
 
 const createModifierSchema = z.object({
@@ -2304,6 +2372,141 @@ export function buildServer() {
   });
 
   // ── Schedule Baseline routes ────────────────────────────────────────
+
+  app.get("/projects/:projectId/schedule-calendars", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return request.store!.listScheduleCalendars(projectId);
+  });
+
+  app.post("/projects/:projectId/schedule-calendars", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = scheduleCalendarSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid schedule calendar payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.createScheduleCalendar(projectId, parsed.data satisfies CreateScheduleCalendarInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/schedule-calendars/:calendarId", async (request, reply) => {
+    const { projectId, calendarId } = request.params as { projectId: string; calendarId: string };
+    const parsed = scheduleCalendarSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid schedule calendar payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.updateScheduleCalendar(projectId, calendarId, parsed.data satisfies ScheduleCalendarPatchInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/schedule-calendars/:calendarId", async (request, reply) => {
+    const { projectId, calendarId } = request.params as { projectId: string; calendarId: string };
+    await request.store!.deleteScheduleCalendar(projectId, calendarId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.get("/projects/:projectId/schedule-resources", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return request.store!.listScheduleResources(projectId);
+  });
+
+  app.post("/projects/:projectId/schedule-resources", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = scheduleResourceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid schedule resource payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.createScheduleResource(projectId, parsed.data satisfies CreateScheduleResourceInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/schedule-resources/:resourceId", async (request, reply) => {
+    const { projectId, resourceId } = request.params as { projectId: string; resourceId: string };
+    const parsed = scheduleResourceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid schedule resource payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.updateScheduleResource(projectId, resourceId, parsed.data satisfies ScheduleResourcePatchInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/schedule-resources/:resourceId", async (request, reply) => {
+    const { projectId, resourceId } = request.params as { projectId: string; resourceId: string };
+    await request.store!.deleteScheduleResource(projectId, resourceId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.get("/projects/:projectId/schedule-baselines", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return request.store!.listScheduleBaselines(projectId);
+  });
+
+  app.post("/projects/:projectId/schedule-baselines", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = scheduleBaselineSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid schedule baseline payload", issues: parsed.error.flatten() });
+    }
+
+    await request.store!.createScheduleBaseline(projectId, parsed.data satisfies CreateScheduleBaselineInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/schedule-baselines/:baselineId", async (request, reply) => {
+    const { projectId, baselineId } = request.params as { projectId: string; baselineId: string };
+    await request.store!.deleteScheduleBaseline(projectId, baselineId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
 
   app.post("/projects/:projectId/schedule/save-baseline", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };

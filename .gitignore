@@ -7,6 +7,8 @@ dist
 !.env.example
 .env.local
 coverage
+playwright-report/
+test-results/
 .turbo
 .prisma
 *.log

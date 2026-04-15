@@ -1540,6 +1540,11 @@ export const mockStore: BidwrightStore = {
 
   scheduleTasks: [],
   scheduleDependencies: [],
+  scheduleCalendars: [],
+  scheduleBaselines: [],
+  scheduleBaselineTasks: [],
+  scheduleResources: [],
+  scheduleTaskAssignments: [],
 
   // ── Rate Schedules (empty — user creates these per organization) ─────
   rateSchedules: [],
