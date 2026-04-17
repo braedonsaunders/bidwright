@@ -63,7 +63,7 @@ jobs:
   deploy:
     needs:
       - verify
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, bidwright-prod]
     timeout-minutes: 40
     environment: production
     if: >
