@@ -115,6 +115,7 @@ pnpm lint
 pnpm db:generate
 pnpm db:push
 pnpm db:seed
+pnpm deploy:export
 pnpm docker:up
 pnpm docker:down
 ```
@@ -123,6 +124,7 @@ pnpm docker:down
 
 - `scripts/dev/` contains local hot-reload launchers.
 - `scripts/db/` contains database bootstrap and seed helpers.
+- `scripts/deploy/` contains export, restore, and server deploy helpers.
 - `scripts/launch/` contains one-click Docker launchers.
 - `scripts/ad-hoc/` contains one-off maintenance and extraction scripts.
 
@@ -140,6 +142,7 @@ You can also use the launch wrappers:
 - Windows: `.\scripts\launch\start-docker.bat`
 
 For an Ubuntu deployment and data migration checklist, see [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
+For the dedicated `10.0.0.74` move and GitHub deploy plan that avoids `ADMINAPP2` downtime, see [docs/deployment/server-10.0.0.74.md](./docs/deployment/server-10.0.0.74.md).
 
 ## Core Environment Variables
 
