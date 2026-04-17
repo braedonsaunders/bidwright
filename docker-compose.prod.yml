@@ -60,7 +60,7 @@ services:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
     restart: "no"
     command: >
-      sh -c "npx prisma db push --schema=packages/db/prisma/schema.prisma --skip-generate"
+      sh -c "pnpm --filter @bidwright/db db:push"
 
   api:
     build:
@@ -109,7 +109,7 @@ services:
     ports:
       - "${WEB_PUBLIC_PORT:-3000}:3000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000 >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
