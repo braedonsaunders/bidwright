@@ -25,10 +25,11 @@ RUN pnpm --filter @bidwright/api build
 
 # --- runtime stage ---
 FROM node:22-alpine AS runner
+RUN corepack enable
 RUN apk add --no-cache libgcc libstdc++ ripgrep git poppler-utils
 # Install Claude Code CLI globally for agent runtime
 RUN npm install -g @anthropic-ai/claude-code 2>/dev/null || true
 WORKDIR /app
 COPY --from=builder /app .
 EXPOSE 3001
-CMD ["node", "apps/api/dist/index.js"]
+CMD ["pnpm", "--filter", "@bidwright/api", "exec", "tsx", "src/index.ts"]

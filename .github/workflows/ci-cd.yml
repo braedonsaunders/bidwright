@@ -104,6 +104,7 @@ jobs:
           tar \
             --exclude='.git' \
             --exclude='node_modules' \
+            --exclude='dist' \
             --exclude='data' \
             --exclude='backups' \
             --exclude='.claude' \
