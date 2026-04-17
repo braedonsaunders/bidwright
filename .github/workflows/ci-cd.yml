@@ -1,0 +1,133 @@
+name: CI / CD
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @bidwright/db db:generate
+
+      - name: Typecheck web
+        run: pnpm --filter @bidwright/web exec tsc --noEmit
+
+      - name: Typecheck API
+        run: pnpm --filter @bidwright/api exec tsc --noEmit
+
+      - name: Typecheck worker
+        run: pnpm --filter @bidwright/worker exec tsc --noEmit
+
+      - name: Build API
+        run: pnpm --filter @bidwright/api build
+
+      - name: Build worker
+        run: pnpm --filter @bidwright/worker build
+
+      - name: Build web
+        run: pnpm --filter @bidwright/web build
+
+      - name: Run schedule unit tests
+        run: pnpm exec tsx --test apps/web/lib/schedule-utils.test.ts
+
+      - name: Validate production compose
+        run: docker compose -f docker-compose.prod.yml config > /dev/null
+
+  deploy:
+    needs:
+      - verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       github.ref == 'refs/heads/main' &&
+       vars.ENABLE_SERVER_DEPLOY == 'true')
+
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_BASE: ${{ vars.DEPLOY_BASE || '/opt/bidwright' }}
+      DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE || '/opt/bidwright/.env.server' }}
+      DEPLOY_COMPOSE_PROJECT_NAME: ${{ vars.DEPLOY_COMPOSE_PROJECT_NAME || 'bidwright' }}
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Assert deploy configuration
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_SSH_KEY"
+
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Build release bundle
+        run: |
+          mkdir -p dist
+          tar \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='data' \
+            --exclude='backups' \
+            --exclude='.claude' \
+            --exclude='.env' \
+            --exclude='.env.local' \
+            --exclude='.turbo' \
+            --exclude='apps/web/.next' \
+            -czf "dist/bidwright-${GITHUB_SHA}.tgz" .
+
+      - name: Upload release bundle
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_BASE/releases/$GITHUB_SHA'"
+          scp -P "$DEPLOY_PORT" "dist/bidwright-${GITHUB_SHA}.tgz" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_BASE/releases/$GITHUB_SHA/release.tgz"
+
+      - name: Deploy release on server
+        run: |
+          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "
+            set -euo pipefail
+            RELEASE_DIR='$DEPLOY_BASE/releases/$GITHUB_SHA'
+            mkdir -p \"\$RELEASE_DIR/app\"
+            tar -xzf \"\$RELEASE_DIR/release.tgz\" -C \"\$RELEASE_DIR/app\"
+            chmod +x \"\$RELEASE_DIR/app/scripts/deploy/remote-deploy.sh\" \"\$RELEASE_DIR/app/scripts/deploy/restore-server-state.sh\"
+            DEPLOY_BASE='$DEPLOY_BASE' \
+            ENV_FILE='$DEPLOY_ENV_FILE' \
+            COMPOSE_PROJECT_NAME='$DEPLOY_COMPOSE_PROJECT_NAME' \
+            \"\$RELEASE_DIR/app/scripts/deploy/remote-deploy.sh\"
+          "

@@ -5,6 +5,7 @@ dist
 .env
 .env.*
 !.env.example
+!.env.server.example
 .env.local
 coverage
 playwright-report/

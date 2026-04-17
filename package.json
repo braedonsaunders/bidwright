@@ -19,6 +19,7 @@
     "db:seed": "pnpm --filter @bidwright/db db:seed",
     "db:migrate": "pnpm --filter @bidwright/db db:migrate",
     "seed": "tsx scripts/db/seed-db.ts",
+    "deploy:export": "powershell -ExecutionPolicy Bypass -File scripts/deploy/export-local-state.ps1",
     "docker:up": "docker compose -f docker-compose.prod.yml up --build -d",
     "docker:down": "docker compose -f docker-compose.prod.yml down",
     "docker:logs": "docker compose -f docker-compose.prod.yml logs -f"
