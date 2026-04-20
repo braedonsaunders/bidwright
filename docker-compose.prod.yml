@@ -83,6 +83,8 @@ services:
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
+      CLAUDE_CONFIG_DIR: "${CLAUDE_CONFIG_DIR:-/root/.claude}"
+      CODEX_HOME: "${CODEX_HOME:-/root/.codex}"
       EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
       EMBEDDING_BASE_URL: "http://ollama:11434/v1"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
@@ -92,6 +94,8 @@ services:
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
     volumes:
       - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
+      - ${CLAUDE_CONFIG_PATH:-/opt/bidwright/data/agent-home/claude}:/root/.claude
+      - ${CODEX_HOME_PATH:-/opt/bidwright/data/agent-home/codex}:/root/.codex
     ports:
       - "${API_PUBLIC_PORT:-3001}:3001"
     healthcheck:

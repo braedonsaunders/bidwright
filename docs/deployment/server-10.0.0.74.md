@@ -30,6 +30,9 @@ Nothing in the Bidwright deploy path should stop, rebuild, or rebind the existin
     <git-sha>/
   data/
     app/
+    agent-home/
+      claude/
+      codex/
     postgres/
     redis/
     ollama/
@@ -106,6 +109,33 @@ The repo includes a GitHub Actions workflow that verifies on GitHub-hosted runne
   Set to `true` when you want pushes to `main` to auto-deploy.
 
 The workflow uploads a release tarball, extracts it into `/opt/bidwright/releases/<sha>`, updates `/opt/bidwright/current`, and runs `scripts/deploy/remote-deploy.sh`.
+
+## Public Repo, Private Deploy
+
+- The GitHub repository can stay public because deploy access is not controlled by the repo contents.
+- Deployment access lives in GitHub environment secrets and variables plus the private LAN reachability of the self-hosted runner.
+- Pull requests do not deploy. Only `push` to `main` and manual workflow runs can reach the deploy job.
+- To keep that boundary tight, protect `main` in GitHub:
+  - require pull requests
+  - require the `verify` check to pass
+  - restrict who can push or merge
+  - require an environment approval for `production` if you want one last human gate before deploy
+- Use a dedicated Bidwright deploy key/user only. Do not reuse any `ADMINAPP` key material.
+
+## Agent CLI Runtime
+
+Bidwright's project agent features shell out from the API container to the Claude Code CLI or Codex CLI. The production API image is expected to carry those binaries itself; the host machine does not need them globally installed.
+
+- Claude auth/config is persisted under `${CLAUDE_CONFIG_PATH}` and mounted at `${CLAUDE_CONFIG_DIR}` inside the API container.
+- Codex auth/config is persisted under `${CODEX_HOME_PATH}` and mounted at `${CODEX_HOME}` inside the API container.
+- If you use API keys instead of interactive CLI login, set them through the Bidwright Integrations settings or server environment rather than baking them into the public repo.
+- A redeploy should not wipe CLI auth anymore as long as those mounted directories remain intact.
+
+Recommended production approach:
+
+1. Install both CLIs in the API image.
+2. Use per-organization `ANTHROPIC` / `OPENAI` credentials in Bidwright settings for runtime execution.
+3. Treat OAuth login inside the container as optional, not the primary prod auth path.
 
 ## Smoke Checks Before Any Cutover
 
