@@ -110,6 +110,7 @@ services:
       - api
     environment:
       NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}"
+      INTERNAL_API_BASE_URL: "http://api:3001"
     ports:
       - "${WEB_PUBLIC_PORT:-3000}:3000"
     healthcheck:
