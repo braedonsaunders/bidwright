@@ -87,6 +87,7 @@ export interface IntegrationSettings {
   azureDiKey: string;
   agentRuntime?: string | null;
   agentModel?: string | null;
+  agentReasoningEffort?: string | null;
   claudeCodePath?: string | null;
   codexPath?: string | null;
   maxConcurrentSubAgents?: number;
@@ -165,6 +166,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
     llmModel: "claude-sonnet-4-20250514",
     azureDiEndpoint: "",
     azureDiKey: "",
+    agentReasoningEffort: "extra_high",
   },
   termsAndConditions: "",
 };

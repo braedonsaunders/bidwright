@@ -36,6 +36,43 @@ export interface SSEEventData {
   data: unknown;
 }
 
+type AgentReasoningEffort = "auto" | "low" | "medium" | "high" | "extra_high" | "max";
+
+function normalizeAgentReasoningEffort(value: unknown): AgentReasoningEffort {
+  if (value === "auto" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max") {
+    return value;
+  }
+  return "extra_high";
+}
+
+function mapClaudeEffort(value: AgentReasoningEffort): "low" | "medium" | "high" | "xhigh" | "max" | null {
+  switch (value) {
+    case "low":
+    case "medium":
+    case "high":
+    case "max":
+      return value;
+    case "extra_high":
+      return "xhigh";
+    default:
+      return null;
+  }
+}
+
+function mapCodexEffort(value: AgentReasoningEffort): "low" | "medium" | "high" | "xhigh" | "max" | null {
+  switch (value) {
+    case "low":
+    case "medium":
+    case "high":
+    case "max":
+      return value;
+    case "extra_high":
+      return "xhigh";
+    default:
+      return null;
+  }
+}
+
 function buildDefaultResumePrompt(runtime: AgentRuntime): string {
   if (runtime === "codex") {
     return "Resume the previous estimate session. Read AGENTS.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
@@ -265,8 +302,10 @@ export async function spawnSession(opts: {
   customCliPath?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  reasoningEffort?: string;
 }): Promise<CliSession> {
   const { projectId, projectDir, prompt, runtime, model, authToken, apiBaseUrl, revisionId, quoteId, customCliPath, anthropicApiKey, openaiApiKey } = opts;
+  const reasoningEffort = normalizeAgentReasoningEffort(opts.reasoningEffort);
 
   // Check for existing session
   const existing = sessions.get(projectId);
@@ -360,6 +399,8 @@ export async function spawnSession(opts: {
       "--mcp-config", mcpConfigPath, // Pass MCP config file path
     ];
     if (model) cliArgs.push("--model", model);
+    const claudeEffort = mapClaudeEffort(reasoningEffort);
+    if (claudeEffort) cliArgs.push("--effort", claudeEffort);
     // Auth: pass API key if provided. On bare metal (dev), the CLI uses
     // macOS Keychain / OAuth credentials automatically — no key needed.
     if (anthropicApiKey) {
@@ -373,9 +414,13 @@ export async function spawnSession(opts: {
       "exec", // Non-interactive mode
       "--dangerously-bypass-approvals-and-sandbox",
       "--model", model || "gpt-5.4",
+    ];
+    const codexEffort = mapCodexEffort(reasoningEffort);
+    if (codexEffort) cliArgs.push("-c", `model_reasoning_effort=${codexEffort}`);
+    cliArgs.push(
       "--json", // Structured output
       prompt,
-    ];
+    );
     // Auth: pass API key if provided
     if (openaiApiKey) {
       cliEnv.CODEX_API_KEY = openaiApiKey;
@@ -516,6 +561,8 @@ export async function spawnSession(opts: {
           authToken: authToken as string | undefined,
           apiBaseUrl: apiBaseUrl as string | undefined,
           anthropicApiKey: anthropicApiKey as string | undefined,
+          openaiApiKey: openaiApiKey as string | undefined,
+          reasoningEffort: session._spawnOpts?.reasoningEffort as string | undefined,
         });
         newSession._spawnOpts = session._spawnOpts;
         newSession._recoveryCount = recoveries + 1;
@@ -826,6 +873,7 @@ export async function resumeSession(opts: {
   customCliPath?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  reasoningEffort?: string;
 }): Promise<CliSession> {
   const session = sessions.get(opts.projectId);
   const sessionId = session?.sessionId;
@@ -859,6 +907,7 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
     revisionId,
     quoteId,
   } = opts;
+  const reasoningEffort = normalizeAgentReasoningEffort(opts.reasoningEffort);
   const runtime: AgentRuntime = opts.runtime === "codex" ? "codex" : "claude-code";
   const resumePrompt = typeof opts.prompt === "string" && opts.prompt.trim()
     ? opts.prompt.trim()
@@ -890,6 +939,8 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
     ];
     if (resumePrompt) cliArgs.push("-p", resumePrompt);
     if (model) cliArgs.push("--model", model);
+    const claudeEffort = mapClaudeEffort(reasoningEffort);
+    if (claudeEffort) cliArgs.push("--effort", claudeEffort);
     if (anthropicApiKey) cliEnv.ANTHROPIC_API_KEY = anthropicApiKey;
   } else {
     cliEnv.CODEX_HOME = await prepareCodexHome(projectDir, mcpRunner, mcpArgs, mcpEnv);
@@ -899,6 +950,8 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
       "--dangerously-bypass-approvals-and-sandbox",
     ];
     if (model) cliArgs.push("--model", model);
+    const codexEffort = mapCodexEffort(reasoningEffort);
+    if (codexEffort) cliArgs.push("-c", `model_reasoning_effort=${codexEffort}`);
     cliArgs.push("--json");
     cliArgs.push(sessionId);
     cliArgs.push(resumePrompt);

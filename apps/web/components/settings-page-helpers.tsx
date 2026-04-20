@@ -8,17 +8,38 @@ import { detectCli } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type AgentRuntime = "claude-code" | "codex";
+type AgentReasoningEffort = "auto" | "low" | "medium" | "high" | "extra_high" | "max";
+
+const REASONING_EFFORT_OPTIONS: Array<{
+  value: AgentReasoningEffort;
+  label: string;
+  description: string;
+}> = [
+  { value: "auto", label: "Auto", description: "Use the runtime default for the active model" },
+  { value: "low", label: "Low", description: "Fastest, lightest reasoning" },
+  { value: "medium", label: "Medium", description: "Balanced speed and depth" },
+  { value: "high", label: "High", description: "Stronger reasoning with more compute" },
+  { value: "extra_high", label: "Extra High", description: "Best default for difficult coding and agentic runs" },
+  { value: "max", label: "Max", description: "Deepest available reasoning for the current runtime" },
+];
 
 function isAgentRuntime(value: unknown): value is AgentRuntime {
   return value === "claude-code" || value === "codex";
 }
 
 function isClaudeCliModel(model: string) {
-  return ["sonnet", "opus", "haiku"].includes(model) || model.startsWith("claude-");
+  return ["default", "best", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "opusplan"].includes(model) || model.startsWith("claude-");
 }
 
 function isCodexCliModel(model: string) {
-  return model.startsWith("gpt-");
+  return !!model.trim() && !isClaudeCliModel(model);
+}
+
+function normalizeAgentReasoningEffort(value: unknown): AgentReasoningEffort {
+  if (value === "auto" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max") {
+    return value;
+  }
+  return "extra_high";
 }
 
 function getAutoRuntime(cliStatus: {
@@ -221,6 +242,7 @@ export function AgentRuntimeSettings({
   const effectiveRuntime = isAgentRuntime(currentRuntime) ? currentRuntime : getAutoRuntime(cliStatus);
   const rawCurrentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
   const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel) ? rawCurrentModel : "";
+  const reasoningEffort = normalizeAgentReasoningEffort(settings.integrations.agentReasoningEffort);
 
   return (
     <Card>
@@ -312,8 +334,7 @@ export function AgentRuntimeSettings({
               : effectiveRuntime === "claude-code"
               ? (cliStatus?.claude?.models || [])
               : [];
-            const filtered = models.filter((m) => !m.id.startsWith("claude-") && !m.id.startsWith("gpt-5."));
-            const displayModels = filtered.length > 0 ? filtered : models;
+            const displayModels = models.filter((model, index) => models.findIndex((candidate) => candidate.id === model.id) === index);
             return (
               <Select
                 value={currentModel}
@@ -326,7 +347,22 @@ export function AgentRuntimeSettings({
               </Select>
             );
           })()}
-          <p className="text-[10px] text-fg/30 mt-1.5">Models are scoped to the selected runtime so Bidwright can’t save an invalid CLI/model pairing.</p>
+          <p className="text-[10px] text-fg/30 mt-1.5">Models are scoped to the selected runtime. Alias options like `opus` and `sonnet` stay current when Claude ships a new snapshot.</p>
+        </div>
+
+        <div>
+          <Label>Reasoning Effort</Label>
+          <Select
+            value={reasoningEffort}
+            onChange={(e) => onUpdate({ agentReasoningEffort: e.target.value || "extra_high" })}
+          >
+            {REASONING_EFFORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label} - {option.description}
+              </option>
+            ))}
+          </Select>
+          <p className="text-[10px] text-fg/30 mt-1.5">`Extra High` maps to `xhigh` for Codex and the strongest supported non-max level for Claude when a model does not support `xhigh`.</p>
         </div>
 
         <div>

@@ -316,6 +316,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
     let model = body.model;
     if (runtime === "claude-code" && (!model || model.includes("/"))) {
       model = "sonnet";
+    } else if (runtime === "codex" && !model) {
+      model = "gpt-5.4";
     }
 
     const store = request.store!;
@@ -430,6 +432,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
 
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
+    const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
+      ? integrations.agentReasoningEffort
+      : "extra_high";
 
     try {
       const session = await spawnSession({
@@ -447,6 +452,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
           : integrations.codexPath || undefined,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
+        reasoningEffort,
       });
 
       // Persist events to DB
