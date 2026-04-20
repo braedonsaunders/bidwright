@@ -8,7 +8,20 @@ export const apiBaseUrl =
   (typeof window !== "undefined" ? window.location.origin : null) ??
   DEFAULT_API_BASE_URL;
 
+function resolveBrowserProxyPath(path: string) {
+  if (path.startsWith("/api/")) {
+    return path;
+  }
+  return `/api/proxy${path}`;
+}
+
 export function resolveApiUrl(path: string) {
+  if (typeof window !== "undefined") {
+    const currentOrigin = window.location.origin;
+    if (apiBaseUrl === currentOrigin) {
+      return new URL(resolveBrowserProxyPath(path), currentOrigin).toString();
+    }
+  }
   return new URL(path, apiBaseUrl).toString();
 }
 
