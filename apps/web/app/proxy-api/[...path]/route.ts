@@ -45,22 +45,34 @@ async function proxyRequest(request: NextRequest, context: { params: Promise<{ p
   });
 }
 
-export async function GET(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, context);
+type RouteContext = { params: Promise<unknown> };
+
+function parsePathParams(params: unknown): string[] {
+  const value = params as { path?: string[] };
+  return Array.isArray(value.path) ? value.path : [];
 }
 
-export async function POST(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, context);
+async function handleRoute(request: NextRequest, context: RouteContext) {
+  const path = parsePathParams(await context.params);
+  return proxyRequest(request, { params: Promise.resolve({ path }) });
 }
 
-export async function PUT(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, context);
+export async function GET(request: NextRequest, context: RouteContext) {
+  return handleRoute(request, context);
 }
 
-export async function PATCH(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, context);
+export async function POST(request: NextRequest, context: RouteContext) {
+  return handleRoute(request, context);
 }
 
-export async function DELETE(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
-  return proxyRequest(request, context);
+export async function PUT(request: NextRequest, context: RouteContext) {
+  return handleRoute(request, context);
+}
+
+export async function PATCH(request: NextRequest, context: RouteContext) {
+  return handleRoute(request, context);
+}
+
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  return handleRoute(request, context);
 }
