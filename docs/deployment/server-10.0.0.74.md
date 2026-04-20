@@ -86,7 +86,7 @@ It does not stop or reconfigure `ADMINAPP2`.
 
 ## Continuous Deploys From GitHub
 
-The repo includes a GitHub Actions workflow that verifies on GitHub-hosted runners and then deploys the current commit to `10.0.0.74` over SSH.
+The repo includes a GitHub Actions workflow that verifies on GitHub-hosted runners and then deploys the current commit to `10.0.0.74` from a private self-hosted runner that can reach the LAN host over SSH.
 
 ### Required GitHub secrets
 
