@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { useAuth } from "@/components/auth-provider";
-import { cn } from "@/lib/utils";
 import { Building2, Database, LayoutDashboard, LogOut, Shield, Users } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 const adminNav = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
@@ -22,16 +22,16 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (loading) return;
-    // Give a brief grace period — the auth state may still be settling after setup
-    if (!user && !isSuperAdmin) {
-      const timeout = setTimeout(() => {
-        router.replace("/login");
-      }, 500);
-      return () => clearTimeout(timeout);
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    if (!isSuperAdmin) {
+      router.replace("/");
     }
   }, [loading, user, isSuperAdmin, router]);
 
-  if (loading || (!isSuperAdmin && !user)) {
+  if (loading || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg">
         <div className="text-fg/40 text-sm">Loading...</div>
@@ -43,9 +43,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-bg text-fg">
-      {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-line bg-panel flex flex-col">
-        {/* Branding */}
+      <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
         <div className="flex items-center gap-2.5 border-b border-line px-4 py-4">
           <Shield className="h-5 w-5 text-accent" />
           <div>
@@ -54,8 +52,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-3 space-y-0.5">
+        <nav className="flex-1 space-y-0.5 px-3 py-3">
           {adminNav.map((item) => {
             const Icon = item.icon;
             const active = item.href === "/admin"
@@ -79,15 +76,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           })}
         </nav>
 
-        {/* User section */}
         <div className="border-t border-line px-4 py-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/10">
               <Shield className="h-3.5 w-3.5 text-accent" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium text-fg/70">{user?.name ?? "Super Admin"}</p>
-              <p className="truncate text-[10px] text-fg/30">{user?.email}</p>
+              <p className="truncate text-xs font-medium text-fg/70">{user.name}</p>
+              <p className="truncate text-[10px] text-fg/30">{user.email}</p>
             </div>
           </div>
           <Button variant="ghost" size="xs" className="mt-2 w-full" onClick={logout}>
@@ -97,10 +93,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      {/* Content */}
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
+      <main className="flex-1 overflow-auto">{children}</main>
     </div>
   );
 }

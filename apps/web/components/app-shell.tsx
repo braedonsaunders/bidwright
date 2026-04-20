@@ -83,7 +83,15 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
-  const { user: authUser, organization: authOrg, impersonating, isSuperAdmin, logout, refreshUser } = useAuth();
+  const {
+    user: authUser,
+    organization: authOrg,
+    impersonating,
+    isSuperAdmin,
+    loading: authLoading,
+    logout,
+    refreshUser,
+  } = useAuth();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [orgSwitcherOpen, setOrgSwitcherOpen] = useState(false);
   const [myOrgs, setMyOrgs] = useState<UserOrganization[]>([]);
@@ -435,7 +443,9 @@ export function AppShell({
               <User className="h-3.5 w-3.5 text-fg/50" />
             </div>
             <div className="min-w-0 flex-1 text-left">
-              <p className="truncate text-xs font-medium text-fg/70">{authUser?.name ?? "User"}</p>
+              <p className="truncate text-xs font-medium text-fg/70">
+                {authLoading ? "Loading..." : authUser?.name ?? "Not signed in"}
+              </p>
               <p className="truncate text-[10px] text-fg/30">{authUser?.email ?? ""}</p>
             </div>
             <ChevronRight className={cn("h-3 w-3 text-fg/30 transition-transform", userMenuOpen && "rotate-90")} />
