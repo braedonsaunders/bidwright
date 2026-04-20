@@ -70,17 +70,18 @@ function intakeStorageKey(projectId: string) {
 }
 
 type CliRuntime = "claude-code" | "codex";
+type CliModelOption = { id: string; name: string; description: string };
 
 function isCliRuntime(value: unknown): value is CliRuntime {
   return value === "claude-code" || value === "codex";
 }
 
 function isClaudeCliModel(model: string) {
-  return ["sonnet", "opus", "haiku"].includes(model) || model.startsWith("claude-");
+  return ["default", "best", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "opusplan"].includes(model) || model.startsWith("claude-");
 }
 
 function isCodexCliModel(model: string) {
-  return model.startsWith("gpt-");
+  return !!model.trim() && !isClaudeCliModel(model);
 }
 
 function defaultCliModel(runtime: CliRuntime) {
@@ -955,6 +956,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
   const [docsExpanded, setDocsExpanded] = useState(false);
   const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
+  const [cliModels, setCliModels] = useState<{ claude: CliModelOption[]; codex: CliModelOption[] }>({ claude: [], codex: [] });
   const [cliRuntime, setCliRuntime] = useState<CliRuntime | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
   const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
@@ -1024,6 +1026,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         codex: cliResult.status === "fulfilled" ? cliResult.value.codex.available : false,
       };
       setCliAvailable(availability);
+      if (cliResult.status === "fulfilled") {
+        setCliModels({
+          claude: cliResult.value.claude.models || [],
+          codex: cliResult.value.codex.models || [],
+        });
+      }
 
       const configuredRuntime = isCliRuntime(integ?.agentRuntime)
         ? integ.agentRuntime
@@ -1882,19 +1890,36 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                   </div>
                 )}
                 {/* Model selection */}
-                {cliRuntime === "claude-code" && (
+                {cliRuntime && (
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
                       Model
                     </label>
                     <Select
                       className="h-8 text-xs"
-                      value={effectiveCliModel || "sonnet"}
+                      value={effectiveCliModel || defaultCliModel(cliRuntime)}
                       onChange={(e) => setCliAgentModel(e.target.value)}
                     >
-                      <option value="sonnet">Claude Sonnet 4.6 (Recommended)</option>
-                      <option value="opus">Claude Opus 4.6</option>
-                      <option value="haiku">Claude Haiku 4.5</option>
+                      {(() => {
+                        const runtimeModels = cliRuntime === "claude-code" ? cliModels.claude : cliModels.codex;
+                        const options = runtimeModels.filter((option, index) => runtimeModels.findIndex((candidate) => candidate.id === option.id) === index);
+                        const selectedModel = effectiveCliModel || defaultCliModel(cliRuntime);
+                        const displayOptions = options.some((option) => option.id === selectedModel)
+                          ? options
+                          : [
+                              ...options,
+                              {
+                                id: selectedModel,
+                                name: selectedModel,
+                                description: "Current configured model",
+                              },
+                            ];
+                        return displayOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name} - {option.description}
+                          </option>
+                        ));
+                      })()}
                     </Select>
                   </div>
                 )}

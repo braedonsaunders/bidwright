@@ -33,7 +33,21 @@ export interface AppSettingsRecord {
     benchmarkUpperHoursRatio?: number;
     requireHumanReviewForBenchmarkOutliers?: boolean;
   };
-  integrations: { openaiKey: string; anthropicKey: string; openrouterKey: string; geminiKey: string; lmstudioBaseUrl?: string; llmProvider: string; llmModel: string; azureDiEndpoint?: string; azureDiKey?: string; agentRuntime?: string; agentModel?: string; maxConcurrentSubAgents?: number };
+  integrations: {
+    openaiKey: string;
+    anthropicKey: string;
+    openrouterKey: string;
+    geminiKey: string;
+    lmstudioBaseUrl?: string;
+    llmProvider: string;
+    llmModel: string;
+    azureDiEndpoint?: string;
+    azureDiKey?: string;
+    agentRuntime?: string;
+    agentModel?: string;
+    agentReasoningEffort?: string;
+    maxConcurrentSubAgents?: number;
+  };
   brand: BrandProfile;
   termsAndConditions?: string;
 }
