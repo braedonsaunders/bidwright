@@ -7,12 +7,13 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
-import { copyFile, readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { copyFile, readFile, writeFile, mkdir, unlink } from "node:fs/promises";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { execSync } from "node:child_process";
+import { tmpdir } from "node:os";
 
 export type AgentRuntime = "claude-code" | "codex";
 
@@ -264,11 +265,269 @@ export function detectCli(runtime: AgentRuntime, customCliPath?: string): { avai
   }
 }
 
+export interface CliModelOption {
+  id: string;
+  name: string;
+  description: string;
+  defaultReasoningEffort?: string | null;
+  hidden?: boolean;
+  isDefault?: boolean;
+  supportedReasoningEfforts?: string[];
+}
+
+function normalizeCliModelDescription(description: string) {
+  return description
+    .replace(/\$\{[^}]+\}/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+[•·]\s*$/g, "")
+    .trim();
+}
+
+function getCliShimTarget(commandPath: string, packagePath: string[], relativeCliPath: string) {
+  if (!existsSync(commandPath)) return null;
+  if (commandPath.endsWith(".js")) return commandPath;
+
+  try {
+    const shim = readFileSync(commandPath, "utf-8").trim();
+    const baseDir = dirname(commandPath);
+    const match = shim.match(/["']([^"']*node_modules[\\/][^"']+)["']/i);
+    if (match?.[1]) {
+      const rawTarget = match[1]
+        .replace(/%dp0%|%~dp0/gi, `${baseDir}\\`)
+        .replace(/\$basedir/gi, baseDir);
+      const normalizedTarget = rawTarget.replace(/[\\/]+/g, process.platform === "win32" ? "\\" : "/");
+      const resolvedTarget = resolvePath(normalizedTarget);
+      if (existsSync(resolvedTarget)) return resolvedTarget;
+    }
+  } catch {
+    // Fall back to common global npm layout checks below.
+  }
+
+  const candidates = [
+    join(dirname(commandPath), "node_modules", ...packagePath, relativeCliPath),
+    join(dirname(commandPath), "..", "lib", "node_modules", ...packagePath, relativeCliPath),
+    join(dirname(commandPath), "..", "node_modules", ...packagePath, relativeCliPath),
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+function extractClaudeBundleModel(id: string, regex: RegExp, text: string): CliModelOption | null {
+  const match = text.match(regex);
+  if (!match) return null;
+  const [, name, description] = match;
+  return {
+    id,
+    name,
+    description: normalizeCliModelDescription(description),
+  };
+}
+
+async function listClaudeCliModels(customCliPath?: string): Promise<CliModelOption[]> {
+  const cliCommand = resolveCliCommand("claude-code", customCliPath);
+  const cliBundlePath = getCliShimTarget(cliCommand, ["@anthropic-ai", "claude-code"], "cli.js");
+  if (!cliBundlePath) return [];
+
+  const text = await readFile(cliBundlePath, "utf-8");
+
+  const models: CliModelOption[] = [
+    {
+      id: "default",
+      name: "Default (recommended)",
+      description: "Use the Claude Code account default model for the signed-in tier.",
+      isDefault: true,
+    },
+  ];
+
+  const sonnet = extractClaudeBundleModel(
+    "sonnet",
+    /return\{value:[^,]+,label:"(Sonnet)",description:[^,]+,descriptionForModel:"([^"]*best for everyday tasks[^"]*)"\}/,
+    text,
+  );
+  if (sonnet) models.push(sonnet);
+
+  const opus = extractClaudeBundleModel(
+    "opus",
+    /return\{value:[^,]+,label:"(Opus)",description:[^,]+,descriptionForModel:"([^"]*most capable for complex work[^"]*)"\}/,
+    text,
+  );
+  if (opus) models.push(opus);
+
+  const haiku = extractClaudeBundleModel(
+    "haiku",
+    /return\{value:"haiku",label:"(Haiku)",description:[^,]+,descriptionForModel:"([^"]*fastest for quick answers[^"]*)"\}/,
+    text,
+  );
+  if (haiku) models.push(haiku);
+
+  const sonnet1m = extractClaudeBundleModel(
+    "sonnet[1m]",
+    /return\{value:[^,]*"sonnet\[1m\]",label:"(Sonnet \(1M context\))",description:[^,]+,descriptionForModel:"([^"]*1M context[^"]*)"\}/,
+    text,
+  );
+  if (sonnet1m) models.push(sonnet1m);
+
+  const opus1m = extractClaudeBundleModel(
+    "opus[1m]",
+    /return\{value:[^,]*"opus\[1m\]",label:"(Opus \(1M context\))",description:[^,]+,descriptionForModel:"([^"]*1M context[^"]*)"\}/,
+    text,
+  );
+  if (opus1m) models.push(opus1m);
+
+  const opusPlanMatch = text.match(/\{value:"opusplan",label:"([^"]+)",description:"([^"]+)"\}/);
+  if (opusPlanMatch) {
+    models.push({
+      id: "opusplan",
+      name: opusPlanMatch[1],
+      description: normalizeCliModelDescription(opusPlanMatch[2]),
+    });
+  }
+
+  return models.filter((model, index) => models.findIndex((candidate) => candidate.id === model.id) === index);
+}
+
+function isBenignCodexRpcWarning(line: string) {
+  return BENIGN_CODEX_STDERR_PATTERNS.some((pattern) => pattern.test(line));
+}
+
+async function spawnCodexAppServerProcess(cliCommand: string) {
+  if (process.platform !== "win32") {
+    return {
+      child: spawn(cliCommand, ["app-server"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+      cleanup: async () => {},
+    };
+  }
+
+  const batFile = join(tmpdir(), `bidwright-codex-app-server-${Date.now()}-${Math.random().toString(16).slice(2)}.bat`);
+  await writeFile(
+    batFile,
+    `@echo off\r\ncall "${cliCommand}" app-server\r\n`,
+    "utf-8",
+  );
+
+  return {
+    child: spawn("cmd.exe", ["/c", batFile], {
+      stdio: ["pipe", "pipe", "pipe"],
+    }),
+    cleanup: async () => {
+      await unlink(batFile).catch(() => {});
+    },
+  };
+}
+
+async function listCodexCliModels(customCliPath?: string): Promise<CliModelOption[]> {
+  const cliCommand = resolveCliCommand("codex", customCliPath);
+  const { child, cleanup } = await spawnCodexAppServerProcess(cliCommand);
+
+  return new Promise<CliModelOption[]>((resolve, reject) => {
+    let settled = false;
+    let stderrSummary = "";
+    const stdout = createInterface({ input: child.stdout! });
+    const stderr = createInterface({ input: child.stderr! });
+
+    const finish = async (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      stdout.close();
+      stderr.close();
+      child.kill();
+      await cleanup();
+      handler();
+    };
+
+    const timeout = setTimeout(() => {
+      void finish(() => reject(new Error(`Timed out while polling Codex models.${stderrSummary ? ` ${stderrSummary.trim()}` : ""}`)));
+    }, 15000);
+
+    stderr.on("line", (line) => {
+      if (isBenignCodexRpcWarning(line)) return;
+      stderrSummary += `${line}\n`;
+    });
+
+    stdout.on("line", (line) => {
+      let message: any;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        return;
+      }
+
+      if (message.id === 1 && message.result) {
+        child.stdin?.write(JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "model/list",
+          params: {
+            includeHidden: false,
+            limit: 100,
+          },
+        }) + "\n");
+        return;
+      }
+
+      if (message.id === 2 && message.result) {
+        const models = Array.isArray(message.result.data) ? message.result.data : [];
+        void finish(() => resolve(models.map((model: any) => ({
+          id: String(model.id),
+          name: String(model.displayName || model.id),
+          description: String(model.description || model.displayName || model.id),
+          defaultReasoningEffort: typeof model.defaultReasoningEffort === "string" ? model.defaultReasoningEffort : null,
+          hidden: Boolean(model.hidden),
+          isDefault: Boolean(model.isDefault),
+          supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts)
+            ? model.supportedReasoningEfforts
+                .map((entry: any) => typeof entry?.reasoningEffort === "string" ? entry.reasoningEffort : null)
+                .filter((entry: string | null): entry is string => !!entry)
+            : [],
+        }))));
+        return;
+      }
+
+      if (message.id === 2 && message.error) {
+        const reason = typeof message.error?.message === "string" ? message.error.message : "Unknown Codex app-server error";
+        void finish(() => reject(new Error(reason)));
+      }
+    });
+
+    child.once("error", (error) => {
+      void finish(() => reject(error));
+    });
+
+    child.once("exit", (code) => {
+      if (settled) return;
+      void finish(() => reject(new Error(`Codex app-server exited before returning models (code ${code ?? "unknown"}).${stderrSummary ? ` ${stderrSummary.trim()}` : ""}`)));
+    });
+
+    child.stdin?.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        clientInfo: {
+          name: "bidwright",
+          version: "1.0.0",
+        },
+        capabilities: {
+          experimentalApi: true,
+        },
+      },
+    }) + "\n");
+  });
+}
+
+export async function listCliModels(runtime: AgentRuntime, customCliPath?: string): Promise<CliModelOption[]> {
+  if (runtime === "codex") return listCodexCliModels(customCliPath);
+  return listClaudeCliModels(customCliPath);
+}
+
 /**
  * Get the MCP server binary path
  */
 function getMcpServerPath(): string {
-  // Resolve from this file's location (apps/api/src/services/ → 4 levels up to repo root)
+  // Resolve from this file's location (apps/api/src/services/ -> 4 levels up to repo root)
   const thisUrl = new URL(".", import.meta.url);
   const thisDir = process.platform === "win32" ? fileURLToPath(thisUrl) : thisUrl.pathname;
   const repoRoot = join(thisDir, "../../../..");

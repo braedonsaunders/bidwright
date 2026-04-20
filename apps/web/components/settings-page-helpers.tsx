@@ -4,11 +4,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Plus, Search, X } from "lucide-react";
 
 import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Select } from "@/components/ui";
-import { detectCli } from "@/lib/api";
+import { detectCli, listCliModels } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type AgentRuntime = "claude-code" | "codex";
 type AgentReasoningEffort = "auto" | "low" | "medium" | "high" | "extra_high" | "max";
+type CliModelOption = {
+  id: string;
+  name: string;
+  description: string;
+  defaultReasoningEffort?: string | null;
+  hidden?: boolean;
+  isDefault?: boolean;
+  supportedReasoningEfforts?: string[];
+};
 
 const REASONING_EFFORT_OPTIONS: Array<{
   value: AgentReasoningEffort;
@@ -54,6 +63,13 @@ function getAutoRuntime(cliStatus: {
 function isCompatibleModel(runtime: AgentRuntime | null, model: string | null | undefined) {
   if (!runtime || !model) return true;
   return runtime === "codex" ? isCodexCliModel(model) : isClaudeCliModel(model);
+}
+
+function getRuntimeCliPath(runtime: AgentRuntime | null, integrations: Record<string, any>) {
+  if (!runtime) return "";
+  return runtime === "codex"
+    ? integrations.codexPath || ""
+    : integrations.claudeCodePath || "";
 }
 
 export function SearchableModelSelect({
@@ -220,16 +236,29 @@ export function AgentRuntimeSettings({
   onUpdateDefaults: (patch: Record<string, any>) => void;
 }) {
   const [cliStatus, setCliStatus] = useState<{
-    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
-    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: { id: string; name: string; description: string }[] };
+    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: CliModelOption[] };
+    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: CliModelOption[] };
     configured: { runtime: string | null; model: string | null };
   } | null>(null);
   const [detecting, setDetecting] = useState(true);
+  const [liveModels, setLiveModels] = useState<Record<AgentRuntime, CliModelOption[]>>({
+    "claude-code": [],
+    codex: [],
+  });
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [debouncedCliPath, setDebouncedCliPath] = useState("");
 
   useEffect(() => {
     setDetecting(true);
     detectCli()
-      .then((result) => setCliStatus(result as any))
+      .then((result) => {
+        const nextStatus = result as any;
+        setCliStatus(nextStatus);
+        setLiveModels({
+          "claude-code": nextStatus?.claude?.models || [],
+          codex: nextStatus?.codex?.models || [],
+        });
+      })
       .catch(() => setCliStatus(null))
       .finally(() => setDetecting(false));
   }, []);
@@ -243,6 +272,67 @@ export function AgentRuntimeSettings({
   const rawCurrentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
   const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel) ? rawCurrentModel : "";
   const reasoningEffort = normalizeAgentReasoningEffort(settings.integrations.agentReasoningEffort);
+  const selectedCliPath = getRuntimeCliPath(effectiveRuntime, settings.integrations);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedCliPath(selectedCliPath);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [selectedCliPath]);
+
+  useEffect(() => {
+    if (!effectiveRuntime) return;
+    const runtimeAvailable = effectiveRuntime === "claude-code"
+      ? cliStatus?.claude?.available
+      : cliStatus?.codex?.available;
+    if (!runtimeAvailable) return;
+
+    let active = true;
+    let pollingTimer: number | null = null;
+
+    const pollRuntimeModels = async () => {
+      setModelsLoading(true);
+      try {
+        const result = await listCliModels(effectiveRuntime, debouncedCliPath);
+        if (!active) return;
+        const models = result.models || [];
+        setLiveModels((prev) => ({ ...prev, [effectiveRuntime]: models }));
+        setCliStatus((prev) => {
+          if (!prev) return prev;
+          if (effectiveRuntime === "claude-code") {
+            return {
+              ...prev,
+              claude: { ...prev.claude, models },
+            };
+          }
+          return {
+            ...prev,
+            codex: { ...prev.codex, models },
+          };
+        });
+      } catch {
+        // Keep the most recent successful model list visible.
+      } finally {
+        if (active) setModelsLoading(false);
+      }
+    };
+
+    void pollRuntimeModels();
+    pollingTimer = window.setInterval(() => {
+      void pollRuntimeModels();
+    }, 30000);
+
+    return () => {
+      active = false;
+      if (pollingTimer != null) window.clearInterval(pollingTimer);
+    };
+  }, [
+    effectiveRuntime,
+    cliStatus?.claude?.available,
+    cliStatus?.codex?.available,
+    debouncedCliPath,
+  ]);
 
   return (
     <Card>
@@ -329,11 +419,7 @@ export function AgentRuntimeSettings({
         <div>
           <Label>Model</Label>
           {(() => {
-            const models = effectiveRuntime === "codex"
-              ? (cliStatus?.codex?.models || [])
-              : effectiveRuntime === "claude-code"
-              ? (cliStatus?.claude?.models || [])
-              : [];
+            const models = effectiveRuntime ? liveModels[effectiveRuntime] || [] : [];
             const displayModels = models.filter((model, index) => models.findIndex((candidate) => candidate.id === model.id) === index);
             return (
               <Select
@@ -347,7 +433,10 @@ export function AgentRuntimeSettings({
               </Select>
             );
           })()}
-          <p className="text-[10px] text-fg/30 mt-1.5">Models are scoped to the selected runtime. Alias options like `opus` and `sonnet` stay current when Claude ships a new snapshot.</p>
+          <p className="text-[10px] text-fg/30 mt-1.5">
+            Models are polled directly from the selected CLI on load and refreshed while this page is open.
+            {modelsLoading && effectiveRuntime ? ` Refreshing ${effectiveRuntime}...` : ""}
+          </p>
         </div>
 
         <div>
