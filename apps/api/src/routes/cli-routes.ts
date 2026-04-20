@@ -5,7 +5,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, type AgentRuntime } from "../services/cli-runtime.js";
+import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
 import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
@@ -387,6 +387,49 @@ async function buildCliModelOptions(runtime: AgentRuntime, apiKey?: string): Pro
   return dedupeCliModels([...defaultModels, ...(await fetchOpenAiCliModels(apiKey))]);
 }
 
+function resolveCliPathOverride(
+  runtime: AgentRuntime,
+  integrations: Record<string, unknown>,
+  requestedPath?: unknown,
+) {
+  if (typeof requestedPath === "string" && requestedPath.trim()) return requestedPath.trim();
+  if (runtime === "claude-code") {
+    return typeof integrations.claudeCodePath === "string" ? integrations.claudeCodePath : undefined;
+  }
+  return typeof integrations.codexPath === "string" ? integrations.codexPath : undefined;
+}
+
+async function listRuntimeModels(
+  runtime: AgentRuntime,
+  integrations: Record<string, unknown>,
+  requestedPath?: unknown,
+) {
+  const cliPath = resolveCliPathOverride(runtime, integrations, requestedPath);
+  const nativeModels = await listCliModels(
+    runtime,
+    cliPath,
+  ).catch(() => []);
+
+  if (nativeModels.length > 0) {
+    return nativeModels.map((model) => ({
+      id: model.id,
+      name: model.name,
+      description: model.description,
+      defaultReasoningEffort: model.defaultReasoningEffort ?? null,
+      hidden: model.hidden ?? false,
+      isDefault: model.isDefault ?? false,
+      supportedReasoningEfforts: model.supportedReasoningEfforts ?? [],
+    }));
+  }
+
+  return buildCliModelOptions(
+    runtime,
+    runtime === "claude-code"
+      ? (typeof integrations.anthropicKey === "string" ? integrations.anthropicKey : process.env.ANTHROPIC_API_KEY)
+      : (typeof integrations.openaiKey === "string" ? integrations.openaiKey : process.env.OPENAI_API_KEY),
+  );
+}
+
 function buildResumePrompt(runtime: AgentRuntime, prompt?: string) {
   if (typeof prompt === "string" && prompt.trim()) return prompt.trim();
   if (runtime === "codex") {
@@ -486,14 +529,9 @@ export function registerCliRoutes(app: FastifyInstance) {
     const claudeAuth = checkCliAuth("claude-code", integrations.anthropicKey);
     const codexAuth = checkCliAuth("codex", integrations.openaiKey);
 
-    const [claudeModels, codexModels] = await Promise.all([
-      claude.available ? buildCliModelOptions("claude-code", integrations.anthropicKey || process.env.ANTHROPIC_API_KEY) : Promise.resolve([]),
-      codex.available ? buildCliModelOptions("codex", integrations.openaiKey || process.env.OPENAI_API_KEY) : Promise.resolve([]),
-    ]);
-
     return {
-      claude: { ...claude, auth: claudeAuth, models: claudeModels },
-      codex: { ...codex, auth: codexAuth, models: codexModels },
+      claude: { ...claude, auth: claudeAuth },
+      codex: { ...codex, auth: codexAuth },
       configured: {
         runtime: configuredRuntime,
         model: configuredModel,
@@ -502,6 +540,33 @@ export function registerCliRoutes(app: FastifyInstance) {
   });
 
   // ── Start CLI Session ───────────────────────────────────────
+  app.get("/api/cli/models", async (request, reply) => {
+    const runtime = (request.query as any)?.runtime;
+    const requestedPath = (request.query as any)?.path;
+    if (!isCliRuntime(runtime)) {
+      return reply.code(400).send({ error: "runtime must be 'claude-code' or 'codex'" });
+    }
+
+    const store = request.store!;
+    const settings = await store.getSettings();
+    const integrations = (settings as any)?.integrations || {};
+    const cliPath = resolveCliPathOverride(runtime, integrations, requestedPath);
+    const detected = detectCli(
+      runtime,
+      cliPath,
+    );
+
+    if (!detected.available) {
+      return reply.code(404).send({ error: `${runtime} is not installed` });
+    }
+
+    return {
+      runtime,
+      models: await listRuntimeModels(runtime, integrations, cliPath),
+      queriedAt: new Date().toISOString(),
+    };
+  });
+
   app.post("/api/cli/start", async (request, reply) => {
     const body = request.body as {
       projectId: string;

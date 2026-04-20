@@ -3412,20 +3412,54 @@ export async function detectCli() {
       path: string;
       version?: string;
       auth?: { authenticated: boolean; method: string };
-      models?: { id: string; name: string; description: string }[];
+      models?: {
+        id: string;
+        name: string;
+        description: string;
+        defaultReasoningEffort?: string | null;
+        hidden?: boolean;
+        isDefault?: boolean;
+        supportedReasoningEfforts?: string[];
+      }[];
     };
     codex: {
       available: boolean;
       path: string;
       version?: string;
       auth?: { authenticated: boolean; method: string };
-      models?: { id: string; name: string; description: string }[];
+      models?: {
+        id: string;
+        name: string;
+        description: string;
+        defaultReasoningEffort?: string | null;
+        hidden?: boolean;
+        isDefault?: boolean;
+        supportedReasoningEfforts?: string[];
+      }[];
     };
     configured: {
       runtime: "claude-code" | "codex" | null;
       model: string | null;
     };
   }>("/api/cli/detect");
+}
+
+export async function listCliModels(runtime: "claude-code" | "codex", cliPath?: string | null) {
+  const params = new URLSearchParams({ runtime });
+  if (cliPath?.trim()) params.set("path", cliPath.trim());
+  return apiRequest<{
+    runtime: "claude-code" | "codex";
+    queriedAt: string;
+    models: {
+      id: string;
+      name: string;
+      description: string;
+      defaultReasoningEffort?: string | null;
+      hidden?: boolean;
+      isDefault?: boolean;
+      supportedReasoningEfforts?: string[];
+    }[];
+  }>(`/api/cli/models?${params.toString()}`);
 }
 
 export async function startCliSession(input: {
