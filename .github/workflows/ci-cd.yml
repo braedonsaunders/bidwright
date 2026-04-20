@@ -63,7 +63,7 @@ jobs:
   deploy:
     needs:
       - verify
-    runs-on: [self-hosted, linux, x64, bidwright-prod]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: production
     if: >
@@ -71,6 +71,9 @@ jobs:
       (github.event_name == 'push' &&
        github.ref == 'refs/heads/main' &&
        vars.ENABLE_SERVER_DEPLOY == 'true')
+    concurrency:
+      group: bidwright-production-deploy
+      cancel-in-progress: false
 
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -96,7 +99,7 @@ jobs:
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          ssh-keyscan -H -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
       - name: Build release bundle
         run: |
@@ -107,11 +110,14 @@ jobs:
             --exclude='dist' \
             --exclude='data' \
             --exclude='backups' \
+            --exclude='tmp' \
             --exclude='.claude' \
             --exclude='.env' \
             --exclude='.env.local' \
             --exclude='.turbo' \
             --exclude='apps/web/.next' \
+            --exclude='playwright-report' \
+            --exclude='test-results' \
             -czf "dist/bidwright-${GITHUB_SHA}.tgz" .
 
       - name: Upload release bundle

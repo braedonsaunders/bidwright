@@ -28,11 +28,13 @@ services:
 
   ollama:
     image: ollama/ollama
+    profiles:
+      - embeddings
     restart: unless-stopped
     volumes:
       - ${OLLAMA_DATA_PATH:-ollama_data}:/root/.ollama
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:11434/"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:11434/"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -40,6 +42,8 @@ services:
   # Pulls the embedding model on first run, then exits
   ollama-init:
     image: curlimages/curl:latest
+    profiles:
+      - embeddings
     depends_on:
       ollama:
         condition: service_healthy
@@ -91,7 +95,7 @@ services:
     ports:
       - "${API_PUBLIC_PORT:-3001}:3001"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12

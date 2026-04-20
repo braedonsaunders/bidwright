@@ -34,6 +34,18 @@ compose() {
     "$@"
 }
 
+is_local_embeddings() {
+  [[ "${EMBEDDING_PROVIDER:-local}" == "local" ]]
+}
+
+compose_up_profiles() {
+  if is_local_embeddings; then
+    compose --profile embeddings "$@"
+  else
+    compose "$@"
+  fi
+}
+
 wait_for_postgres() {
   for _ in $(seq 1 60); do
     if compose exec -T postgres pg_isready -U "${POSTGRES_USER:-bidwright}" -d "${POSTGRES_DB:-bidwright}" >/dev/null 2>&1; then
@@ -60,12 +72,17 @@ wait_for_url() {
   return 1
 }
 
-compose config >/dev/null
-compose up -d postgres redis ollama
+compose_up_profiles config >/dev/null
+compose up -d postgres redis
 wait_for_postgres
 
+if is_local_embeddings; then
+  compose_up_profiles up -d ollama
+  compose_up_profiles run --rm ollama-init
+fi
+
 compose run --rm db-migrate
-compose up -d --build api web worker
+compose_up_profiles up -d --build api web worker
 
 wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
 wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}"

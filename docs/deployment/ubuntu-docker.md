@@ -46,7 +46,13 @@ API_PUBLIC_PORT=3001
 4. Start the infrastructure first:
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d postgres redis ollama
+docker compose -f docker-compose.prod.yml up -d postgres redis
+```
+
+If you explicitly keep `EMBEDDING_PROVIDER=local`, also start the embeddings profile:
+
+```bash
+docker compose -f docker-compose.prod.yml --profile embeddings up -d ollama
 ```
 
 5. Restore the database dump into the Ubuntu Postgres container:
