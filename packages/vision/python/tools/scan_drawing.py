@@ -3,7 +3,7 @@
 Proactive drawing scanner — scans an entire page, clusters similar symbols,
 and auto-counts each cluster. Returns a structured symbol inventory.
 
-Autoresearch results (12 configs across 2 construction packages — Kemira + Soprema):
+Autoresearch results (12 configs across 2 representative construction packages):
   Best config: min_size=20, max_size=180, threshold=0.78, max_clusters=10
   Cross-package accuracy: 92% (11/12 test cases)
   Avg scan time: 2-5s per P&ID page
@@ -288,3 +288,5 @@ if __name__ == "__main__":
         c.pop("thumbnail", None)
 
     print(json.dumps(result))
+
+

@@ -4,4 +4,4 @@
 - `db/` contains database bootstrap SQL and seed helpers.
 - `deploy/` contains migration/export and server deployment helpers.
 - `launch/` contains one-click Docker launchers.
-- `ad-hoc/` contains project-specific one-off utilities that should not leave output in the repo root.
+- `ad-hoc/` is intentionally ignored for local-only customer-specific utilities and should never be committed to the public repo.

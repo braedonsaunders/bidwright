@@ -868,7 +868,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <Label>Project name</Label>
-              <Input value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder="e.g. Soprema Tillsonburg" />
+              <Input value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder="e.g. North Campus Boiler Upgrade" />
             </div>
             <div>
               <Label>Client</Label>
