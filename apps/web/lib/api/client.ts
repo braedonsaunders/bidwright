@@ -12,7 +12,7 @@ function resolveBrowserProxyPath(path: string) {
   if (path.startsWith("/api/")) {
     return path;
   }
-  return `/proxy-api${path}`;
+  return `/api/proxy${path}`;
 }
 
 export function resolveApiUrl(path: string) {
