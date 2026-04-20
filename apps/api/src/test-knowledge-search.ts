@@ -3,7 +3,7 @@
  * Knowledge Search Auto-Researcher
  *
  * Iteratively tests and improves the knowledge search pipeline.
- * Similar to packages/vision/test-sandbox/autoresearch.py pattern.
+ * Similar to the prior vision autoresearch sandbox pattern.
  *
  * Ground truth: queries an estimator would ask + expected content from the Mechanical Estimating Manual.
  */

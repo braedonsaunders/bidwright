@@ -255,10 +255,10 @@ export async function seedRateSchedules(prisma: PrismaClient, store: BidwrightSt
 
 export async function seedCustomersAndDepartments(prisma: PrismaClient, organizationId: string) {
   const customers = [
-    { id: "cust_metro_health", name: "Metro Health Authority", shortName: "MHA", phone: "(416) 555-0100", email: "procurement@metrohealth.ca", website: "https://metrohealth.ca", addressStreet: "200 University Ave", addressCity: "Toronto", addressProvince: "Ontario", addressPostalCode: "M5H 3C6", addressCountry: "Canada", notes: "Major institutional client. Net-30 terms." },
-    { id: "cust_northern_builders", name: "Northern Builders Ltd", shortName: "NBL", phone: "(403) 555-0200", email: "estimating@northernbuilders.ca", website: "https://northernbuilders.ca", addressStreet: "1500 Centre St N", addressCity: "Calgary", addressProvince: "Alberta", addressPostalCode: "T2E 2R8", addressCountry: "Canada", notes: "General contractor. Repeat client since 2019." },
-    { id: "cust_greenfield_dev", name: "Greenfield Development Corp", shortName: "GDC", phone: "(604) 555-0300", email: "projects@greenfielddev.com", website: "https://greenfielddev.com", addressStreet: "888 Dunsmuir St, Suite 400", addressCity: "Vancouver", addressProvince: "British Columbia", addressPostalCode: "V6C 3K4", addressCountry: "Canada", notes: "Commercial developer. High-rise and mixed-use projects." },
-    { id: "cust_apex_industrial", name: "Apex Industrial Services", shortName: "AIS", phone: "(905) 555-0400", email: "bids@apexindustrial.com", website: "", addressStreet: "45 Industrial Pkwy", addressCity: "Hamilton", addressProvince: "Ontario", addressPostalCode: "L8W 3N6", addressCountry: "Canada", notes: "Industrial maintenance and plant upgrades." },
+    { id: "cust_city_health", name: "City Health Authority", shortName: "CHA", phone: "(416) 555-0100", email: "procurement@cityhealth.example", website: "https://cityhealth.example", addressStreet: "200 University Ave", addressCity: "Toronto", addressProvince: "Ontario", addressPostalCode: "M5H 3C6", addressCountry: "Canada", notes: "Sample institutional client. Net-30 terms." },
+    { id: "cust_northline_builders", name: "Northline Builders Ltd", shortName: "NBL", phone: "(403) 555-0200", email: "estimating@northline.example", website: "https://northline.example", addressStreet: "1500 Centre St N", addressCity: "Calgary", addressProvince: "Alberta", addressPostalCode: "T2E 2R8", addressCountry: "Canada", notes: "Sample general contractor. Repeat client for demo purposes." },
+    { id: "cust_westfield_dev", name: "Westfield Development Group", shortName: "WDG", phone: "(604) 555-0300", email: "projects@westfield.example", website: "https://westfield.example", addressStreet: "888 Dunsmuir St, Suite 400", addressCity: "Vancouver", addressProvince: "British Columbia", addressPostalCode: "V6C 3K4", addressCountry: "Canada", notes: "Sample commercial developer. Mixed-use projects." },
+    { id: "cust_summit_industrial", name: "Summit Industrial Services", shortName: "SIS", phone: "(905) 555-0400", email: "bids@summitindustrial.example", website: "https://summitindustrial.example", addressStreet: "45 Industrial Pkwy", addressCity: "Hamilton", addressProvince: "Ontario", addressPostalCode: "L8W 3N6", addressCountry: "Canada", notes: "Sample industrial maintenance client." },
   ];
 
   for (const c of customers) {
@@ -266,12 +266,12 @@ export async function seedCustomersAndDepartments(prisma: PrismaClient, organiza
   }
 
   const contacts = [
-    { id: "ccon_smith", customerId: "cust_metro_health", name: "John Smith", title: "Director of Facilities", phone: "(416) 555-0101", email: "john.smith@metrohealth.ca", isPrimary: true },
-    { id: "ccon_chen", customerId: "cust_metro_health", name: "Linda Chen", title: "Procurement Manager", phone: "(416) 555-0102", email: "linda.chen@metrohealth.ca", isPrimary: false },
-    { id: "ccon_taylor", customerId: "cust_northern_builders", name: "Mike Taylor", title: "Project Manager", phone: "(403) 555-0201", email: "m.taylor@northernbuilders.ca", isPrimary: true },
-    { id: "ccon_patel", customerId: "cust_northern_builders", name: "Priya Patel", title: "Estimating Lead", phone: "(403) 555-0202", email: "p.patel@northernbuilders.ca", isPrimary: false },
-    { id: "ccon_wong", customerId: "cust_greenfield_dev", name: "David Wong", title: "VP Construction", phone: "(604) 555-0301", email: "d.wong@greenfielddev.com", isPrimary: true },
-    { id: "ccon_murphy", customerId: "cust_apex_industrial", name: "Sean Murphy", title: "Plant Manager", phone: "(905) 555-0401", email: "s.murphy@apexindustrial.com", isPrimary: true },
+    { id: "ccon_mercer", customerId: "cust_city_health", name: "Alex Mercer", title: "Director of Facilities", phone: "(416) 555-0101", email: "alex.mercer@cityhealth.example", isPrimary: true },
+    { id: "ccon_park", customerId: "cust_city_health", name: "Jamie Park", title: "Procurement Manager", phone: "(416) 555-0102", email: "jamie.park@cityhealth.example", isPrimary: false },
+    { id: "ccon_brooks", customerId: "cust_northline_builders", name: "Jordan Brooks", title: "Project Manager", phone: "(403) 555-0201", email: "jordan.brooks@northline.example", isPrimary: true },
+    { id: "ccon_shah", customerId: "cust_northline_builders", name: "Taylor Shah", title: "Estimating Lead", phone: "(403) 555-0202", email: "taylor.shah@northline.example", isPrimary: false },
+    { id: "ccon_lin", customerId: "cust_westfield_dev", name: "Morgan Lin", title: "VP Construction", phone: "(604) 555-0301", email: "morgan.lin@westfield.example", isPrimary: true },
+    { id: "ccon_reid", customerId: "cust_summit_industrial", name: "Casey Reid", title: "Plant Manager", phone: "(905) 555-0401", email: "casey.reid@summitindustrial.example", isPrimary: true },
   ];
 
   for (const c of contacts) {
