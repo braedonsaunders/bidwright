@@ -8,8 +8,8 @@ fi
 
 DB_DUMP_PATH="$(realpath "$1")"
 DATA_ARCHIVE_PATH="$(realpath "$2")"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+APP_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/bidwright}"
 ENV_FILE="${ENV_FILE:-${DEPLOY_BASE}/.env.server}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-bidwright}"
@@ -96,7 +96,7 @@ cat "${DB_DUMP_PATH}" | compose exec -T postgres pg_restore \
   --no-privileges
 
 compose run --rm db-migrate
-compose_up_profiles up -d --build api web worker
+compose_up_profiles up -d --build --remove-orphans api web worker
 compose ps
 
 echo

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+APP_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd -P)"
 DEPLOY_BASE="${DEPLOY_BASE:-/opt/bidwright}"
 ENV_FILE="${ENV_FILE:-${DEPLOY_BASE}/.env.server}"
 CURRENT_LINK="${CURRENT_LINK:-${DEPLOY_BASE}/current}"
@@ -82,7 +82,7 @@ if is_local_embeddings; then
 fi
 
 compose run --rm db-migrate
-compose_up_profiles up -d --build api web worker
+compose_up_profiles up -d --build --remove-orphans api web worker
 
 wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
 wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}"
