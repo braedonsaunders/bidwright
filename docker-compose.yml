@@ -44,8 +44,12 @@ services:
       REDIS_URL: redis://redis:6379
       DATA_DIR: /data
       API_PORT: "3001"
+      CLAUDE_CONFIG_DIR: /root/.claude
+      CODEX_HOME: /root/.codex
     volumes:
       - ./data/bidwright-api:/data
+      - ./data/agent-home/claude:/root/.claude
+      - ./data/agent-home/codex:/root/.codex
     ports:
       - "3001:3001"
 
