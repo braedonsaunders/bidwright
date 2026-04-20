@@ -48,6 +48,18 @@ compose() {
     "$@"
 }
 
+is_local_embeddings() {
+  [[ "${EMBEDDING_PROVIDER:-local}" == "local" ]]
+}
+
+compose_up_profiles() {
+  if is_local_embeddings; then
+    compose --profile embeddings "$@"
+  else
+    compose "$@"
+  fi
+}
+
 wait_for_postgres() {
   for _ in $(seq 1 60); do
     if compose exec -T postgres pg_isready -U "${POSTGRES_USER:-bidwright}" -d "${POSTGRES_DB:-bidwright}" >/dev/null 2>&1; then
@@ -60,7 +72,7 @@ wait_for_postgres() {
   return 1
 }
 
-compose up -d postgres redis ollama
+compose up -d postgres redis
 wait_for_postgres
 
 compose exec -T postgres psql -U "${POSTGRES_USER:-bidwright}" -d "${POSTGRES_DB:-bidwright}" -c "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null
@@ -84,7 +96,7 @@ cat "${DB_DUMP_PATH}" | compose exec -T postgres pg_restore \
   --no-privileges
 
 compose run --rm db-migrate
-compose up -d --build api web worker
+compose_up_profiles up -d --build api web worker
 compose ps
 
 echo
