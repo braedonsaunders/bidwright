@@ -1510,7 +1510,38 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         setSseConnected(false);
         es.close();
         eventSourceRef.current = null;
-        onWorkspaceMutated?.(); // Final refresh
+        window.setTimeout(() => {
+          void getCliStatus(projectId)
+          .then((latest) => {
+            const events = latest.events || [];
+            const tools = events.filter((evt: any) => evt.type === "tool_call");
+            const msgs = events.filter((evt: any) => evt.type === "message");
+
+            setLiveToolCalls(tools.map((evt: any, i: number) => ({
+              id: evt.data?.toolUseId || `terminal-tc-${i}`,
+              toolId: evt.data?.toolId || "unknown",
+              input: evt.data?.input || {},
+              result: { success: true, duration_ms: 0 },
+            })));
+            setMessages(msgs.map((evt: any, i: number) => ({
+              id: `terminal-msg-${i}`,
+              role: evt.data?.role || "assistant",
+              content: evt.data?.content || "",
+              timestamp: evt.timestamp || "",
+            })));
+            setIntakeStatus((prev) => prev ? {
+              ...prev,
+              status: latest.status as any,
+              toolCallCount: tools.length,
+              messageCount: msgs.length,
+              events,
+            } : prev);
+          })
+          .catch(() => {})
+          .finally(() => {
+            onWorkspaceMutated?.(); // Final refresh
+          });
+        }, 250);
       }
     });
 

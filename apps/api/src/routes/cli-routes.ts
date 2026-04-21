@@ -84,6 +84,236 @@ function buildSyntheticCompletionEvents(summary: any, updatedAt: Date | string |
   ];
 }
 
+function asEstimateObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function asEstimateArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readNumericValue(source: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function readStringValue(source: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function toReadableText(value: unknown): string | null {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/\s+/g, " ");
+    return normalized || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (Array.isArray(value)) {
+    const joined = value.map(toReadableText).filter((entry): entry is string => !!entry).join(", ");
+    return joined || null;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const direct = readStringValue(record, ["statement", "text", "description", "message", "title", "label", "name", "summary", "note"]);
+    if (direct) return direct;
+  }
+  return null;
+}
+
+function collectEstimateHighlights(items: unknown, limit = 3): string[] {
+  return asEstimateArray(items)
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return toReadableText(entry);
+      const record = entry as Record<string, unknown>;
+      const title = readStringValue(record, ["title", "label", "name"]);
+      const detail = readStringValue(record, ["statement", "text", "description", "message", "summary", "note"]);
+      if (title && detail && !detail.toLowerCase().startsWith(title.toLowerCase())) {
+        return `${title}: ${detail}`;
+      }
+      return title || detail || null;
+    })
+    .filter((entry): entry is string => !!entry)
+    .map((entry) => entry.replace(/^[•\-]\s*/, "").trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function formatCurrency(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function formatHours(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return `${new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: value % 1 === 0 ? 0 : 1,
+    maximumFractionDigits: 1,
+  }).format(value)} labour MH`;
+}
+
+function formatCount(value: number | null, label: string): string | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  return `${rounded} ${label}${rounded === 1 ? "" : "s"}`;
+}
+
+function joinList(items: string[]): string {
+  if (items.length <= 1) return items[0] || "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function isGenericCompletionMessage(content: unknown) {
+  return typeof content === "string"
+    && content.trim() === "Intake complete. Review the estimate worksheets and adjust pricing as needed.";
+}
+
+function hasRichCompletionSummary(events: PersistedCliEvent[]) {
+  return events.some((event) => {
+    if (event.type !== "message") return false;
+    const data = (event.data || {}) as Record<string, unknown>;
+    const content = typeof data.content === "string" ? data.content : "";
+    if (!content.trim()) return false;
+    if (data.derived === true) return true;
+    return /^estimate complete\./i.test(content.trim())
+      || /^estimate finalized\./i.test(content.trim())
+      || /reply with .*revise/i.test(content);
+  });
+}
+
+function buildEstimateCompletionEvents(
+  strategy: {
+    summary?: unknown;
+    assumptions?: unknown;
+    reconcileReport?: unknown;
+    reviewRequired?: boolean | null;
+  },
+  updatedAt: Date | string | null | undefined,
+  options?: { includeStatus?: boolean },
+) {
+  const timestamp = updatedAt instanceof Date
+    ? updatedAt.toISOString()
+    : typeof updatedAt === "string" && updatedAt
+      ? updatedAt
+      : new Date().toISOString();
+
+  const summary = asEstimateObject(strategy.summary);
+  const reconcileReport = asEstimateObject(strategy.reconcileReport);
+  const totalValue = readNumericValue(summary, ["quotedTotal", "totalPrice", "grandTotal", "subtotal"]);
+  const totalHours = readNumericValue(summary, ["totalLabourMH", "totalHours"]);
+  const worksheetCount = readNumericValue(summary, ["totalWorksheets", "worksheetCount"]);
+  const itemCount = readNumericValue(summary, ["totalItems", "lineItemCount", "itemCount"]);
+  const detailParts = [
+    formatCurrency(totalValue),
+    formatCount(worksheetCount, "worksheet"),
+    formatCount(itemCount, "line item"),
+    formatHours(totalHours),
+  ].filter((entry): entry is string => !!entry);
+
+  const detail = detailParts.length > 0
+    ? `Estimate finalized from workspace state with ${detailParts.join(", ")}.`
+    : "Estimate finalized from workspace state.";
+
+  const assumptionHighlights = collectEstimateHighlights(strategy.assumptions, 3);
+  const riskHighlights = [
+    ...collectEstimateHighlights(reconcileReport.majorRisks, 2),
+    ...collectEstimateHighlights(reconcileReport.risks, 2),
+    ...collectEstimateHighlights(reconcileReport.reviewItems, 2),
+  ].filter((entry, index, source) => source.indexOf(entry) === index).slice(0, 3);
+
+  if (strategy.reviewRequired) {
+    riskHighlights.unshift("Human review is still required before this estimate should be treated as final.");
+  }
+
+  const breakdownParts = [
+    ["labour", readNumericValue(summary, ["labourPrice"])],
+    ["material", readNumericValue(summary, ["materialPrice"])],
+    ["equipment", readNumericValue(summary, ["equipmentPrice"])],
+    ["subcontract", readNumericValue(summary, ["subcontractorPrice"])],
+    ["allowance", readNumericValue(summary, ["allowancePrice"])],
+  ]
+    .map(([label, value]) => {
+      const formatted = formatCurrency(value as number | null);
+      return formatted ? `${label} ${formatted}` : null;
+    })
+    .filter((entry): entry is string => !!entry)
+    .slice(0, 4);
+
+  const summaryLead = detailParts.length > 0
+    ? `Estimate complete. I finished the estimate at ${formatCurrency(totalValue) ?? "the current workspace total"} based on ${joinList(detailParts.slice(1)) || "the current workspace state"}.`
+    : "Estimate complete. I finished the estimate using the current workspace state.";
+  const sections = [summaryLead];
+
+  if (breakdownParts.length > 0) {
+    sections.push(`Breakdown: ${breakdownParts.join(", ")}.`);
+  }
+
+  if (assumptionHighlights.length > 0) {
+    sections.push(`Key assumptions: ${joinList(assumptionHighlights)}.`);
+  }
+
+  if (riskHighlights.length > 0) {
+    sections.push(`Review notes: ${joinList(riskHighlights)}.`);
+  }
+
+  const summaryNote = readStringValue(summary, ["completionNotes", "note", "notes"]);
+  if (summaryNote) {
+    sections.push(summaryNote);
+  }
+
+  sections.push("Reply with any pricing, scope, schedule, or packaging changes and I can revise the estimate.");
+
+  const events: PersistedCliEvent[] = [
+    {
+      type: "progress",
+      data: {
+        phase: "Complete",
+        detail,
+        derived: true,
+      },
+      timestamp,
+    },
+    {
+      type: "message",
+      data: {
+        role: "assistant",
+        content: sections.join("\n\n"),
+        derived: true,
+      },
+      timestamp,
+    },
+  ];
+
+  if (options?.includeStatus !== false) {
+    events.push({
+      type: "status",
+      data: {
+        status: "completed",
+        derived: true,
+      },
+      timestamp,
+    });
+  }
+
+  return events;
+}
+
 type PersistedCliEvent = {
   type?: string;
   data?: Record<string, unknown>;
@@ -1072,26 +1302,36 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
           status: true,
           currentStage: true,
           summary: true,
+          assumptions: true,
+          reconcileReport: true,
+          reviewRequired: true,
           updatedAt: true,
         },
       });
 
       const strategyMatchesLatestRun =
         strategy?.aiRunId === latestRun.id &&
-        strategy.status === "complete" &&
+        (strategy.status === "complete" || strategy.status === "ready_for_review") &&
         strategy.currentStage === "complete";
 
       if (strategyMatchesLatestRun) {
         derivedStatus = "completed";
 
-        if (!latestRunClosed) {
+        const alreadyHasCompletionSummary = hasRichCompletionSummary(latestRunEvents);
+        if (!alreadyHasCompletionSummary) {
           const lastEventTimestamp = latestRunEvents[latestRunEvents.length - 1]?.timestamp;
           const strategyUpdatedAt = strategy.updatedAt instanceof Date
             ? strategy.updatedAt.toISOString()
             : strategy.updatedAt;
 
-          if (!lastEventTimestamp || (strategyUpdatedAt && strategyUpdatedAt > lastEventTimestamp)) {
-            derivedCompletionEvents = buildSyntheticCompletionEvents(strategy.summary, strategy.updatedAt);
+          if (
+            latestRunClosed
+            || !lastEventTimestamp
+            || (strategyUpdatedAt && strategyUpdatedAt >= lastEventTimestamp)
+          ) {
+            derivedCompletionEvents = buildEstimateCompletionEvents(strategy, strategy.updatedAt, {
+              includeStatus: !latestRunClosed,
+            });
           }
         }
       }
@@ -1118,6 +1358,9 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
 
       // Add all events from this run
       for (const event of runEvents) {
+        if (run.id === latestRun?.id && derivedCompletionEvents.length > 0 && isGenericCompletionMessage(event?.data?.content)) {
+          continue;
+        }
         mergedEvents.push(event);
       }
 
