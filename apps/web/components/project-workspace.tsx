@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronDown,
   ClipboardList,
@@ -170,6 +170,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
   { id: "review", label: "Review", icon: SearchCheck },
   { id: "activity", label: "Activity", icon: MessageSquareText },
 ];
+const estimateSubTabs = ["worksheets", "phases", "takeoff", "schedule"] as const;
 
 /* ─── Utilities ─── */
 
@@ -197,6 +198,14 @@ function statusTone(s: string | undefined | null) {
     case "failed": case "didnotget": case "declined": case "cancelled": return "danger" as const;
     default: return "default" as const;
   }
+}
+
+function isWorkspaceTab(value: string | null): value is WorkspaceTab {
+  return tabs.some((tab) => tab.id === value);
+}
+
+function isEstimateSubTab(value: string | null): value is EstimateSubTab {
+  return estimateSubTabs.some((tab) => tab === value);
 }
 
 /* ─── Status Dropdown ─── */
@@ -282,8 +291,17 @@ function findWs(workspace: ProjectWorkspaceData, id: string) {
 /* ─── Main Component ─── */
 
 export function ProjectWorkspace({ initialData }: { initialData: WorkspaceResponse }) {
-  const [tab, setTab] = useState<WorkspaceTab>("setup");
-  const [estimateSubTab, setEstimateSubTab] = useState<EstimateSubTab>("worksheets");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [tab, setTab] = useState<WorkspaceTab>(() => {
+    const urlTab = searchParams.get("tab");
+    return isWorkspaceTab(urlTab) ? urlTab : "setup";
+  });
+  const [estimateSubTab, setEstimateSubTab] = useState<EstimateSubTab>(() => {
+    const urlSubTab = searchParams.get("subtab");
+    return isEstimateSubTab(urlSubTab) ? urlSubTab : "worksheets";
+  });
   const [data, setData] = useState(initialData);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedWsId, setSelectedWsId] = useState(
@@ -303,7 +321,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [chatOpen, setChatOpen] = useState(false);
   const [autoIntake, setAutoIntake] = useState(false);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
-  const searchParams = useSearchParams();
   const intakeInitRef = useRef(false);
   const [isPending, startTransition] = useTransition();
 
@@ -348,15 +365,42 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   useEffect(() => { setWsNameDraft(selectedWs?.name ?? ""); }, [selectedWs?.id, selectedWs?.name]);
 
-  // Auto-open estimate tab + agent chat when redirected from intake
+  // Keep UI state in sync with URL changes/back-forward navigation.
+  useEffect(() => {
+    const urlTab = searchParams.get("tab");
+    const nextTab = isWorkspaceTab(urlTab) ? urlTab : "setup";
+    if (nextTab !== tab) {
+      setTab(nextTab);
+    }
+    if (nextTab === "estimate") {
+      const urlSubTab = searchParams.get("subtab");
+      const nextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : "worksheets";
+      if (nextSubTab !== estimateSubTab) {
+        setEstimateSubTab(nextSubTab);
+      }
+    }
+  }, [estimateSubTab, searchParams, tab]);
+
+  // Reflect current tab selection back into the URL for deep-linking.
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", tab);
+    if (tab === "estimate") {
+      params.set("subtab", estimateSubTab);
+    } else {
+      params.delete("subtab");
+    }
+    const nextQuery = params.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+    }
+  }, [estimateSubTab, pathname, router, searchParams, tab]);
+
+  // Auto-open agent chat when redirected from intake.
   useEffect(() => {
     if (intakeInitRef.current) return;
-    const urlTab = searchParams.get("tab");
     const urlIntake = searchParams.get("intake");
-    if (urlTab === "estimate") {
-      setTab("estimate");
-      setEstimateSubTab("worksheets");
-    }
     if (urlIntake === "true") {
       setChatOpen(true);
       setAutoIntake(true);
