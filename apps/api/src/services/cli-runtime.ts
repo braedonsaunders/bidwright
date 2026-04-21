@@ -81,6 +81,20 @@ function buildDefaultResumePrompt(runtime: AgentRuntime): string {
   return "Resume the previous estimate session. Read CLAUDE.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
 }
 
+function shouldUseClaudeBypassPermissions() {
+  if (process.env.SUDO_USER) return false;
+  if (typeof process.geteuid === "function" && process.geteuid() === 0) return false;
+  if (typeof process.getuid === "function" && process.getuid() === 0) return false;
+  return true;
+}
+
+function getClaudePermissionArgs() {
+  if (shouldUseClaudeBypassPermissions()) {
+    return ["--dangerously-skip-permissions"];
+  }
+  return ["--permission-mode", "acceptEdits"];
+}
+
 // Active sessions: one per project
 const sessions = new Map<string, CliSession>();
 const BENIGN_CODEX_STDERR_PATTERNS = [
@@ -601,6 +615,7 @@ export async function spawnSession(opts: {
   await mkdir(claudeSettingsDir, { recursive: true });
   await writeFile(join(claudeSettingsDir, "settings.json"), JSON.stringify({
     permissions: {
+      defaultMode: "acceptEdits",
       "allow": [
         "mcp__bidwright__*",
         "Bash(*)",
@@ -652,11 +667,11 @@ export async function spawnSession(opts: {
     cliArgs = [
       "-p", safePrompt,
       "--output-format", "stream-json",
-      "--dangerously-skip-permissions", // Non-interactive, no permission prompts
       "--verbose",
       "--max-turns", "200", // Prevent infinite loops
       "--mcp-config", mcpConfigPath, // Pass MCP config file path
     ];
+    cliArgs.push(...getClaudePermissionArgs());
     if (model) cliArgs.push("--model", model);
     const claudeEffort = mapClaudeEffort(reasoningEffort);
     if (claudeEffort) cliArgs.push("--effort", claudeEffort);
@@ -1192,10 +1207,10 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
     cliArgs = [
       "--resume", sessionId,
       "--output-format", "stream-json",
-      "--dangerously-skip-permissions",
       "--verbose",
       "--max-turns", "200",
     ];
+    cliArgs.push(...getClaudePermissionArgs());
     if (resumePrompt) cliArgs.push("-p", resumePrompt);
     if (model) cliArgs.push("--model", model);
     const claudeEffort = mapClaudeEffort(reasoningEffort);
