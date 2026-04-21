@@ -323,21 +323,52 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
   const intakeInitRef = useRef(false);
   const [isPending, startTransition] = useTransition();
+  const urlTab = searchParams.get("tab");
+  const urlSubTab = searchParams.get("subtab");
+  const urlIntake = searchParams.get("intake");
 
   const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
 
+  const updateWorkspaceUrl = useCallback((nextTab: WorkspaceTab, nextSubTab?: EstimateSubTab) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", nextTab);
+    if (nextTab === "estimate") {
+      params.set("subtab", nextSubTab ?? "worksheets");
+    } else {
+      params.delete("subtab");
+    }
+    const nextQuery = params.toString();
+    const currentQuery = searchParams.toString();
+    if (nextQuery !== currentQuery) {
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+    }
+  }, [pathname, router, searchParams]);
+
+  const handleTabChange = useCallback((nextTab: WorkspaceTab) => {
+    setTab(nextTab);
+    updateWorkspaceUrl(nextTab, nextTab === "estimate" ? estimateSubTab : undefined);
+  }, [estimateSubTab, updateWorkspaceUrl]);
+
+  const handleEstimateSubTabChange = useCallback((nextSubTab: EstimateSubTab) => {
+    setTab("estimate");
+    setEstimateSubTab(nextSubTab);
+    updateWorkspaceUrl("estimate", nextSubTab);
+  }, [updateWorkspaceUrl]);
+
   const handleSearchNavigate = useCallback((target: SearchNavigationTarget) => {
-    setTab(target.tab);
     if (target.tab === "estimate" && "subTab" in target) {
-      setEstimateSubTab(target.subTab as EstimateSubTab);
-      if (target.subTab === "worksheets" && "worksheetId" in target && target.worksheetId) {
+      const nextSubTab = target.subTab as EstimateSubTab;
+      handleEstimateSubTabChange(nextSubTab);
+      if (nextSubTab === "worksheets" && "worksheetId" in target && target.worksheetId) {
         setSelectedWsId(target.worksheetId);
       }
+    } else {
+      handleTabChange(target.tab);
     }
     setSearchHighlight(target);
     // Clear highlight after 3 seconds
     setTimeout(() => setSearchHighlight(null), 3000);
-  }, []);
+  }, [handleEstimateSubTabChange, handleTabChange]);
 
   const workspace = data.workspace;
   const selectedWs = selectedWsId === "all" ? null : findWs(workspace, selectedWsId);
@@ -367,40 +398,21 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // Keep UI state in sync with URL changes/back-forward navigation.
   useEffect(() => {
-    const urlTab = searchParams.get("tab");
     const nextTab = isWorkspaceTab(urlTab) ? urlTab : "setup";
     if (nextTab !== tab) {
       setTab(nextTab);
     }
     if (nextTab === "estimate") {
-      const urlSubTab = searchParams.get("subtab");
       const nextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : "worksheets";
       if (nextSubTab !== estimateSubTab) {
         setEstimateSubTab(nextSubTab);
       }
     }
-  }, [estimateSubTab, searchParams, tab]);
-
-  // Reflect current tab selection back into the URL for deep-linking.
-  useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", tab);
-    if (tab === "estimate") {
-      params.set("subtab", estimateSubTab);
-    } else {
-      params.delete("subtab");
-    }
-    const nextQuery = params.toString();
-    const currentQuery = searchParams.toString();
-    if (nextQuery !== currentQuery) {
-      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
-    }
-  }, [estimateSubTab, pathname, router, searchParams, tab]);
+  }, [estimateSubTab, tab, urlSubTab, urlTab]);
 
   // Auto-open agent chat when redirected from intake.
   useEffect(() => {
     if (intakeInitRef.current) return;
-    const urlIntake = searchParams.get("intake");
     if (urlIntake === "true") {
       setChatOpen(true);
       setAutoIntake(true);
@@ -410,7 +422,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       url.searchParams.delete("intake");
       window.history.replaceState({}, "", url.pathname + url.search);
     }
-  }, [searchParams]);
+  }, [urlIntake]);
 
   const visibleRows = useMemo(() => {
     const rows = selectedWs ? selectedWs.items : (workspace.worksheets ?? []).flatMap((w) => w.items);
@@ -649,7 +661,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           return (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
+              onClick={() => handleTabChange(t.id)}
               className={cn(
                 "flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors whitespace-nowrap",
                 tab === t.id ? "border-accent text-accent" : "border-transparent text-fg/45 hover:text-fg/70"
@@ -680,8 +692,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <motion.div key="estimate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col gap-3">
               {/* Estimate sub-tabs */}
               <div className="flex items-center gap-1 shrink-0">
-                {(["worksheets", "phases", "takeoff", "schedule"] as const).map((st) => (
-                  <button key={st} onClick={() => setEstimateSubTab(st)}
+                {estimateSubTabs.map((st) => (
+                  <button key={st} onClick={() => handleEstimateSubTabChange(st)}
                     className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
                       estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
                     )}>
