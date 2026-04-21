@@ -569,6 +569,11 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     });
   }
 
+  const displayTotalHours =
+    Number(workspace.currentRevision.totalHours ?? 0) > 0
+      ? Number(workspace.currentRevision.totalHours ?? 0)
+      : Number(workspace.estimate.totals.totalHours ?? 0);
+
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-4">
       {/* ─── Header ─── */}
@@ -602,7 +607,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <div className="flex items-center gap-3 text-[11px] text-fg/50">
               <div className="whitespace-nowrap"><span className="text-fg/35">Cost</span> <span className="font-mono">{formatMoney(workspace.currentRevision.cost)}</span></div>
               <div className="whitespace-nowrap"><span className="text-fg/35">Profit</span> <span className={cn("font-mono", (workspace.currentRevision.estimatedProfit ?? 0) >= 0 ? "text-success" : "text-danger")}>{formatMoney(workspace.currentRevision.estimatedProfit)}</span></div>
-              <div className="whitespace-nowrap"><span className="text-fg/35">Hrs</span> <span className="font-mono">{(workspace.currentRevision.totalHours ?? 0).toLocaleString()}</span></div>
+              <div className="whitespace-nowrap"><span className="text-fg/35">Hrs</span> <span className="font-mono">{displayTotalHours.toLocaleString()}</span></div>
             </div>
             <div className="border-l border-line pl-3">
               <div className="text-base font-semibold tabular-nums whitespace-nowrap">{formatMoney(workspace.currentRevision.subtotal)}</div>
