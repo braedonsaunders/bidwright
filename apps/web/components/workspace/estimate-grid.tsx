@@ -46,6 +46,7 @@ import {
   updateWorksheetItem,
 } from "@/lib/api";
 import { formatMoney, formatPercent } from "@/lib/format";
+import { getWorksheetHourBreakdown, mapLegacyUnitsToTierUnits } from "@/lib/worksheet-hours";
 import {
   Badge,
   Button,
@@ -701,6 +702,21 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     }
   }, [autoDefaultColumns]);
 
+  const getRowHourBreakdown = useCallback(
+    (row: WorkspaceWorksheetItem) => getWorksheetHourBreakdown(row, workspace.rateSchedules),
+    [workspace.rateSchedules],
+  );
+
+  const getEditableValue = useCallback(
+    (row: WorkspaceWorksheetItem, column: EditableColumn) => {
+      if (column === "unit1" || column === "unit2" || column === "unit3") {
+        return getRowHourBreakdown(row)[column];
+      }
+      return row[column as keyof WorkspaceWorksheetItem];
+    },
+    [getRowHourBreakdown],
+  );
+
   // Toggle sort on column click
   function handleSortToggle(column: ColumnId) {
     setSortState((prev) => {
@@ -757,9 +773,9 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
           case "description": aVal = a.description.toLowerCase(); bVal = b.description.toLowerCase(); break;
           case "quantity": aVal = a.quantity; bVal = b.quantity; break;
           case "uom": aVal = a.uom; bVal = b.uom; break;
-          case "unit1": aVal = a.unit1; bVal = b.unit1; break;
-          case "unit2": aVal = a.unit2; bVal = b.unit2; break;
-          case "unit3": aVal = a.unit3; bVal = b.unit3; break;
+          case "unit1": aVal = getRowHourBreakdown(a).unit1; bVal = getRowHourBreakdown(b).unit1; break;
+          case "unit2": aVal = getRowHourBreakdown(a).unit2; bVal = getRowHourBreakdown(b).unit2; break;
+          case "unit3": aVal = getRowHourBreakdown(a).unit3; bVal = getRowHourBreakdown(b).unit3; break;
           case "cost": aVal = a.cost; bVal = b.cost; break;
           case "markup": aVal = a.markup; bVal = b.markup; break;
           case "price": aVal = a.price; bVal = b.price; break;
@@ -781,7 +797,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     }
 
     return rows;
-  }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState]);
+  }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState, getRowHourBreakdown]);
 
   // Grouped rows
   const groupedRows = useMemo(
@@ -794,12 +810,12 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     return {
       cost: visibleRows.reduce((sum, r) => sum + r.cost * r.quantity, 0),
       price: visibleRows.reduce((sum, r) => sum + r.price, 0),
-      regHrs: visibleRows.reduce((sum, r) => sum + r.unit1, 0),
-      otHrs: visibleRows.reduce((sum, r) => sum + r.unit2, 0),
-      dtHrs: visibleRows.reduce((sum, r) => sum + r.unit3, 0),
+      regHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit1 * r.quantity, 0),
+      otHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit2 * r.quantity, 0),
+      dtHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit3 * r.quantity, 0),
       count: visibleRows.length,
     };
-  }, [visibleRows]);
+  }, [visibleRows, getRowHourBreakdown]);
 
   // All catalog items flattened (for catalog quick-add)
   const allCatalogItems = useMemo(() => {
@@ -894,7 +910,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     }
 
     let patch: Record<string, unknown> = {};
-    const currentVal = row[column as keyof WorkspaceWorksheetItem];
+    const currentVal = getEditableValue(row, column);
 
     if (column === "markup") {
       const numVal = parseNum(editValue) / 100;
@@ -916,7 +932,31 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
         setEditingCell(null);
         return;
       }
-      patch = { [column]: numVal };
+      if (column === "unit1" || column === "unit2" || column === "unit3") {
+        const nextUnits = {
+          ...getRowHourBreakdown(row),
+          [column]: numVal,
+        };
+
+        patch = {
+          [column]: numVal,
+          ...(row.rateScheduleItemId || Object.keys(row.tierUnits ?? {}).length > 0
+            ? {
+                tierUnits: mapLegacyUnitsToTierUnits(
+                  row,
+                  workspace.rateSchedules,
+                  {
+                    unit1: nextUnits.unit1,
+                    unit2: nextUnits.unit2,
+                    unit3: nextUnits.unit3,
+                  },
+                ),
+              }
+            : {}),
+        };
+      } else {
+        patch = { [column]: numVal };
+      }
     } else if (column === "phaseId") {
       const phaseVal = editValue || null;
       if (phaseVal === currentVal) {
@@ -959,7 +999,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     for (let i = colIdx + 1; i < EDITABLE_COLUMNS_ORDER.length; i++) {
       const nextCol = EDITABLE_COLUMNS_ORDER[i];
       if (!isCellDisabledByCategory(catDef, nextCol)) {
-        const rawVal = row[nextCol as keyof WorkspaceWorksheetItem];
+        const rawVal = getEditableValue(row, nextCol);
         startEditing(rowId, nextCol, rawVal as string | number);
         return;
       }
@@ -971,7 +1011,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       const nextCatDef = findCategoryForRow(nextRow, entityCategories);
       for (const col of EDITABLE_COLUMNS_ORDER) {
         if (!isCellDisabledByCategory(nextCatDef, col)) {
-          const rawVal = nextRow[col as keyof WorkspaceWorksheetItem];
+          const rawVal = getEditableValue(nextRow, col);
           startEditing(nextRow.id, col, rawVal as string | number);
           return;
         }
@@ -989,7 +1029,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
         const rowIdx = visibleRows.findIndex((r) => r.id === rowId);
         if (rowIdx >= 0 && rowIdx < visibleRows.length - 1) {
           const nextRow = visibleRows[rowIdx + 1];
-          const rawVal = nextRow[column as keyof WorkspaceWorksheetItem];
+          const rawVal = getEditableValue(nextRow, column);
           setTimeout(() => startEditing(nextRow.id, column, rawVal as string | number), 0);
         }
       }
@@ -1605,6 +1645,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   function renderUnitsCell(row: WorkspaceWorksheetItem) {
     const catDef = findCategoryForRow(row, entityCategories);
     const hasAutoLabour = catDef?.calculationType === "auto_labour";
+    const hourBreakdown = getRowHourBreakdown(row);
 
     const renderUnitSlot = (
       field: "unit1" | "unit2" | "unit3",
@@ -1665,13 +1706,13 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     return (
       <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-center gap-0">
-          {renderUnitSlot("unit1", row.unit1, "Unit 1")}
+          {renderUnitSlot("unit1", hourBreakdown.unit1, "Unit 1")}
           {hasAutoLabour && (
             <>
               <span className="text-fg/15 text-[9px] select-none">·</span>
-              {renderUnitSlot("unit2", row.unit2, "Unit 2")}
+              {renderUnitSlot("unit2", hourBreakdown.unit2, "Unit 2")}
               <span className="text-fg/15 text-[9px] select-none">·</span>
-              {renderUnitSlot("unit3", row.unit3, "Unit 3")}
+              {renderUnitSlot("unit3", hourBreakdown.unit3, "Unit 3")}
             </>
           )}
         </div>
@@ -1956,7 +1997,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
         onClick={(e) => {
           e.stopPropagation();
           if (!disabled) {
-            const raw = row[column as keyof WorkspaceWorksheetItem];
+            const raw = getEditableValue(row, column);
             startEditing(row.id, column, raw as string | number);
           }
         }}

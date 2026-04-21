@@ -15,6 +15,7 @@ import type {
   WorksheetItem,
 } from "./models.js";
 import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder.js";
+import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours.js";
 
 const directCostCategories = new Set([
   "Material",
@@ -154,7 +155,7 @@ function computeItemCost(item: WorksheetItem) {
   return item.cost;
 }
 
-function computeItemHours(item: WorksheetItem) {
+function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
   const category = normalizeCategoryName(item.category, item.entityType);
 
   if (category !== "Labour") {
@@ -169,14 +170,16 @@ function computeItemHours(item: WorksheetItem) {
   const tierUnits: Record<string, number> = {};
   if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
     for (const [tierId, hours] of Object.entries(item.tierUnits)) {
-      tierUnits[tierId] = (Number(hours) || 0) * item.quantity;
+      tierUnits[tierId] = roundMoney((Number(hours) || 0) * item.quantity);
     }
   }
 
+  const derivedHours = getExtendedWorksheetHourBreakdown(item, schedules, item.quantity);
+
   return {
-    unit1: item.unit1 * item.quantity,
-    unit2: item.unit2 * item.quantity,
-    unit3: item.unit3 * item.quantity,
+    unit1: derivedHours.unit1,
+    unit2: derivedHours.unit2,
+    unit3: derivedHours.unit3,
     tierUnits,
   };
 }
@@ -206,6 +209,24 @@ function getWorksheets(store: BidwrightStore, revisionId: string) {
     .map((worksheet) => ({
       ...worksheet,
       items: getWorksheetItems(store, worksheet.id),
+    }));
+}
+
+function getRevisionRateSchedules(
+  store: BidwrightStore,
+  revisionId: string,
+): WorksheetHourRateScheduleLike[] {
+  const revisionScheduleIds = new Set(
+    store.rateSchedules
+      .filter((schedule) => schedule.revisionId === revisionId)
+      .map((schedule) => schedule.id),
+  );
+
+  return store.rateSchedules
+    .filter((schedule) => revisionScheduleIds.has(schedule.id))
+    .map((schedule) => ({
+      tiers: store.rateScheduleTiers.filter((tier) => tier.scheduleId === schedule.id),
+      items: store.rateScheduleItems.filter((item) => item.scheduleId === schedule.id),
     }));
 }
 
@@ -593,6 +614,7 @@ export function calculateTotals(
   worksheets: Array<Worksheet & { items: WorksheetItem[] }>,
   phases: BidwrightStore["phases"],
   adjustments: Adjustment[],
+  revisionSchedules: WorksheetHourRateScheduleLike[] = [],
 ): RevisionTotals {
   const lineItems = worksheets.flatMap((worksheet) => worksheet.items);
   const {
@@ -767,7 +789,7 @@ export function calculateTotals(
   updateSourceMargins(phaseTotalsMap.values());
   updateSourceMargins(phaseCategoryTotalsMap.values());
 
-  const allItemHours = lineItems.map((item) => computeItemHours(item));
+  const allItemHours = lineItems.map((item) => computeItemHours(item, revisionSchedules));
   const regHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit1, 0));
   const overHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit2, 0));
   const doubleHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit3, 0));
@@ -902,7 +924,8 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
   const estimateFeedback = (store.estimateCalibrationFeedback ?? [])
     .filter((entry) => entry.revisionId === revision.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  const totals = calculateTotals(revision, worksheets, phases, adjustments);
+  const revisionSchedules = getRevisionRateSchedules(store, revision.id);
+  const totals = calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules);
   const summaryBuilder = buildSummaryBuilderConfig(
     (revision.pdfPreferences as Record<string, unknown> | undefined)?.summaryBuilder as any,
     summaryRows,
@@ -1324,8 +1347,9 @@ export function summarizeProjectTotals(store: BidwrightStore, projectId: string)
   const worksheets = getWorksheets(store, revision.id);
   const phases = store.phases.filter((phase) => phase.revisionId === revision.id);
   const adjustments = store.adjustments.filter((adjustment) => adjustment.revisionId === revision.id);
+  const revisionSchedules = getRevisionRateSchedules(store, revision.id);
 
-  return calculateTotals(revision, worksheets, phases, adjustments);
+  return calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules);
 }
 
 export function updateWorksheetItem(

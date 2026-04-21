@@ -10,6 +10,7 @@ import {
   computeSummaryRows,
   createSummaryBuilderPreset,
   deriveSummaryBuilderFromLegacy,
+  getExtendedWorksheetHourBreakdown,
   inferSummaryPresetFromBuilder,
   materializeSummaryRowsFromBuilder,
   normalizeSummaryBuilderConfig,
@@ -1448,14 +1449,14 @@ export class PrismaApiStore {
     unit1?: number | null;
     unit2?: number | null;
     unit3?: number | null;
+    tierUnits?: Record<string, number> | null;
   }) {
     const category = this.normalizeEstimateCategory(item.category, item.entityType);
     if (category !== "Labour") {
       return 0;
     }
 
-    const quantity = Number(item.quantity ?? 1);
-    return quantity * (Number(item.unit1 ?? 0) + Number(item.unit2 ?? 0) + Number(item.unit3 ?? 0));
+    return getExtendedWorksheetHourBreakdown(item, [], Number(item.quantity ?? 1)).total;
   }
 
   private estimateItemExtendedCost(item: {
