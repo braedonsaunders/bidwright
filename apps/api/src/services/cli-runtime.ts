@@ -782,13 +782,14 @@ export async function spawnSession(opts: {
   };
 
   // Stash spawn opts for recovery
-  session._spawnOpts = { projectId, projectDir, prompt, runtime, model, authToken, apiBaseUrl, revisionId, quoteId, customCliPath, anthropicApiKey, openaiApiKey };
+  session._spawnOpts = { projectId, projectDir, prompt, runtime, model, authToken, apiBaseUrl, revisionId, quoteId, customCliPath, anthropicApiKey, openaiApiKey, reasoningEffort };
   session._recoveryCount = 0;
 
   sessions.set(projectId, session);
 
-  // Inactivity watchdog — recover session if no output for 5 minutes
-  const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+  // Inactivity watchdog — recover session if no output for a long interval
+  const INACTIVITY_TIMEOUT_MINUTES = 15;
+  const INACTIVITY_TIMEOUT_MS = INACTIVITY_TIMEOUT_MINUTES * 60 * 1000;
   const MAX_RECOVERIES = 2;
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   const resetInactivityTimer = () => {
@@ -800,7 +801,7 @@ export async function spawnSession(opts: {
       if (recoveries >= MAX_RECOVERIES) {
         // Give up after max retries
         console.warn(`[cli] Inactivity timeout for project ${projectId} — max recoveries (${MAX_RECOVERIES}) reached, terminating`);
-        events.emit("event", { type: "error", data: { message: `Session terminated: no activity for 5 minutes (${MAX_RECOVERIES} recovery attempts exhausted)` } });
+        events.emit("event", { type: "error", data: { message: `Session terminated: no activity for ${INACTIVITY_TIMEOUT_MINUTES} minutes (${MAX_RECOVERIES} recovery attempts exhausted)` } });
         killProcess(child, "SIGINT");
         return;
       }
@@ -809,13 +810,13 @@ export async function spawnSession(opts: {
       const savedSessionId = session.sessionId;
       if (!savedSessionId) {
         console.warn(`[cli] Inactivity timeout for project ${projectId} — no session ID for recovery, terminating`);
-        events.emit("event", { type: "error", data: { message: "Session terminated: no activity for 5 minutes (no session ID for recovery)" } });
+        events.emit("event", { type: "error", data: { message: `Session terminated: no activity for ${INACTIVITY_TIMEOUT_MINUTES} minutes (no session ID for recovery)` } });
         killProcess(child, "SIGINT");
         return;
       }
 
       console.warn(`[cli] Inactivity timeout for project ${projectId} — attempting recovery #${recoveries + 1} via --resume`);
-      events.emit("event", { type: "progress", data: { phase: "Recovery", detail: `No activity for 5 minutes — restarting session (attempt ${recoveries + 1}/${MAX_RECOVERIES})` } });
+      events.emit("event", { type: "progress", data: { phase: "Recovery", detail: `No activity for ${INACTIVITY_TIMEOUT_MINUTES} minutes — restarting session (attempt ${recoveries + 1}/${MAX_RECOVERIES})` } });
 
       // Kill the stuck process and mark it so spawnSession doesn't reject
       session.status = "stopped";
@@ -855,7 +856,7 @@ export async function spawnSession(opts: {
 
   // Wire up stdout/stderr/exit handlers (shared helper)
   wireChildProcess(child, session, runtime, events, {
-    onStdoutLine: resetInactivityTimer,
+    onActivity: resetInactivityTimer,
   });
 
   // Clear inactivity timer on process exit/error
@@ -879,14 +880,14 @@ function wireChildProcess(
   session: CliSession,
   runtime: AgentRuntime,
   events: EventEmitter,
-  opts?: { onStdoutLine?: () => void },
+  opts?: { onActivity?: () => void },
 ) {
   let suppressCodexHtmlWarning = false;
 
   if (child.stdout) {
     const rl = createInterface({ input: child.stdout });
     rl.on("line", (line) => {
-      opts?.onStdoutLine?.();
+      opts?.onActivity?.();
       if (!line.trim()) return;
       try {
         const parsed = JSON.parse(line);
@@ -913,6 +914,7 @@ function wireChildProcess(
   if (child.stderr) {
     const rl = createInterface({ input: child.stderr });
     rl.on("line", (line) => {
+      opts?.onActivity?.();
       if (line.trim()) {
         if (runtime === "codex") {
           const trimmed = line.trim();
@@ -1201,17 +1203,58 @@ async function spawnResumedSession(opts: any, sessionId: string): Promise<CliSes
     BIDWRIGHT_QUOTE_ID: quoteId || "",
   };
   const cliEnv: Record<string, string> = { ...mcpEnv };
+  const mcpConfigObj = {
+    mcpServers: {
+      bidwright: {
+        command: mcpRunner,
+        args: mcpArgs,
+        env: mcpEnv,
+      },
+    },
+  };
+  const mcpConfigPath = join(projectDir, ".bidwright-mcp-config.json");
+  await writeFile(mcpConfigPath, JSON.stringify(mcpConfigObj, null, 2), "utf-8");
 
   let cliArgs: string[];
   if (runtime === "claude-code") {
+    const claudeSettingsDir = join(projectDir, ".claude");
+    await mkdir(claudeSettingsDir, { recursive: true });
+    await writeFile(join(claudeSettingsDir, "settings.json"), JSON.stringify({
+      permissions: {
+        defaultMode: "acceptEdits",
+        allow: [
+          "mcp__bidwright__*",
+          "Bash(*)",
+          "Read(*)",
+          "Write(*)",
+          "Edit(*)",
+          "Glob(*)",
+          "Grep(*)",
+          "Agent(*)",
+          "TodoWrite",
+          "WebSearch(*)",
+          "WebFetch(*)",
+        ],
+      },
+      mcpServers: {
+        bidwright: {
+          command: mcpRunner,
+          args: mcpArgs,
+          env: mcpEnv,
+        },
+      },
+    }, null, 2), "utf-8");
+
+    const safeResumePrompt = isWin ? resumePrompt.replace(/\r?\n/g, " ") : resumePrompt;
     cliArgs = [
       "--resume", sessionId,
       "--output-format", "stream-json",
       "--verbose",
       "--max-turns", "200",
+      "--mcp-config", mcpConfigPath,
     ];
     cliArgs.push(...getClaudePermissionArgs());
-    if (resumePrompt) cliArgs.push("-p", resumePrompt);
+    if (safeResumePrompt) cliArgs.push("-p", safeResumePrompt);
     if (model) cliArgs.push("--model", model);
     const claudeEffort = mapClaudeEffort(reasoningEffort);
     if (claudeEffort) cliArgs.push("--effort", claudeEffort);
