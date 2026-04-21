@@ -45,6 +45,7 @@ import {
   Separator,
   Textarea,
 } from "@/components/ui";
+import { ConfirmModal } from "@/components/workspace/modals";
 import {
   CabinetDirectorySidebar,
   cabinetPathLabel,
@@ -364,6 +365,8 @@ function BooksTab({
 }) {
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [bookToDelete, setBookToDelete] = useState<KnowledgeBookRecord | null>(null);
+  const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
   const [movingBook, setMovingBook] = useState<KnowledgeBookRecord | null>(null);
@@ -481,6 +484,24 @@ function BooksTab({
     }
   };
 
+  const handleConfirmDeleteBook = async () => {
+    if (!bookToDelete) return;
+    setDeletingBookId(bookToDelete.id);
+    try {
+      await deleteKnowledgeBook(bookToDelete.id);
+      if (selectedBookId === bookToDelete.id) {
+        setSelectedBookId(null);
+      }
+      await onRefresh();
+      setError(null);
+      setBookToDelete(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete book");
+    } finally {
+      setDeletingBookId(null);
+    }
+  };
+
   return (
     <>
     <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -550,11 +571,7 @@ function BooksTab({
                   setMoveTargetCabinetId(book.cabinetId ?? "__root__");
                 }}
                 onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
-                onDelete={async () => {
-                  await deleteKnowledgeBook(book.id);
-                  if (selectedBookId === book.id) setSelectedBookId(null);
-                  onRefresh();
-                }}
+                onDelete={() => setBookToDelete(book)}
               />
             ))}
           </div>
@@ -602,6 +619,19 @@ function BooksTab({
       />,
       document.body,
     )}
+
+    <ConfirmModal
+      open={bookToDelete !== null}
+      onClose={() => {
+        if (!deletingBookId) setBookToDelete(null);
+      }}
+      title="Delete Book"
+      message={`Delete "${bookToDelete?.name ?? "this book"}"? This will remove the book and its indexed content.`}
+      confirmLabel="Delete"
+      confirmVariant="danger"
+      isPending={deletingBookId !== null}
+      onConfirm={handleConfirmDeleteBook}
+    />
     </>
   );
 }
@@ -621,7 +651,6 @@ function BookCard({
   onSelect: () => void;
   onDelete: () => void;
 }) {
-  const [deleting, setDeleting] = useState(false);
   const [imgError, setImgError] = useState(false);
 
   return (
@@ -694,10 +723,8 @@ function BookCard({
               size="xs"
               onClick={(e) => {
                 e.stopPropagation();
-                setDeleting(true);
                 onDelete();
               }}
-              disabled={deleting}
             >
               <Trash2 className="h-3 w-3" />
             </Button>
@@ -2163,6 +2190,8 @@ function DatasetsTab({
 }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [datasetToDelete, setDatasetToDelete] = useState<DatasetRecord | null>(null);
+  const [deletingDatasetId, setDeletingDatasetId] = useState<string | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryDatasets, setLibraryDatasets] = useState<DatasetRecord[]>([]);
   const [adopting, setAdopting] = useState<string | null>(null);
@@ -2273,6 +2302,24 @@ function DatasetsTab({
     }
   };
 
+  const handleConfirmDeleteDataset = async () => {
+    if (!datasetToDelete) return;
+    setDeletingDatasetId(datasetToDelete.id);
+    try {
+      await deleteDataset(datasetToDelete.id);
+      if (selectedDatasetId === datasetToDelete.id) {
+        setSelectedDatasetId(null);
+      }
+      await onRefresh();
+      setError(null);
+      setDatasetToDelete(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete dataset");
+    } finally {
+      setDeletingDatasetId(null);
+    }
+  };
+
   return (
     <>
       <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
@@ -2353,9 +2400,9 @@ function DatasetsTab({
           cabinetsById={cabinetsById}
           datasets={filtered}
           onSelect={(id) => setSelectedDatasetId(id)}
-          onDelete={async (id) => {
-            await deleteDataset(id);
-            onRefresh();
+          onDelete={(id) => {
+            const target = datasets.find((dataset) => dataset.id === id) ?? null;
+            setDatasetToDelete(target);
           }}
           onMove={(dataset) => {
             setMovingDataset(dataset);
@@ -2465,10 +2512,23 @@ function DatasetsTab({
           onConfirm={handleMoveSave}
           onValueChange={setMoveTargetCabinetId}
           saving={savingMove}
-          value={moveTargetCabinetId}
-        />,
-        document.body,
-      )}
+        value={moveTargetCabinetId}
+      />,
+      document.body,
+    )}
+
+    <ConfirmModal
+      open={datasetToDelete !== null}
+      onClose={() => {
+        if (!deletingDatasetId) setDatasetToDelete(null);
+      }}
+      title="Delete Dataset"
+      message={`Delete "${datasetToDelete?.name ?? "this dataset"}"? This will remove the dataset and all of its rows.`}
+      confirmLabel="Delete"
+      confirmVariant="danger"
+      isPending={deletingDatasetId !== null}
+      onConfirm={handleConfirmDeleteDataset}
+    />
     </>
   );
 }
