@@ -518,11 +518,23 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   // ── Get Latest Review ─────────────────────────────────────
   app.get("/api/review/:projectId/latest", async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const review = await prisma.quoteReview.findFirst({
+    let review = await prisma.quoteReview.findFirst({
       where: { projectId },
       orderBy: { createdAt: "desc" },
     });
     if (!review) return { review: null };
+    if (review.status === "running" && review.aiRunId) {
+      const run = await prisma.aiRun.findUnique({
+        where: { id: review.aiRunId },
+        select: { status: true },
+      });
+      if (!run || run.status !== "running") {
+        review = await prisma.quoteReview.update({
+          where: { id: review.id },
+          data: { status: run?.status === "completed" ? "completed" : "failed" },
+        });
+      }
+    }
     const context = await getQuoteReviewContext(projectId);
     return { review: serializeReview(review, context) };
   });
