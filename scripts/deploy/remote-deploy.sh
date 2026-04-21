@@ -46,6 +46,10 @@ compose_up_profiles() {
   fi
 }
 
+cleanup_db_migrate_container() {
+  compose rm -f -s db-migrate >/dev/null 2>&1 || true
+}
+
 wait_for_postgres() {
   for _ in $(seq 1 60); do
     if compose exec -T postgres pg_isready -U "${POSTGRES_USER:-bidwright}" -d "${POSTGRES_DB:-bidwright}" >/dev/null 2>&1; then
@@ -81,8 +85,10 @@ if is_local_embeddings; then
   compose_up_profiles run --rm ollama-init
 fi
 
+cleanup_db_migrate_container
 compose run --rm db-migrate
 compose_up_profiles up -d --build --remove-orphans api web worker
+cleanup_db_migrate_container
 
 wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
 wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}"
