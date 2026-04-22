@@ -46,7 +46,11 @@ import {
   updateWorksheetItem,
 } from "@/lib/api";
 import { formatMoney, formatPercent } from "@/lib/format";
-import { getWorksheetHourBreakdown, mapLegacyUnitsToTierUnits } from "@/lib/worksheet-hours";
+import {
+  getWorksheetHourBreakdown,
+  getWorksheetUnitSlotLabels,
+  mapLegacyUnitsToTierUnits,
+} from "@/lib/worksheet-hours";
 import {
   Badge,
   Button,
@@ -520,7 +524,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   }, [highlightItemId]);
 
   // Filter state
-  const [searchTerm, setSearchTerm] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [phaseFilter, setPhaseFilter] = useState("");
 
@@ -707,6 +710,12 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     [workspace.rateSchedules],
   );
 
+  const getRowUnitSlotLabels = useCallback(
+    (row: WorkspaceWorksheetItem, category: EntityCategory | undefined) =>
+      getWorksheetUnitSlotLabels(row, workspace.rateSchedules, category?.unitLabels),
+    [workspace.rateSchedules],
+  );
+
   const getEditableValue = useCallback(
     (row: WorkspaceWorksheetItem, column: EditableColumn) => {
       if (column === "unit1" || column === "unit2" || column === "unit3") {
@@ -738,16 +747,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     } else {
       const ws = findWs(workspace, activeTab);
       rows = ws ? ws.items : [];
-    }
-
-    const q = searchTerm.trim().toLowerCase();
-    if (q) {
-      rows = rows.filter((r) =>
-        [r.entityName, r.description, r.category, r.entityType, r.vendor ?? ""]
-          .join(" ")
-          .toLowerCase()
-          .includes(q)
-      );
     }
 
     if (categoryFilter) {
@@ -797,7 +796,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     }
 
     return rows;
-  }, [searchTerm, categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState, getRowHourBreakdown]);
+  }, [categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState, getRowHourBreakdown]);
 
   // Grouped rows
   const groupedRows = useMemo(
@@ -1643,6 +1642,8 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
   /** Combined units cell — shows unit1 · unit2 · unit3 inline, each editable */
   function renderUnitsCell(row: WorkspaceWorksheetItem) {
+    return renderResolvedUnitsCell(row);
+
     const catDef = findCategoryForRow(row, entityCategories);
     const hasAutoLabour = catDef?.calculationType === "auto_labour";
     const hourBreakdown = getRowHourBreakdown(row);
@@ -1673,7 +1674,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       }
       if (disabled) {
         return (
-          <span key={field} className="tabular-nums text-xs text-fg/30 italic px-1" title={label}
+          <span key={field} className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs text-fg/30 italic" title={label}
             onClick={(e) => e.stopPropagation()}
           >
             {value || "–"}
@@ -1715,6 +1716,96 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
               {renderUnitSlot("unit3", hourBreakdown.unit3, "Unit 3")}
             </>
           )}
+        </div>
+      </td>
+    );
+  }
+
+  function renderResolvedUnitsCell(row: WorkspaceWorksheetItem) {
+    const catDef = findCategoryForRow(row, entityCategories);
+    const hasAutoLabour = catDef?.calculationType === "auto_labour";
+    const hourBreakdown = getRowHourBreakdown(row);
+    const unitLabels = getRowUnitSlotLabels(row, catDef);
+    const hasDerivedSecondaryUnits = hourBreakdown.unit2 > 0 || hourBreakdown.unit3 > 0;
+    const visibleUnitSlots =
+      hasAutoLabour
+        ? (["unit1", "unit2", "unit3"] as const)
+        : hasDerivedSecondaryUnits
+          ? ((["unit1", "unit2", "unit3"] as const).filter((slot) => hourBreakdown[slot] > 0))
+          : (["unit1"] as const);
+
+    const renderUnitSlot = (
+      field: "unit1" | "unit2" | "unit3",
+      value: number,
+      label: string,
+    ) => {
+      const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
+      const disabled = isCellDisabledByCategory(catDef, field);
+
+      if (isEditing) {
+        return (
+          <input
+            key={field}
+            ref={(el) => { editInputRef.current = el; }}
+            type="number"
+            step="0.01"
+            className="w-14 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onBlur={commitEdit}
+            onKeyDown={handleCellKeyDown}
+            autoFocus
+          />
+        );
+      }
+
+      const valueDisplay = value || <span className="text-fg/20">â€“</span>;
+
+      if (disabled) {
+        return (
+          <span
+            key={field}
+            className="tabular-nums text-xs text-fg/30 italic px-1"
+            title={label}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {valueDisplay}
+          </span>
+        );
+      }
+
+      return (
+        <span
+          key={field}
+          role="button"
+          tabIndex={0}
+          className="tabular-nums text-xs px-1.5 py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors min-w-[32px] text-center inline-block"
+          title={`Click to edit ${label}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            startEditing(row.id, field, value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              startEditing(row.id, field, value);
+            }
+          }}
+        >
+          {valueDisplay}
+        </span>
+      );
+    };
+
+    return (
+      <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-center gap-0">
+          {visibleUnitSlots.map((field, index) => (
+            <div key={field} className="contents">
+              {index > 0 ? <span className="text-fg/15 text-[9px] select-none">Â·</span> : null}
+              {renderUnitSlot(field, hourBreakdown[field], unitLabels[field])}
+            </div>
+          ))}
         </div>
       </td>
     );
@@ -2154,10 +2245,6 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
       {/* ─── Toolbar ─── */}
       <div className="flex items-center gap-2 shrink-0">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-fg/30" />
-            <Input className="pl-7 h-6 w-56 text-[11px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-          </div>
           <RadixSelect.Root value={categoryFilter} onValueChange={(v) => setCategoryFilter(v === "__all__" ? "" : v)}>
             <RadixSelect.Trigger className="inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors">
               <RadixSelect.Value placeholder="All types" />
