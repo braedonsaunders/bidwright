@@ -8,7 +8,7 @@ import type {
   SummaryRow,
   SummaryRowStyle,
   SummaryRowType,
-} from "./models.js";
+} from "./models";
 
 const standalonePricingModes = new Set<AdjustmentPricingMode>([
   "option_standalone",
