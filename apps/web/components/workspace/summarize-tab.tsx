@@ -456,8 +456,8 @@ function IconToggleButton({
   );
 }
 
-function MetricCell({ value }: { value: string }) {
-  return <td className="px-3 py-2 text-right font-mono text-[11px] font-medium text-fg/80">{value}</td>;
+function MetricCell({ value, className }: { value: string; className?: string }) {
+  return <td className={cn("px-3 py-2 text-right font-mono text-[11px] font-medium text-fg/80", className)}>{value}</td>;
 }
 
 export function SummarizeTab({
@@ -920,7 +920,7 @@ function SummaryBreakdownPanel({
                     </td>
                   );
                 })}
-                <MetricCell value={formatMoney(total?.value ?? 0)} />
+                <MetricCell value={formatMoney(total?.value ?? 0)} className="border-l border-line" />
                 <MetricCell value={formatMoney(total?.cost ?? 0)} />
                 <MetricCell value={formatPercent(total?.margin ?? 0)} />
                 <td className="px-3 py-2 text-right">
@@ -944,7 +944,7 @@ function SummaryBreakdownPanel({
           />
           <tr className="bg-panel2/35">
             <td colSpan={visibleColumns.length + 1} className="px-3 py-2 font-semibold text-fg">Grand Total</td>
-            <MetricCell value={formatMoney(totals.subtotal)} />
+            <MetricCell value={formatMoney(totals.subtotal)} className="border-l border-line" />
             <MetricCell value={formatMoney(totals.cost)} />
             <MetricCell value={formatPercent(totals.estimatedMargin)} />
             <td className="px-3 py-2" />
