@@ -7,6 +7,14 @@ interface WorksheetHourBreakdown {
   total: number;
 }
 
+type WorksheetUnitSlot = "unit1" | "unit2" | "unit3";
+
+interface WorksheetUnitSlotLabels {
+  unit1: string;
+  unit2: string;
+  unit3: string;
+}
+
 const OVERTIME_PATTERN = /(^|[^a-z])ot([^a-z]|$)|overtime|time[\s-]*and[\s-]*half|week(?:ly)?/i;
 const DOUBLETIME_PATTERN = /double|(^|[^a-z])dt([^a-z]|$)|2x|two[\s-]*time|month(?:ly)?/i;
 const REGULAR_PATTERN = /regular|straight|base|day(?:ly)?/i;
@@ -102,6 +110,20 @@ function findTierForSlot(slot: "unit1" | "unit2" | "unit3", schedule: RateSchedu
   return sortTiers(schedule).find((tier) => inferSlotFromTier(tier.name, tier.multiplier) === slot) ?? null;
 }
 
+function getFallbackSlotLabel(
+  slot: WorksheetUnitSlot,
+  fallbackLabels?: Partial<Record<WorksheetUnitSlot, string>>,
+) {
+  const configured = fallbackLabels?.[slot]?.trim();
+  if (configured) {
+    return configured;
+  }
+
+  if (slot === "unit1") return "Unit 1";
+  if (slot === "unit2") return "Unit 2";
+  return "Unit 3";
+}
+
 export function getWorksheetHourBreakdown(row: WorkspaceWorksheetItem, schedules: RateSchedule[]): WorksheetHourBreakdown {
   const legacy = {
     unit1: toNumber(row.unit1),
@@ -146,6 +168,30 @@ export function getWorksheetHourBreakdown(row: WorkspaceWorksheetItem, schedules
     unit3: roundHours(unit3),
     total: roundHours(unit1 + unit2 + unit3),
   };
+}
+
+export function getWorksheetUnitSlotLabels(
+  row: WorkspaceWorksheetItem,
+  schedules: RateSchedule[],
+  fallbackLabels?: Partial<Record<WorksheetUnitSlot, string>>,
+): WorksheetUnitSlotLabels {
+  const schedule = findMatchingSchedule(row, schedules);
+
+  const labels: WorksheetUnitSlotLabels = {
+    unit1: getFallbackSlotLabel("unit1", fallbackLabels),
+    unit2: getFallbackSlotLabel("unit2", fallbackLabels),
+    unit3: getFallbackSlotLabel("unit3", fallbackLabels),
+  };
+
+  for (const slot of ["unit1", "unit2", "unit3"] as const) {
+    const tier = findTierForSlot(slot, schedule);
+    const tierName = tier?.name?.trim();
+    if (tierName) {
+      labels[slot] = tierName;
+    }
+  }
+
+  return labels;
 }
 
 export function mapLegacyUnitsToTierUnits(
