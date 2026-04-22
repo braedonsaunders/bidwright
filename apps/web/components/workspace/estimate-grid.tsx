@@ -56,6 +56,10 @@ import {
   mapLegacyUnitsToTierUnits,
 } from "@/lib/worksheet-hours";
 import {
+  categoryAllowsEditingUnitSlot,
+  categoryUsesTieredUnits,
+} from "@/lib/entity-category-calculation";
+import {
   Badge,
   Button,
   Card,
@@ -299,11 +303,8 @@ function isCellDisabledByCategory(
   if (column === "entityName" || column === "vendor" || column === "description" || column === "phaseId") {
     return false;
   }
-  if (
-    category.calculationType === "auto_equipment" &&
-    (column === "unit1" || column === "unit2" || column === "unit3")
-  ) {
-    return false;
+  if (column === "unit1" || column === "unit2" || column === "unit3") {
+    return !categoryAllowsEditingUnitSlot(category, column);
   }
   const fieldMap: Record<string, keyof EntityCategory["editableFields"]> = {
     quantity: "quantity",
@@ -877,7 +878,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
     const cols = new Set(DEFAULT_VISIBLE_COLUMNS);
 
     // Hide combined units column if no rows use labour or have unit fields
-    const hasLabourOrUnit1 = activeCatDefs.some((c) => c.calculationType === "auto_labour" || c.editableFields.unit1);
+    const hasLabourOrUnit1 = activeCatDefs.some((c) => categoryUsesTieredUnits(c) || c.editableFields.unit1);
     if (!hasLabourOrUnit1 && allItems.length > 0) {
       cols.delete("units");
     }
@@ -1882,13 +1883,12 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
   function renderResolvedUnitsCell(row: WorkspaceWorksheetItem) {
     const catDef = findCategoryForRow(row, entityCategories);
     const isTemporary = isTemporaryWorksheetItemId(row.id);
-    const hasAutoLabour = catDef?.calculationType === "auto_labour";
-    const hasAutoEquipment = catDef?.calculationType === "auto_equipment";
+    const hasTieredUnits = categoryUsesTieredUnits(catDef);
     const hourBreakdown = getRowHourBreakdown(row);
     const unitLabels = getRowUnitSlotLabels(row, catDef);
     const hasDerivedSecondaryUnits = hourBreakdown.unit2 > 0 || hourBreakdown.unit3 > 0;
     const visibleUnitSlots =
-      hasAutoLabour || hasAutoEquipment
+      hasTieredUnits
         ? (["unit1", "unit2", "unit3"] as const)
         : hasDerivedSecondaryUnits
           ? ((["unit1", "unit2", "unit3"] as const).filter((slot) => hourBreakdown[slot] > 0))

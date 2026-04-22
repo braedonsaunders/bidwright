@@ -1,6 +1,7 @@
 import { Building2, Layers, Users, Zap } from "lucide-react";
 
 import type { BrandProfile, CalculationType, EntityCategory } from "@/lib/api";
+import { CALCULATION_TYPE_OPTIONS } from "@/lib/entity-category-calculation";
 
 export const STORAGE_KEY = "bidwright-settings";
 
@@ -204,16 +205,9 @@ export const CURRENCIES = ["USD", "CAD", "EUR", "GBP", "AUD", "NZD", "CHF", "JPY
 export const DATE_FORMATS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-export const CALCULATION_TYPES: { value: CalculationType; label: string }[] = [
-  { value: "auto_labour", label: "Auto Labour" },
-  { value: "auto_equipment", label: "Auto Equipment" },
-  { value: "auto_stock", label: "Auto Stock" },
-  { value: "auto_consumable", label: "Auto Consumable" },
-  { value: "auto_subcontract", label: "Auto Subcontract" },
-  { value: "direct_price", label: "Direct Price" },
-  { value: "manual", label: "Manual" },
-  { value: "formula", label: "Formula" },
-];
+export const CALCULATION_TYPES: { value: CalculationType; label: string }[] = CALCULATION_TYPE_OPTIONS.map(
+  ({ value, label }) => ({ value, label }),
+);
 
 export const VALID_UOMS = ["EA", "LF", "SF", "SY", "CY", "TON", "LB", "GAL", "HR", "DAY", "WK", "MO", "LS", "MH", "CF", "BF", "PC", "SET", "BAG", "BOX", "ROLL"];
 
