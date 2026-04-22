@@ -268,43 +268,150 @@ function buildNecaPlugin(): Plugin {
 function buildPhccPlugin(): Plugin {
   const plugin = clonePlugin("phcc-labour");
   const labourTool = findTool(plugin, "phcc.labourUnits");
-  replaceServiceItemWithRateSchedule(labourTool);
-
-  const hoursPerUnitField = findField(labourTool, "hoursPerUnit");
-  hoursPerUnitField.computation = {
-    formula: "lookup(category, class, subClass)",
-    dependencies: ["category", "class", "subClass", "difficulty"],
-    format: "number",
-    datasetId: "ds-phcc-labour",
-    lookupColumns: ["category", "class", "subClass"],
-    resultColumn: "hourNormal",
-    resultColumnFrom: "difficulty",
-    resultColumnMap: {
-      Normal: "hourNormal",
-      Difficult: "hourDifficult",
-      "Very Difficult": "hourVeryDifficult",
-      Extreme: "hourVeryDifficult",
+  labourTool.parameters = [
+    { name: "category", type: "string", description: "PHCC labour category", required: true },
+    { name: "class", type: "string", description: "PHCC labour class", required: true },
+    { name: "subClass", type: "string", description: "PHCC labour subclass", required: false },
+    { name: "quantity", type: "number", description: "Quantity of units to estimate", required: true },
+    {
+      name: "difficulty",
+      type: "string",
+      description: "Difficulty level to apply to the PHCC lookup",
+      required: false,
+      enum: ["Normal", "Difficult", "Very Difficult", "Extreme"],
+      default: "Normal",
     },
+    { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
+  ];
+  labourTool.ui = {
+    layout: "single",
+    submitLabel: "Add Labour Item",
+    showPreview: true,
+    sections: [
+      {
+        id: "lookup",
+        type: "fields",
+        label: "PHCC Labour Lookup",
+        description: "Select PHCC category, class, and subclass to find standard hours.",
+        order: 0,
+        fields: [
+          {
+            id: "category",
+            type: "select",
+            label: "Category",
+            description: "Primary PHCC labour category",
+            placeholder: "Select category...",
+            optionsSource: { type: "dataset", datasetId: "ds-phcc-labour", column: "category" },
+            validation: { required: true },
+            width: "full",
+            order: 0,
+          },
+          {
+            id: "class",
+            type: "select",
+            label: "Class",
+            description: "PHCC labour class",
+            placeholder: "Select class...",
+            optionsSource: {
+              type: "cascade",
+              datasetId: "ds-phcc-labour",
+              column: "class",
+              dependsOn: "category",
+              parentColumn: "category",
+            },
+            validation: { required: true },
+            width: "full",
+            order: 1,
+          },
+          {
+            id: "subClass",
+            type: "select",
+            label: "Sub-Class",
+            description: "Specific PHCC labour subclass",
+            placeholder: "Select sub-class...",
+            optionsSource: {
+              type: "cascade",
+              datasetId: "ds-phcc-labour",
+              column: "subClass",
+              dependsOn: "class",
+              parentColumn: "class",
+            },
+            width: "full",
+            order: 2,
+          },
+          {
+            id: "hoursPerUnit",
+            type: "computed",
+            label: "Hours per Unit",
+            description: "Standard PHCC hours for this item",
+            computation: {
+              formula: "lookup(category, class, subClass)",
+              dependencies: ["category", "class", "subClass", "difficulty"],
+              format: "number",
+              datasetId: "ds-phcc-labour",
+              lookupColumns: ["category", "class", "subClass"],
+              resultColumn: "hourNormal",
+              resultColumnFrom: "difficulty",
+              resultColumnMap: {
+                Normal: "hourNormal",
+                Difficult: "hourDifficult",
+                "Very Difficult": "hourVeryDifficult",
+                Extreme: "hourVeryDifficult",
+              },
+            },
+            width: "half",
+            order: 3,
+          },
+          {
+            id: "quantity",
+            type: "number",
+            label: "Quantity",
+            placeholder: "Enter quantity",
+            defaultValue: 1,
+            validation: { required: true, min: 0.01 },
+            width: "half",
+            order: 4,
+          },
+          {
+            id: "difficulty",
+            type: "select",
+            label: "Difficulty",
+            defaultValue: "Normal",
+            options: [
+              { value: "Normal", label: "Normal", description: "Use standard PHCC hours" },
+              { value: "Difficult", label: "Difficult", description: "Use difficult-condition PHCC hours" },
+              { value: "Very Difficult", label: "Very Difficult", description: "Use very difficult PHCC hours" },
+              { value: "Extreme", label: "Extreme", description: "Use the most conservative PHCC difficulty hours" },
+            ],
+            width: "half",
+            order: 5,
+          },
+          {
+            id: "serviceItemId",
+            type: "select",
+            label: "Labour Rate",
+            description: "Select the labour rate schedule item to price these hours against",
+            optionsSource: { type: "rate_schedule" },
+            validation: { required: true },
+            width: "half",
+            order: 6,
+          },
+          {
+            id: "totalHours",
+            type: "computed",
+            label: "Total Hours",
+            computation: {
+              formula: "hoursPerUnit * quantity",
+              dependencies: ["hoursPerUnit", "quantity"],
+              format: "hours",
+            },
+            width: "full",
+            order: 7,
+          },
+        ],
+      },
+    ],
   };
-
-  const totalHoursField = findField(labourTool, "totalHours");
-  totalHoursField.computation = {
-    formula: "hoursPerUnit * quantity",
-    dependencies: ["hoursPerUnit", "quantity"],
-    format: "hours",
-  };
-
-  upsertParameter(labourTool, {
-    name: "difficulty",
-    type: "string",
-    description: "Difficulty level to apply to the PHCC lookup",
-    required: false,
-    enum: ["Normal", "Difficult", "Very Difficult", "Extreme"],
-    default: "Normal",
-  });
-
-  const difficultyField = findField(labourTool, "difficulty");
-  difficultyField.defaultValue = "Normal";
 
   return plugin;
 }
