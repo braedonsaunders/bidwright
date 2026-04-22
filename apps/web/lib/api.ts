@@ -1173,6 +1173,12 @@ export interface CreateWorksheetItemInput {
   sourceNotes?: string;
 }
 
+export interface WorksheetItemMutationResponse {
+  mode: "create" | "update" | "delete";
+  item: WorkspaceWorksheetItem;
+  currentRevision: QuoteRevision;
+}
+
 export async function updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-items/${itemId}`, {
     method: "PATCH",
@@ -1197,6 +1203,49 @@ export async function deleteWorksheetItem(projectId: string, itemId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-items/${itemId}`, {
     method: "DELETE",
   });
+}
+
+export async function updateWorksheetItemFast(
+  projectId: string,
+  itemId: string,
+  patch: WorksheetItemPatchInput,
+) {
+  return apiRequest<WorksheetItemMutationResponse>(
+    `/projects/${projectId}/worksheet-items/${itemId}?response=delta`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+export async function createWorksheetItemFast(
+  projectId: string,
+  worksheetId: string,
+  input: CreateWorksheetItemInput,
+) {
+  return apiRequest<WorksheetItemMutationResponse>(
+    `/projects/${projectId}/worksheets/${worksheetId}/items?response=delta`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteWorksheetItemFast(projectId: string, itemId: string) {
+  return apiRequest<WorksheetItemMutationResponse>(
+    `/projects/${projectId}/worksheet-items/${itemId}?response=delta`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export async function reorderWorksheetItems(

@@ -2512,6 +2512,12 @@ export class PrismaApiStore {
     return summarizeProjectTotals(store, projectId);
   }
 
+  async getCurrentRevisionSnapshot(projectId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    return revision ? mapRevision(revision) : null;
+  }
+
   async recalculateProjectEstimate(projectId: string) {
     await this.requireProject(projectId);
     return this.syncProjectEstimate(projectId);

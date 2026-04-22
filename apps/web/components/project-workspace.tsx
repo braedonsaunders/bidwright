@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition, useRef, useCallback } from "react";
+import { useEffect, useMemo, useState, useTransition, useRef, useCallback, type SetStateAction } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -433,7 +433,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   const currentItem = itemDraft?.itemId ? (workspace.worksheets ?? []).flatMap((w) => w.items).find((i) => i.id === itemDraft.itemId) ?? null : null;
 
-  function apply(next: WorkspaceResponse) { setData(next); setError(null); }
+  const apply = useCallback((next: SetStateAction<WorkspaceResponse>) => {
+    setData((prev) =>
+      typeof next === "function"
+        ? (next as (value: WorkspaceResponse) => WorkspaceResponse)(prev)
+        : next,
+    );
+    setError(null);
+  }, []);
 
   const refreshWorkspace = useCallback(() => {
     startTransition(async () => {
@@ -711,7 +718,13 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
               <AnimatePresence mode="wait">
                 {estimateSubTab === "worksheets" && (
                   <motion.div key="worksheets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <EstimateGrid workspace={workspace} onApply={apply} onError={setError} highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined} />
+                    <EstimateGrid
+                      workspace={workspace}
+                      onApply={apply}
+                      onError={setError}
+                      onRefresh={refreshWorkspace}
+                      highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
+                    />
                   </motion.div>
                 )}
 
