@@ -1,6 +1,6 @@
-import type { Plugin, PluginField, PluginScoringCriterion, PluginToolDefinition } from "./models.js";
-import { mockStore } from "./mock-data.js";
-import { LEGACY_NECA_JOB_CONDITION_CRITERIA, SHOP_WELD_COMPONENTS, SHOP_PIPE_DATA } from "./plugin-calculators.js";
+import type { Plugin, PluginField, PluginScoringCriterion, PluginToolDefinition } from "./models";
+import { mockStore } from "./mock-data";
+import { LEGACY_NECA_JOB_CONDITION_CRITERIA, SHOP_WELD_COMPONENTS, SHOP_PIPE_DATA } from "./plugin-calculators";
 
 const pluginMap = new Map(mockStore.plugins.map((plugin) => [plugin.slug, plugin]));
 

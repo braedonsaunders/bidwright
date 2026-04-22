@@ -13,9 +13,9 @@ import type {
   SummaryRowType,
   Worksheet,
   WorksheetItem,
-} from "./models.js";
-import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder.js";
-import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours.js";
+} from "./models";
+import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder";
+import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours";
 
 const directCostCategories = new Set([
   "Material",

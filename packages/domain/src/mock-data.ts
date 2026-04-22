@@ -1,4 +1,4 @@
-import type { BidwrightStore } from "./models.js";
+import type { BidwrightStore } from "./models";
 
 export const mockStore: BidwrightStore = {
   projects: [

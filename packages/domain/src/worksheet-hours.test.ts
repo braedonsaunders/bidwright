@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getExtendedWorksheetHourBreakdown, getWorksheetHourBreakdown, mapLegacyUnitsToTierUnits } from "./worksheet-hours.js";
+import { getExtendedWorksheetHourBreakdown, getWorksheetHourBreakdown, mapLegacyUnitsToTierUnits } from "./worksheet-hours";
 
 const labourSchedules = [
   {
