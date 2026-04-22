@@ -5,6 +5,8 @@ import {
   computeNecaTemperatureAdjustment,
   computeShopPipeEstimate,
   computeShopWeldEstimate,
+  getDatasetCellValue,
+  getDatasetCellString,
   sumTableHours,
 } from "@bidwright/domain";
 
@@ -59,9 +61,9 @@ function daysBetween(start: string, end: string) {
 
 function getRowString(row: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const value = getDatasetCellString(row, key);
+    if (value) {
+      return value;
     }
   }
   return "";
@@ -69,7 +71,7 @@ function getRowString(row: Record<string, unknown>, keys: string[]) {
 
 function getRowNumber(row: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
-    const value = Number(row[key]);
+    const value = Number(getDatasetCellValue(row, key));
     if (Number.isFinite(value)) {
       return value;
     }
@@ -94,12 +96,12 @@ function findLabourDatasetRow(
   const subClass = toStringValue(input.subClass);
 
   const matches = rows.filter((row) =>
-    getRowString(row, ["category", "LabourCategory"]) === category &&
-    getRowString(row, ["class", "Class"]) === labourClass,
+    getRowString(row, ["category"]) === category &&
+    getRowString(row, ["class"]) === labourClass,
   );
 
   if (subClass) {
-    const exact = matches.find((row) => getRowString(row, ["subClass", "SubClass"]) === subClass);
+    const exact = matches.find((row) => getRowString(row, ["subClass"]) === subClass);
     if (exact) {
       return exact;
     }
@@ -210,14 +212,14 @@ async function executeDatasetBackedLabourTool(
   const quantity = toNumber(ctx.input.quantity);
   const hoursPerUnit =
     difficulty === "Difficult"
-      ? getRowNumber(row, ["hourDifficult", "HourDifficult"])
+      ? getRowNumber(row, ["hourDifficult"])
       : difficulty === "Very Difficult" || difficulty === "Extreme"
-        ? getRowNumber(row, ["hourVeryDifficult", "HourVeryDifficult"])
-        : getRowNumber(row, ["hourNormal", "HourNormal"]);
+        ? getRowNumber(row, ["hourVeryDifficult"])
+        : getRowNumber(row, ["hourNormal"]);
   const totalHours = roundHours(quantity * hoursPerUnit);
-  const category = getRowString(row, ["category", "LabourCategory"]);
-  const labourClass = getRowString(row, ["class", "Class"]);
-  const subClass = getRowString(row, ["subClass", "SubClass"]);
+  const category = getRowString(row, ["category"]);
+  const labourClass = getRowString(row, ["class"]);
+  const subClass = getRowString(row, ["subClass"]);
   const description = [providerLabel, category, labourClass, subClass].filter(Boolean).join(" - ");
 
   const output: PluginOutput = {

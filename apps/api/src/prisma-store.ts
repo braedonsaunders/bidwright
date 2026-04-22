@@ -8712,12 +8712,20 @@ export class PrismaApiStore {
 
     const normalizedRef = this._normalizeDatasetReference(trimmed);
     const aliases = this._getDatasetReferenceAliases(trimmed);
+    const normalizedAliases = aliases.map((alias) => this._normalizeDatasetReference(alias));
     const organizationDatasets = await this.db.dataset.findMany({
       where: { organizationId: this.organizationId },
     });
     const byOrgName = organizationDatasets.find((dataset) => {
       const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
-      return normalizedName === normalizedRef || aliases.includes(dataset.name ?? "");
+      return (
+        normalizedName === normalizedRef ||
+        normalizedAliases.some((alias) =>
+          normalizedName === alias ||
+          normalizedName.includes(alias) ||
+          alias.includes(normalizedName),
+        )
+      );
     });
     if (byOrgName) {
       return { dataset: byOrgName, client: this.db };
@@ -8735,7 +8743,14 @@ export class PrismaApiStore {
     });
     const byTemplateName = templates.find((dataset) => {
       const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
-      return normalizedName === normalizedRef || aliases.includes(dataset.name ?? "");
+      return (
+        normalizedName === normalizedRef ||
+        normalizedAliases.some((alias) =>
+          normalizedName === alias ||
+          normalizedName.includes(alias) ||
+          alias.includes(normalizedName),
+        )
+      );
     });
     if (byTemplateName) {
       return { dataset: byTemplateName, client: sharedPrisma };

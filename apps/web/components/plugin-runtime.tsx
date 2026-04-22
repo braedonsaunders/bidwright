@@ -42,6 +42,9 @@ import { resolveApiUrl } from "@/lib/api/client";
 import {
   computeNecaExtendedDuration,
   computeNecaTemperatureAdjustment,
+  datasetRowMatchesFilters,
+  getDatasetCellNumber,
+  getDatasetCellString,
 } from "@bidwright/domain";
 
 // ── Dataset Options Hook ────────────────────────────────────────────
@@ -60,8 +63,28 @@ async function fetchDatasetRows(datasetId: string): Promise<DatasetRowData[]> {
   if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.rows;
 
   try {
-    const result = await listDatasetRows(datasetId, { limit: 5000 });
-    const rows = (result.rows ?? []).map((r: any) => r.data ?? r);
+    const pageSize = 5000;
+    const rows: DatasetRowData[] = [];
+    let offset = 0;
+    let total = Infinity;
+
+    while (offset < total) {
+      const result = await listDatasetRows(datasetId, { limit: pageSize, offset });
+      const pageRows = (result.rows ?? []).map((r: any) => r.data ?? r);
+      rows.push(...pageRows);
+
+      total =
+        typeof result.total === "number" && result.total > 0
+          ? result.total
+          : pageRows.length;
+
+      if (pageRows.length === 0 || pageRows.length < pageSize) {
+        break;
+      }
+
+      offset += pageRows.length;
+    }
+
     datasetRowsCache.set(cacheKey, { rows, ts: Date.now() });
     return rows;
   } catch {
@@ -72,6 +95,7 @@ async function fetchDatasetRows(datasetId: string): Promise<DatasetRowData[]> {
 function useDatasetOptions(
   optionsSource: PluginField["optionsSource"],
   parentValue?: unknown,
+  filters: Array<{ key: string; value: unknown }> = [],
 ): { options: PluginFieldOption[]; loading: boolean; allRows: DatasetRowData[] } {
   const [options, setOptions] = useState<PluginFieldOption[]>([]);
   const [allRows, setAllRows] = useState<DatasetRowData[]>([]);
@@ -89,7 +113,10 @@ function useDatasetOptions(
       return;
     }
 
-    const key = `${optionsSource.datasetId}:${optionsSource.column}:${optionsSource.type}:${parentValue ?? ""}`;
+    const filterKey = JSON.stringify(
+      filters.map((filter) => [filter.key, String(filter.value ?? "")]),
+    );
+    const key = `${optionsSource.datasetId}:${optionsSource.column}:${optionsSource.type}:${parentValue ?? ""}:${filterKey}`;
     if (key === prevKey.current) return;
     prevKey.current = key;
 
@@ -101,17 +128,15 @@ function useDatasetOptions(
         const rows = await fetchDatasetRows(optionsSource.datasetId!);
 
         let filtered = rows;
-        if (optionsSource.type === "cascade" && optionsSource.parentColumn && parentValue) {
-          filtered = rows.filter(
-            (r) => String(r[optionsSource.parentColumn!] ?? "") === String(parentValue)
-          );
+        if (filters.length > 0) {
+          filtered = rows.filter((row) => datasetRowMatchesFilters(row, filters));
         }
 
         // Extract unique values for the column
         const seen = new Set<string>();
         const opts: PluginFieldOption[] = [];
         for (const row of filtered) {
-          const val = String(row[optionsSource.column!] ?? "");
+          const val = getDatasetCellString(row, optionsSource.column!);
           if (val && !seen.has(val)) {
             seen.add(val);
             opts.push({ value: val, label: val });
@@ -134,7 +159,7 @@ function useDatasetOptions(
     })();
 
     return () => { cancelled = true; };
-  }, [optionsSource?.datasetId, optionsSource?.column, optionsSource?.type, optionsSource?.parentColumn, parentValue]);
+  }, [filters, optionsSource?.datasetId, optionsSource?.column, optionsSource?.type, optionsSource?.parentColumn, parentValue]);
 
   return { options, loading, allRows };
 }
@@ -187,13 +212,12 @@ function datasetLookup(
   for (const row of rows) {
     let match = true;
     for (let i = 0; i < matchColumns.length; i++) {
-      const rowVal = String(row[matchColumns[i]] ?? "");
+      const rowVal = getDatasetCellString(row, matchColumns[i]);
       const matchVal = String(matchValues[i] ?? "");
       if (!matchVal || rowVal !== matchVal) { match = false; break; }
     }
     if (match) {
-      const val = row[resultColumn];
-      return typeof val === "number" ? val : parseFloat(String(val)) || 0;
+      return getDatasetCellNumber(row, resultColumn);
     }
   }
   return 0;
@@ -207,19 +231,21 @@ function datasetInterpolate(
   resultColumn: string,
 ): number {
   if (rows.length === 0) return 0;
-  const sorted = [...rows].sort((a, b) => (Number(a[inputColumn]) || 0) - (Number(b[inputColumn]) || 0));
-  const first = Number(sorted[0][inputColumn]) || 0;
-  const last = Number(sorted[sorted.length - 1][inputColumn]) || 0;
-  if (inputValue <= first) return Number(sorted[0][resultColumn]) || 0;
-  if (inputValue >= last) return Number(sorted[sorted.length - 1][resultColumn]) || 0;
+  const sorted = [...rows].sort(
+    (a, b) => getDatasetCellNumber(a, inputColumn) - getDatasetCellNumber(b, inputColumn),
+  );
+  const first = getDatasetCellNumber(sorted[0], inputColumn);
+  const last = getDatasetCellNumber(sorted[sorted.length - 1], inputColumn);
+  if (inputValue <= first) return getDatasetCellNumber(sorted[0], resultColumn);
+  if (inputValue >= last) return getDatasetCellNumber(sorted[sorted.length - 1], resultColumn);
 
   for (let i = 0; i < sorted.length - 1; i++) {
-    const lo = Number(sorted[i][inputColumn]) || 0;
-    const hi = Number(sorted[i + 1][inputColumn]) || 0;
+    const lo = getDatasetCellNumber(sorted[i], inputColumn);
+    const hi = getDatasetCellNumber(sorted[i + 1], inputColumn);
     if (inputValue >= lo && inputValue <= hi) {
       const t = hi !== lo ? (inputValue - lo) / (hi - lo) : 0;
-      const loVal = Number(sorted[i][resultColumn]) || 0;
-      const hiVal = Number(sorted[i + 1][resultColumn]) || 0;
+      const loVal = getDatasetCellNumber(sorted[i], resultColumn);
+      const hiVal = getDatasetCellNumber(sorted[i + 1], resultColumn);
       return loVal + t * (hiVal - loVal);
     }
   }
@@ -238,12 +264,12 @@ function datasetNearest(
   for (const row of rows) {
     let dist = 0;
     for (let i = 0; i < matchColumns.length; i++) {
-      const diff = (Number(row[matchColumns[i]]) || 0) - matchValues[i];
+      const diff = getDatasetCellNumber(row, matchColumns[i]) - matchValues[i];
       dist += diff * diff;
     }
     if (dist < bestDist) {
       bestDist = dist;
-      bestVal = Number(row[resultColumn]) || 0;
+      bestVal = getDatasetCellNumber(row, resultColumn);
     }
   }
   return bestVal;
@@ -702,6 +728,7 @@ function PluginFieldRenderer({
   allValues,
   error,
   datasetRowsById,
+  sectionFields,
 }: {
   field: PluginField;
   value: unknown;
@@ -710,17 +737,46 @@ function PluginFieldRenderer({
   allValues: Record<string, unknown>;
   error?: string;
   datasetRowsById?: DatasetRowsById;
+  sectionFields: PluginField[];
 }) {
   if (!isFieldVisible(field, allValues)) return null;
 
   // Resolve dataset options for select fields
   const parentField = field.optionsSource?.type === "cascade" ? field.optionsSource.dependsOn : undefined;
   const parentValue = parentField ? allValues[parentField] : undefined;
+  const datasetFilters = useMemo(() => {
+    const datasetId = field.optionsSource?.datasetId;
+    if (!datasetId) {
+      return [] as Array<{ key: string; value: unknown }>;
+    }
+
+    const currentIndex = sectionFields.findIndex((entry) => entry.id === field.id);
+    if (currentIndex <= 0) {
+      return [];
+    }
+
+    return sectionFields
+      .slice(0, currentIndex)
+      .filter((candidate) => {
+        const source = candidate.optionsSource;
+        return (
+          (source?.type === "dataset" || source?.type === "cascade") &&
+          source.datasetId === datasetId &&
+          Boolean(source.column)
+        );
+      })
+      .map((candidate) => ({
+        key: candidate.optionsSource!.column!,
+        value: allValues[candidate.id],
+      }))
+      .filter((filter) => String(filter.value ?? "").trim() !== "");
+  }, [allValues, field.id, field.optionsSource, sectionFields]);
   const dsOpts = useDatasetOptions(
     field.optionsSource?.type === "dataset" || field.optionsSource?.type === "cascade"
       ? field.optionsSource
       : undefined,
     parentValue,
+    datasetFilters,
   );
   const rsOpts = useRateScheduleOptions(
     field.optionsSource?.type === "rate_schedule" ? field.optionsSource : undefined,
@@ -1251,6 +1307,10 @@ function PluginSectionRenderer({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const fieldValues = useMemo(() => buildFormulaValues(values, tableData), [tableData, values]);
+  const orderedFields = useMemo(
+    () => [...(section.fields ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [section.fields],
+  );
 
   return (
     <div className="space-y-3">
@@ -1278,11 +1338,9 @@ function PluginSectionRenderer({
 
       {!collapsed && (
         <FadeIn>
-          {(section.type === "fields" || section.type === "search") && section.fields && (
+          {(section.type === "fields" || section.type === "search") && orderedFields.length > 0 && (
             <div className="grid grid-cols-12 gap-3">
-              {section.fields
-                .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                .map((field) => (
+              {orderedFields.map((field) => (
                   <PluginFieldRenderer
                     key={field.id}
                     field={field}
@@ -1292,6 +1350,7 @@ function PluginSectionRenderer({
                     allValues={fieldValues}
                     error={errors[field.id]}
                     datasetRowsById={datasetRowsById}
+                    sectionFields={orderedFields}
                   />
                 ))}
             </div>
