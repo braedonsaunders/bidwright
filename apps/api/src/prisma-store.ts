@@ -5,6 +5,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
+  calculateTotals,
   buildProjectWorkspace,
   buildSummaryBuilderConfig,
   computeSummaryRows,
@@ -1023,14 +1024,67 @@ export class PrismaApiStore {
 
   // ── Private: sync estimate totals back to the revision ──────────────────
 
+  private async resolveCurrentRevisionTotals(projectId: string) {
+    await this.requireProject(projectId);
+    const { quote, revision } = await this.findCurrentRevision(projectId);
+    if (!quote || !revision) {
+      return null;
+    }
+
+    const [worksheets, phases, adjustments, revisionSchedules] = await Promise.all([
+      this.db.worksheet.findMany({
+        where: { revisionId: revision.id },
+        include: { items: true },
+        orderBy: { order: "asc" },
+      }),
+      this.db.phase.findMany({
+        where: { revisionId: revision.id },
+        orderBy: { order: "asc" },
+      }),
+      this.db.adjustment.findMany({
+        where: { revisionId: revision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      }),
+      this.db.rateSchedule.findMany({
+        where: { revisionId: revision.id },
+        include: { tiers: true, items: true },
+      }),
+    ]);
+
+    const mappedRevision = mapRevision(revision);
+    const mappedWorksheets: Array<ReturnType<typeof mapWorksheet> & { items: WorksheetItem[] }> =
+      worksheets.map((worksheet) => ({
+        ...mapWorksheet(worksheet),
+        items: (worksheet.items ?? [])
+          .map(mapWorksheetItem)
+          .sort((left, right) => {
+            if (left.lineOrder !== right.lineOrder) {
+              return left.lineOrder - right.lineOrder;
+            }
+            return left.id.localeCompare(right.id);
+          }),
+      }));
+
+    return {
+      quote,
+      revision,
+      mappedRevision,
+      totals: calculateTotals(
+        mappedRevision,
+        mappedWorksheets,
+        phases.map(mapPhase),
+        adjustments.map(mapAdjustment),
+        revisionSchedules.map(mapRateScheduleWithChildren),
+      ),
+    };
+  }
+
   private async syncProjectEstimate(projectId: string, timestamp = isoNow()) {
-    const store = await this.buildStoreSnapshot(projectId);
-    const totals = summarizeProjectTotals(store, projectId);
+    const resolved = await this.resolveCurrentRevisionTotals(projectId);
+    const timestampDate = new Date(timestamp);
 
-    const quote = store.quotes.find((q) => q.projectId === projectId);
-    const revision = quote ? store.revisions.find((r) => r.id === quote.currentRevisionId) : undefined;
-
-    if (revision && totals) {
+    if (resolved) {
+      const { quote, revision, totals } = resolved;
       await this.db.quoteRevision.update({
         where: { id: revision.id },
         data: {
@@ -1039,26 +1093,34 @@ export class PrismaApiStore {
           estimatedProfit: totals.estimatedProfit,
           estimatedMargin: totals.estimatedMargin,
           calculatedTotal: totals.calculatedTotal,
+          regHours: totals.regHours,
+          overHours: totals.overHours,
+          doubleHours: totals.doubleHours,
           totalHours: totals.totalHours,
           breakoutPackage: totals.breakout as any,
           calculatedCategoryTotals: totals.categoryTotals as any,
         },
       });
+
+      await this.db.quote.update({
+        where: { id: quote.id },
+        data: { updatedAt: timestampDate },
+      });
+
+      await this.db.project.update({
+        where: { id: projectId },
+        data: { updatedAt: timestampDate },
+      });
+
+      return totals;
     }
 
     await this.db.project.update({
       where: { id: projectId },
-      data: { updatedAt: new Date(timestamp) },
+      data: { updatedAt: timestampDate },
     });
 
-    if (quote) {
-      await this.db.quote.update({
-        where: { id: quote.id },
-        data: { updatedAt: new Date(timestamp) },
-      });
-    }
-
-    return totals;
+    return null;
   }
 
   // ── Private: find current revision ──────────────────────────────────────
@@ -2507,9 +2569,8 @@ export class PrismaApiStore {
   }
 
   async getEstimateTotals(projectId: string) {
-    await this.requireProject(projectId);
-    const store = await this.buildStoreSnapshot(projectId);
-    return summarizeProjectTotals(store, projectId);
+    const resolved = await this.resolveCurrentRevisionTotals(projectId);
+    return resolved?.totals ?? null;
   }
 
   async getCurrentRevisionSnapshot(projectId: string) {
