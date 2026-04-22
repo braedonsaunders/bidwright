@@ -2740,7 +2740,13 @@ export async function executePlugin(
   projectId: string,
   revisionId: string,
   input: Record<string, unknown>,
-  opts?: { worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string },
+  opts?: {
+    worksheetId?: string;
+    replaceExecutionId?: string;
+    formState?: Record<string, unknown>;
+    executedBy?: "user" | "agent";
+    agentSessionId?: string;
+  },
 ) {
   return apiRequest<PluginExecutionRecord>(`/plugins/${pluginId}/execute`, {
     method: "POST",

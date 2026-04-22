@@ -3000,6 +3000,8 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
             onDuplicate={(id) => {
               duplicateRow(id);
             }}
+            onRefreshWorkspace={onRefresh}
+            onError={onError}
             onClose={() => setDetailItem(null)}
           />
         )}

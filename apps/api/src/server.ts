@@ -4524,12 +4524,18 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const { pluginId } = request.params as { pluginId: string };
     const body = request.body as {
       toolId?: string; projectId: string; revisionId: string; input: Record<string, unknown>;
-      worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string;
+      worksheetId?: string; replaceExecutionId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string;
     };
     try {
       const execution = await request.store!.executePlugin(
         pluginId, body.toolId ?? pluginId, body.projectId, body.revisionId, body.input ?? {},
-        { worksheetId: body.worksheetId, formState: body.formState, executedBy: body.executedBy, agentSessionId: body.agentSessionId },
+        {
+          worksheetId: body.worksheetId,
+          replaceExecutionId: body.replaceExecutionId,
+          formState: body.formState,
+          executedBy: body.executedBy,
+          agentSessionId: body.agentSessionId,
+        },
       );
       reply.code(201);
       return execution;
