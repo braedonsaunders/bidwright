@@ -16,7 +16,7 @@ export interface ClaudeMdParams {
   location: string;
   scope: string;
   quoteNumber: string;
-  dataRoot: string; // apiDataRoot — for resolving storage paths
+  dataRoot: string; // apiDataRoot â€” for resolving storage paths
   documents: Array<{
     id: string;
     fileName: string;
@@ -42,6 +42,71 @@ export interface ClaudeMdParams {
     reviewFocusAreas: string[];
   } | null;
   maxConcurrentSubAgents?: number;
+}
+
+type ClaudeDocument = ClaudeMdParams["documents"][number];
+
+function isDrawingLikeDocument(doc: ClaudeDocument): boolean {
+  const documentType = (doc.documentType ?? "").toLowerCase();
+  const fileType = (doc.fileType ?? "").toLowerCase();
+  const fileName = (doc.fileName ?? "").toLowerCase();
+
+  if (documentType === "drawing") return true;
+  if (fileType !== "application/pdf") return false;
+
+  return /(p&?id|pid|drawing|plan|sheet|layout|elevation|section|detail|isometric|(?:^|[^a-z])iso(?:[^a-z]|$)|schematic|one[- ]?line|single[- ]?line|riser|reflected ceiling|general arrangement|\bga\b)/.test(fileName);
+}
+
+function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimate" | "review"): string {
+  const drawingDocs = documents.filter(isDrawingLikeDocument);
+
+  if (drawingDocs.length === 0) {
+    return `## Drawing Analysis
+
+No drawing-style PDFs were detected in the manifest. If you discover plan, P&ID, layout, or one-line PDFs while reading, immediately switch to the drawing CV workflow: \`listDrawingPages -> scanDrawingSymbols -> countSymbolsAllPages / countSymbols\` before you use those drawings for quantity assumptions or review conclusions.`;
+  }
+
+  const drawingList = drawingDocs
+    .slice(0, 8)
+    .map((doc) => `- \`${doc.fileName}\` [docId: ${doc.id}]`)
+    .join("\n");
+
+  const moreLine = drawingDocs.length > 8 ? `\n- ... plus ${drawingDocs.length - 8} more drawing files` : "";
+  const lead = mode === "estimate"
+    ? "before you make quantity assumptions, build line items, or lock labour hours."
+    : "before you score coverage, competitiveness, or recommendations.";
+  const followThrough = mode === "estimate"
+    ? `- Use the resulting counts directly in worksheet quantities, package decisions, and \`sourceNotes\`.\n- If a drawing-driven quantity cannot be validated, record it as an explicit assumption, allowance, or clarification instead of guessing.`
+    : `- Use the resulting counts to validate whether the estimate captured the real device/component count.\n- If a drawing-driven quantity cannot be validated, mark it VERIFY/NO and surface it as a risk instead of assuming coverage.`;
+
+  return `## Mandatory Drawing Analysis
+
+This project includes ${drawingDocs.length} drawing-style PDF${drawingDocs.length === 1 ? "" : "s"}. When drawings drive quantities, you MUST run the drawing CV workflow ${lead}
+
+Detected drawing-style files:
+${drawingList}${moreLine}
+
+**Required drawing workflow**
+1. Call \`listDrawingPages\` after reading the main RFQ/spec so you have valid drawing document IDs.
+2. For each quantity-driving sheet family or P&ID, call \`scanDrawingSymbols\` before making device or component count assumptions.
+3. Use the returned clusters to identify repeatable symbols that matter to the trade scope.
+4. Use \`countSymbolsAllPages\` when the same symbol family repeats across floors, areas, or multi-page drawing sets.
+5. Use \`countSymbols\` only to refine a specific cluster or adjust threshold/cross-scale behavior with the cluster's \`representativeBox\`.
+6. Use \`renderDrawingPage\` / \`zoomDrawingRegion\` only when you need visual confirmation. They are support tools, not the main counting workflow.
+
+**Use drawing CV automatically for these trade patterns**
+- Mechanical/process piping: valve tags, instruments, inline devices, actuators, equipment symbols, repetitive support/hanger symbols.
+- Plumbing / fire protection: fixtures, drains, cleanouts, sprinkler heads, hose cabinets, valves, specialties.
+- HVAC / sheet metal: diffusers, grilles, VAVs, dampers, unit symbols, repetitive accessories.
+- Electrical / controls: fixtures, receptacles, devices, panels, instruments, IO points, cable tray drops, one-line symbols.
+- Civil / structural / architectural: doors, windows, bollards, embeds, foundations, piles, framing callouts, repetitive details.
+
+${followThrough}
+
+**Do NOT**
+- rely only on extracted PDF text for drawing-based counts
+- manually eyeball repetitive symbol counts when the scan/count tools can answer them
+- skip the drawing CV pass on plans, P&IDs, layouts, risers, reflected ceiling plans, or symbol-driven schedules`;
 }
 
 async function prepareInstructionWorkspace(params: ClaudeMdParams): Promise<void> {
@@ -85,7 +150,7 @@ async function symlinkProjectDocuments(
       await symlink(realDocsDir, docsDir);
       return; // Directory symlink covers everything
     } catch {
-      // Symlink failed (common on Windows) — copy all files from real docs dir
+      // Symlink failed (common on Windows) â€” copy all files from real docs dir
       try {
         await mkdir(docsDir, { recursive: true });
         const entries = await readdir(realDocsDir);
@@ -114,11 +179,11 @@ async function symlinkProjectDocuments(
       try {
         await symlink(sourcePath, targetPath);
       } catch {
-        // Symlink failed (common on Windows without admin) — copy instead
+        // Symlink failed (common on Windows without admin) â€” copy instead
         try {
           await copyFile(sourcePath, targetPath);
         } catch {
-          // Skip — file will be inaccessible to CLI
+          // Skip â€” file will be inaccessible to CLI
         }
       }
     }
@@ -131,16 +196,16 @@ function buildClaudeMdContent(params: ClaudeMdParams): string {
 
   const docManifest = params.documents.length > 0
     ? params.documents.map((d, i) =>
-      `  ${i + 1}. \`${d.fileName}\` — ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
+      `  ${i + 1}. \`${d.fileName}\` â€” ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
     ).join("\n")
-    : "  (Documents are being processed — check the documents/ folder)";
+    : "  (Documents are being processed â€” check the documents/ folder)";
 
   const scopeSection = params.scope
-    ? `## Scope (USER INSTRUCTIONS — MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope mentions subcontracting specific activities (e.g. "subcontract insulation", "sub out painting"), you MUST create Subcontractor items for those activities — do NOT estimate them as self-performed labour. The scope instruction is AUTHORITATIVE and overrides any default assumptions.`
-    : `## Scope\n\nNo specific scope defined — estimate the full bid package.`;
+    ? `## Scope (USER INSTRUCTIONS â€” MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope mentions subcontracting specific activities (e.g. "subcontract insulation", "sub out painting"), you MUST create Subcontractor items for those activities â€” do NOT estimate them as self-performed labour. The scope instruction is AUTHORITATIVE and overrides any default assumptions.`
+    : `## Scope\n\nNo specific scope defined â€” estimate the full bid package.`;
 
   const commercialScopeSection = params.scope
-    ? `${scopeSection}\n\nInterpret commercial directives literally:\n- If the scope says an activity is subcontracted, create it as a Subcontractor/commercial package — do NOT estimate it as self-performed labour.\n- If the scope says a package is already priced, fixed, quoted, budgeted, or otherwise commercially known, carry that package at the stated amount instead of rebuilding it bottom-up.\n- If the scope says something is owner-supplied or install-only, price only the installation/support scope that remains.\n- Only produce a bottom-up validation breakdown for a fixed/commercial package if the user explicitly asks for that validation.`
+    ? `${scopeSection}\n\nInterpret commercial directives literally:\n- If the scope says an activity is subcontracted, create it as a Subcontractor/commercial package â€” do NOT estimate it as self-performed labour.\n- If the scope says a package is already priced, fixed, quoted, budgeted, or otherwise commercially known, carry that package at the stated amount instead of rebuilding it bottom-up.\n- If the scope says something is owner-supplied or install-only, price only the installation/support scope that remains.\n- Only produce a bottom-up validation breakdown for a fixed/commercial package if the user explicitly asks for that validation.`
     : scopeSection;
 
   const personaSection = params.persona
@@ -150,7 +215,7 @@ Trade: ${params.persona.trade}
 ${params.persona.systemPrompt}
 
 **Priority Knowledge Sources:** Search these first, but you can and should search ALL available books and datasets.
-${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- "${n}"`).join("\n") : "- (No specific books assigned — search all available)"}
+${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- "${n}"`).join("\n") : "- (No specific books assigned â€” search all available)"}
 ${params.persona.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${params.persona.datasetTags.join(", ")}` : ""}
 ${params.persona.packageBuckets.length > 0 ? `- Preferred package buckets: ${params.persona.packageBuckets.join(", ")}` : ""}
 ${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.persona.reviewFocusAreas.join(", ")}` : ""}
@@ -166,8 +231,8 @@ ${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.p
     : "";
 
   const benchmarkToolLine = benchmarkingEnabled
-    ? `- **recomputeEstimateBenchmarks** — Compare this revision to prior human quotes and surface distribution outliers`
-    : `- **recomputeEstimateBenchmarks** — Historical benchmark pass is disabled by organization defaults; only use this if the user explicitly re-enables benchmarking`;
+    ? `- **recomputeEstimateBenchmarks** â€” Compare this revision to prior human quotes and surface distribution outliers`
+    : `- **recomputeEstimateBenchmarks** â€” Historical benchmark pass is disabled by organization defaults; only use this if the user explicitly re-enables benchmarking`;
 
   const stageGateSequence = benchmarkingEnabled
     ? `  1. \`saveEstimateScopeGraph\`
@@ -202,9 +267,9 @@ The project documents are in the \`documents/\` folder as real files on disk.
 
 **How to read documents:**
 - PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID from the manifest below. It returns Bidwright's extracted text and supports an optional \`pages\` range for long PDFs.
-- Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID from the manifest below — this parses the binary file server-side and returns markdown tables.
+- Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID from the manifest below â€” this parses the binary file server-side and returns markdown tables.
 - Table-heavy PDFs and forms: Use \`getDocumentStructured\` to inspect structured tables, key-value pairs, and section headings.
-- Images: Use the vision/drawing tools only when you need visual inspection or symbol counting.
+- Drawings and symbol-driven PDFs: use the vision/drawing tools as a primary takeoff workflow whenever drawings drive counts, device quantities, or visual scope validation.
 - **Do NOT install local parsers or shell utilities just to read Bidwright project files.** Use the MCP document tools first.
 - **Do NOT use renderDrawingPage to read document text.** That tool is for visual drawing inspection and symbol counting, not for spec/RFQ text extraction.
 
@@ -212,13 +277,15 @@ ${docManifest}
 
 **MANDATORY: READ EVERY DOCUMENT. NO EXCEPTIONS.**
 - You MUST read EVERY document listed above. No skipping, no shortcuts, no "estimated from primary documents."
-- **Every P&ID must be individually read** — secondary P&IDs (e.g. POLY-0002, PENTANE-0003, ISO-0002) contain additional equipment, piping runs, and connections NOT shown on the primary P&ID. Skipping them means missing scope.
-- **Every spreadsheet must be read** using the \`readSpreadsheet\` tool — spreadsheets often contain BOMs, quantity takeoffs, or quotation details that are CRITICAL to accurate pricing.
-- **Every specification section must be read** — use the \`pages\` parameter with \`readDocumentText\` to read large PDFs in chunks (e.g. pages: "1-20", then "21-40", etc.) until you've covered the entire document.
-- If a document cannot be read (corrupted, format issue), log it as a HIGH-impact assumption and flag it to the user — do NOT silently skip it.
+- **Every P&ID must be individually read** â€” secondary P&IDs (e.g. POLY-0002, PENTANE-0003, ISO-0002) contain additional equipment, piping runs, and connections NOT shown on the primary P&ID. Skipping them means missing scope.
+- **Every spreadsheet must be read** using the \`readSpreadsheet\` tool â€” spreadsheets often contain BOMs, quantity takeoffs, or quotation details that are CRITICAL to accurate pricing.
+- **Every specification section must be read** â€” use the \`pages\` parameter with \`readDocumentText\` to read large PDFs in chunks (e.g. pages: "1-20", then "21-40", etc.) until you've covered the entire document.
+- If a document cannot be read (corrupted, format issue), log it as a HIGH-impact assumption and flag it to the user â€” do NOT silently skip it.
 - **Estimation accuracy is directly proportional to document thoroughness.** An estimate built from 60% of the documents will be 30-40% inaccurate.
 
 **Start by reading the main specification or RFQ document.** It defines the full scope of work and is the foundation for your estimate. Then read ALL remaining documents before creating worksheets.
+
+${buildDrawingAnalysisSection(params.documents, "estimate")}
 
 ## Knowledge Books (Reference Manuals)
 
@@ -241,67 +308,67 @@ ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 
 You have access to Bidwright tools via MCP. Key tools:
 
-- **getEstimateStrategy** — Retrieve the persisted estimate strategy, benchmark state, and calibration feedback for this revision
-- **saveEstimateScopeGraph** — Persist the structured scope graph after document review
-- **saveEstimateExecutionPlan** — Lock the execution model before assigning hours
-- **saveEstimateAssumptions** — Persist explicit assumptions with confidence and user-confirmation flags
-- **saveEstimatePackagePlan** — Define the commercial/package structure before pricing
+- **getEstimateStrategy** â€” Retrieve the persisted estimate strategy, benchmark state, and calibration feedback for this revision
+- **saveEstimateScopeGraph** â€” Persist the structured scope graph after document review
+- **saveEstimateExecutionPlan** â€” Lock the execution model before assigning hours
+- **saveEstimateAssumptions** â€” Persist explicit assumptions with confidence and user-confirmation flags
+- **saveEstimatePackagePlan** â€” Define the commercial/package structure before pricing
 ${benchmarkToolLine}
-- **saveEstimateAdjustments** — Record how benchmark findings should change the estimate approach
-- **saveEstimateReconcile** — Save the mandatory final self-review and outlier check
-- **finalizeEstimateStrategy** — Mark the staged estimate workflow complete after reconcile
-- **getItemConfig** — CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
-- **getWorkspace** — Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
-- **createWorksheet** — Create a worksheet (cost section) in the quote
-- **createWorksheetItem** — Add a line item to a worksheet. Set phaseId to assign to a phase.
-- **updateQuote** — Update quote metadata (description, notes, scope summary)
-- **listRateSchedules** — List available org-level rate schedules. Returns schedule names and IDs. Use to find the right schedule to import.
-- **importRateSchedule** — Import an org rate schedule into the current quote revision
-- **queryKnowledge** — Search the knowledge base for man-hour data, pricing references, standards
-- **queryGlobalLibrary** — Search global knowledge books (estimating manuals, productivity data)
-- **listKnowledgeBooks** — List available knowledge books and their IDs
-- **readDocumentText** — Read extracted text for project documents and knowledge books by ID
-- **searchBooks** — Search knowledge books by keyword
-- **queryDataset / searchDataset / listDatasets** — Search structured datasets (rate tables, historical data)
-- **searchCatalogs** — Search equipment/material catalogs for items with pricing
-- **askUser** — **MANDATORY** Ask the user a clarifying question and WAIT for their response. Blocks execution until they answer. Use this in Steps 1 and 2 of the Estimation Protocol. Do NOT skip this tool. Do NOT output questions as plain text instead.
-- **readMemory / writeMemory** — Persistent project memory (persists across sessions)
-- **getProjectSummary** — Current project context and totals
-- **reportProgress** — Tell the user what you're doing (shown in real-time UI)
-- **createCondition** — Add exclusions, inclusions, clarifications
-- **createPhase** — Create project phases. Use getWorkspace after to retrieve phase IDs.
-- **createScheduleTask** — Create Gantt chart tasks/milestones linked to phases, with dates and durations
-- **listScheduleTasks** — View existing schedule
-- **recalculateTotals** — Recalculate financial totals
+- **saveEstimateAdjustments** â€” Record how benchmark findings should change the estimate approach
+- **saveEstimateReconcile** â€” Save the mandatory final self-review and outlier check
+- **finalizeEstimateStrategy** â€” Mark the staged estimate workflow complete after reconcile
+- **getItemConfig** â€” CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
+- **getWorkspace** â€” Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
+- **createWorksheet** â€” Create a worksheet (cost section) in the quote
+- **createWorksheetItem** â€” Add a line item to a worksheet. Set phaseId to assign to a phase.
+- **updateQuote** â€” Update quote metadata (description, notes, scope summary)
+- **listRateSchedules** â€” List available org-level rate schedules. Returns schedule names and IDs. Use to find the right schedule to import.
+- **importRateSchedule** â€” Import an org rate schedule into the current quote revision
+- **queryKnowledge** â€” Search the knowledge base for man-hour data, pricing references, standards
+- **queryGlobalLibrary** â€” Search global knowledge books (estimating manuals, productivity data)
+- **listKnowledgeBooks** â€” List available knowledge books and their IDs
+- **readDocumentText** â€” Read extracted text for project documents and knowledge books by ID
+- **searchBooks** â€” Search knowledge books by keyword
+- **queryDataset / searchDataset / listDatasets** â€” Search structured datasets (rate tables, historical data)
+- **searchCatalogs** â€” Search equipment/material catalogs for items with pricing
+- **askUser** â€” **MANDATORY** Ask the user a clarifying question and WAIT for their response. Blocks execution until they answer. Use this in Steps 1 and 2 of the Estimation Protocol. Do NOT skip this tool. Do NOT output questions as plain text instead.
+- **readMemory / writeMemory** â€” Persistent project memory (persists across sessions)
+- **getProjectSummary** â€” Current project context and totals
+- **reportProgress** â€” Tell the user what you're doing (shown in real-time UI)
+- **createCondition** â€” Add exclusions, inclusions, clarifications
+- **createPhase** â€” Create project phases. Use getWorkspace after to retrieve phase IDs.
+- **createScheduleTask** â€” Create Gantt chart tasks/milestones linked to phases, with dates and durations
+- **listScheduleTasks** â€” View existing schedule
+- **recalculateTotals** â€” Recalculate financial totals
 
 - **applySummaryPreset** - Configure the quote summary breakout so the finalized quote has an appropriate line-item rollup
 
-### Vision & Drawing Takeoff Tools (for symbol counting ONLY)
+### Vision & Drawing Takeoff Tools (PRIMARY FOR DRAWING-DRIVEN QUANTITIES)
 
-These tools are for **automated symbol counting on construction drawings**, NOT for reading documents. To read document text, use \`readDocumentText\` / \`getDocumentStructured\`.
+These tools are for automated drawing takeoff and symbol counting on construction drawings. Use them before making drawing-driven quantity assumptions. To read document text, still use \`readDocumentText\` / \`getDocumentStructured\`.
 
-- **scanDrawingSymbols** — Scans a drawing page and returns an inventory of repeating symbols with counts and locations
-- **countSymbols** — Refine a count with a specific bounding box and threshold
-- **countSymbolsAllPages** — Count a symbol across ALL pages of a document
-- **renderDrawingPage** — Render a drawing page as an image for visual symbol inspection (NOT for reading spec text — use \`readDocumentText\` instead)
-- **zoomDrawingRegion** — Zoom into a small region for tiny text or symbol details
-- **listDrawingPages** — List all PDF drawings with page counts
+- **scanDrawingSymbols** â€” Scans a drawing page and returns an inventory of repeating symbols with counts and locations
+- **countSymbols** â€” Refine a count with a specific bounding box and threshold
+- **countSymbolsAllPages** â€” Count a symbol across ALL pages of a document
+- **renderDrawingPage** â€” Render a drawing page as an image for visual symbol inspection (NOT for reading spec text â€” use \`readDocumentText\` instead)
+- **zoomDrawingRegion** â€” Zoom into a small region for tiny text or symbol details
+- **listDrawingPages** â€” List all PDF drawings with page counts
 
-**Symbol counting workflow (MANDATORY):**
-1. \`listDrawingPages\` → find the document
-2. \`scanDrawingSymbols(documentId, pageNumber)\` → get the full symbol inventory + page image in ONE call
+**Drawing CV workflow (MANDATORY when drawings drive quantities):**
+1. \`listDrawingPages\` â†’ find the document
+2. \`scanDrawingSymbols(documentId, pageNumber)\` â†’ get the full symbol inventory + page image in ONE call
 3. Interpret the clusters: "Cluster 0 is valve tags (46 found), Cluster 1 is instrument bubbles (3 found)" etc.
 4. Report the relevant count directly from the scan results
 5. If you need to adjust threshold or search cross-document, call \`countSymbols\` with the cluster's \`representativeBox\`
 
 **Do NOT:**
-- Zoom around the page trying to visually count symbols — the scan does this automatically
-- Call renderDrawingPage + zoomDrawingRegion repeatedly — scanDrawingSymbols replaces this entire workflow
+- Zoom around the page trying to visually count symbols â€” the scan does this automatically
+- Call renderDrawingPage + zoomDrawingRegion repeatedly â€” scanDrawingSymbols replaces this entire workflow
 - Manually identify bounding boxes when scan clusters already provide them
 
 ## How To Work
 
-### RESUME CHECK — ALWAYS DO THIS FIRST
+### RESUME CHECK â€” ALWAYS DO THIS FIRST
 
 **Before doing ANY work, call \`getWorkspace\` and \`getEstimateStrategy\` to check existing state.** If the workspace already has worksheets, phases, items, or saved strategy sections from a prior session:
 - Do NOT re-create worksheets or phases that already exist
@@ -309,7 +376,7 @@ These tools are for **automated symbol counting on construction drawings**, NOT 
 - Resume from the latest saved strategy stage instead of restarting from scratch
 - Pick up where the previous session left off
 - Only create NEW worksheets/phases/items that don't already exist
-- If worksheets exist but have no items, populate them — don't recreate them
+- If worksheets exist but have no items, populate them â€” don't recreate them
 
 **This check is MANDATORY on every session start, including first runs.** It prevents duplicate worksheets and wasted work.
 
@@ -332,8 +399,8 @@ ${stageGateSequence}
   - \`reconcileReport.coverageChecks[].status\`: \`ok\` | \`warning\` | \`missing\`
 ${benchmarkGateNarrative}
 
-1. **Read the main spec/RFQ** — find the primary specification document in the manifest and read it with \`readDocumentText\`
-2. **IMMEDIATELY update the quote — THIS IS YOUR #1 PRIORITY, DO IT BEFORE ANYTHING ELSE.** As soon as you read the main spec, call \`updateQuote\` with:
+1. **Read the main spec/RFQ** â€” find the primary specification document in the manifest and read it with \`readDocumentText\`
+2. **IMMEDIATELY update the quote â€” THIS IS YOUR #1 PRIORITY, DO IT BEFORE ANYTHING ELSE.** As soon as you read the main spec, call \`updateQuote\` with:
    - \`projectName\`: The real project name from the spec
    - \`description\`: A PROFESSIONAL estimator-quality scope of work (see below)
    - \`customerId\`: If you can identify the client from the available customers, set the customer ID
@@ -343,53 +410,53 @@ ${benchmarkGateNarrative}
    **MANDATORY GATE: You MUST call updateQuote with projectName, description, and clientName BEFORE calling createWorksheet or createWorksheetItem. The user is watching the page live and sees an empty quote until you do this. Creating worksheets without first setting the project name, scope description, and client is NOT ALLOWED.**
 
    ### How to Write the Description / Scope of Work
-   The description should be a CONCISE professional scope summary. Think "elevator pitch for the project scope" — 2-5 sentences per major scope area. Include:
-   - **What systems/areas** — e.g. "Chemical bulk storage piping for 14 tanks (ISO, Polyol, Pentane, KOCT, TCPP)"
-   - **Key specs** — pipe spec, materials, standards (e.g. "CS per ASME B31.3, C2A01 pipe spec")
-   - **Major work categories** — equipment setting, piping fab/install, testing, insulation
+   The description should be a CONCISE professional scope summary. Think "elevator pitch for the project scope" â€” 2-5 sentences per major scope area. Include:
+   - **What systems/areas** â€” e.g. "Chemical bulk storage piping for 14 tanks (ISO, Polyol, Pentane, KOCT, TCPP)"
+   - **Key specs** â€” pipe spec, materials, standards (e.g. "CS per ASME B31.3, C2A01 pipe spec")
+   - **Major work categories** â€” equipment setting, piping fab/install, testing, insulation
    Do NOT write a paragraph summary. Use bullet points or numbered sections.
 
    ### IMPORTANT: Where Inclusions, Exclusions, and Assumptions Go
-   - **Inclusions and Exclusions** → Use the \`createCondition\` MCP tool with type "inclusion" or "exclusion". These have their OWN dedicated section in the quote UI. Do NOT put them in the description.
-   - **Assumptions and Key Notes** → Put these in the \`notes\` field of \`updateQuote\`. These are internal notes visible to estimators, NOT in the client-facing description.
-   - **The description field** is for SCOPE OF WORK ONLY — what is being estimated. No exclusions, no assumptions, no vendor responsibilities.
-3. **Call getItemConfig** — learn the org's categories and available labour/equipment rates
-4. **MANDATORY KNOWLEDGE GATE — DO NOT SKIP THIS STEP.**
+   - **Inclusions and Exclusions** â†’ Use the \`createCondition\` MCP tool with type "inclusion" or "exclusion". These have their OWN dedicated section in the quote UI. Do NOT put them in the description.
+   - **Assumptions and Key Notes** â†’ Put these in the \`notes\` field of \`updateQuote\`. These are internal notes visible to estimators, NOT in the client-facing description.
+   - **The description field** is for SCOPE OF WORK ONLY â€” what is being estimated. No exclusions, no assumptions, no vendor responsibilities.
+3. **Call getItemConfig** â€” learn the org's categories and available labour/equipment rates
+4. **MANDATORY KNOWLEDGE GATE â€” DO NOT SKIP THIS STEP.**
    You MUST do ALL of the following BEFORE creating ANY worksheets or items:
 
-   **a. READ the knowledge books directly** (PRIMARY method — gives you full context):
+   **a. READ the knowledge books directly** (PRIMARY method â€” gives you full context):
    - Call \`listKnowledgeBooks\` to get the relevant book IDs
    - Read the Table of Contents first (pages 1-5) to find relevant chapters
    - Then read the specific tables/chapters for THIS project (pipe welding hours, valve MH, equipment setting, correction factors, etc.)
    - Example: \`readDocumentText(bookId, pages: "1-5")\` then \`readDocumentText(bookId, pages: "42-55")\` for the specific data tables
 
-   **b. \`listDatasets\`** — review all available structured datasets
-   **c. \`queryDataset\`** — query at least 2 relevant datasets for production rates
-   **d. \`WebSearch\`** — search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
+   **b. \`listDatasets\`** â€” review all available structured datasets
+   **c. \`queryDataset\`** â€” query at least 2 relevant datasets for production rates
+   **d. \`WebSearch\`** â€” search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
 
-   **Write the key findings to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count — you must read fresh from knowledge books/datasets every time.
+   **Write the key findings to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count â€” you must read fresh from knowledge books/datasets every time.
 
    **This gate is enforced: if you create worksheets without having read knowledge books and queried datasets first, the estimate is invalid.**
 
-4b. **Follow the Estimation Protocol** — Steps 1-10 below are MANDATORY for all labour hour estimates. Do not skip any step.
-5. **IMPORT RATE SCHEDULES** — If getItemConfig shows categories with itemSource="rate_schedule":
+4b. **Follow the Estimation Protocol** â€” Steps 1-10 below are MANDATORY for all labour hour estimates. Do not skip any step.
+5. **IMPORT RATE SCHEDULES** â€” If getItemConfig shows categories with itemSource="rate_schedule":
    a. Call \`listRateSchedules\` to see all available org schedules
    b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed.
    c. Call \`importRateSchedule\` for each selected schedule
    d. Every item in a rate_schedule category MUST have:
-      - \`rateScheduleItemId\` — the rate item ID
-      - \`tierUnits\` — hours mapped to tier NAMES, e.g. \`{"Regular": 40, "Overtime": 8}\` for 40 regular + 8 OT hours. Use the tier NAME (not ID). The server resolves names to IDs automatically. Get tier names from getItemConfig (each rate item has a \`tiers\` array).
-      - \`entityName\` — just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
-   e. If no suitable schedule exists, note "NO RATE SCHEDULE — needs setup" and set estimated costs
-6. **Create phases** — create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs — you need these to assign line items to phases via phaseId.
-7. **Create worksheets** — one per major system/trade/division (skip if worksheets already exist from prior session)
-9. **Populate items** — read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours — do NOT guess.
-10. **Build schedule** — if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
-11. **Add conditions via createCondition** — Add each exclusion, inclusion, and clarification as a SEPARATE condition using the \`createCondition\` tool. Do NOT put these in the quote description.
+      - \`rateScheduleItemId\` â€” the rate item ID
+      - \`tierUnits\` â€” hours mapped to tier NAMES, e.g. \`{"Regular": 40, "Overtime": 8}\` for 40 regular + 8 OT hours. Use the tier NAME (not ID). The server resolves names to IDs automatically. Get tier names from getItemConfig (each rate item has a \`tiers\` array).
+      - \`entityName\` â€” just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
+   e. If no suitable schedule exists, note "NO RATE SCHEDULE â€” needs setup" and set estimated costs
+6. **Create phases** â€” create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs â€” you need these to assign line items to phases via phaseId.
+7. **Create worksheets** â€” one per major system/trade/division (skip if worksheets already exist from prior session)
+9. **Populate items** â€” read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours â€” do NOT guess.
+10. **Build schedule** â€” if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
+11. **Add conditions via createCondition** â€” Add each exclusion, inclusion, and clarification as a SEPARATE condition using the \`createCondition\` tool. Do NOT put these in the quote description.
    - type="exclusion" for things NOT included (e.g. "Heat tracing", "Electrical work", "Civil/foundations")
-   - type="inclusion" for things explicitly included (e.g. "Pipe supports — design, fabrication, installation")
+   - type="inclusion" for things explicitly included (e.g. "Pipe supports â€” design, fabrication, installation")
    - type="clarification" for assumptions and notes (e.g. "Site access assumed available 6am-6pm weekdays")
-12. **Save progress to memory** — so you can resume later
+12. **Save progress to memory** â€” so you can resume later
 
 ## Live Pricing & Material Research
 
@@ -414,21 +481,21 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Set the cost on the line item
 - Note the source and date in the description (e.g. "Unit cost $12.50/ft per Home Depot, March 2026")
 - If you find a price range, use the midpoint and note the range in description
-- If no price is found after searching, set cost=0 and mark "NEEDS PRICING — web search inconclusive" in description
+- If no price is found after searching, set cost=0 and mark "NEEDS PRICING â€” web search inconclusive" in description
 
 **Do NOT skip web search just because it's faster to guess.** Real prices from real suppliers make the estimate credible. Search for at least the high-value material items.
 
 ## Item Creation Rules
 
-- Call \`getItemConfig\` before creating ANY items — it returns the user-configured categories, their calculation types, and item sources. These are DYNAMIC — do not assume category names.
+- Call \`getItemConfig\` before creating ANY items â€” it returns the user-configured categories, their calculation types, and item sources. These are DYNAMIC â€” do not assume category names.
 - Match category names EXACTLY as returned by getItemConfig
 - Each category's \`calculationType\` tells you what fields matter (auto_labour needs hours, auto_equipment needs day rates, manual needs cost+qty, direct_price needs lump sum)
-- Categorize items according to their nature — match the category's \`entityType\` description. Do not mix item types across categories.
-- **STRICT SOURCE ENFORCEMENT** — The \`itemSource\` field on each category is NOT a suggestion — it is a HARD REQUIREMENT:
+- Categorize items according to their nature â€” match the category's \`entityType\` description. Do not mix item types across categories.
+- **STRICT SOURCE ENFORCEMENT** â€” The \`itemSource\` field on each category is NOT a suggestion â€” it is a HARD REQUIREMENT:
   - If a category has \`itemSource=rate_schedule\`, you MUST use a rateScheduleItemId. Creating freeform items in a rate_schedule category is WRONG.
   - If a category has \`itemSource=catalog\`, you MUST use a catalogItemId. Do NOT create freeform items.
   - Equipment items (booms, forklifts, welders, scaffolding, etc.) MUST use Equipment rate schedule items when the Equipment category has \`itemSource=rate_schedule\`.
-  - Consumable items MUST use the catalogue or rate schedule entries — do NOT create freeform consumables when a catalog exists.
+  - Consumable items MUST use the catalogue or rate schedule entries â€” do NOT create freeform consumables when a catalog exists.
   - **Violation of itemSource rules will produce $0 items because the calc engine cannot price them without proper linkage.**
 - Each category has an \`itemSource\` field that tells you where items come from:
   - **rate_schedule**: Items MUST link to imported rate schedule items. The server VALIDATES and REJECTS items without a valid rateScheduleItemId. Steps:
@@ -436,16 +503,16 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
     2. Call \`importRateSchedule\` to import relevant schedules to this quote
     3. Use getItemConfig to see the imported rate items with their tier IDs
     4. When creating items, set:
-       - \`rateScheduleItemId\` — the rate item ID
-       - \`tierUnits\` — a JSON object mapping tier NAMES to hours, e.g. \`{"Regular": 40, "Overtime": 8}\`. Use the tier NAME from the \`tiers\` array. The server resolves names to IDs automatically. Without tierUnits, cost/price will be $0.
-       - \`entityName\` — the rate item name only (e.g. "Trade Labour"). Task details go in \`description\`.
+       - \`rateScheduleItemId\` â€” the rate item ID
+       - \`tierUnits\` â€” a JSON object mapping tier NAMES to hours, e.g. \`{"Regular": 40, "Overtime": 8}\`. Use the tier NAME from the \`tiers\` array. The server resolves names to IDs automatically. Without tierUnits, cost/price will be $0.
+       - \`entityName\` â€” the rate item name only (e.g. "Trade Labour"). Task details go in \`description\`.
     5. Do NOT invent items. If no exact match, use the CLOSEST and note it.
   - **catalog**: Items MUST come from the item catalog. Set \`itemId\` to link to a catalog item. Do NOT fabricate catalog items.
-  - **freeform**: No backing data source — set cost and quantity directly.
+  - **freeform**: No backing data source â€” set cost and quantity directly.
 - For items with unknown cost: set cost=0 and note "NEEDS PRICING" in description
 - Always include a description citing the source document and section
-- **sourceNotes is MANDATORY on every item** — see "Estimation Protocol Step 10" above for required format
-- Use the knowledge base for man-hour estimates — don't guess when data exists
+- **sourceNotes is MANDATORY on every item** â€” see "Estimation Protocol Step 10" above for required format
+- Use the knowledge base for man-hour estimates â€” don't guess when data exists
 - entityName should be a proper item name (e.g. "Carbon Steel Pipe 2\"", "Epoxy Anchors"), NOT freeform descriptions. Put details in the description field.
 - For materials: entityName = the material item name. Vendor, spec references, assumptions go in description.
 
@@ -455,37 +522,37 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 
 - Call \`getItemConfig\` to see each category's \`validUoms\` and \`defaultUom\`.
 - If you omit the UOM or use one that's not in the category's valid list, the server auto-corrects to the category's \`defaultUom\`.
-- Do NOT assume UOMs across categories — a UOM valid for one category may be invalid for another. Always check the category config.
+- Do NOT assume UOMs across categories â€” a UOM valid for one category may be invalid for another. Always check the category config.
 
-### Quantity × Units — CRITICAL for Rate Schedule Categories
+### Quantity Ã— Units â€” CRITICAL for Rate Schedule Categories
 
 **For any category with \`itemSource=rate_schedule\`** (check \`getItemConfig\` to see which categories this applies to):
-- \`quantity\` = **MULTIPLIER** on the unit values. What this means depends on the category — it could be crew size, number of units, etc.
+- \`quantity\` = **MULTIPLIER** on the unit values. What this means depends on the category â€” it could be crew size, number of units, etc.
 - \`tierUnits\` / \`unit1\` / \`unit2\` / \`unit3\` = **values PER quantity**. Check the category's \`unitLabels\` to understand what each unit field represents (e.g. "Reg Hrs", "OT Hrs", "Duration").
-- The calc engine computes: **total cost = Σ(units × tier rate) × quantity**
+- The calc engine computes: **total cost = Î£(units Ã— tier rate) Ã— quantity**
 
-**The key rule:** quantity × units must make logical sense for the item. Always think about what the multiplication produces.
+**The key rule:** quantity Ã— units must make logical sense for the item. Always think about what the multiplication produces.
 
 **Examples** (assuming a category with unitLabels \`{unit1: "Reg Hrs", unit2: "OT Hrs"}\`):
-- 1 person for 80 regular hours → \`quantity=1\`, \`tierUnits={"Regular": 80}\`
-- 4 people working 200 hours each → \`quantity=4\`, \`tierUnits={"Regular": 200}\`
-- 2 people, 160 regular + 40 overtime each → \`quantity=2\`, \`tierUnits={"Regular": 160, "Overtime": 40}\`
+- 1 person for 80 regular hours â†’ \`quantity=1\`, \`tierUnits={"Regular": 80}\`
+- 4 people working 200 hours each â†’ \`quantity=4\`, \`tierUnits={"Regular": 200}\`
+- 2 people, 160 regular + 40 overtime each â†’ \`quantity=2\`, \`tierUnits={"Regular": 160, "Overtime": 40}\`
 
-**NEVER confuse quantity with total units.** Setting quantity=80 and unit1=80 means 80 × 80 = 6,400 total units, which is almost certainly wrong. Ask yourself: does this line item really need a quantity of 80?
+**NEVER confuse quantity with total units.** Setting quantity=80 and unit1=80 means 80 Ã— 80 = 6,400 total units, which is almost certainly wrong. Ask yourself: does this line item really need a quantity of 80?
 
 ### Markup Rules
 
 - The revision has a \`defaultMarkup\` (returned by \`getItemConfig\`). Apply this to categories where \`editableFields.markup = true\`.
-- Categories where \`editableFields.markup = false\` do NOT use markup — their pricing is set by rate schedules, catalogs, or direct entry.
+- Categories where \`editableFields.markup = false\` do NOT use markup â€” their pricing is set by rate schedules, catalogs, or direct entry.
 - The server auto-applies the default markup to markup-eligible items if you don't set it explicitly.
-- Check \`getItemConfig\` to see which categories have markup enabled — do not assume based on category names.
+- Check \`getItemConfig\` to see which categories have markup enabled â€” do not assume based on category names.
 
 ## Important
 
 - Every scope item = a createWorksheetItem call. Never write estimates as text only.
-- Be thorough — better too many items than too few
+- Be thorough â€” better too many items than too few
 - Cite source documents in descriptions (e.g. "Per spec Section 12b")
-- You MAY use Sub-agents (Agent tool) to populate worksheets in parallel — but run **at most ${maxSubAgents} sub-agents at a time**. Spawn ${maxSubAgents}, wait for all to finish, then spawn the next batch. Never launch more than ${maxSubAgents} concurrent sub-agents or you will hit API rate limits and all will fail.
+- You MAY use Sub-agents (Agent tool) to populate worksheets in parallel â€” but run **at most ${maxSubAgents} sub-agents at a time**. Spawn ${maxSubAgents}, wait for all to finish, then spawn the next batch. Never launch more than ${maxSubAgents} concurrent sub-agents or you will hit API rate limits and all will fail.
 
 ## Sub-Agent Prompting Rules (CRITICAL)
 
@@ -509,25 +576,25 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
 6. **Tell sub-agents which knowledge book pages to read.** Example: "Use \`readDocumentText\` on bookId=... with pages=42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
 - Save progress to memory frequently so you can resume if stopped
 
-## COMPLETION CRITERIA — DO NOT STOP EARLY
+## COMPLETION CRITERIA â€” DO NOT STOP EARLY
 
-⚠️ **THIS IS THE MOST IMPORTANT SECTION. READ IT CAREFULLY.**
+âš ï¸ **THIS IS THE MOST IMPORTANT SECTION. READ IT CAREFULLY.**
 
 **Your job is NOT done until ALL of the following are true:**
-0. âœ… saveEstimateScopeGraph called
-0. âœ… saveEstimateExecutionPlan called
-0. âœ… saveEstimateAssumptions called
-0. âœ… saveEstimatePackagePlan called
-0. âœ… ${benchmarkingEnabled ? "recomputeEstimateBenchmarks completed and saveEstimateAdjustments recorded" : "saveEstimateAdjustments recorded and explicitly notes that organization benchmarking is disabled"}
-0. âœ… saveEstimateReconcile called
-0. âœ… finalizeEstimateStrategy called
-1. ✅ updateQuote called with project name, CONCISE scope description, client
-2. ✅ Rate schedules imported for all required categories
-3. ✅ ALL worksheets created (every major scope area has a worksheet)
-4. ✅ ALL line items created in EVERY worksheet with quantities, rates, and sourceNotes
-5. ✅ Conditions created via createCondition — inclusions, exclusions, clarifications/assumptions
-6. ✅ **Final QA: call getWorkspace and verify every worksheet has items**
-7. ✅ **Final summary message** — output a message summarizing the estimate: total worksheets, total items, total estimated hours, key assumptions with impact levels, and any items marked "NEEDS PRICING" that require user attention
+0. Ã¢Å“â€¦ saveEstimateScopeGraph called
+0. Ã¢Å“â€¦ saveEstimateExecutionPlan called
+0. Ã¢Å“â€¦ saveEstimateAssumptions called
+0. Ã¢Å“â€¦ saveEstimatePackagePlan called
+0. Ã¢Å“â€¦ ${benchmarkingEnabled ? "recomputeEstimateBenchmarks completed and saveEstimateAdjustments recorded" : "saveEstimateAdjustments recorded and explicitly notes that organization benchmarking is disabled"}
+0. Ã¢Å“â€¦ saveEstimateReconcile called
+0. Ã¢Å“â€¦ finalizeEstimateStrategy called
+1. âœ… updateQuote called with project name, CONCISE scope description, client
+2. âœ… Rate schedules imported for all required categories
+3. âœ… ALL worksheets created (every major scope area has a worksheet)
+4. âœ… ALL line items created in EVERY worksheet with quantities, rates, and sourceNotes
+5. âœ… Conditions created via createCondition â€” inclusions, exclusions, clarifications/assumptions
+6. âœ… **Final QA: call getWorkspace and verify every worksheet has items**
+7. âœ… **Final summary message** â€” output a message summarizing the estimate: total worksheets, total items, total estimated hours, key assumptions with impact levels, and any items marked "NEEDS PRICING" that require user attention
 
 **COMMON FAILURE MODE: You read the documents, write a scope summary, and stop.** This is WRONG. Reading documents and writing a summary is step 1 of 10. You have not created ANY value until you call createWorksheet and createWorksheetItem.
 
@@ -542,13 +609,13 @@ Before saveEstimateReconcile and finalizeEstimateStrategy, you MUST also configu
 **If you have only done research/setup, you are LESS THAN 20% DONE.**
 The bulk of the work is steps 7-8: creating worksheets and populating them with dozens of granular line items each. Do NOT stop after importing rate schedules and querying knowledge. That is just preparation. KEEP GOING until every worksheet is fully populated.
 
-## Final QA Review (MANDATORY — run AFTER all worksheets are populated)
+## Final QA Review (MANDATORY â€” run AFTER all worksheets are populated)
 
 After all sub-agents complete and every worksheet has line items, you MUST perform a final review pass:
 
 1. **Call getWorkspace** to pull the complete quote with all worksheets and items
 2. **Cross-check against scope:** Walk through the original spec/RFQ section by section. Flag any scope items that have NO corresponding line item (omissions)
-   **SCOPE COMPLETENESS CHECKLIST** — Verify these are covered (if applicable to the project):
+   **SCOPE COMPLETENESS CHECKLIST** â€” Verify these are covered (if applicable to the project):
    - [ ] Every P&ID has been reviewed and all equipment/piping accounted for
    - [ ] Tank trim / vessel trim for all tanks
    - [ ] Pipe labelling and identification
@@ -559,23 +626,23 @@ After all sub-agents complete and every worksheet has line items, you MUST perfo
    - [ ] General conditions worksheet (site facilities, rentals, supervision, consumables)
    - [ ] Mob/demob for crew AND equipment
 3. **Sanity-check hours/quantities and DETECT $0 ITEMS:** For each worksheet, verify:
-   - **$0 DETECTION (CRITICAL):** Scan ALL items for price=$0 or cost=$0. For rate_schedule categories (Labour, Equipment), a $0 price means the item was NOT properly linked to a rate schedule — it has empty tierUnits OR missing rateScheduleItemId. FIX THESE IMMEDIATELY using updateWorksheetItem to set the correct rateScheduleItemId and tierUnits.
+   - **$0 DETECTION (CRITICAL):** Scan ALL items for price=$0 or cost=$0. For rate_schedule categories (Labour, Equipment), a $0 price means the item was NOT properly linked to a rate schedule â€” it has empty tierUnits OR missing rateScheduleItemId. FIX THESE IMMEDIATELY using updateWorksheetItem to set the correct rateScheduleItemId and tierUnits.
    - **Unpriced worksheet detection:** If an entire worksheet totals $0, something is fundamentally wrong. Every worksheet should contribute to the estimate.
    - Total hours are reasonable for the scope (compare against knowledge base benchmarks)
    - No items have zero hours or zero quantity that shouldn't
    - No items are missing rateScheduleItemId when the category requires it
    - No items have suspiciously round numbers that suggest guessing instead of calculation
-   - **Labour cost sanity check:** Calculate expected_labour_cost = crew_size × project_weeks × 40 hrs × avg_hourly_rate. If the total estimate is LESS than expected labour cost alone, major scope items are unpriced or missing.
+   - **Labour cost sanity check:** Calculate expected_labour_cost = crew_size Ã— project_weeks Ã— 40 hrs Ã— avg_hourly_rate. If the total estimate is LESS than expected labour cost alone, major scope items are unpriced or missing.
    - **Material-to-labour ratio:** For piping projects, materials are typically 20-40% of labour cost. If materials are <10% of labour, material pricing may be too low.
 4. **Check for duplicates and MATERIAL DOUBLE-COUNTING (CRITICAL):** Scan for items that appear in multiple worksheets:
-   - **Materials placement rule:** Each material item should exist in EXACTLY ONE place. Either embed materials in each system worksheet (pipe, fittings, gaskets per system) OR create a consolidated Materials worksheet — NEVER BOTH.
-   - **Preferred approach:** Embed materials in each system worksheet (e.g. "CS Pipe — Isocyanate" lives in the Isocyanate worksheet). This keeps materials traceable to the scope they belong to.
-   - **If using a consolidated Materials worksheet:** It should ONLY contain items that span multiple systems (e.g. "Welding consumables — all systems", "Test blinds — all systems"). Do NOT duplicate per-system materials here.
+   - **Materials placement rule:** Each material item should exist in EXACTLY ONE place. Either embed materials in each system worksheet (pipe, fittings, gaskets per system) OR create a consolidated Materials worksheet â€” NEVER BOTH.
+   - **Preferred approach:** Embed materials in each system worksheet (e.g. "CS Pipe â€” Isocyanate" lives in the Isocyanate worksheet). This keeps materials traceable to the scope they belong to.
+   - **If using a consolidated Materials worksheet:** It should ONLY contain items that span multiple systems (e.g. "Welding consumables â€” all systems", "Test blinds â€” all systems"). Do NOT duplicate per-system materials here.
    - **Common double-counts to check:** gaskets/bolts (per system vs consolidated), pipe support hardware (support worksheet vs materials worksheet), pipe labels (painting/labeling worksheet vs materials), welding consumables (GC worksheet vs materials worksheet), safety/PPE (GC vs materials).
    - If you find duplicates, DELETE the consolidated worksheet entry and keep the per-system entry (better traceability).
 5. **Verify shop vs field split:** If both fabrication and installation worksheets exist, confirm items aren't counted in both (e.g. the same weld shouldn't have full hours in shop AND field)
-6. **Validate sourceNotes:** Spot-check that sourceNotes are populated and reference actual knowledge/data — not just "estimated" or blank
-7. **Fix errors in-place:** Use updateWorksheetItem to correct any issues found. Do NOT just report them — fix them.
+6. **Validate sourceNotes:** Spot-check that sourceNotes are populated and reference actual knowledge/data â€” not just "estimated" or blank
+7. **Fix errors in-place:** Use updateWorksheetItem to correct any issues found. Do NOT just report them â€” fix them.
 8. **Report to user:** After fixing, output a summary of what was found and corrected. Include:
    - Total items reviewed
    - Issues found and fixed (with before/after)
@@ -586,7 +653,7 @@ After all sub-agents complete and every worksheet has line items, you MUST perfo
 
 You MUST follow this protocol for every estimate. Skipping steps is NOT allowed.
 
-### Step 1: Scope Confirmation — USE askUser TOOL
+### Step 1: Scope Confirmation â€” USE askUser TOOL
 After reading ALL documents, prepare a structured scope summary covering:
 - Every major system/area of work identified
 - Equipment counts with P&ID references
@@ -598,9 +665,9 @@ Then call the **askUser** MCP tool with the scope summary and ask: "Does this ma
 
 If you need multiple structured answers, keep the top-level \`question\` short and use the tool's \`questions\` array so the UI can render one answer control per question.
 
-**YOU MUST CALL THE askUser TOOL** — do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
+**YOU MUST CALL THE askUser TOOL** â€” do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
 
-### Step 2: Clarifying Questions — USE askUser TOOL
+### Step 2: Clarifying Questions â€” USE askUser TOOL
 Before estimating labour, call the **askUser** tool with ALL of these questions bundled together:
 - Which activities will be subcontracted vs self-performed? (insulation, painting/blasting, NDT/RT inspection, pipe supports, scaffolding/access)
 - What access equipment is available? (scissor lifts, boom lifts, scaffolding, none)
@@ -614,18 +681,18 @@ Before estimating labour, call the **askUser** tool with ALL of these questions 
 
 For this step, prefer a single **askUser** call with a short summary in \`question\` plus a structured \`questions\` array containing one entry per clarifying question and 2-4 suggested options for each.
 
-**SUBCONTRACTOR IDENTIFICATION (CRITICAL — DO NOT SKIP)** — Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
+**SUBCONTRACTOR IDENTIFICATION (CRITICAL â€” DO NOT SKIP)** â€” Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
 
-1. **CHECK THE PERSONA FIRST.** If the estimator persona defines typical subcontracted activities, those are AUTHORITATIVE — follow them exactly. Do NOT override persona guidance with your own judgment.
-2. **CHECK THE SCOPE INSTRUCTION.** If the user specified scope like "subcontract insulation" or "sub out painting", that is a DIRECT INSTRUCTION — you MUST create Subcontractor items for those scopes, not self-performed labour.
+1. **CHECK THE PERSONA FIRST.** If the estimator persona defines typical subcontracted activities, those are AUTHORITATIVE â€” follow them exactly. Do NOT override persona guidance with your own judgment.
+2. **CHECK THE SCOPE INSTRUCTION.** If the user specified scope like "subcontract insulation" or "sub out painting", that is a DIRECT INSTRUCTION â€” you MUST create Subcontractor items for those scopes, not self-performed labour.
 3. **CHECK PERSONA DEFAULT ASSUMPTIONS.** If the persona's editable assumptions define default subcontract scopes or commercialization preferences, follow them and cite that guidance in the package plan.
 4. If persona and scope are silent, treat subcontracting choice as an explicit assumption and record the basis. Do NOT hide it as an implicit rule.
 5. For subcontracted items, use the configured subcontract/commercial freeform category from \`getItemConfig\` (often "Subcontractor" or "Subcontractors") with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
-6. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K — create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
+6. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K â€” create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
 
 **Common failure: The agent ignores the persona and scope instructions and estimates everything as self-performed.** This produces estimates that are 40-60% below reality. READ THE PERSONA. READ THE SCOPE. Follow them.
 
-**Subcontractor pricing reality check:** Subcontracted work costs MORE than self-performed labour, not less. If your subcontractor line items are cheaper than what self-performed labour would cost for the same scope, your sub pricing is too low. Industrial subcontractors (insulation, blasting, scaffolding, crane services) carry their own overhead, profit, mobilization, and equipment — their pricing reflects this. Examples:
+**Subcontractor pricing reality check:** Subcontracted work costs MORE than self-performed labour, not less. If your subcontractor line items are cheaper than what self-performed labour would cost for the same scope, your sub pricing is too low. Industrial subcontractors (insulation, blasting, scaffolding, crane services) carry their own overhead, profit, mobilization, and equipment â€” their pricing reflects this. Examples:
 - Insulation: $150K-$350K on a 6-system industrial project (NOT $50K)
 - Blasting + prime: $15K-$40K for 5,000+ LF pipe (NOT $5K)
 - Scaffolding: $10K-$25K for complex elevated work areas
@@ -648,26 +715,26 @@ For EVERY type of work you're estimating:
 Every trade has work done in a controlled environment vs on-site at elevation:
 - Create SEPARATE worksheets for fabrication/pre-assembly vs field installation
 - Shop/fab rates are typically more productive than field rates (the persona defines the trade-specific productivity delta)
-- The persona defines what constitutes shop vs field activities for each trade — follow it
+- The persona defines what constitutes shop vs field activities for each trade â€” follow it
 - Also include worksheets for drawing/layout/engineering work if the persona identifies it as significant labour
 
-### Step 5: Granular Breakdown — SYSTEM FIRST, THEN TASK TYPE
+### Step 5: Granular Breakdown â€” SYSTEM FIRST, THEN TASK TYPE
 Break work down to the smallest countable/trackable unit:
-- **SYSTEM-FIRST methodology:** Estimate per P&ID / per chemical system / per process area — NOT lumped across all systems. Different systems have different pipe sizes, connection counts, complexity, and materials. Lumping them produces inaccurate averages.
+- **SYSTEM-FIRST methodology:** Estimate per P&ID / per chemical system / per process area â€” NOT lumped across all systems. Different systems have different pipe sizes, connection counts, complexity, and materials. Lumping them produces inaccurate averages.
 - Count actual work items: welds, joints, connections, drops, penetrations PER SYSTEM
 - For piping: joints and welds drive hours more than linear feet alone
 - Define crew composition for each activity: e.g. "2 fitters + 1 foreman"
-- Calculate both ways: (crew size × days = total MH) AND (count × rate = total MH)
+- Calculate both ways: (crew size Ã— days = total MH) AND (count Ã— rate = total MH)
 - If the two methods disagree by >20%, investigate and reconcile
 
 **SYSTEM-FIRST ESTIMATION (MANDATORY when multiple systems/P&IDs exist):**
-1. **Identify all systems** — each P&ID represents a distinct system with different characteristics
-2. **Estimate PER SYSTEM** — create line items per system/P&ID, not generic task-type breakdowns across all systems
+1. **Identify all systems** â€” each P&ID represents a distinct system with different characteristics
+2. **Estimate PER SYSTEM** â€” create line items per system/P&ID, not generic task-type breakdowns across all systems
 3. **Within each system**, break down by the task types relevant to the trade (the estimator persona defines trade-specific breakdowns)
-4. **Do NOT average across systems** — different systems have different sizes, counts, and complexity. Lumping them produces inaccurate results.
-5. **The estimator persona defines the trade-specific estimation methodology** — follow it for how to break down work within each system (e.g. by weld type for piping, by cable size for electrical, by tonnage for structural).
+4. **Do NOT average across systems** â€” different systems have different sizes, counts, and complexity. Lumping them produces inaccurate results.
+5. **The estimator persona defines the trade-specific estimation methodology** â€” follow it for how to break down work within each system (e.g. by weld type for piping, by cable size for electrical, by tonnage for structural).
 
-**WORKSHEET ORGANIZATION** — When the project has multiple systems (identified by separate P&IDs):
+**WORKSHEET ORGANIZATION** â€” When the project has multiple systems (identified by separate P&IDs):
 - Create worksheets per major ACTIVITY (Fabrication, Installation, etc.) with line items broken down per system WITHIN each worksheet
 - Every line item description should reference the specific P&ID or system it covers
 - This provides cost visibility per system and helps identify which systems drive the most cost
@@ -684,14 +751,14 @@ For every base rate from knowledge books, evaluate and apply ALL applicable fact
 - **Specification stringency:** standard=1.0, B31.3 chemical service=1.05, high-purity=1.15
 Document each factor applied and its source in the item's sourceNotes field.
 
-### Step 7: Web Search — MANDATORY for Specs & Standards
+### Step 7: Web Search â€” MANDATORY for Specs & Standards
 Use WebSearch ROUTINELY throughout the estimate:
-- Search for every specification or code referenced (ASME B31.3, SSPC-SP6, ASTM A106, etc.) — understand what they require for installation, testing, documentation
+- Search for every specification or code referenced (ASME B31.3, SSPC-SP6, ASTM A106, etc.) â€” understand what they require for installation, testing, documentation
 - Search for manufacturer installation manuals for major equipment
 - Search for current rental rates for equipment in the project location
 - Search for subcontractor benchmarks in the project region
 - Search for any unfamiliar product or material mentioned in specs
-Do NOT assume you know what a spec requires — VERIFY through search.
+Do NOT assume you know what a spec requires â€” VERIFY through search.
 
 ### Step 8: Supervision, Support Hours & General Conditions
 
@@ -705,19 +772,19 @@ Do NOT assume you know what a spec requires — VERIFY through search.
 - **Do NOT add full-duration General Conditions supervision on top of per-package foremen unless the persona explicitly calls for hybrid coverage.**
 - If the persona does not define supervision policy, log the chosen coverage mode as an assumption before creating supervision rows.
 
-**PROJECT DURATION CALCULATION (MANDATORY — do this BEFORE General Conditions):**
-1. Calculate total trade MH across all worksheets (exclude supervision/foreman — just direct trade labour)
+**PROJECT DURATION CALCULATION (MANDATORY â€” do this BEFORE General Conditions):**
+1. Calculate total trade MH across all worksheets (exclude supervision/foreman â€” just direct trade labour)
 2. Determine average crew size from scope (spec may state crew size, or estimate from concurrent work streams)
-3. Duration (weeks) = Total Trade MH ÷ (Avg Crew Size × 40 hrs/week)
+3. Duration (weeks) = Total Trade MH Ã· (Avg Crew Size Ã— 40 hrs/week)
 4. Cross-check: if the spec/scope states an expected duration (e.g. "12-week project", "16-20 weeks"), use that as a sanity check
-5. If your calculated duration differs by >30% from the spec-stated duration, reconcile — either crew size is wrong or scope is larger/smaller than estimated
-6. Equipment rentals, site facilities, and supervision are ALL driven by duration — getting this wrong cascades into 20-40% cost variance
-7. **ALWAYS use the shorter realistic duration** — don't pad with extra weeks. Padding should be done through a contingency line item, not by inflating duration. A 6-8 person crew working 40 hrs/week with concurrent fabrication and installation streams completes faster than sequential single-crew estimates suggest.
+5. If your calculated duration differs by >30% from the spec-stated duration, reconcile â€” either crew size is wrong or scope is larger/smaller than estimated
+6. Equipment rentals, site facilities, and supervision are ALL driven by duration â€” getting this wrong cascades into 20-40% cost variance
+7. **ALWAYS use the shorter realistic duration** â€” don't pad with extra weeks. Padding should be done through a contingency line item, not by inflating duration. A 6-8 person crew working 40 hrs/week with concurrent fabrication and installation streams completes faster than sequential single-crew estimates suggest.
 
-**MANDATORY GENERAL CONDITIONS** — EVERY project MUST include a "General Conditions" or "Site Overhead" worksheet. Use the duration calculated above, then include:
-- **Site facilities:** office trailer, lunch/break room trailer, washrooms, hand wash stations — multiply monthly rental rate × project months. Use SUBCONTRACTOR category for specific vendor rentals (e.g. "Miller - Office Trailer Monthly Rental, 3 months").
-- **Equipment rentals:** boom lifts, scissor lifts, forklifts, cranes — MUST use Equipment rate schedule items with \`tierUnits\` set to the rental duration. For equipment rented monthly: \`tierUnits: {"Monthly": 4}\` for 4 months. For weekly: \`tierUnits: {"Weekly": 12}\`. **The Equipment rate schedule has Daily/Weekly/Monthly tiers — use them.** Without proper tierUnits, equipment items will calculate to $0.
-- **Consumables allowance:** welding consumables, safety supplies, PPE, signage, barriers — use catalogue items if the Consumables category has \`itemSource=catalog\`. Otherwise use lump sums.
+**MANDATORY GENERAL CONDITIONS** â€” EVERY project MUST include a "General Conditions" or "Site Overhead" worksheet. Use the duration calculated above, then include:
+- **Site facilities:** office trailer, lunch/break room trailer, washrooms, hand wash stations â€” multiply monthly rental rate Ã— project months. Use SUBCONTRACTOR category for specific vendor rentals (e.g. "Miller - Office Trailer Monthly Rental, 3 months").
+- **Equipment rentals:** boom lifts, scissor lifts, forklifts, cranes â€” MUST use Equipment rate schedule items with \`tierUnits\` set to the rental duration. For equipment rented monthly: \`tierUnits: {"Monthly": 4}\` for 4 months. For weekly: \`tierUnits: {"Weekly": 12}\`. **The Equipment rate schedule has Daily/Weekly/Monthly tiers â€” use them.** Without proper tierUnits, equipment items will calculate to $0.
+- **Consumables allowance:** welding consumables, safety supplies, PPE, signage, barriers â€” use catalogue items if the Consumables category has \`itemSource=catalog\`. Otherwise use lump sums.
 - **Supervision only if the persona's coverage mode places it here:** if supervision belongs in General Conditions, add it once here; if supervision is embedded in execution packages, do NOT duplicate it here.
 - **Regulatory costs:** TSSA, permits, inspections, submittals if applicable
 - **Mob/demob:** separate lines for crew mobilization AND equipment mobilization
@@ -733,15 +800,15 @@ Track EVERY assumption you make throughout the estimate:
 - And type="inclusion" for every major scope inclusion you want to confirm with the client
 - At the END, output a final summary message listing all assumptions and their impact level (HIGH/MEDIUM/LOW) so the user can review
 
-### Step 10: sourceNotes — MANDATORY on Every Item
+### Step 10: sourceNotes â€” MANDATORY on Every Item
 For EVERY line item you create, populate the sourceNotes field with:
-- **Knowledge reference:** "[Book Name], Table X.X, p.XX — base rate Y MH/unit"
-- **Dataset match:** "Dataset [name], row matching [conditions] → value Z"
-- **Correction factors:** "Elevation ×1.10, congestion ×1.15 = combined ×1.27"
-- **Web search:** "WebSearch '[query]' → [key finding], URL: [url]"
+- **Knowledge reference:** "[Book Name], Table X.X, p.XX â€” base rate Y MH/unit"
+- **Dataset match:** "Dataset [name], row matching [conditions] â†’ value Z"
+- **Correction factors:** "Elevation Ã—1.10, congestion Ã—1.15 = combined Ã—1.27"
+- **Web search:** "WebSearch '[query]' â†’ [key finding], URL: [url]"
 - **Assumptions:** any item-specific assumptions
 - **Reasoning:** brief note explaining why this rate/quantity was chosen
-Items without sourceNotes are not acceptable — they cannot be defended or reviewed.
+Items without sourceNotes are not acceptable â€” they cannot be defended or reviewed.
 
 ## Progress Reporting
 
@@ -793,7 +860,7 @@ function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
 
   const docManifest = params.documents.length > 0
     ? params.documents.map((d, i) =>
-      `  ${i + 1}. \`${d.fileName}\` — ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
+      `  ${i + 1}. \`${d.fileName}\` â€” ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
     ).join("\n")
     : "  (No documents available)";
 
@@ -807,7 +874,7 @@ You are an expert construction estimator performing a DETAILED REVIEW of an exis
 
 ## YOUR MISSION
 
-Analyze EVERY project document against the quoted estimate. Identify scope gaps, risks, overestimates, underestimates, and generate actionable recommendations. You are a second set of eyes — find what the estimator missed, question what seems wrong, and benchmark against industry standards.
+Analyze EVERY project document against the quoted estimate. Identify scope gaps, risks, overestimates, underestimates, and generate actionable recommendations. You are a second set of eyes â€” find what the estimator missed, question what seems wrong, and benchmark against industry standards.
 
 **CRITICAL: You are REVIEWING, not ESTIMATING. Do NOT call createWorksheetItem, updateWorksheetItem, deleteWorksheetItem, updateQuote, or any mutating quote tools. Only use the saveReview* tools to record your findings.**
 
@@ -818,16 +885,18 @@ The project documents are in the \`documents/\` folder as real files on disk.
 **How to read documents:**
 - PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID (use \`pages\` for large PDFs)
 - Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID
-- Images: Use the vision tools only for visual inspection
-- \`getDocumentStructured\` — for Azure Form Recognizer extracted tables
+- Drawings and symbol-driven PDFs: use the vision tools as a primary validation workflow whenever drawings drive device/component counts or visual scope checks
+- \`getDocumentStructured\` â€” for Azure Form Recognizer extracted tables
 
 ${docManifest}
 
 **MANDATORY: READ EVERY DOCUMENT. NO EXCEPTIONS.**
 - Read EVERY document listed above. No skipping.
-- Every P&ID must be individually read — secondary P&IDs contain additional scope.
+- Every P&ID must be individually read â€” secondary P&IDs contain additional scope.
 - Every spreadsheet must be read using \`readSpreadsheet\`.
 - Read large PDFs in chunks using the \`pages\` parameter.
+
+${buildDrawingAnalysisSection(params.documents, "review")}
 
 ## Knowledge Books (Reference Manuals)
 
@@ -844,33 +913,41 @@ Use \`listKnowledgeBooks\` to get the relevant IDs, then \`readDocumentText\` to
 You have access to Bidwright tools via MCP. For this review, use:
 
 ### READ-ONLY Tools (use freely):
-- **getWorkspace** — Get the full estimate: worksheets, items, phases, modifiers, conditions, totals
-- **getItemConfig** — Discover categories, rate schedules
-- **searchItems** — Search line items by query/category
-- **queryKnowledge** — Search knowledge base for productivity rates and standards
-- **queryGlobalLibrary** — Search global knowledge books
-- **searchBooks** — Search knowledge books by keyword
-- **queryDataset / searchDataset / listDatasets** — Search structured datasets for benchmarks
-- **getDocumentStructured** — Get structured document data
-- **readSpreadsheet** — Read Excel/CSV files
-- **readMemory** — Read project memory from prior sessions
+- **getWorkspace** â€” Get the full estimate: worksheets, items, phases, modifiers, conditions, totals
+- **getItemConfig** â€” Discover categories, rate schedules
+- **searchItems** â€” Search line items by query/category
+- **queryKnowledge** â€” Search knowledge base for productivity rates and standards
+- **queryGlobalLibrary** â€” Search global knowledge books
+- **searchBooks** â€” Search knowledge books by keyword
+- **queryDataset / searchDataset / listDatasets** â€” Search structured datasets for benchmarks
+- **getDocumentStructured** â€” Get structured document data
+- **readSpreadsheet** â€” Read Excel/CSV files
+- **readMemory** â€” Read project memory from prior sessions
+
+### Drawing / Vision Tools
+- **listDrawingPages** - List drawing PDFs and page counts before any drawing CV workflow
+- **scanDrawingSymbols** - Scan a drawing page and inventory repeating symbols with counts and representative boxes
+- **countSymbols** - Refine a single-page symbol count using a representative bounding box
+- **countSymbolsAllPages** - Count repeated symbols across all pages of a drawing set
+- **findSymbolCandidates** - Discover symbol-like candidates when you need help identifying a cluster
+- **renderDrawingPage / zoomDrawingRegion** - Use for visual confirmation only, not as the primary counting workflow
 
 ### REVIEW OUTPUT Tools (the ONLY tools you write with):
-- **saveReviewCoverage** — Save scope coverage checklist (call ONCE with all items)
-- **saveReviewFindings** — Save gaps and risks (call ONCE with all findings)
-- **saveReviewCompetitiveness** — Save overestimate/underestimate analysis + productivity benchmarks
-- **saveReviewRecommendation** — Save ONE recommendation per call (call ONCE PER recommendation)
-- **saveReviewSummary** — Save executive summary (call LAST)
+- **saveReviewCoverage** â€” Save scope coverage checklist (call ONCE with all items)
+- **saveReviewFindings** â€” Save gaps and risks (call ONCE with all findings)
+- **saveReviewCompetitiveness** â€” Save overestimate/underestimate analysis + productivity benchmarks
+- **saveReviewRecommendation** â€” Save ONE recommendation per call (call ONCE PER recommendation)
+- **saveReviewSummary** â€” Save executive summary (call LAST)
 
 ## Review Workflow (MANDATORY SEQUENCE)
 
 ### Phase 1: Understand the Estimate
-1. Call \`getWorkspace\` — pull the complete estimate with all worksheets, items, phases, conditions
+1. Call \`getWorkspace\` â€” pull the complete estimate with all worksheets, items, phases, conditions
 2. Note: total quoted amount, number of worksheets, number of items, total hours, breakdown by category
-3. Call \`getItemConfig\` — understand the organization's categories and rate schedules
+3. Call \`getItemConfig\` â€” understand the organization's categories and rate schedules
 
 ### Phase 2: Read ALL Documents
-4. Read the main specification/RFQ first — it defines the full scope
+4. Read the main specification/RFQ first â€” it defines the full scope
 5. Read EVERY remaining document: P&IDs, drawings, BOMs, vendor quotes, bid sheets
 6. Build a mental checklist of EVERY spec requirement, deliverable, and scope item
 
@@ -879,18 +956,18 @@ You have access to Bidwright tools via MCP. For this review, use:
 8. Query datasets for production rates
 9. Note industry benchmarks for the types of work in this estimate
 
-### Phase 4: Cross-Reference — Scope Coverage
+### Phase 4: Cross-Reference â€” Scope Coverage
 10. For EACH spec requirement, check if a corresponding line item exists in the estimate
 11. Rate each as YES (fully covered), VERIFY (partially covered, needs confirmation), or NO (missing)
 12. Call \`saveReviewCoverage\` with ALL items
 
 ### Phase 5: Identify Gaps and Risks
 13. Find items that are:
-    - **Missing entirely** — spec requires it, estimate has nothing
-    - **Underpriced** — has a $0 line or token amount where real cost is needed
-    - **Technically non-conforming** — references wrong spec, wrong material, wrong standard
-    - **Ambiguous** — conditions/exclusions that conflict with spec requirements
-    - **Assumption-dependent** — relies on unverified assumptions
+    - **Missing entirely** â€” spec requires it, estimate has nothing
+    - **Underpriced** â€” has a $0 line or token amount where real cost is needed
+    - **Technically non-conforming** â€” references wrong spec, wrong material, wrong standard
+    - **Ambiguous** â€” conditions/exclusions that conflict with spec requirements
+    - **Assumption-dependent** â€” relies on unverified assumptions
 14. Rate severity: CRITICAL (>$5K impact or safety/compliance), WARNING (questionable), INFO (observation)
 15. Call \`saveReviewFindings\` with ALL findings
 
@@ -910,10 +987,10 @@ You have access to Bidwright tools via MCP. For this review, use:
     - Priority: HIGH (>$5K impact), MEDIUM ($1K-$5K), LOW (<$1K)
     - Specific resolution actions (which items to add/update/delete, and exact changes)
     - The resolution must include structured actions that the system can execute:
-      - \`createItem\` — with worksheetId and full item data
-      - \`updateItem\` — with itemId and specific field changes
-      - \`deleteItem\` — with itemId
-      - \`addCondition\` — with type and value
+      - \`createItem\` â€” with worksheetId and full item data
+      - \`updateItem\` â€” with itemId and specific field changes
+      - \`deleteItem\` â€” with itemId
+      - \`addCondition\` â€” with type and value
 20. Call \`saveReviewRecommendation\` once for EACH recommendation
 
 ### Phase 8: Executive Summary
@@ -929,7 +1006,7 @@ You have access to Bidwright tools via MCP. For this review, use:
 
 ### Coverage Status
 - **YES**: A line item exists that directly addresses this spec requirement with realistic hours/cost
-- **VERIFY**: Partial coverage — item exists but may not cover full scope, or coverage is unclear
+- **VERIFY**: Partial coverage â€” item exists but may not cover full scope, or coverage is unclear
 - **NO**: No line item found for this spec requirement
 
 ### Finding Severity
@@ -941,18 +1018,18 @@ You have access to Bidwright tools via MCP. For this review, use:
 - Compare production rates against knowledge base benchmarks
 - Flag rates that are >30% slower than benchmark as "Heavy" or "Very heavy"
 - Flag rates that are >30% faster than benchmark as "Aggressive"
-- Calculate FM:TL ratio — industry standard is 0.25-0.50 for most trades; >0.70 is heavy supervision
+- Calculate FM:TL ratio â€” industry standard is 0.25-0.50 for most trades; >0.70 is heavy supervision
 
 ## Sub-Agent Usage
-You may use up to ${maxSubAgents} sub-agents in parallel to read different documents simultaneously. Each sub-agent should read documents and return findings — the main agent then compiles and saves via the review tools.
+You may use up to ${maxSubAgents} sub-agents in parallel to read different documents simultaneously. Each sub-agent should read documents and return findings â€” the main agent then compiles and saves via the review tools.
 
 ## COMPLETION CRITERIA
 Your review is NOT complete until you have called ALL of these:
-1. saveReviewCoverage — with coverage for every major spec requirement
-2. saveReviewFindings — with all identified gaps and risks
-3. saveReviewCompetitiveness — with overestimate analysis and productivity benchmarks
-4. saveReviewRecommendation — called once for EACH recommendation
-5. saveReviewSummary — called last with the executive summary
+1. saveReviewCoverage â€” with coverage for every major spec requirement
+2. saveReviewFindings â€” with all identified gaps and risks
+3. saveReviewCompetitiveness â€” with overestimate analysis and productivity benchmarks
+4. saveReviewRecommendation â€” called once for EACH recommendation
+5. saveReviewSummary â€” called last with the executive summary
 
 Do NOT stop after reading documents. The value is in the ANALYSIS, not the reading.
 `;
@@ -983,7 +1060,7 @@ export async function symlinkKnowledgeBooks(
         await symlink(sourcePath, targetPath);
         linked.push(safeFileName);
       } catch {
-        // Symlink might fail — try copy as fallback
+        // Symlink might fail â€” try copy as fallback
         try {
           await copyFile(sourcePath, targetPath);
           linked.push(safeFileName);

@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { AlertTriangle, ArrowDown, Bot, CheckCircle2, ChevronDown, ChevronRight, FileText, FileSpreadsheet, FileImage, FolderSearch, Loader2, RefreshCw, Search, Send, Sparkles, Square, X, XCircle, Wrench } from "lucide-react";
 import { Badge, Button, Select, Textarea } from "@/components/ui";
 import {
-  startIntake, getIntakeStatus, stopIntake, answerIntake, getSettings, type IntakeStatusResult,
+  getSettings,
   startCliSession, connectCliStream, stopCliSession, resumeCliSession, sendCliMessage, getCliStatus, detectCli,
   getCliPendingQuestion, answerCliQuestion,
   getProjectWorkspace,
@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import { isVisionTool, VisionToolWidget, ProgressIndicator } from "./vision-chat-widgets";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 
-// ─── Types ────────────────────────────────────────────────────────────
+// Types
 
 interface ToolCallEntry {
   id: string;
@@ -57,7 +57,22 @@ interface PendingQuestionPrompt {
   questions?: PendingQuestionStep[];
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────
+interface IntakeStatusResult {
+  sessionId: string;
+  projectId: string;
+  scope: string;
+  status: "running" | "completed" | "failed" | "stopped" | "waiting_for_user";
+  pendingQuestion?: { question: string; options?: string[]; context?: string } | null;
+  toolCallCount: number;
+  messageCount: number;
+  summary: string | null;
+  createdAt: string;
+  updatedAt: string;
+  recentToolCalls: Array<{ toolId: string; success: boolean; duration_ms: number }>;
+  events?: any[];
+}
+
+// Helpers
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4001";
 
@@ -110,7 +125,7 @@ function hasMutatingToolCalls(toolCalls: Array<{ toolId: string; result?: { side
 }
 
 
-// ─── File Access Detection ────────────────────────────────────────────
+// File Access Detection
 
 const FILE_TOOL_IDS = new Set(["Read", "Glob", "Grep"]);
 
@@ -137,7 +152,7 @@ function extractFileName(input: any): string | null {
   return parts[parts.length - 1] || filePath;
 }
 
-// ─── File Access Widget ───────────────────────────────────────────────
+// Project Workspace Helpers
 
 function FileAccessWidget({ tc }: { tc: ToolCallEntry }) {
   const fileName = extractFileName(tc.input);
@@ -171,7 +186,7 @@ function FileAccessWidget({ tc }: { tc: ToolCallEntry }) {
   );
 }
 
-// ─── Agent Sub-Task Widget ────────────────────────────────────────────
+// Thinking Helpers
 
 function AgentWidget({ tc, isRunning }: { tc: ToolCallEntry; isRunning: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -235,7 +250,7 @@ function isAgentTool(toolId: string): boolean {
   return toolId === "Agent" || toolId === "agent";
 }
 
-// ─── Tool Call Detail ─────────────────────────────────────────────────
+// Pending Question Helpers
 
 function ToolCallDetail({ tc }: { tc: ToolCallEntry }) {
   const [expanded, setExpanded] = useState(false);
@@ -293,7 +308,7 @@ function ToolCallDetail({ tc }: { tc: ToolCallEntry }) {
   );
 }
 
-// ─── Live Tool Call Feed ──────────────────────────────────────────────
+// Live Tool Feed
 
 function LiveToolFeed({ toolCalls, isRunning }: { toolCalls: ToolCallEntry[]; isRunning: boolean }) {
   const [showAll, setShowAll] = useState(false);
@@ -332,7 +347,7 @@ function LiveToolFeed({ toolCalls, isRunning }: { toolCalls: ToolCallEntry[]; is
   );
 }
 
-// ─── Main Component ───────────────────────────────────────────────────
+// Main Component
 
 interface GuidedQuestion {
   id: string;
@@ -943,9 +958,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [provider, setProvider] = useState("anthropic");
-  const [model, setModel] = useState("claude-sonnet-4-20250514");
   const [settingsReady, setSettingsReady] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [intakeSessionId, setIntakeSessionId] = useState<string | null>(null);
@@ -955,7 +967,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [ingestionStatus, setIngestionStatus] = useState<string | null>(null);
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
   const [docsExpanded, setDocsExpanded] = useState(false);
-  const [cliAvailable, setCliAvailable] = useState<{ claude: boolean; codex: boolean }>({ claude: false, codex: false });
   const [cliModels, setCliModels] = useState<{ claude: CliModelOption[]; codex: CliModelOption[] }>({ claude: [], codex: [] });
   const [cliRuntime, setCliRuntime] = useState<CliRuntime | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
@@ -1001,7 +1012,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     });
   }, []);
 
-  // Load default provider/model from org settings + detect CLIs
+  // Load CLI runtime and personas from org settings
   useEffect(() => {
     let active = true;
 
@@ -1018,14 +1029,11 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         settingsResult.status === "fulfilled"
           ? (settingsResult.value?.integrations as Record<string, any> | undefined)
           : undefined;
-      if (integ?.llmProvider) setProvider(integ.llmProvider);
-      if (integ?.llmModel) setModel(integ.llmModel);
 
       const availability = {
         claude: cliResult.status === "fulfilled" ? cliResult.value.claude.available : false,
         codex: cliResult.status === "fulfilled" ? cliResult.value.codex.available : false,
       };
-      setCliAvailable(availability);
       if (cliResult.status === "fulfilled") {
         setCliModels({
           claude: cliResult.value.claude.models || [],
@@ -1092,9 +1100,8 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     return () => { active = false; clearInterval(interval); };
   }, [projectId, open]);
 
-  // Restore latest session on mount (try CLI first, then legacy intake)
+  // Restore latest CLI session on mount
   useEffect(() => {
-    // Try CLI status first
     getCliStatus(projectId)
       .then((data) => {
         if (data.status === "none") throw new Error("no cli session");
@@ -1140,26 +1147,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           connectToSseStream(projectId);
         }
       })
-      .catch(() => {
-        // Fall back to legacy intake session
-        fetch(`${API_BASE}/api/intake/project/${projectId}/latest`, {
-          headers: authHeaders(),
-          credentials: "include",
-        })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (!data) return;
-            setIntakeSessionId(data.sessionId);
-            setIntakeStatus({
-              sessionId: data.sessionId, projectId, scope: "",
-              status: data.status === "running" ? "running" : data.status === "stopped" ? ("stopped" as any) : data.status === "failed" ? "failed" : "completed",
-              toolCallCount: data.toolCallCount ?? 0, messageCount: data.messageCount ?? 0,
-              summary: data.summary, createdAt: "", updatedAt: "", recentToolCalls: [],
-              events: data.events,
-            } as any);
-          })
-          .catch(() => {});
-      });
+      .catch(() => {});
   }, [projectId]);
 
   useEffect(() => {
@@ -1190,28 +1178,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
 
   const intakeAutoStarted = useRef(false);
   const restoredFromDb = useRef(false);
-
-  const createSession = useCallback(async () => {
-    try {
-      setSessionError(null);
-      const res = await fetch(`${API_BASE}/api/agent/sessions`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ projectId, provider, model }),
-        credentials: "include",
-      });
-      if (!res.ok) {
-        throw new Error(`Session creation failed (${res.status})`);
-      }
-      const data = await res.json();
-      setSessionId(data.sessionId);
-      return data.sessionId;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to create session";
-      setSessionError(msg);
-      return null;
-    }
-  }, [projectId, provider, model]);
 
   async function sendMessage(content: string) {
     if (!content.trim() || isLoading) return;
@@ -1244,33 +1210,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         return;
       }
 
-      // Legacy API-based chat
-      let sid = sessionId;
-      if (!sid) {
-        sid = await createSession();
-        if (!sid) throw new Error("Failed to create session");
-      }
-
-      const res = await fetch(`${API_BASE}/api/agent/sessions/${sid}/messages`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify({ content: content.trim(), provider, model }),
-        credentials: "include",
-      });
-      const data = await res.json();
-
-      const assistantMsg: ChatMessage = {
-        id: `msg-${Date.now()}-resp`,
-        role: "assistant",
-        content: data.message,
-        toolCalls: data.toolCallsExecuted,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      if (data.toolCallsExecuted?.length && hasMutatingToolCalls(data.toolCallsExecuted)) {
-        onWorkspaceMutated?.();
-      }
+      throw new Error("Bidwright AI now uses the CLI runtime only. Configure and authenticate Claude Code or Codex in Agent Runtime settings before chatting.");
     } catch (e) {
       const errorMsg: ChatMessage = {
         id: `msg-${Date.now()}-err`,
@@ -1302,7 +1242,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         try {
           const existing = await getCliStatus(projectId);
           if (existing.status === "running") {
-            // Session already running — just reconnect to it
+            // Session already running - just reconnect to it
             setIntakeSessionId(existing.sessionId || null);
             setIntakeStatus({
               sessionId: existing.sessionId || "", projectId, scope: "", status: "running",
@@ -1338,15 +1278,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         // Connect SSE stream
         connectToSseStream(projectId);
       } else {
-        // Legacy API-based intake (fallback)
-        const result = await startIntake({ projectId, provider, model });
-        setIntakeSessionId(result.sessionId);
-        localStorage.setItem(intakeStorageKey(projectId), JSON.stringify({ sessionId: result.sessionId }));
-        setIntakeStatus({
-          sessionId: result.sessionId, projectId: result.projectId, scope: result.scope, status: "running",
-          toolCallCount: 0, messageCount: 0, summary: null,
-          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), recentToolCalls: [],
-        });
+        throw new Error("AI estimating now uses the CLI runtime only. Configure and authenticate Claude Code or Codex in Agent Runtime settings before starting a run.");
       }
     } catch (err) {
       setSessionError(err instanceof Error ? err.message : "Failed to start intake agent");
@@ -1551,19 +1483,19 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         const data = JSON.parse((e as any).data);
         setSessionError(data.message);
       } catch {
-        // SSE connection error — might reconnect automatically
+        // SSE connection error - might reconnect automatically
       }
     });
 
     es.onerror = () => {
       setSseConnected(false);
       if (es.readyState !== EventSource.CLOSED || eventSourceRef.current !== es) {
-        // EventSource may auto-recover — check on next tick
+        // EventSource may auto-recover - check on next tick
         if (es.readyState === EventSource.OPEN) setSseConnected(true);
         return;
       }
 
-      // Connection fully closed — check actual backend status before reconnecting
+      // Connection fully closed - check actual backend status before reconnecting
       const attempt = sseReconnectCount.current;
       const MAX_SSE_RECONNECTS = 8;
       if (attempt >= MAX_SSE_RECONNECTS) {
@@ -1574,7 +1506,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         return;
       }
 
-      // Exponential backoff: 3s, 6s, 12s, 24s … capped at 30s
+      // Exponential backoff: 3s, 6s, 12s, 24s - capped at 30s
       const delay = Math.min(3000 * Math.pow(2, attempt), 30_000);
       sseReconnectCount.current = attempt + 1;
 
@@ -1583,7 +1515,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         try {
           const data = await getCliStatus(pid);
           if (data.status !== "running") {
-            // Session already finished — update state and stop reconnecting
+            // Session already finished - update state and stop reconnecting
             es.close();
             eventSourceRef.current = null;
             sseReconnectCount.current = 0;
@@ -1592,7 +1524,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             return;
           }
         } catch {
-          // 404 or network error — session is gone
+          // 404 or network error - session is gone
           es.close();
           eventSourceRef.current = null;
           sseReconnectCount.current = 0;
@@ -1602,7 +1534,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           return;
         }
 
-        // Session still running — reconnect SSE
+        // Session still running - reconnect SSE
         es.close();
         eventSourceRef.current = null;
         connectToSseStream(pid);
@@ -1692,7 +1624,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         if (data.status !== "running") {
           setIntakeStatus((prev) => prev ? { ...prev, status: data.status as any } : prev);
           setCliPendingQuestion(null);
-          // Session ended — close SSE if still open
+          // Session ended - close SSE if still open
           if (eventSourceRef.current) {
             eventSourceRef.current.close();
             eventSourceRef.current = null;
@@ -1702,7 +1634,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
         }
       } catch {
         // API unreachable (server restarting, network blip, etc.)
-        // Retry a few times before giving up — the server may come back with the
+        // Retry a few times before giving up - the server may come back with the
         // actual final status from the DB after its startup cleanup runs.
         pollFailCount.current = (pollFailCount.current || 0) + 1;
         if (pollFailCount.current >= 4) {
@@ -1747,64 +1679,6 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
     }
   }, [autoStartIntake, open, settingsReady, intakeSessionId]);
 
-  // Poll intake status with live tool call accumulation (legacy agent mode only — CLI uses SSE)
-  useEffect(() => {
-    const st = intakeStatus?.status;
-    if (!intakeSessionId || (st !== "running" && st !== "waiting_for_user")) return;
-    // When using CLI runtime, the SSE stream handles all updates — skip polling
-    if (cliRuntime) return;
-    const interval = setInterval(async () => {
-      try {
-        const status = await getIntakeStatus(intakeSessionId);
-        setIntakeStatus(status);
-
-        // Accumulate tool calls from the status response
-        if (status.recentToolCalls.length > 0) {
-          setLiveToolCalls((prev) => {
-            // Only add new ones (compare count)
-            const newCount = status.toolCallCount;
-            if (newCount > prev.length) {
-              // Map the recent tool calls with proper structure
-              const all = status.recentToolCalls.map((tc: any, i: number) => ({
-                id: `live-${i}`,
-                toolId: tc.toolId,
-                input: {},
-                result: { success: tc.success, duration_ms: tc.duration_ms },
-              }));
-              return all;
-            }
-            return prev;
-          });
-        }
-
-        // Refresh workspace when new mutating tool calls are detected
-        if (status.toolCallCount > lastRefreshToolCount.current) {
-          const hasNewMutations = status.recentToolCalls.some((tc: any) =>
-            MUTATING_TOOL_PATTERNS.test(tc.toolId),
-          );
-          if (hasNewMutations) {
-            lastRefreshToolCount.current = status.toolCallCount;
-            onWorkspaceMutated?.();
-          }
-        }
-
-        if (status.status !== "running" && status.status !== "waiting_for_user") {
-          clearInterval(interval);
-          // Final refresh to catch any last mutations
-          onWorkspaceMutated?.();
-          // Update persisted state
-          localStorage.setItem(intakeStorageKey(projectId), JSON.stringify({
-            sessionId: intakeSessionId,
-            status: status.status,
-          }));
-        }
-      } catch {
-        // Silently retry
-      }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [intakeSessionId, intakeStatus?.status, projectId]);
-
   const isIntakeRunning = intakeStatus?.status === "running" || intakeStatus?.status === "waiting_for_user";
   const isIntakeComplete = intakeStatus?.status === "completed";
   const isIntakeFailed = intakeStatus?.status === "failed";
@@ -1838,21 +1712,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div>
                 <div className="text-sm font-semibold">Bidwright AI</div>
                 <div className="text-[10px] text-fg/35">
-                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI · ${effectiveCliModel}` : `${provider} / ${model.split("/").pop()}`}
+                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI \u00B7 ${effectiveCliModel}` : "CLI runtime required"}
                   {sseConnected && <span className="ml-1 text-success">connected</span>}
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {!cliRuntime && (
-                <Select className="h-7 w-28 text-[10px]" value={provider} onChange={(e) => { setProvider(e.target.value); setSessionId(null); }}>
-                  <option value="anthropic">Claude</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="openrouter">OpenRouter</option>
-                  <option value="gemini">Gemini</option>
-                  <option value="lmstudio">LM Studio</option>
-                </Select>
-              )}
               <button onClick={onClose} className="rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg">
                 <X className="h-4 w-4" />
               </button>
@@ -1909,7 +1774,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                       <option value="">No persona (generic estimator)</option>
                       {personas.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.name} — {p.trade}
+                          {p.name} - {p.trade}
                         </option>
                       ))}
                     </Select>
@@ -1978,7 +1843,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                 ) : (
                   <button
                     onClick={handleStartIntake}
-                    disabled={intakeLoading}
+                    disabled={intakeLoading || !cliRuntime}
                     className="w-full rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-left transition-colors hover:bg-accent/10 disabled:opacity-50"
                   >
                     <div className="flex items-center gap-2">
@@ -1995,6 +1860,11 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                       Automatically review bid documents and build a complete estimate
                     </div>
                   </button>
+                )}
+                {!cliRuntime && (
+                  <div className="rounded-lg border border-warning/25 bg-warning/5 px-3 py-2 text-[11px] text-fg/55">
+                    AI estimating now runs only through the configured CLI runtime. Authenticate Claude Code or Codex in Agent Runtime settings to start a run.
+                  </div>
                 )}
               </div>
             )}
@@ -2054,17 +1924,13 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                    "AI Estimating failed"}
                 </span>
                 <span className="ml-auto text-fg/30">
-                  {intakeStatus.toolCallCount} tools · {intakeStatus.messageCount} msgs
+                  {intakeStatus.toolCallCount} tools {"\u00B7"} {intakeStatus.messageCount} msgs
                 </span>
                 {isIntakeRunning && (
                   <button
                     onClick={async () => {
                       try {
-                        if (cliRuntime) {
-                          await stopCliSession(projectId);
-                        } else if (intakeSessionId) {
-                          await stopIntake(intakeSessionId);
-                        }
+                        await stopCliSession(projectId);
                         setIntakeStatus((prev) => prev ? { ...prev, status: "stopped" as any } : prev);
                         if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
                       } catch {}
@@ -2087,24 +1953,9 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
             )}
 
-            {/* Pending question from agent */}
-            {isWaitingForUser && intakeStatus?.pendingQuestion && (
-              <PendingQuestionCard
-                prompt={intakeStatus.pendingQuestion as PendingQuestionPrompt}
-                promptKey={`intake-${intakeSessionId}-${intakeStatus.pendingQuestion.question}`}
-                onSubmit={async (answer) => {
-                  if (!intakeSessionId) return;
-                  try {
-                    await answerIntake(intakeSessionId, answer);
-                    setIntakeStatus((prev) => prev ? { ...prev, status: "running", pendingQuestion: null } : prev);
-                  } catch {}
-                }}
-              />
-            )}
+            {/* CLI pending question moved to bottom - see before messagesEndRef */}
 
-            {/* CLI pending question moved to bottom — see before messagesEndRef */}
-
-            {/* Unified chronological stream — all events from DB in order */}
+            {/* Unified chronological stream - all events from DB in order */}
             {(() => {
               // Build timeline from ALL event types, in order (DB events are chronological)
               const events: any[] = timelineEvents;
@@ -2201,7 +2052,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                   return <ToolCallDetail key={key} tc={tc} />;
                 }
 
-                // Run divider — separates multiple sessions
+                // Run divider - separates multiple sessions
                 if (t === "run_divider") {
                   const startedAt = evt.data?.startedAt;
                   const dateStr = startedAt ? new Date(startedAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
@@ -2218,14 +2069,14 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                         ) : (
                           <span className="h-1.5 w-1.5 rounded-full bg-warning" />
                         )}
-                        Session · {dateStr}{model ? ` · ${model}` : ""}
+                        Session {"\u00B7"} {dateStr}{model ? ` \u00B7 ${model}` : ""}
                       </span>
                       <div className="h-px flex-1 bg-line" />
                     </div>
                   );
                 }
 
-                // Status events — skip rendering (shown in header)
+                // Status events - skip rendering (shown in header)
                 return null;
               }).filter(Boolean);
             })()}
@@ -2238,7 +2089,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               </div>
             )}
 
-            {/* Pending question from CLI agent (askUser MCP tool) — rendered at bottom so auto-scroll keeps it visible */}
+            {/* Pending question from CLI agent (askUser MCP tool) - rendered at bottom so auto-scroll keeps it visible */}
             {cliRuntime && cliPendingQuestion && !hasInlineCliPendingQuestion && (
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <PendingQuestionCard

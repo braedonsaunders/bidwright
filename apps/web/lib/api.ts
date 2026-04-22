@@ -3340,68 +3340,6 @@ export async function runVisionCountAllPages(input: {
 }
 
 // ---------------------------------------------------------------------------
-// Intake Orchestration
-// ---------------------------------------------------------------------------
-
-export interface IntakeStartInput {
-  projectId: string;
-  scope?: string;
-  provider?: string;
-  model?: string;
-  apiKey?: string;
-  maxIterations?: number;
-}
-
-export interface IntakeStartResult {
-  sessionId: string;
-  projectId: string;
-  scope: string;
-  status: string;
-  documentCount: number;
-  message: string;
-}
-
-export interface IntakeStatusResult {
-  sessionId: string;
-  projectId: string;
-  scope: string;
-  status: "running" | "completed" | "failed" | "stopped" | "waiting_for_user";
-  pendingQuestion?: { question: string; options?: string[]; context?: string } | null;
-  toolCallCount: number;
-  messageCount: number;
-  summary: string | null;
-  createdAt: string;
-  updatedAt: string;
-  recentToolCalls: Array<{ toolId: string; success: boolean; duration_ms: number }>;
-}
-
-export async function startIntake(input: IntakeStartInput) {
-  return apiRequest<IntakeStartResult>("/api/intake/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function getIntakeStatus(sessionId: string) {
-  return apiRequest<IntakeStatusResult>(`/api/intake/${sessionId}/status`);
-}
-
-export async function stopIntake(sessionId: string) {
-  return apiRequest<{ message: string; status: string }>(`/api/intake/${sessionId}/stop`, {
-    method: "POST",
-  });
-}
-
-export async function answerIntake(sessionId: string, answer: string) {
-  return apiRequest<{ message: string; status: string }>(`/api/intake/${sessionId}/answer`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ answer }),
-  });
-}
-
-// ---------------------------------------------------------------------------
 // CLI Agent Runtime
 // ---------------------------------------------------------------------------
 
