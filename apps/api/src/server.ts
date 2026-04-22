@@ -65,7 +65,6 @@ import {
   resolveApiPath,
   sanitizeFileName
 } from "./paths.js";
-import { agentRoutes } from "./routes/agent-routes.js";
 import { knowledgeRoutes } from "./routes/knowledge-routes.js";
 import { datasetRoutes } from "./routes/dataset-routes.js";
 import { takeoffRoutes } from "./routes/takeoff-routes.js";
@@ -74,7 +73,6 @@ import { authPlugin } from "./middleware/auth.js";
 import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
-import { intakeRoutes } from "./routes/intake-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
@@ -4798,7 +4796,6 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
 
   app.register(authRoutes);
   app.register(adminRoutes);
-  app.register(agentRoutes);
   app.register(knowledgeRoutes);
   app.register(datasetRoutes);
   app.register(takeoffRoutes);
@@ -4809,7 +4806,6 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(travelPolicyRoutes);
   app.register(settingsRoutes);
   app.register(estimateRoutes);
-  app.register(intakeRoutes);
   app.register(catalogRoutes);
   registerCliRoutes(app);
   registerReviewRoutes(app);
