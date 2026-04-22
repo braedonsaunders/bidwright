@@ -1,10 +1,6 @@
-import { calculateTotals } from "@bidwright/domain";
-
 import type {
-  EstimateTotalBreakout,
   ProjectWorkspaceData,
   QuoteRevision,
-  SourceTotalEntry,
   WorksheetItemMutationResponse,
   WorkspaceResponse,
   WorkspaceWorksheet,
@@ -30,109 +26,45 @@ function sortWorksheetItems(items: WorkspaceWorksheetItem[]) {
   });
 }
 
-function rebuildWorkspaceEstimate(
+function applyWorkspaceMutationState(
   workspace: ProjectWorkspaceData,
   worksheets: WorkspaceWorksheet[],
-  currentRevisionOverride?: QuoteRevision,
+  options?: {
+    currentRevision?: QuoteRevision;
+    estimateTotals?: ProjectWorkspaceData["estimate"]["totals"];
+  },
 ): ProjectWorkspaceData {
   const lineItems = worksheets.flatMap((worksheet) => worksheet.items);
+  const nextRevision = options?.currentRevision ?? workspace.currentRevision;
 
-  try {
-    const totals = calculateTotals(
-      (currentRevisionOverride ?? workspace.currentRevision) as any,
-      worksheets as any,
-      workspace.phases as any,
-      workspace.adjustments as any,
-      workspace.rateSchedules as any,
-    );
-
-    const nextRevision: QuoteRevision = currentRevisionOverride
-      ? {
-          ...currentRevisionOverride,
-          regHours: totals.regHours,
-          overHours: totals.overHours,
-          doubleHours: totals.doubleHours,
-          breakoutPackage:
-            (currentRevisionOverride.breakoutPackage?.length
-              ? currentRevisionOverride.breakoutPackage
-              : (totals.breakout as unknown[])) ?? [],
-          calculatedCategoryTotals:
-            (currentRevisionOverride.calculatedCategoryTotals?.length
-              ? currentRevisionOverride.calculatedCategoryTotals
-              : (totals.categoryTotals as unknown[])) ?? [],
-          calculatedTotal:
-            currentRevisionOverride.calculatedTotal ?? totals.calculatedTotal,
-        }
-      : {
-          ...workspace.currentRevision,
-          subtotal: totals.subtotal,
-          cost: totals.cost,
-          estimatedProfit: totals.estimatedProfit,
-          estimatedMargin: totals.estimatedMargin,
-          calculatedTotal: totals.calculatedTotal,
-          totalHours: totals.totalHours,
-          regHours: totals.regHours,
-          overHours: totals.overHours,
-          doubleHours: totals.doubleHours,
-          breakoutPackage: totals.breakout as unknown[],
-          calculatedCategoryTotals: totals.categoryTotals as unknown[],
-        };
-
-    const breakout =
-      ((nextRevision.breakoutPackage as EstimateTotalBreakout[] | undefined) ??
-        totals.breakout) as EstimateTotalBreakout[];
-    const categoryTotals =
-      ((nextRevision.calculatedCategoryTotals as SourceTotalEntry[] | undefined) ??
-        totals.categoryTotals) as SourceTotalEntry[];
-
-    return {
-      ...workspace,
-      currentRevision: nextRevision,
-      worksheets,
-      estimate: {
-        ...workspace.estimate,
-        revisionId: nextRevision.id,
-        lineItems,
-        totals: {
-          ...workspace.estimate.totals,
-          ...totals,
-          subtotal: nextRevision.subtotal,
-          cost: nextRevision.cost,
-          estimatedProfit: nextRevision.estimatedProfit,
-          estimatedMargin: nextRevision.estimatedMargin,
-          calculatedTotal: nextRevision.calculatedTotal ?? totals.calculatedTotal,
-          totalHours: nextRevision.totalHours,
-          breakout,
-          categoryTotals,
-        },
-        summary: {
-          ...workspace.estimate.summary,
-          worksheetCount: worksheets.length,
-          lineItemCount: lineItems.length,
-        },
+  return {
+    ...workspace,
+    currentRevision: nextRevision,
+    worksheets,
+    estimate: {
+      ...workspace.estimate,
+      revisionId: nextRevision.id,
+      lineItems,
+      totals: options?.estimateTotals
+        ? {
+            ...workspace.estimate.totals,
+            ...options.estimateTotals,
+          }
+        : workspace.estimate.totals,
+      summary: {
+        ...workspace.estimate.summary,
+        worksheetCount: worksheets.length,
+        lineItemCount: lineItems.length,
       },
-    };
-  } catch {
-    return {
-      ...workspace,
-      worksheets,
-      estimate: {
-        ...workspace.estimate,
-        lineItems,
-        summary: {
-          ...workspace.estimate.summary,
-          worksheetCount: worksheets.length,
-          lineItemCount: lineItems.length,
-        },
-      },
-    };
-  }
+    },
+  };
 }
 
 export function applyWorksheetItemUpsert(
   current: WorkspaceResponse,
   item: WorkspaceWorksheetItem,
   currentRevisionOverride?: QuoteRevision,
+  estimateTotals?: ProjectWorkspaceData["estimate"]["totals"],
 ) {
   const nextWorksheets = current.workspace.worksheets.some(
     (worksheet) => worksheet.id === item.worksheetId,
@@ -156,11 +88,10 @@ export function applyWorksheetItemUpsert(
 
   return {
     ...current,
-    workspace: rebuildWorkspaceEstimate(
-      current.workspace,
-      nextWorksheets,
-      currentRevisionOverride,
-    ),
+    workspace: applyWorkspaceMutationState(current.workspace, nextWorksheets, {
+      currentRevision: currentRevisionOverride,
+      estimateTotals,
+    }),
   };
 }
 
@@ -168,6 +99,7 @@ export function applyWorksheetItemDelete(
   current: WorkspaceResponse,
   itemId: string,
   currentRevisionOverride?: QuoteRevision,
+  estimateTotals?: ProjectWorkspaceData["estimate"]["totals"],
 ) {
   const nextWorksheets = current.workspace.worksheets.map((worksheet) => ({
     ...worksheet,
@@ -176,11 +108,10 @@ export function applyWorksheetItemDelete(
 
   return {
     ...current,
-    workspace: rebuildWorkspaceEstimate(
-      current.workspace,
-      nextWorksheets,
-      currentRevisionOverride,
-    ),
+    workspace: applyWorkspaceMutationState(current.workspace, nextWorksheets, {
+      currentRevision: currentRevisionOverride,
+      estimateTotals,
+    }),
   };
 }
 
@@ -193,6 +124,7 @@ export function applyWorksheetItemMutation(
       current,
       mutation.item.id,
       mutation.currentRevision,
+      mutation.estimateTotals,
     );
   }
 
@@ -200,5 +132,6 @@ export function applyWorksheetItemMutation(
     current,
     mutation.item,
     mutation.currentRevision,
+    mutation.estimateTotals,
   );
 }

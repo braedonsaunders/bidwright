@@ -1253,21 +1253,15 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
   };
 }
 
-async function buildWorksheetItemMutationResponse(
-  store: PrismaApiStore,
-  projectId: string,
+function buildWorksheetItemMutationResponse(
   mode: "create" | "update" | "delete",
-  item: Awaited<ReturnType<PrismaApiStore["createWorksheetItem"]>>,
+  mutation: Awaited<ReturnType<PrismaApiStore["createWorksheetItemWithSnapshot"]>>,
 ) {
-  const currentRevision = await store.getCurrentRevisionSnapshot(projectId);
-  if (!currentRevision) {
-    return null;
-  }
-
   return {
     mode,
-    item,
-    currentRevision,
+    item: mutation.item,
+    currentRevision: mutation.snapshot.currentRevision,
+    estimateTotals: mutation.snapshot.estimateTotals,
   };
 }
 
@@ -2052,7 +2046,12 @@ export function buildServer() {
       }
     }
 
-    const item = await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput);
+    const createResult = deltaResponse
+      ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput)
+      : null;
+    if (!deltaResponse) {
+      await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput);
+    }
     await captureHumanEstimateFeedback(request, projectId, {
       action: "create_item",
       worksheetId,
@@ -2061,19 +2060,8 @@ export function buildServer() {
     });
 
     if (deltaResponse) {
-      const mutation = await buildWorksheetItemMutationResponse(
-        request.store!,
-        projectId,
-        "create",
-        item,
-      );
-      if (!mutation) {
-        return reply.code(404).send({
-          message: "Project workspace not found"
-        });
-      }
       reply.code(201);
-      return mutation;
+      return buildWorksheetItemMutationResponse("create", createResult!);
     }
 
     const payload = await buildWorkspaceResponse(request.store!, projectId);
@@ -2158,7 +2146,12 @@ export function buildServer() {
       });
     }
 
-    const item = await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput);
+    const updateResult = deltaResponse
+      ? await request.store!.updateWorksheetItemWithSnapshot(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput)
+      : null;
+    if (!deltaResponse) {
+      await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput);
+    }
     await captureHumanEstimateFeedback(request, projectId, {
       action: "update_item",
       itemId,
@@ -2166,18 +2159,7 @@ export function buildServer() {
     });
 
     if (deltaResponse) {
-      const mutation = await buildWorksheetItemMutationResponse(
-        request.store!,
-        projectId,
-        "update",
-        item,
-      );
-      if (!mutation) {
-        return reply.code(404).send({
-          message: "Project workspace not found"
-        });
-      }
-      return mutation;
+      return buildWorksheetItemMutationResponse("update", updateResult!);
     }
 
     const payload = await buildWorkspaceResponse(request.store!, projectId);
@@ -2192,25 +2174,19 @@ export function buildServer() {
   app.delete("/projects/:projectId/worksheet-items/:itemId", async (request, reply) => {
     const { projectId, itemId } = request.params as { projectId: string; itemId: string };
     const deltaResponse = ((request.query as { response?: string } | undefined)?.response) === "delta";
-    const item = await request.store!.deleteWorksheetItem(projectId, itemId);
+    const deleteResult = deltaResponse
+      ? await request.store!.deleteWorksheetItemWithSnapshot(projectId, itemId)
+      : null;
+    if (!deltaResponse) {
+      await request.store!.deleteWorksheetItem(projectId, itemId);
+    }
     await captureHumanEstimateFeedback(request, projectId, {
       action: "delete_item",
       itemId,
     });
 
     if (deltaResponse) {
-      const mutation = await buildWorksheetItemMutationResponse(
-        request.store!,
-        projectId,
-        "delete",
-        item,
-      );
-      if (!mutation) {
-        return reply.code(404).send({
-          message: "Project workspace not found"
-        });
-      }
-      return mutation;
+      return buildWorksheetItemMutationResponse("delete", deleteResult!);
     }
 
     const payload = await buildWorkspaceResponse(request.store!, projectId);

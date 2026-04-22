@@ -12,6 +12,7 @@ import {
   createSummaryBuilderPreset,
   deriveSummaryBuilderFromLegacy,
   getExtendedWorksheetHourBreakdown,
+  getWorksheetHourBreakdown,
   inferSummaryPresetFromBuilder,
   materializeSummaryRowsFromBuilder,
   normalizeSummaryBuilderConfig,
@@ -62,6 +63,7 @@ import type {
   Quote,
   QuoteRevision,
   ReportSection,
+  RevisionTotals,
   ScheduleBaseline,
   ScheduleBaselineTask,
   ScheduleCalendar,
@@ -270,6 +272,41 @@ function resolveTierUnitKeys(
   return resolved;
 }
 
+function normalizeEstimateCategoryName(value: string, entityType?: string | null) {
+  const trimmed = value.trim();
+  const trimmedEntityType = entityType?.trim() ?? "";
+  const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
+
+  if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
+    return "Material";
+  }
+  if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
+    return "Labour";
+  }
+  if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
+    return "Subcontractors";
+  }
+
+  return trimmed || trimmedEntityType || "Uncategorized";
+}
+
+function synchronizeWorksheetItemHourBreakdown(
+  item: WorksheetItem,
+  schedules: RateScheduleWithChildren[],
+) {
+  const baseHours = getWorksheetHourBreakdown(item, schedules);
+  item.unit1 = baseHours.unit1;
+  item.unit2 = baseHours.unit2;
+  item.unit3 = baseHours.unit3;
+}
+
+interface RevisionItemAggregateRow {
+  phaseId: string | null;
+  category: string | null;
+  priceTotal: number;
+  costTotal: number;
+}
+
 function adjustmentToLegacyModifier(adjustment: Adjustment): Modifier | null {
   if (adjustment.pricingMode !== "modifier" && adjustment.kind !== "modifier") {
     return null;
@@ -458,6 +495,16 @@ export interface CreateWorksheetItemInput {
 
 export interface CreateWorksheetInput {
   name: string;
+}
+
+export interface EstimateMutationSnapshot {
+  currentRevision: QuoteRevision;
+  estimateTotals: RevisionTotals;
+}
+
+export interface WorksheetItemMutationResult {
+  item: WorksheetItem;
+  snapshot: EstimateMutationSnapshot;
 }
 
 export interface WorksheetPatchInput {
@@ -1076,6 +1123,210 @@ export class PrismaApiStore {
         adjustments.map(mapAdjustment),
         revisionSchedules.map(mapRateScheduleWithChildren),
       ),
+    };
+  }
+
+  private async getRevisionItemAggregateRows(revisionId: string): Promise<RevisionItemAggregateRow[]> {
+    const directCostCategories = Array.from(DIRECT_COST_ESTIMATE_CATEGORIES);
+    const categoryPlaceholders = directCostCategories.map((_, index) => `$${index + 1}`).join(", ");
+    const entityTypePlaceholders = directCostCategories
+      .map((_, index) => `$${directCostCategories.length + index + 1}`)
+      .join(", ");
+    const revisionPlaceholder = `$${directCostCategories.length * 2 + 1}`;
+
+    return this.db.$queryRawUnsafe<RevisionItemAggregateRow[]>(
+      `
+      SELECT
+        wi."phaseId" AS "phaseId",
+        wi."category" AS "category",
+        COALESCE(SUM(wi."price"), 0)::double precision AS "priceTotal",
+        COALESCE(
+          SUM(
+            CASE
+              WHEN wi."category" IN (${categoryPlaceholders})
+                OR wi."entityType" IN (${entityTypePlaceholders})
+                THEN wi."quantity" * wi."cost"
+              ELSE wi."cost"
+            END
+          ),
+          0
+        )::double precision AS "costTotal"
+      FROM "WorksheetItem" wi
+      INNER JOIN "Worksheet" w ON w."id" = wi."worksheetId"
+      WHERE w."revisionId" = ${revisionPlaceholder}
+      GROUP BY wi."phaseId", wi."category"
+    `,
+      ...directCostCategories,
+      ...directCostCategories,
+      revisionId,
+    );
+  }
+
+  private async syncProjectEstimateForWorksheetItemMutation(
+    projectId: string,
+    options: {
+      previousItem?: WorksheetItem | null;
+      nextItem?: WorksheetItem | null;
+      revisionSchedules?: RateScheduleWithChildren[];
+      timestamp?: string;
+    } = {},
+  ): Promise<EstimateMutationSnapshot | null> {
+    const { quote, revision } = await this.findCurrentRevision(projectId);
+    const timestampDate = new Date(options.timestamp ?? isoNow());
+
+    if (!quote || !revision) {
+      await this.db.project.update({
+        where: { id: projectId },
+        data: { updatedAt: timestampDate },
+      });
+      return null;
+    }
+
+    const [aggregateRows, phaseRows, adjustmentRows, revisionSchedules] = await Promise.all([
+      this.getRevisionItemAggregateRows(revision.id),
+      this.db.phase.findMany({
+        where: { revisionId: revision.id },
+        orderBy: { order: "asc" },
+      }),
+      this.db.adjustment.findMany({
+        where: { revisionId: revision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      }),
+      options.revisionSchedules
+        ? Promise.resolve(options.revisionSchedules)
+        : this.db.rateSchedule.findMany({
+            where: { revisionId: revision.id },
+            include: { tiers: true, items: true },
+          }).then((rows) => rows.map(mapRateScheduleWithChildren)),
+    ]);
+
+    const groupedAggregates = new Map<string, {
+      phaseId: string | null;
+      category: string;
+      priceTotal: number;
+      costTotal: number;
+    }>();
+
+    for (const row of aggregateRows) {
+      const category = normalizeEstimateCategoryName(String(row.category ?? ""));
+      const phaseId = row.phaseId ?? null;
+      const key = `${phaseId ?? "__unphased__"}::${category}`;
+      const existing = groupedAggregates.get(key) ?? {
+        phaseId,
+        category,
+        priceTotal: 0,
+        costTotal: 0,
+      };
+      existing.priceTotal += Number(row.priceTotal) || 0;
+      existing.costTotal += Number(row.costTotal) || 0;
+      groupedAggregates.set(key, existing);
+    }
+
+    const phaseOrder = new Map(phaseRows.map((phase, index) => [phase.id, index]));
+    const aggregateItems = Array.from(groupedAggregates.values())
+      .sort((left, right) => {
+        const leftOrder = left.phaseId ? (phaseOrder.get(left.phaseId) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+        const rightOrder = right.phaseId ? (phaseOrder.get(right.phaseId) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+        return left.category.localeCompare(right.category);
+      })
+      .map((entry, index) => ({
+        id: `aggregate-item-${index + 1}`,
+        worksheetId: "__aggregate__",
+        phaseId: entry.phaseId,
+        category: entry.category,
+        entityType: entry.category,
+        entityName: entry.category,
+        description: "",
+        quantity: 1,
+        uom: "EA",
+        cost: roundMoney(entry.costTotal),
+        markup: 0,
+        price: roundMoney(entry.priceTotal),
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        lineOrder: index + 1,
+        rateScheduleItemId: null,
+        itemId: null,
+        tierUnits: {},
+        sourceNotes: "",
+      } satisfies WorksheetItem));
+
+    const mappedRevision = mapRevision(revision);
+    const totalsBase = calculateTotals(
+      mappedRevision,
+      [{
+        id: "__aggregate__",
+        revisionId: revision.id,
+        name: "Aggregated",
+        order: 1,
+        items: aggregateItems,
+      }],
+      phaseRows.map(mapPhase),
+      adjustmentRows.map(mapAdjustment),
+      [],
+    );
+
+    const toHourTotals = (item?: WorksheetItem | null) => {
+      if (!item) {
+        return { reg: 0, over: 0, double: 0 };
+      }
+      const breakdown = getExtendedWorksheetHourBreakdown(item, revisionSchedules, item.quantity);
+      return {
+        reg: breakdown.unit1,
+        over: breakdown.unit2,
+        double: breakdown.unit3,
+      };
+    };
+
+    const previousHours = toHourTotals(options.previousItem);
+    const nextHours = toHourTotals(options.nextItem);
+    const regHours = roundMoney((Number(revision.regHours) || 0) - previousHours.reg + nextHours.reg);
+    const overHours = roundMoney((Number(revision.overHours) || 0) - previousHours.over + nextHours.over);
+    const doubleHours = roundMoney((Number(revision.doubleHours) || 0) - previousHours.double + nextHours.double);
+    const totalHours = roundMoney(regHours + overHours + doubleHours);
+
+    const totals: RevisionTotals = {
+      ...totalsBase,
+      regHours,
+      overHours,
+      doubleHours,
+      totalHours,
+    };
+
+    const updatedRevision = await this.db.quoteRevision.update({
+      where: { id: revision.id },
+      data: {
+        subtotal: totals.subtotal,
+        cost: totals.cost,
+        estimatedProfit: totals.estimatedProfit,
+        estimatedMargin: totals.estimatedMargin,
+        calculatedTotal: totals.calculatedTotal,
+        regHours: totals.regHours,
+        overHours: totals.overHours,
+        doubleHours: totals.doubleHours,
+        totalHours: totals.totalHours,
+        breakoutPackage: totals.breakout as any,
+        calculatedCategoryTotals: totals.categoryTotals as any,
+      },
+    });
+
+    await this.db.quote.update({
+      where: { id: quote.id },
+      data: { updatedAt: timestampDate },
+    });
+
+    await this.db.project.update({
+      where: { id: projectId },
+      data: { updatedAt: timestampDate },
+    });
+
+    return {
+      currentRevision: mapRevision(updatedRevision),
+      estimateTotals: totals,
     };
   }
 
@@ -3983,6 +4234,14 @@ export class PrismaApiStore {
   // ── Worksheet Item CRUD ────────────────────────────────────────────────
 
   async createWorksheetItem(projectId: string, worksheetId: string, input: CreateWorksheetItemInput) {
+    return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input)).item;
+  }
+
+  async createWorksheetItemWithSnapshot(
+    projectId: string,
+    worksheetId: string,
+    input: CreateWorksheetItemInput,
+  ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
@@ -4021,11 +4280,12 @@ export class PrismaApiStore {
       sourceNotes: input.sourceNotes ?? "",
     };
 
-    const revisionSchedules = await this.db.rateSchedule.findMany({
+    const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
       include: { tiers: true, items: true },
     });
-    const rateScheduleCtx = revisionSchedules.map((s) => ({
+    const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
+    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
       tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
@@ -4036,7 +4296,7 @@ export class PrismaApiStore {
     const itemSource = catDef?.itemSource ?? "freeform";
 
     if (item.rateScheduleItemId) {
-      const allRsItems = revisionSchedules.flatMap((s) => s.items ?? []);
+      const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
       const match = allRsItems.find((ri) => ri.id === item.rateScheduleItemId);
       if (!match) {
         const available = allRsItems.map((ri) => `${ri.name} (${ri.id})`).slice(0, 20);
@@ -4065,8 +4325,9 @@ export class PrismaApiStore {
     // ── Resolve tierUnit keys to full tier IDs ────────────
     // Handles: exact IDs, tier names (e.g. "Regular"), and truncated ID prefixes
     if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
-      item.tierUnits = resolveTierUnitKeys(item.tierUnits, revisionSchedules);
+      item.tierUnits = resolveTierUnitKeys(item.tierUnits, revisionScheduleRows);
     }
+    synchronizeWorksheetItemHourBreakdown(item, mappedRevisionSchedules);
 
     const labourCostCtx = await this.getLabourCostContext();
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
@@ -4099,10 +4360,20 @@ export class PrismaApiStore {
       },
     });
 
-    await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category, before: null, after: mapWorksheetItem(created) });
-    await this.syncProjectEstimate(projectId);
+    const mappedCreated = mapWorksheetItem(created);
+    await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category, before: null, after: mappedCreated });
+    const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
+      nextItem: mappedCreated,
+      revisionSchedules: mappedRevisionSchedules,
+    });
+    if (!snapshot) {
+      throw new Error(`Project ${projectId} does not have an active revision`);
+    }
 
-    return mapWorksheetItem(created);
+    return {
+      item: mappedCreated,
+      snapshot,
+    };
   }
 
   async createWorksheet(projectId: string, input: CreateWorksheetInput) {
@@ -4193,6 +4464,14 @@ export class PrismaApiStore {
   }
 
   async updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
+    return (await this.updateWorksheetItemWithSnapshot(projectId, itemId, patch)).item;
+  }
+
+  async updateWorksheetItemWithSnapshot(
+    projectId: string,
+    itemId: string,
+    patch: WorksheetItemPatchInput,
+  ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     const item = await this.db.worksheetItem.findFirst({ where: { id: itemId } });
@@ -4210,11 +4489,12 @@ export class PrismaApiStore {
       domainItem.vendor = undefined;
     }
 
-    const revisionSchedules = await this.db.rateSchedule.findMany({
+    const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
       include: { tiers: true, items: true },
     });
-    const rateScheduleCtx = revisionSchedules.map((s) => ({
+    const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
+    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
       tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
@@ -4225,7 +4505,7 @@ export class PrismaApiStore {
     const updateItemSource = updateCatDef?.itemSource ?? "freeform";
 
     if (domainItem.rateScheduleItemId) {
-      const allRsItems = revisionSchedules.flatMap((s) => s.items ?? []);
+      const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
       const match = allRsItems.find((ri) => ri.id === domainItem.rateScheduleItemId);
       if (!match) {
         const available = allRsItems.map((ri) => `${ri.name} (${ri.id})`).slice(0, 20);
@@ -4253,8 +4533,9 @@ export class PrismaApiStore {
 
     // ── Resolve tierUnit keys to full tier IDs ────────────
     if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
-      domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionSchedules);
+      domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
     }
+    synchronizeWorksheetItemHourBreakdown(domainItem, mappedRevisionSchedules);
 
     const updateLabourCostCtx = await this.getLabourCostContext();
     const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
@@ -4288,11 +4569,22 @@ export class PrismaApiStore {
 
     const patchKeys = Object.keys(patch);
     const itemBefore = this.pick(mapWorksheetItem(item) as any, patchKeys);
-    const itemAfter = this.pick(mapWorksheetItem(updated) as any, patchKeys);
+    const mappedUpdated = mapWorksheetItem(updated);
+    const itemAfter = this.pick(mappedUpdated as any, patchKeys);
     await this.pushActivity(projectId, revision.id, "item_updated", { itemId, entityName: domainItem.entityName, patch: patchKeys, before: itemBefore, after: itemAfter });
-    await this.syncProjectEstimate(projectId);
+    const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
+      previousItem: mapWorksheetItem(item),
+      nextItem: mappedUpdated,
+      revisionSchedules: mappedRevisionSchedules,
+    });
+    if (!snapshot) {
+      throw new Error(`Project ${projectId} does not have an active revision`);
+    }
 
-    return mapWorksheetItem(updated);
+    return {
+      item: mappedUpdated,
+      snapshot,
+    };
   }
 
   async reorderWorksheetItems(projectId: string, worksheetId: string, orderedIds: string[]) {
@@ -4406,6 +4698,13 @@ export class PrismaApiStore {
   }
 
   async deleteWorksheetItem(projectId: string, itemId: string) {
+    return (await this.deleteWorksheetItemWithSnapshot(projectId, itemId)).item;
+  }
+
+  async deleteWorksheetItemWithSnapshot(
+    projectId: string,
+    itemId: string,
+  ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     const item = await this.db.worksheetItem.findFirst({ where: { id: itemId } });
@@ -4417,10 +4716,24 @@ export class PrismaApiStore {
     }
 
     await this.db.worksheetItem.delete({ where: { id: itemId } });
-    await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName, before: mapWorksheetItem(item), after: null });
-    await this.syncProjectEstimate(projectId);
+    const mappedDeleted = mapWorksheetItem(item);
+    await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName, before: mappedDeleted, after: null });
+    const revisionScheduleRows = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
+      previousItem: mappedDeleted,
+      revisionSchedules: revisionScheduleRows.map(mapRateScheduleWithChildren),
+    });
+    if (!snapshot) {
+      throw new Error(`Project ${projectId} does not have an active revision`);
+    }
 
-    return mapWorksheetItem(item);
+    return {
+      item: mappedDeleted,
+      snapshot,
+    };
   }
 
   // ── Create Project ─────────────────────────────────────────────────────

@@ -1177,6 +1177,7 @@ export interface WorksheetItemMutationResponse {
   mode: "create" | "update" | "delete";
   item: WorkspaceWorksheetItem;
   currentRevision: QuoteRevision;
+  estimateTotals: EstimateData["totals"];
 }
 
 export async function updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
