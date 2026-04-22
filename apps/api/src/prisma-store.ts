@@ -8000,13 +8000,252 @@ export class PrismaApiStore {
     return mapPlugin(plugin);
   }
 
+  private async replacePluginExecutionLineItems(
+    projectId: string,
+    revision: any,
+    execution: any,
+    lineItems: PluginOutputLineItem[],
+    worksheetId?: string,
+  ) {
+    const storedItemIds = Array.isArray(execution.appliedLineItemIds)
+      ? execution.appliedLineItemIds.filter(
+          (value: unknown): value is string => typeof value === "string" && value.length > 0,
+        )
+      : [];
+
+    const existingRows = storedItemIds.length > 0
+      ? await this.db.worksheetItem.findMany({ where: { id: { in: storedItemIds } } })
+      : [];
+    const existingById = new Map(existingRows.map((row) => [row.id, row]));
+    const orderedExisting = storedItemIds
+      .map((itemId: string) => existingById.get(itemId))
+      .filter(
+        (row: ((typeof existingRows)[number] | undefined)): row is (typeof existingRows)[number] =>
+          Boolean(row),
+      );
+
+    let resolvedWorksheetId =
+      worksheetId ??
+      execution.worksheetId ??
+      orderedExisting[0]?.worksheetId ??
+      await this._resolveDefaultWorksheetId(projectId, revision.id);
+
+    const resolvedWorksheet = await this.db.worksheet.findFirst({ where: { id: resolvedWorksheetId } });
+    if (!resolvedWorksheet || resolvedWorksheet.revisionId !== revision.id) {
+      resolvedWorksheetId = await this._resolveDefaultWorksheetId(projectId, revision.id);
+    }
+
+    const maxOrder = await this.db.worksheetItem.aggregate({
+      where: { worksheetId: resolvedWorksheetId },
+      _max: { lineOrder: true },
+    });
+    let nextLineOrder = (maxOrder._max.lineOrder ?? 0) + 1;
+
+    const revisionSchedules = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const rateScheduleCtx = revisionSchedules.map((schedule) => ({
+      tiers: (schedule.tiers ?? []).map((tier: any) => ({
+        id: tier.id,
+        name: tier.name,
+        multiplier: tier.multiplier,
+        sortOrder: tier.sortOrder,
+      })),
+      items: (schedule.items ?? []).map((item: any) => ({
+        id: item.id,
+        name: item.name,
+        code: item.code,
+        rates: (item.rates as Record<string, number>) ?? {},
+        costRates: (item.costRates as Record<string, number>) ?? {},
+        burden: item.burden,
+        perDiem: item.perDiem,
+      })),
+    }));
+    const entityCategories = await this.db.entityCategory.findMany({
+      where: { organizationId: this.organizationId },
+    });
+    const labourCostCtx = await this.getLabourCostContext();
+    const mappedRevision = mapRevision(revision);
+    const appliedLineItemIds: string[] = [];
+
+    for (let index = 0; index < lineItems.length; index += 1) {
+      const sourceItem = lineItems[index];
+      const existing = orderedExisting[index];
+      const preserveLineOrder = existing?.worksheetId === resolvedWorksheetId;
+
+      const domainItem: WorksheetItem = {
+        id: existing?.id ?? createId("li"),
+        worksheetId: resolvedWorksheetId,
+        phaseId: sourceItem.phaseId ?? null,
+        category: sourceItem.category,
+        entityType: sourceItem.entityType,
+        entityName: sourceItem.entityName,
+        vendor: sourceItem.vendor ?? undefined,
+        description: sourceItem.description,
+        quantity: sourceItem.quantity,
+        uom: sourceItem.uom,
+        cost: sourceItem.cost ?? 0,
+        markup: sourceItem.markup ?? 0,
+        price: sourceItem.price ?? 0,
+        unit1: sourceItem.unit1 ?? 0,
+        unit2: sourceItem.unit2 ?? 0,
+        unit3: sourceItem.unit3 ?? 0,
+        lineOrder: preserveLineOrder ? existing.lineOrder : nextLineOrder++,
+        rateScheduleItemId: sourceItem.rateScheduleItemId ?? null,
+        itemId: sourceItem.itemId ?? null,
+        tierUnits: sourceItem.tierUnits ?? {},
+        sourceNotes: sourceItem.sourceNotes ?? "",
+      };
+
+      const categoryDef = entityCategories.find((candidate) => candidate.name === domainItem.category);
+      const calcType = (categoryDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+      const itemSource = categoryDef?.itemSource ?? "freeform";
+
+      if (domainItem.rateScheduleItemId) {
+        const allRateScheduleItems = revisionSchedules.flatMap((schedule) => schedule.items ?? []);
+        const match = allRateScheduleItems.find((candidate) => candidate.id === domainItem.rateScheduleItemId);
+        if (!match) {
+          throw new Error(
+            `Invalid rateScheduleItemId "${domainItem.rateScheduleItemId}" - no matching rate schedule item found in this revision.`,
+          );
+        }
+      } else if (itemSource === "rate_schedule") {
+        throw new Error(
+          `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule).`,
+        );
+      }
+
+      if (domainItem.itemId) {
+        const catalogItem = await this.db.catalogItem.findFirst({ where: { id: domainItem.itemId } });
+        if (!catalogItem) {
+          throw new Error(`Invalid itemId "${domainItem.itemId}" - no matching catalog item found.`);
+        }
+      }
+
+      if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
+        domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionSchedules);
+      }
+
+      const calculated = calculateLineItem(
+        domainItem,
+        mappedRevision,
+        calcType,
+        rateScheduleCtx,
+        { labourCost: labourCostCtx },
+      );
+      Object.assign(domainItem, calculated);
+
+      if (existing) {
+        const updated = await this.db.worksheetItem.update({
+          where: { id: existing.id },
+          data: {
+            worksheetId: domainItem.worksheetId,
+            phaseId: domainItem.phaseId,
+            category: domainItem.category,
+            entityType: domainItem.entityType,
+            entityName: domainItem.entityName,
+            vendor: domainItem.vendor ?? null,
+            description: domainItem.description,
+            quantity: domainItem.quantity,
+            uom: domainItem.uom,
+            cost: domainItem.cost,
+            markup: domainItem.markup,
+            price: domainItem.price,
+            unit1: domainItem.unit1,
+            unit2: domainItem.unit2,
+            unit3: domainItem.unit3,
+            lineOrder: domainItem.lineOrder,
+            rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
+            itemId: domainItem.itemId ?? null,
+            tierUnits: domainItem.tierUnits ?? {},
+            sourceNotes: domainItem.sourceNotes ?? "",
+          },
+        });
+
+        await this.pushActivity(projectId, revision.id, "item_updated", {
+          itemId: updated.id,
+          entityName: domainItem.entityName,
+          patch: ["plugin_execution"],
+          before: mapWorksheetItem(existing),
+          after: mapWorksheetItem(updated),
+        });
+
+        appliedLineItemIds.push(updated.id);
+        continue;
+      }
+
+      const created = await this.db.worksheetItem.create({
+        data: {
+          id: domainItem.id,
+          worksheetId: domainItem.worksheetId,
+          phaseId: domainItem.phaseId,
+          category: domainItem.category,
+          entityType: domainItem.entityType,
+          entityName: domainItem.entityName,
+          vendor: domainItem.vendor ?? null,
+          description: domainItem.description,
+          quantity: domainItem.quantity,
+          uom: domainItem.uom,
+          cost: domainItem.cost,
+          markup: domainItem.markup,
+          price: domainItem.price,
+          unit1: domainItem.unit1,
+          unit2: domainItem.unit2,
+          unit3: domainItem.unit3,
+          lineOrder: domainItem.lineOrder,
+          rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
+          itemId: domainItem.itemId ?? null,
+          tierUnits: domainItem.tierUnits ?? {},
+          sourceNotes: domainItem.sourceNotes ?? "",
+        },
+      });
+
+      await this.pushActivity(projectId, revision.id, "item_created", {
+        itemId: created.id,
+        entityName: domainItem.entityName,
+        category: domainItem.category,
+        before: null,
+        after: mapWorksheetItem(created),
+      });
+
+      appliedLineItemIds.push(created.id);
+    }
+
+    for (const staleRow of orderedExisting.slice(lineItems.length)) {
+      await this.db.worksheetItem.delete({ where: { id: staleRow.id } });
+      await this.pushActivity(projectId, revision.id, "item_deleted", {
+        itemId: staleRow.id,
+        entityName: staleRow.entityName,
+        before: mapWorksheetItem(staleRow),
+        after: null,
+      });
+    }
+
+    if (lineItems.length > 0 || orderedExisting.length > 0) {
+      await this.syncProjectEstimate(projectId);
+    }
+
+    return {
+      appliedLineItemIds,
+      worksheetId: resolvedWorksheetId,
+      previousCount: orderedExisting.length,
+    };
+  }
+
   async executePlugin(
     pluginId: string,
     toolId: string,
     projectId: string,
     revisionId: string,
     input: Record<string, unknown>,
-    opts?: { worksheetId?: string; formState?: Record<string, unknown>; executedBy?: "user" | "agent"; agentSessionId?: string },
+    opts?: {
+      worksheetId?: string;
+      replaceExecutionId?: string;
+      formState?: Record<string, unknown>;
+      executedBy?: "user" | "agent";
+      agentSessionId?: string;
+    },
   ) {
     const plugin = await this.db.plugin.findFirst({ where: { id: pluginId, organizationId: this.organizationId } });
     if (!plugin) throw new Error(`Plugin ${pluginId} not found`);
@@ -8027,6 +8266,22 @@ export class PrismaApiStore {
     const outputType = toolDef.outputType ?? plugin.defaultOutputType ?? "summary";
     const toolName = toolDef.name ?? plugin.name;
     const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    if (!revision) {
+      throw new Error(`Revision ${revisionId} not found`);
+    }
+    const replacementExecution = opts?.replaceExecutionId
+      ? await this.db.pluginExecution.findFirst({
+          where: {
+            id: opts.replaceExecutionId,
+            projectId,
+            pluginId,
+            toolId,
+          },
+        })
+      : null;
+    if (opts?.replaceExecutionId && !replacementExecution) {
+      throw new Error("Plugin execution to reopen was not found for this project.");
+    }
     const builtinOutput = await executeBuiltinPluginTool({
       plugin: mapPlugin(plugin),
       toolId,
@@ -8131,24 +8386,46 @@ export class PrismaApiStore {
 
     // ── Apply effects to the quote ────────────────────────────────────
 
-    if (output.lineItems && output.lineItems.length > 0) {
-      const wsId = opts?.worksheetId ?? await this._resolveDefaultWorksheetId(projectId, revisionId);
-      for (const item of output.lineItems) {
-        const created = await this.createWorksheetItem(projectId, wsId, {
-          category: item.category, entityType: item.entityType, entityName: item.entityName,
-          vendor: item.vendor ?? null, description: item.description,
-          quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
-          markup: item.markup ?? 0, price: item.price ?? 0,
-          unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
-          unit3: item.unit3 ?? 0, phaseId: item.phaseId,
-          rateScheduleItemId: item.rateScheduleItemId ?? null,
-          itemId: item.itemId ?? null,
-          tierUnits: item.tierUnits,
-          sourceNotes: item.sourceNotes,
+    if (output.lineItems) {
+      if (replacementExecution) {
+        const replacementResult = await this.replacePluginExecutionLineItems(
+          projectId,
+          revision,
+          replacementExecution,
+          output.lineItems,
+          opts?.worksheetId,
+        );
+        appliedItemIds.push(...replacementResult.appliedLineItemIds);
+        output.appliedEffects!.push({
+          type: "line_items",
+          description:
+            replacementResult.appliedLineItemIds.length > 0
+              ? `Updated ${replacementResult.appliedLineItemIds.length} linked line item(s)`
+              : `Removed ${replacementResult.previousCount} linked line item(s)`,
         });
-        appliedItemIds.push(created.id);
+        opts = {
+          ...opts,
+          worksheetId: replacementResult.worksheetId,
+        };
+      } else if (output.lineItems.length > 0) {
+        const wsId = opts?.worksheetId ?? await this._resolveDefaultWorksheetId(projectId, revisionId);
+        for (const item of output.lineItems) {
+          const created = await this.createWorksheetItem(projectId, wsId, {
+            category: item.category, entityType: item.entityType, entityName: item.entityName,
+            vendor: item.vendor ?? null, description: item.description,
+            quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
+            markup: item.markup ?? 0, price: item.price ?? 0,
+            unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
+            unit3: item.unit3 ?? 0, phaseId: item.phaseId,
+            rateScheduleItemId: item.rateScheduleItemId ?? null,
+            itemId: item.itemId ?? null,
+            tierUnits: item.tierUnits,
+            sourceNotes: item.sourceNotes,
+          });
+          appliedItemIds.push(created.id);
+        }
+        output.appliedEffects!.push({ type: "line_items", description: `Created ${output.lineItems.length} line item(s)` });
       }
-      output.appliedEffects!.push({ type: "line_items", description: `Created ${output.lineItems.length} line item(s)` });
     }
 
     if (output.worksheet) {
@@ -8261,21 +8538,33 @@ export class PrismaApiStore {
 
     // ── Persist execution ─────────────────────────────────────────────
 
-    const execution = await this.db.pluginExecution.create({
-      data: {
-        id: createId("pexec"),
-        pluginId, toolId, projectId, revisionId,
-        worksheetId: opts?.worksheetId,
-        input: input as any,
-        formState: opts?.formState as any,
-        output: output as any,
-        appliedLineItemIds: appliedItemIds.length > 0 ? appliedItemIds : undefined,
-        status: "complete",
-        executedBy: opts?.executedBy ?? "user",
-        agentSessionId: opts?.agentSessionId,
-        createdAt: new Date(),
-      },
-    });
+    const executionData = {
+      pluginId,
+      toolId,
+      projectId,
+      revisionId,
+      worksheetId: opts?.worksheetId,
+      input: input as any,
+      formState: opts?.formState as any,
+      output: output as any,
+      appliedLineItemIds: appliedItemIds,
+      status: "complete" as const,
+      executedBy: opts?.executedBy ?? "user",
+      agentSessionId: opts?.agentSessionId,
+    };
+
+    const execution = replacementExecution
+      ? await this.db.pluginExecution.update({
+          where: { id: replacementExecution.id },
+          data: executionData,
+        })
+      : await this.db.pluginExecution.create({
+          data: {
+            id: createId("pexec"),
+            ...executionData,
+            createdAt: new Date(),
+          },
+        });
 
     return mapPluginExecution(execution);
   }

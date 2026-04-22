@@ -2,28 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { ChevronDown, Copy, Info, Trash2, X } from "lucide-react";
+import { ChevronDown, Copy, Info, Puzzle, Trash2, X } from "lucide-react";
 import type {
   EntityCategory,
   ProjectWorkspaceData,
   WorksheetItemPatchInput,
   WorkspaceWorksheetItem,
 } from "@/lib/api";
+import { listPluginExecutions } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Badge, Button, Input, Select } from "@/components/ui";
-
-const CATEGORY_COLORS: Record<string, string> = {
-  Labour: "info",
-  Equipment: "warning",
-  Material: "success",
-  Consumables: "default",
-  "Stock Items": "default",
-  "Other Charges": "danger",
-  "Travel & Per Diem": "warning",
-  Subcontractors: "info",
-  "Rental Equipment": "warning",
-};
+import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
+import { ItemPluginTab } from "./item-plugin-tab";
 
 export interface ItemDetailDrawerProps {
   item: WorkspaceWorksheetItem;
@@ -32,6 +22,8 @@ export interface ItemDetailDrawerProps {
   onPatchItem: (itemId: string, patch: WorksheetItemPatchInput) => void;
   onDelete: (itemId: string) => void;
   onDuplicate: (itemId: string) => void;
+  onRefreshWorkspace: () => void;
+  onError: (message: string) => void;
   onClose: () => void;
 }
 
@@ -42,9 +34,13 @@ export function ItemDetailDrawer({
   onPatchItem,
   onDelete,
   onDuplicate,
+  onRefreshWorkspace,
+  onError,
   onClose,
 }: ItemDetailDrawerProps) {
   const [showSources, setShowSources] = useState(!!item.sourceNotes);
+  const [activeTab, setActiveTab] = useState("details");
+  const [showPluginTab, setShowPluginTab] = useState(false);
   const [form, setForm] = useState({
     entityName: item.entityName,
     vendor: item.vendor ?? "",
@@ -78,7 +74,37 @@ export function ItemDetailDrawer({
       sourceNotes: item.sourceNotes ?? "",
     });
     setShowSources(!!item.sourceNotes);
+    setActiveTab("details");
   }, [item]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setShowPluginTab(false);
+
+    listPluginExecutions(workspace.project.id)
+      .then((executions) => {
+        if (cancelled) {
+          return;
+        }
+        setShowPluginTab(
+          executions.some(
+            (execution) =>
+              execution.output?.type === "line_items" &&
+              (execution.appliedLineItemIds ?? []).includes(item.id),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setShowPluginTab(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, workspace.project.id]);
 
   const catDef = entityCategories.find((c) => c.name === item.category);
   const ws = (workspace.worksheets ?? []).find((w) => w.id === item.worksheetId);
@@ -175,11 +201,14 @@ export function ItemDetailDrawer({
 
   return (
     <motion.div
-      initial={{ x: 420 }}
+      initial={{ x: showPluginTab && activeTab === "plugin" ? 760 : 420 }}
       animate={{ x: 0 }}
-      exit={{ x: 420 }}
+      exit={{ x: showPluginTab && activeTab === "plugin" ? 760 : 420 }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
+      className={cn(
+        "fixed inset-y-0 right-0 z-40 border-l border-line bg-panel shadow-2xl flex flex-col",
+        showPluginTab && activeTab === "plugin" ? "w-full max-w-[780px]" : "w-full max-w-[420px]",
+      )}
     >
       {/* Category Color Stripe */}
       <div className="h-1 w-full" style={{ backgroundColor: catDef?.color ?? '#6b7280' }} />
@@ -223,183 +252,213 @@ export function ItemDetailDrawer({
       </div>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div className="flex items-center gap-2 text-xs text-fg/50">
-          <span>
-            Worksheet:{" "}
-            <span className="text-fg/70 font-medium">{ws?.name ?? "Unknown"}</span>
-          </span>
-          <span>
-            Line:{" "}
-            <span className="text-fg/70 font-medium">{item.lineOrder}</span>
-          </span>
-        </div>
-
-        <div>
-          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-            Entity Name
-          </label>
-          <Input
-            className="mt-1"
-            value={form.entityName}
-            onChange={(e) => setForm({ ...form, entityName: e.target.value })}
-            onBlur={() => handleFieldBlur("entityName", form.entityName)}
-          />
-        </div>
-
-        <div>
-          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-            Vendor
-          </label>
-          <Input
-            className="mt-1"
-            value={form.vendor}
-            onChange={(e) => setForm({ ...form, vendor: e.target.value })}
-            onBlur={() => handleFieldBlur("vendor", form.vendor)}
-          />
-        </div>
-
-        <div>
-          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-            Description
-          </label>
-          <textarea
-            className="mt-1 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent/50 resize-y"
-            rows={3}
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            onBlur={() => handleFieldBlur("description", form.description)}
-          />
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          {renderNumericField("quantity", "Quantity", form.quantity)}
-          <div>
-            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-              UOM
-            </label>
-            {catDef?.validUoms && catDef.validUoms.length > 0 ? (
-              <Select
-                className="mt-1"
-                value={form.uom}
-                onChange={(e) => {
-                  setForm({ ...form, uom: e.target.value });
-                  handleFieldBlur("uom", e.target.value);
-                }}
-              >
-                {catDef.validUoms.map((u) => (
-                  <option key={u} value={u}>{u}</option>
-                ))}
-              </Select>
-            ) : (
-              <Input
-                className="mt-1"
-                value={form.uom}
-                onChange={(e) => setForm({ ...form, uom: e.target.value })}
-                onBlur={() => handleFieldBlur("uom", form.uom)}
-              />
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3">
-          {renderNumericField("cost", "Cost", form.cost)}
-          {renderNumericField("markup", "Markup", form.markup)}
-          {renderNumericField("price", "Price", form.price)}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3 p-3 bg-panel2/30 rounded-lg">
-          <div>
-            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-              Ext. Cost
-            </label>
-            <div className="mt-1 text-sm font-medium tabular-nums">
-              {formatMoney(extCost, 2)}
-            </div>
-          </div>
-          <div>
-            <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-              Margin
-            </label>
-            <div className="mt-1 text-sm font-medium tabular-nums">{margin}</div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-3">
-          {renderNumericField(
-            "unit1",
-            catDef?.unitLabels.unit1 || "Unit 1",
-            form.unit1,
-          )}
-          {renderNumericField(
-            "unit2",
-            catDef?.unitLabels.unit2 || "Unit 2",
-            form.unit2,
-          )}
-          {renderNumericField(
-            "unit3",
-            catDef?.unitLabels.unit3 || "Unit 3",
-            form.unit3,
-          )}
-        </div>
-
-        <div>
-          <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-            Phase
-          </label>
-          <Select
-            className="mt-1"
-            value={form.phaseId}
-            onChange={(e) => {
-              setForm({ ...form, phaseId: e.target.value });
-              handleFieldBlur("phaseId", e.target.value);
-            }}
-          >
-            <option value="">None</option>
-            {(workspace.phases ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.number} - {p.name}
-              </option>
-            ))}
-          </Select>
-        </div>
-
-        {/* Sources & Notes */}
-        <div className="border border-line rounded-lg overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setShowSources(!showSources)}
-            className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider hover:bg-panel2/30 transition-colors"
-          >
-            <span className="flex items-center gap-1.5">
-              Sources & Notes
-              {form.sourceNotes && (
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent/60" />
-              )}
-            </span>
-            <ChevronDown className={cn("h-3 w-3 transition-transform", showSources && "rotate-180")} />
-          </button>
-          {showSources && (
-            <div className="px-3 pb-3">
-              <textarea
-                className="w-full rounded border border-line bg-bg px-3 py-2 text-xs font-mono leading-relaxed outline-none focus:border-accent/50 resize-y"
-                rows={6}
-                placeholder="Knowledge book refs, dataset lookups, correction factors, web search results, assumptions..."
-                value={form.sourceNotes}
-                onChange={(e) => setForm({ ...form, sourceNotes: e.target.value })}
-                onBlur={() => handleFieldBlur("sourceNotes", form.sourceNotes)}
-              />
-            </div>
-          )}
-        </div>
-
-        {calcInfoText && (
-          <div className="flex items-start gap-2 rounded-lg bg-accent/5 border border-accent/10 px-3 py-2.5">
-            <Info className="h-3.5 w-3.5 mt-0.5 text-accent/60 shrink-0" />
-            <span className="text-xs text-fg/50">{calcInfoText}</span>
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {showPluginTab && (
+          <div className="border-b border-line px-4 py-2">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="plugin" className="gap-1.5">
+                <Puzzle className="h-3.5 w-3.5" />
+                Plugin
+              </TabsTrigger>
+            </TabsList>
           </div>
         )}
-      </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent value="details" className="mt-0 space-y-4">
+            <div className="flex items-center gap-2 text-xs text-fg/50">
+              <span>
+                Worksheet:{" "}
+                <span className="text-fg/70 font-medium">{ws?.name ?? "Unknown"}</span>
+              </span>
+              <span>
+                Line:{" "}
+                <span className="text-fg/70 font-medium">{item.lineOrder}</span>
+              </span>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                Entity Name
+              </label>
+              <Input
+                className="mt-1"
+                value={form.entityName}
+                onChange={(e) => setForm({ ...form, entityName: e.target.value })}
+                onBlur={() => handleFieldBlur("entityName", form.entityName)}
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                Vendor
+              </label>
+              <Input
+                className="mt-1"
+                value={form.vendor}
+                onChange={(e) => setForm({ ...form, vendor: e.target.value })}
+                onBlur={() => handleFieldBlur("vendor", form.vendor)}
+              />
+            </div>
+
+            <div>
+              <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                Description
+              </label>
+              <textarea
+                className="mt-1 w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent/50 resize-y"
+                rows={3}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                onBlur={() => handleFieldBlur("description", form.description)}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {renderNumericField("quantity", "Quantity", form.quantity)}
+              <div>
+                <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                  UOM
+                </label>
+                {catDef?.validUoms && catDef.validUoms.length > 0 ? (
+                  <Select
+                    className="mt-1"
+                    value={form.uom}
+                    onChange={(e) => {
+                      setForm({ ...form, uom: e.target.value });
+                      handleFieldBlur("uom", e.target.value);
+                    }}
+                  >
+                    {catDef.validUoms.map((u) => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </Select>
+                ) : (
+                  <Input
+                    className="mt-1"
+                    value={form.uom}
+                    onChange={(e) => setForm({ ...form, uom: e.target.value })}
+                    onBlur={() => handleFieldBlur("uom", form.uom)}
+                  />
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              {renderNumericField("cost", "Cost", form.cost)}
+              {renderNumericField("markup", "Markup", form.markup)}
+              {renderNumericField("price", "Price", form.price)}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 p-3 bg-panel2/30 rounded-lg">
+              <div>
+                <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                  Ext. Cost
+                </label>
+                <div className="mt-1 text-sm font-medium tabular-nums">
+                  {formatMoney(extCost, 2)}
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                  Margin
+                </label>
+                <div className="mt-1 text-sm font-medium tabular-nums">{margin}</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              {renderNumericField(
+                "unit1",
+                catDef?.unitLabels.unit1 || "Unit 1",
+                form.unit1,
+              )}
+              {renderNumericField(
+                "unit2",
+                catDef?.unitLabels.unit2 || "Unit 2",
+                form.unit2,
+              )}
+              {renderNumericField(
+                "unit3",
+                catDef?.unitLabels.unit3 || "Unit 3",
+                form.unit3,
+              )}
+            </div>
+
+            <div>
+              <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                Phase
+              </label>
+              <Select
+                className="mt-1"
+                value={form.phaseId}
+                onChange={(e) => {
+                  setForm({ ...form, phaseId: e.target.value });
+                  handleFieldBlur("phaseId", e.target.value);
+                }}
+              >
+                <option value="">None</option>
+                {(workspace.phases ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.number} - {p.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <div className="border border-line rounded-lg overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setShowSources(!showSources)}
+                className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-medium text-fg/40 uppercase tracking-wider hover:bg-panel2/30 transition-colors"
+              >
+                <span className="flex items-center gap-1.5">
+                  Sources & Notes
+                  {form.sourceNotes && (
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-accent/60" />
+                  )}
+                </span>
+                <ChevronDown className={cn("h-3 w-3 transition-transform", showSources && "rotate-180")} />
+              </button>
+              {showSources && (
+                <div className="px-3 pb-3">
+                  <textarea
+                    className="w-full rounded border border-line bg-bg px-3 py-2 text-xs font-mono leading-relaxed outline-none focus:border-accent/50 resize-y"
+                    rows={6}
+                    placeholder="Knowledge book refs, dataset lookups, correction factors, web search results, assumptions..."
+                    value={form.sourceNotes}
+                    onChange={(e) => setForm({ ...form, sourceNotes: e.target.value })}
+                    onBlur={() => handleFieldBlur("sourceNotes", form.sourceNotes)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {calcInfoText && (
+              <div className="flex items-start gap-2 rounded-lg bg-accent/5 border border-accent/10 px-3 py-2.5">
+                <Info className="h-3.5 w-3.5 mt-0.5 text-accent/60 shrink-0" />
+                <span className="text-xs text-fg/50">{calcInfoText}</span>
+              </div>
+            )}
+          </TabsContent>
+
+          {showPluginTab && (
+            <TabsContent value="plugin" className="mt-0">
+              <ItemPluginTab
+                item={item}
+                workspace={workspace}
+                onRefreshWorkspace={onRefreshWorkspace}
+                onError={onError}
+              />
+            </TabsContent>
+          )}
+        </div>
+      </Tabs>
     </motion.div>
   );
 }
