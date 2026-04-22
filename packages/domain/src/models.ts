@@ -831,6 +831,8 @@ export interface PluginField {
     datasetId?: string;                     // dataset for lookup/interpolate/nearest formulas
     lookupColumns?: string[];               // columns to match on in the dataset
     resultColumn?: string;                  // column to return from the matched row
+    resultColumnFrom?: string;              // field id whose value selects the result column
+    resultColumnMap?: Record<string, string>; // map field value -> result column name
   };
   searchConfig?: {                          // for "search" type fields
     endpoint: string;
@@ -838,6 +840,9 @@ export interface PluginField {
     displayField: string;
     valueField: string;
     resultFields?: string[];
+    params?: Record<string, string>;        // query param -> field id mapping
+    minQueryLength?: number;
+    populateFields?: Record<string, string | string[]>;
   };
   width?: "full" | "half" | "third" | "quarter";
   group?: string;                           // group fields visually
@@ -964,6 +969,10 @@ export interface PluginOutputLineItem {
   unit2?: number;
   unit3?: number;
   phaseId?: string;
+  rateScheduleItemId?: string | null;
+  itemId?: string | null;
+  tierUnits?: Record<string, number>;
+  sourceNotes?: string;
   metadata?: Record<string, unknown>;
 }
 

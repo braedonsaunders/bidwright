@@ -9,15 +9,17 @@ async function main() {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
-  const org = await prisma.organization.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!org) {
-    console.error("No organization found. Run the full seed first.");
+  const organizations = await prisma.organization.findMany({ orderBy: { createdAt: "asc" } });
+  if (organizations.length === 0) {
+    console.error("No organizations found. Run the full seed first.");
     process.exitCode = 1;
     return;
   }
 
-  console.log(`Seeding plugins into organization: ${org.name} (${org.id})`);
-  await seedPluginTemplates(prisma, org.id);
+  for (const organization of organizations) {
+    console.log(`Seeding plugins into organization: ${organization.name} (${organization.id})`);
+    await seedPluginTemplates(prisma, organization.id);
+  }
   await prisma.$disconnect();
   console.log("Done.");
 }

@@ -105,6 +105,7 @@ import {
   defaultProjectSummary,
   documentTypeFromIngestion,
 } from "./calc-utils.js";
+import { executeBuiltinPluginTool } from "./plugins/builtin-execution.js";
 import {
   DEFAULT_BRAND,
   DEFAULT_SETTINGS,
@@ -7928,6 +7929,11 @@ export class PrismaApiStore {
     return plugin ? mapPlugin(plugin) : null;
   }
 
+  async getPluginBySlug(slug: string) {
+    const plugin = await this.db.plugin.findFirst({ where: { slug, organizationId: this.organizationId } });
+    return plugin ? mapPlugin(plugin) : null;
+  }
+
   async createPlugin(input: CreatePluginInput) {
     const plugin = await this.db.plugin.create({
       data: {
@@ -8013,11 +8019,40 @@ export class PrismaApiStore {
 
     const outputType = toolDef.outputType ?? plugin.defaultOutputType ?? "summary";
     const toolName = toolDef.name ?? plugin.name;
+    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    const builtinOutput = await executeBuiltinPluginTool({
+      plugin: mapPlugin(plugin),
+      toolId,
+      input,
+      formState: opts?.formState,
+      revisionDifficulty: revision?.necaDifficulty ?? undefined,
+      lookupDatasetRows: async (datasetRef) => {
+        const resolved = await this._resolveDatasetRecordForRead(datasetRef);
+        if (!resolved) {
+          return [];
+        }
+        const rows = await resolved.client.datasetRow.findMany({
+          where: { datasetId: resolved.dataset.id },
+          orderBy: { order: "asc" },
+        });
+        return rows.map((row) => (row.data as Record<string, unknown>) ?? {});
+      },
+      resolveRateScheduleItem: async (rateScheduleItemId) => {
+        const schedules = await this.db.rateSchedule.findMany({
+          where: { revisionId },
+          include: { items: true },
+        });
+        const match = schedules.flatMap((schedule) => schedule.items ?? []).find((item) => item.id === rateScheduleItemId);
+        return match ? { id: match.id, name: match.name } : null;
+      },
+    });
 
-    const output: PluginOutput = { type: outputType, displayText: `Executed ${toolName} with provided input`, appliedEffects: [] };
+    const output: PluginOutput = builtinOutput ?? { type: outputType, displayText: `Executed ${toolName} with provided input`, appliedEffects: [] };
+    output.appliedEffects = output.appliedEffects ?? [];
     const appliedItemIds: string[] = [];
 
-    switch (outputType) {
+    if (!builtinOutput) {
+      switch (outputType) {
       case "line_items":
         output.lineItems = (input.items as PluginOutputLineItem[] | undefined) ?? [];
         output.summary = { title: toolName, sections: [{ label: "Line items", value: String(output.lineItems.length), format: "number" as const }] };
@@ -8052,8 +8087,9 @@ export class PrismaApiStore {
         break;
       case "score":
         output.scores = (input.scores as PluginOutputScore[] | undefined) ?? [];
-        if (output.scores.length === 0 && opts?.formState?.scoringData) {
-          const scoringData = opts.formState.scoringData as Record<string, Record<string, number>>;
+        const scoringState = (opts?.formState?.scoringData ?? opts?.formState?._scores) as Record<string, Record<string, number>> | undefined;
+        if (output.scores.length === 0 && scoringState) {
+          const scoringData = scoringState;
           const uiSections = (toolDef.ui?.sections ?? []) as any[];
           for (const section of uiSections) {
             if (section.type !== "scoring" || !section.scoring) continue;
@@ -8079,6 +8115,7 @@ export class PrismaApiStore {
       default:
         output.summary = { title: toolName, sections: Object.entries(input).map(([k, v]) => ({ label: k, value: String(v), format: "text" as const })) };
         break;
+      }
     }
 
     // ── Apply effects to the quote ────────────────────────────────────
@@ -8093,6 +8130,10 @@ export class PrismaApiStore {
           markup: item.markup ?? 0, price: item.price ?? 0,
           unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
           unit3: item.unit3 ?? 0, phaseId: item.phaseId,
+          rateScheduleItemId: item.rateScheduleItemId ?? null,
+          itemId: item.itemId ?? null,
+          tierUnits: item.tierUnits,
+          sourceNotes: item.sourceNotes,
         });
         appliedItemIds.push(created.id);
       }
@@ -8109,6 +8150,10 @@ export class PrismaApiStore {
           markup: item.markup ?? 0, price: item.price ?? 0,
           unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
           unit3: item.unit3 ?? 0, phaseId: item.phaseId,
+          rateScheduleItemId: item.rateScheduleItemId ?? null,
+          itemId: item.itemId ?? null,
+          tierUnits: item.tierUnits,
+          sourceNotes: item.sourceNotes,
         });
         appliedItemIds.push(created.id);
       }
@@ -8632,6 +8677,73 @@ export class PrismaApiStore {
 
   // ── Datasets ───────────────────────────────────────────────────────────
 
+  private _normalizeDatasetReference(value: string) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  private _getDatasetReferenceAliases(datasetRef: string) {
+    const normalized = this._normalizeDatasetReference(datasetRef);
+    const aliases: Record<string, string[]> = {
+      dsnecalabour: ["NECA Labour Units", "NECA Labour"],
+      dsphcclabour: ["PHCC Labour Units", "PHCC Labour"],
+    };
+    return aliases[normalized] ?? [];
+  }
+
+  private async _resolveDatasetRecordForRead(datasetRef: string): Promise<{ dataset: any; client: PrismaClient } | null> {
+    const trimmed = datasetRef.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const direct = await this.db.dataset.findFirst({
+      where: { id: trimmed, organizationId: this.organizationId },
+    });
+    if (direct) {
+      return { dataset: direct, client: this.db };
+    }
+
+    const adopted = await this.db.dataset.findFirst({
+      where: { organizationId: this.organizationId, sourceTemplateId: trimmed },
+    });
+    if (adopted) {
+      return { dataset: adopted, client: this.db };
+    }
+
+    const normalizedRef = this._normalizeDatasetReference(trimmed);
+    const aliases = this._getDatasetReferenceAliases(trimmed);
+    const organizationDatasets = await this.db.dataset.findMany({
+      where: { organizationId: this.organizationId },
+    });
+    const byOrgName = organizationDatasets.find((dataset) => {
+      const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
+      return normalizedName === normalizedRef || aliases.includes(dataset.name ?? "");
+    });
+    if (byOrgName) {
+      return { dataset: byOrgName, client: this.db };
+    }
+
+    const directTemplate = await sharedPrisma.dataset.findFirst({
+      where: { id: trimmed, isTemplate: true },
+    });
+    if (directTemplate) {
+      return { dataset: directTemplate, client: sharedPrisma };
+    }
+
+    const templates = await sharedPrisma.dataset.findMany({
+      where: { isTemplate: true },
+    });
+    const byTemplateName = templates.find((dataset) => {
+      const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
+      return normalizedName === normalizedRef || aliases.includes(dataset.name ?? "");
+    });
+    if (byTemplateName) {
+      return { dataset: byTemplateName, client: sharedPrisma };
+    }
+
+    return null;
+  }
+
   async listDatasets(projectId?: string): Promise<Dataset[]> {
     const where: any = { organizationId: this.organizationId, isTemplate: false };
     if (projectId) {
@@ -8642,8 +8754,8 @@ export class PrismaApiStore {
   }
 
   async getDataset(datasetId: string): Promise<Dataset | null> {
-    const dataset = await this.db.dataset.findFirst({ where: { id: datasetId, organizationId: this.organizationId } });
-    return dataset ? mapDataset(dataset) : null;
+    const resolved = await this._resolveDatasetRecordForRead(datasetId);
+    return resolved ? mapDataset(resolved.dataset) : null;
   }
 
   async createDataset(input: {
@@ -8716,8 +8828,13 @@ export class PrismaApiStore {
   }
 
   async listDatasetRows(datasetId: string, filter?: string, sort?: string, limit = 100, offset = 0): Promise<{ rows: DatasetRow[]; total: number }> {
-    let rows = await this.db.datasetRow.findMany({
-      where: { datasetId },
+    const resolved = await this._resolveDatasetRecordForRead(datasetId);
+    if (!resolved) {
+      return { rows: [], total: 0 };
+    }
+
+    let rows = await resolved.client.datasetRow.findMany({
+      where: { datasetId: resolved.dataset.id },
       orderBy: { order: "asc" },
     });
 
@@ -8830,7 +8947,11 @@ export class PrismaApiStore {
   }
 
   async searchDatasetRows(datasetId: string, query: string): Promise<DatasetRow[]> {
-    const rows = await this.db.datasetRow.findMany({ where: { datasetId } });
+    const resolved = await this._resolveDatasetRecordForRead(datasetId);
+    if (!resolved) {
+      return [];
+    }
+    const rows = await resolved.client.datasetRow.findMany({ where: { datasetId: resolved.dataset.id } });
     const lowerQuery = query.toLowerCase();
     return rows
       .filter((r) => JSON.stringify(r.data).toLowerCase().includes(lowerQuery))
@@ -8838,7 +8959,11 @@ export class PrismaApiStore {
   }
 
   async queryDataset(datasetId: string, filters: Array<{ column: string; op: "eq" | "gt" | "lt" | "gte" | "lte" | "contains"; value: unknown }>): Promise<DatasetRow[]> {
-    const rows = await this.db.datasetRow.findMany({ where: { datasetId } });
+    const resolved = await this._resolveDatasetRecordForRead(datasetId);
+    if (!resolved) {
+      return [];
+    }
+    const rows = await resolved.client.datasetRow.findMany({ where: { datasetId: resolved.dataset.id } });
     return rows
       .map(mapDatasetRow)
       .filter((r) => {
