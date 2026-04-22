@@ -4,6 +4,7 @@
  * Seed datasets embedded in the plugin JSON are also created.
  */
 import type { PrismaClient } from "@prisma/client";
+import { firstPartyPlugins } from "@bidwright/domain";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
@@ -13,50 +14,58 @@ function createId(prefix: string): string {
 }
 
 const SEED_DIR = path.resolve(import.meta.dirname ?? __dirname, "../seed-plugins");
+type SeedPluginDefinition = {
+  slug: string;
+  name: string;
+  icon?: string;
+  category: string;
+  description: string;
+  llmDescription?: string;
+  version: string;
+  author?: string;
+  tags?: string[];
+  supportedCategories?: string[];
+  defaultOutputType?: string;
+  documentation?: string;
+  config?: Record<string, unknown>;
+  configSchema?: unknown[];
+  toolDefinitions: unknown[];
+  seedDatasets?: Array<{
+    id?: string;
+    name: string;
+    description: string;
+    category: string;
+    columns: unknown[];
+    rows: Record<string, unknown>[];
+    tags?: string[];
+  }>;
+};
 
-export async function seedPluginTemplates(prisma: PrismaClient, organizationId: string) {
+function loadJsonSeedPlugins(): SeedPluginDefinition[] {
   if (!existsSync(SEED_DIR)) {
-    console.log("No seed-plugins directory found, skipping plugin seeding.");
-    return;
+    return [];
   }
 
   const files = readdirSync(SEED_DIR).filter((f) => f.endsWith(".json"));
-  if (files.length === 0) {
-    console.log("No plugin JSON files found in seed-plugins/, skipping.");
+  return files.map((file) => {
+    const raw = readFileSync(path.join(SEED_DIR, file), "utf-8");
+    return JSON.parse(raw) as SeedPluginDefinition;
+  });
+}
+
+export async function seedPluginTemplates(prisma: PrismaClient, organizationId: string) {
+  const bundledPlugins = firstPartyPlugins.map((plugin) => structuredClone(plugin)) as SeedPluginDefinition[];
+  const jsonPlugins = loadJsonSeedPlugins();
+  const seedPlugins = [...bundledPlugins, ...jsonPlugins];
+
+  if (seedPlugins.length === 0) {
+    console.log("No bundled or JSON plugin definitions found, skipping plugin seeding.");
     return;
   }
 
-  console.log(`Seeding ${files.length} plugin(s)...`);
+  console.log(`Seeding ${seedPlugins.length} plugin(s)...`);
 
-  for (const file of files) {
-    const raw = readFileSync(path.join(SEED_DIR, file), "utf-8");
-    const data = JSON.parse(raw) as {
-      slug: string;
-      name: string;
-      icon?: string;
-      category: string;
-      description: string;
-      llmDescription?: string;
-      version: string;
-      author?: string;
-      tags?: string[];
-      supportedCategories?: string[];
-      defaultOutputType?: string;
-      documentation?: string;
-      config?: Record<string, unknown>;
-      configSchema?: unknown[];
-      toolDefinitions: unknown[];
-      seedDatasets?: Array<{
-        id?: string;
-        name: string;
-        description: string;
-        category: string;
-        columns: unknown[];
-        rows: Record<string, unknown>[];
-        tags?: string[];
-      }>;
-    };
-
+  for (const data of seedPlugins) {
     // Seed embedded datasets first
     if (data.seedDatasets && data.seedDatasets.length > 0) {
       for (const ds of data.seedDatasets) {
@@ -114,40 +123,50 @@ export async function seedPluginTemplates(prisma: PrismaClient, organizationId: 
       }
     }
 
-    // Delete existing plugin with same slug (idempotent)
     const existing = await prisma.plugin.findFirst({
       where: { slug: data.slug, organizationId },
     });
-    if (existing) {
-      await prisma.pluginExecution.deleteMany({ where: { pluginId: existing.id } });
-      await prisma.plugin.delete({ where: { id: existing.id } });
-    }
 
     const now = new Date();
-    await prisma.plugin.create({
-      data: {
-        id: createId("plugin"),
-        organizationId,
-        name: data.name,
-        slug: data.slug,
-        icon: data.icon ?? null,
-        category: data.category,
-        description: data.description,
-        llmDescription: data.llmDescription ?? null,
-        version: data.version ?? "1.0.0",
-        author: data.author ?? null,
-        enabled: true,
-        config: (data.config ?? {}) as any,
-        configSchema: (data.configSchema ?? null) as any,
-        toolDefinitions: (data.toolDefinitions ?? []) as any,
-        defaultOutputType: data.defaultOutputType ?? null,
-        supportedCategories: data.supportedCategories ?? [],
-        tags: data.tags ?? [],
-        documentation: data.documentation ?? null,
-        createdAt: now,
-        updatedAt: now,
-      },
-    });
+    const mergedConfig = {
+      ...((data.config ?? {}) as Record<string, unknown>),
+      ...(((existing?.config as Record<string, unknown> | null) ?? {})),
+    };
+    const payload = {
+      organizationId,
+      name: data.name,
+      slug: data.slug,
+      icon: data.icon ?? null,
+      category: data.category,
+      description: data.description,
+      llmDescription: data.llmDescription ?? null,
+      version: data.version ?? "1.0.0",
+      author: data.author ?? null,
+      enabled: existing?.enabled ?? true,
+      config: mergedConfig as any,
+      configSchema: (data.configSchema ?? null) as any,
+      toolDefinitions: (data.toolDefinitions ?? []) as any,
+      defaultOutputType: data.defaultOutputType ?? null,
+      supportedCategories: data.supportedCategories ?? [],
+      tags: data.tags ?? [],
+      documentation: data.documentation ?? null,
+      updatedAt: now,
+    };
+
+    if (existing) {
+      await prisma.plugin.update({
+        where: { id: existing.id },
+        data: payload,
+      });
+    } else {
+      await prisma.plugin.create({
+        data: {
+          id: createId("plugin"),
+          ...payload,
+          createdAt: now,
+        },
+      });
+    }
 
     const toolCount = Array.isArray(data.toolDefinitions) ? data.toolDefinitions.length : 0;
     console.log(`  Plugin "${data.name}": ${toolCount} tools`);

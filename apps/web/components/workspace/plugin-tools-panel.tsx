@@ -14,13 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   Badge,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
-  FadeIn,
   Input,
-  Separator,
 } from "@/components/ui";
 import { PluginRuntime } from "@/components/plugin-runtime";
 import type {
@@ -31,8 +25,6 @@ import type {
 import {
   listPlugins,
   executePlugin as apiExecutePlugin,
-  listDatasets,
-  listDatasetRows,
 } from "@/lib/api";
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
@@ -131,7 +123,11 @@ export function PluginToolsPanel({
         data.values,
         {
           worksheetId,
-          formState: { ...data.values, _tables: data.tableData, _scores: data.scoringData },
+          formState: {
+            values: data.values,
+            tableData: data.tableData,
+            scoringData: data.scoringData,
+          },
         },
       );
       setExecutionOutput(result.output as PluginOutput);

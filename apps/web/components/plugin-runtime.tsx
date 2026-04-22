@@ -16,10 +16,6 @@ import { cn } from "@/lib/utils";
 import {
   Badge,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   FadeIn,
   Input,
   Label,
@@ -40,14 +36,19 @@ import type {
 } from "@/lib/api";
 import {
   listDatasetRows,
-  queryDataset,
-  searchDatasetRows,
   listRateSchedules,
 } from "@/lib/api";
+import { resolveApiUrl } from "@/lib/api/client";
+import {
+  computeNecaExtendedDuration,
+  computeNecaTemperatureAdjustment,
+} from "@bidwright/domain";
 
 // ── Dataset Options Hook ────────────────────────────────────────────
 
 type DatasetRowData = Record<string, unknown>;
+type DatasetRowsById = Record<string, DatasetRowData[]>;
+type PluginSearchResult = Record<string, unknown>;
 
 // Cache for dataset rows to avoid redundant fetches
 const datasetRowsCache = new Map<string, { rows: DatasetRowData[]; ts: number }>();
@@ -248,6 +249,39 @@ function datasetNearest(
   return bestVal;
 }
 
+function toNumber(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function daysBetween(start: unknown, end: unknown): number {
+  const startValue = Date.parse(String(start ?? ""));
+  const endValue = Date.parse(String(end ?? ""));
+  if (!Number.isFinite(startValue) || !Number.isFinite(endValue) || endValue <= startValue) {
+    return 0;
+  }
+  return Math.round((endValue - startValue) / 86_400_000);
+}
+
+function resolveComputationResultColumn(
+  values: Record<string, unknown>,
+  computation?: PluginField["computation"],
+): string {
+  if (!computation) {
+    return "value";
+  }
+
+  const selectedKey = computation.resultColumnFrom
+    ? String(values[computation.resultColumnFrom] ?? "")
+    : "";
+
+  if (selectedKey && computation.resultColumnMap?.[selectedKey]) {
+    return computation.resultColumnMap[selectedKey];
+  }
+
+  return computation.resultColumn ?? "value";
+}
+
 function evaluateFormula(
   formula: string,
   values: Record<string, unknown>,
@@ -258,7 +292,7 @@ function evaluateFormula(
     // Handle lookup() formula — requires dataset context
     if (formula.startsWith("lookup(") && datasetRows && computation) {
       const lookupCols = computation.lookupColumns ?? [];
-      const resultCol = computation.resultColumn ?? "value";
+      const resultCol = resolveComputationResultColumn(values, computation);
       const matchValues = lookupCols.map((col) => values[col]);
       return datasetLookup(datasetRows, lookupCols, matchValues, resultCol);
     }
@@ -266,16 +300,16 @@ function evaluateFormula(
     // Handle interpolate() formula
     if (formula.startsWith("interpolate(") && datasetRows && computation) {
       const inputCol = computation.lookupColumns?.[0] ?? "";
-      const resultCol = computation.resultColumn ?? "value";
-      const inputValue = Number(values[inputCol]) || 0;
+      const resultCol = resolveComputationResultColumn(values, computation);
+      const inputValue = toNumber(values[inputCol]);
       return datasetInterpolate(datasetRows, inputCol, inputValue, resultCol);
     }
 
     // Handle nearest() formula
     if (formula.startsWith("nearest(") && datasetRows && computation) {
       const matchCols = computation.lookupColumns ?? [];
-      const resultCol = computation.resultColumn ?? "value";
-      const matchValues = matchCols.map((col) => Number(values[col]) || 0);
+      const resultCol = resolveComputationResultColumn(values, computation);
+      const matchValues = matchCols.map((col) => toNumber(values[col]));
       return datasetNearest(datasetRows, matchCols, matchValues, resultCol);
     }
 
@@ -299,10 +333,41 @@ function evaluateFormula(
     // Standard formula evaluation
     // eslint-disable-next-line no-new-func
     const fn = new Function(
+      "daysBetween",
+      "necaTemperatureLostProductivity",
+      "necaTemperatureAdditionalHours",
+      "necaExtendedRecommendedWorkers",
+      "necaExtendedAdditionalHours",
       ...Object.keys(values),
       `"use strict"; try { return (${formula}); } catch { return 0; }`
     );
     const result = fn(
+      daysBetween,
+      (temperature: unknown, temperatureUnit: unknown, humidity: unknown) =>
+        computeNecaTemperatureAdjustment({
+          temperature: toNumber(temperature),
+          temperatureUnit: String(temperatureUnit ?? "F"),
+          humidity: toNumber(humidity),
+          baseHours: 0,
+        }).lostProductivityPercent,
+      (baseHours: unknown, temperature: unknown, temperatureUnit: unknown, humidity: unknown) =>
+        computeNecaTemperatureAdjustment({
+          baseHours: toNumber(baseHours),
+          temperature: toNumber(temperature),
+          temperatureUnit: String(temperatureUnit ?? "F"),
+          humidity: toNumber(humidity),
+        }).additionalHours,
+      (baseHours: unknown) =>
+        computeNecaExtendedDuration({
+          baseHours: toNumber(baseHours),
+          monthsExtended: 1,
+        }).recommendedWorkers,
+      (baseHours: unknown, workers: unknown, monthsExtended: unknown) =>
+        computeNecaExtendedDuration({
+          baseHours: toNumber(baseHours),
+          workers: toNumber(workers) || undefined,
+          monthsExtended: toNumber(monthsExtended),
+        }).totalAdditionalHours,
       ...Object.keys(values).map((k) => values[k])
     );
     return typeof result === "number" && isFinite(result) ? result : 0;
@@ -323,6 +388,69 @@ function formatValue(value: number, format?: string): string {
     default:
       return value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
   }
+}
+
+function buildFormulaValues(
+  values: Record<string, unknown>,
+  tableData: Record<string, Record<string, unknown>[]>,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...values };
+  for (const [tableId, rows] of Object.entries(tableData)) {
+    next[`__table_${tableId}`] = rows;
+  }
+  return next;
+}
+
+function recomputeComputedFields(
+  schema: PluginUISchema,
+  values: Record<string, unknown>,
+  tableData: Record<string, Record<string, unknown>[]>,
+  datasetRowsById: DatasetRowsById,
+): Record<string, unknown> {
+  const next = { ...values };
+  const formulaValues = buildFormulaValues(next, tableData);
+
+  for (const section of schema.sections) {
+    for (const field of section.fields ?? []) {
+      if (field.type !== "computed" || !field.computation) {
+        continue;
+      }
+
+      const datasetRows = field.computation.datasetId
+        ? datasetRowsById[field.computation.datasetId] ?? []
+        : undefined;
+      next[field.id] = evaluateFormula(
+        field.computation.formula,
+        formulaValues,
+        datasetRows,
+        field.computation,
+      );
+      formulaValues[field.id] = next[field.id];
+    }
+  }
+
+  return next;
+}
+
+function resolveSearchResultValue(
+  result: PluginSearchResult,
+  selector?: string | string[],
+): unknown {
+  if (!selector) {
+    return undefined;
+  }
+
+  if (Array.isArray(selector)) {
+    for (const key of selector) {
+      const value = result[key];
+      if (value !== undefined && value !== null && value !== "") {
+        return value;
+      }
+    }
+    return undefined;
+  }
+
+  return result[selector];
 }
 
 // ── Field Visibility Check ─────────────────────────────────────────────
@@ -365,20 +493,223 @@ const widthClasses: Record<string, string> = {
 
 // ── Field Renderer ────────────────────────────────────────────────────
 
-function PluginFieldRenderer({
+function PluginSearchField({
   field,
   value,
   onChange,
+  onPatch,
   allValues,
-  error,
-  datasetRows,
 }: {
   field: PluginField;
   value: unknown;
   onChange: (value: unknown) => void;
+  onPatch?: (patch: Record<string, unknown>) => void;
+  allValues: Record<string, unknown>;
+}) {
+  const searchConfig = field.searchConfig;
+  const [query, setQuery] = useState(String(value ?? ""));
+  const [results, setResults] = useState<PluginSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const requestIdRef = useRef(0);
+  const minQueryLength = searchConfig?.minQueryLength ?? field.validation?.minLength ?? 1;
+
+  useEffect(() => {
+    setQuery(String(value ?? ""));
+  }, [value]);
+
+  const extraParams = useMemo(() => {
+    const params: Record<string, string> = {};
+    for (const [paramKey, sourceFieldId] of Object.entries(searchConfig?.params ?? {})) {
+      const sourceValue = allValues[sourceFieldId];
+      if (sourceValue !== undefined && sourceValue !== null && sourceValue !== "") {
+        params[paramKey] = String(sourceValue);
+      }
+    }
+    return params;
+  }, [allValues, searchConfig?.params]);
+
+  const extraParamsKey = useMemo(() => JSON.stringify(extraParams), [extraParams]);
+  const paramFieldCount = Object.keys(searchConfig?.params ?? {}).length;
+  const hasAllParamValues = Object.keys(extraParams).length >= paramFieldCount;
+
+  useEffect(() => {
+    if (!searchConfig?.endpoint) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+
+    const trimmed = query.trim();
+    if (trimmed.length < minQueryLength) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+    if (!hasAllParamValues) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
+
+    const currentRequestId = ++requestIdRef.current;
+    const timer = window.setTimeout(async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams({
+          [searchConfig.queryParam]: trimmed,
+          ...extraParams,
+        });
+        const response = await fetch(
+          resolveApiUrl(`${searchConfig.endpoint}?${params.toString()}`),
+          {
+            cache: "no-store",
+            credentials: "include",
+            headers: { Accept: "application/json" },
+          },
+        );
+        if (!response.ok) {
+          throw new Error(`Search request failed (${response.status})`);
+        }
+
+        const payload = (await response.json()) as PluginSearchResult[] | { results?: PluginSearchResult[] };
+        const nextResults = Array.isArray(payload)
+          ? payload
+          : Array.isArray(payload.results)
+            ? payload.results
+            : [];
+
+        if (currentRequestId === requestIdRef.current) {
+          setResults(nextResults);
+        }
+      } catch {
+        if (currentRequestId === requestIdRef.current) {
+          setResults([]);
+        }
+      } finally {
+        if (currentRequestId === requestIdRef.current) {
+          setLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    extraParamsKey,
+    hasAllParamValues,
+    minQueryLength,
+    query,
+    searchConfig?.endpoint,
+    searchConfig?.queryParam,
+  ]);
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
+        <Input
+          id={field.id}
+          className="pl-9 pr-9"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            onChange(e.target.value);
+          }}
+          placeholder={field.placeholder}
+          autoComplete="off"
+        />
+        {loading && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-fg/30" />
+        )}
+      </div>
+
+      {results.length > 0 && (
+        <div className="max-h-64 overflow-y-auto rounded-lg border border-line bg-panel2/50">
+          {results.map((result, index) => {
+            const selectedValue =
+              resolveSearchResultValue(result, searchConfig?.valueField) ??
+              resolveSearchResultValue(result, searchConfig?.displayField) ??
+              query;
+            const displayValue = String(
+              resolveSearchResultValue(result, searchConfig?.displayField) ?? selectedValue ?? "",
+            );
+            const meta = (searchConfig?.resultFields ?? [])
+              .map((key) => {
+                const rawValue = result[key];
+                if (rawValue === undefined || rawValue === null || rawValue === "") {
+                  return null;
+                }
+                if (key.toLowerCase().includes("price") && typeof rawValue === "number") {
+                  return `$${rawValue.toFixed(2)}`;
+                }
+                return String(rawValue);
+              })
+              .filter((entry): entry is string => Boolean(entry));
+
+            return (
+              <button
+                key={`${String(selectedValue)}-${index}`}
+                type="button"
+                className="w-full border-b border-line/50 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-panel"
+                onClick={() => {
+                  const patch: Record<string, unknown> = { [field.id]: selectedValue };
+                  for (const [targetFieldId, selector] of Object.entries(searchConfig?.populateFields ?? {})) {
+                    const resolvedValue = resolveSearchResultValue(result, selector);
+                    if (resolvedValue !== undefined) {
+                      patch[targetFieldId] = resolvedValue;
+                    }
+                  }
+
+                  setQuery(displayValue);
+                  setResults([]);
+                  if (onPatch) {
+                    onPatch(patch);
+                  } else {
+                    onChange(selectedValue);
+                  }
+                }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-xs font-medium text-fg/80">{displayValue}</span>
+                  {meta[0] && (
+                    <span className="shrink-0 text-[10px] text-accent">{meta[0]}</span>
+                  )}
+                </div>
+                {meta.length > 1 && (
+                  <p className="mt-1 text-[10px] text-fg/45">{meta.slice(1).join(" | ")}</p>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!loading && query.trim().length >= minQueryLength && !hasAllParamValues && (
+        <p className="text-[10px] text-fg/40">Complete the related fields before searching.</p>
+      )}
+
+      {!loading && query.trim().length >= minQueryLength && hasAllParamValues && results.length === 0 && (
+        <p className="text-[10px] text-fg/40">No matches found.</p>
+      )}
+    </div>
+  );
+}
+
+function PluginFieldRenderer({
+  field,
+  value,
+  onChange,
+  onPatch,
+  allValues,
+  error,
+  datasetRowsById,
+}: {
+  field: PluginField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  onPatch?: (patch: Record<string, unknown>) => void;
   allValues: Record<string, unknown>;
   error?: string;
-  datasetRows?: DatasetRowData[];
+  datasetRowsById?: DatasetRowsById;
 }) {
   if (!isFieldVisible(field, allValues)) return null;
 
@@ -403,9 +734,12 @@ function PluginFieldRenderer({
   }, [dsOpts.options, rsOpts.options, field.options]);
 
   const optionsLoading = dsOpts.loading || rsOpts.loading;
+  const fieldDatasetRows = field.computation?.datasetId
+    ? datasetRowsById?.[field.computation.datasetId] ?? []
+    : undefined;
 
   const computedValue = field.type === "computed" && field.computation
-    ? evaluateFormula(field.computation.formula, allValues, datasetRows, field.computation)
+    ? evaluateFormula(field.computation.formula, allValues, fieldDatasetRows, field.computation)
     : undefined;
 
   return (
@@ -590,16 +924,13 @@ function PluginFieldRenderer({
       )}
 
       {field.type === "search" && (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
-          <Input
-            id={field.id}
-            className="pl-9"
-            value={String(value ?? "")}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={field.placeholder}
-          />
-        </div>
+        <PluginSearchField
+          field={field}
+          value={value}
+          onChange={onChange}
+          onPatch={onPatch}
+          allValues={allValues}
+        />
       )}
 
       {field.type === "hidden" && (
@@ -797,22 +1128,25 @@ function PluginScoringRenderer({
   scores: Record<string, number>;
   onScoresChange: (scores: Record<string, number>) => void;
 }) {
-  const totalWeightedScore = useMemo(() => {
+  const totalScore = useMemo(() => {
     let total = 0;
-    let totalWeight = 0;
     for (const criterion of scoring.criteria) {
       const score = scores[criterion.id] ?? criterion.scale.min;
       total += score * criterion.weight;
-      totalWeight += criterion.scale.max * criterion.weight;
     }
-    return totalWeight > 0 ? (total / totalWeight) * 100 : 0;
+    return total;
   }, [scores, scoring.criteria]);
+
+  const maxScore = useMemo(
+    () => scoring.criteria.reduce((sum, criterion) => sum + (criterion.scale.max * criterion.weight), 0),
+    [scoring.criteria],
+  );
 
   const currentResult = useMemo(() => {
     return scoring.resultMapping.find(
-      (r) => totalWeightedScore >= r.minScore && totalWeightedScore <= r.maxScore
+      (r) => totalScore >= r.minScore && totalScore <= r.maxScore
     ) ?? scoring.resultMapping[0];
-  }, [totalWeightedScore, scoring.resultMapping]);
+  }, [totalScore, scoring.resultMapping]);
 
   return (
     <div className="space-y-4">
@@ -881,9 +1215,9 @@ function PluginScoringRenderer({
         </div>
         <div className="text-right">
           <span className="text-lg font-mono font-bold" style={{ color: currentResult?.color }}>
-            {totalWeightedScore.toFixed(1)}
+            {totalScore.toFixed(1)}
           </span>
-          <p className="text-[10px] text-fg/40">weighted score</p>
+          <p className="text-[10px] text-fg/40">score of {maxScore.toFixed(1)}</p>
         </div>
       </div>
     </div>
@@ -896,22 +1230,27 @@ function PluginSectionRenderer({
   section,
   values,
   onChange,
+  onPatch,
   tableData,
   onTableDataChange,
   scoringData,
   onScoringDataChange,
-  datasetRows,
+  errors,
+  datasetRowsById,
 }: {
   section: PluginUISection;
   values: Record<string, unknown>;
   onChange: (fieldId: string, value: unknown) => void;
+  onPatch?: (patch: Record<string, unknown>) => void;
   tableData: Record<string, Record<string, unknown>[]>;
   onTableDataChange: (tableId: string, rows: Record<string, unknown>[]) => void;
   scoringData: Record<string, Record<string, number>>;
   onScoringDataChange: (scoringId: string, scores: Record<string, number>) => void;
-  datasetRows?: DatasetRowData[];
+  errors: Record<string, string>;
+  datasetRowsById?: DatasetRowsById;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const fieldValues = useMemo(() => buildFormulaValues(values, tableData), [tableData, values]);
 
   return (
     <div className="space-y-3">
@@ -949,8 +1288,10 @@ function PluginSectionRenderer({
                     field={field}
                     value={values[field.id]}
                     onChange={(v) => onChange(field.id, v)}
-                    allValues={values}
-                    datasetRows={datasetRows}
+                    onPatch={onPatch}
+                    allValues={fieldValues}
+                    error={errors[field.id]}
+                    datasetRowsById={datasetRowsById}
                   />
                 ))}
             </div>
@@ -1027,7 +1368,7 @@ export function PluginRuntime({
   const [tableData, setTableData] = useState<Record<string, Record<string, unknown>[]>>(initialTableData ?? {});
   const [scoringData, setScoringData] = useState<Record<string, Record<string, number>>>(initialScoringData ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [datasetRows, setDatasetRows] = useState<DatasetRowData[]>([]);
+  const [datasetRowsById, setDatasetRowsById] = useState<DatasetRowsById>({});
 
   // Collect all dataset IDs referenced by computed fields (for lookup/interpolate/nearest)
   useEffect(() => {
@@ -1038,11 +1379,24 @@ export function PluginRuntime({
         if (field.computation?.datasetId) dsIds.add(field.computation.datasetId);
       }
     }
-    if (dsIds.size === 0) return;
+    if (dsIds.size === 0) {
+      setDatasetRowsById({});
+      return;
+    }
 
-    // Fetch first dataset (most plugins reference one dataset)
-    const firstId = [...dsIds][0];
-    fetchDatasetRows(firstId).then(setDatasetRows);
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        [...dsIds].map(async (datasetId) => [datasetId, await fetchDatasetRows(datasetId)] as const),
+      );
+      if (!cancelled) {
+        setDatasetRowsById(Object.fromEntries(entries));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1078,56 +1432,73 @@ export function PluginRuntime({
         tableDefs[section.table.id] = [...section.table.defaultRows];
       }
     }
-    if (Object.keys(defaults).length > 0) {
-      setValues((v) => ({ ...defaults, ...v }));
-    }
     if (Object.keys(tableDefs).length > 0) {
       setTableData((t) => ({ ...tableDefs, ...t }));
+    }
+    if (Object.keys(defaults).length > 0 || Object.keys(tableDefs).length > 0) {
+      const nextTables = Object.keys(tableDefs).length > 0
+        ? { ...tableDefs, ...tableData }
+        : tableData;
+      setValues((v) => recomputeComputedFields(schema, { ...defaults, ...v }, nextTables, datasetRowsById));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleFieldChange = useCallback((fieldId: string, value: unknown) => {
-    setValues((prev) => {
-      const next = { ...prev, [fieldId]: value };
+  useEffect(() => {
+    setValues((prev) => recomputeComputedFields(schema, prev, tableData, datasetRowsById));
+  }, [datasetRowsById, schema, tableData]);
 
-      // Clear cascade dependent fields when parent changes
+  const handleValuesPatch = useCallback((patch: Record<string, unknown>) => {
+    const patchKeys = Object.keys(patch);
+    if (patchKeys.length === 0) {
+      return;
+    }
+
+    setValues((prev) => {
+      const next = { ...prev, ...patch };
+
       const clearDeps = (parentId: string) => {
         const deps = cascadeDeps[parentId];
         if (!deps) return;
         for (const depId of deps) {
-          next[depId] = "";
-          clearDeps(depId); // recursively clear
+          if (!(depId in patch)) {
+            next[depId] = "";
+          }
+          clearDeps(depId);
         }
       };
-      clearDeps(fieldId);
 
-      // Recompute all computed fields
-      for (const section of schema.sections) {
-        if (section.fields) {
-          for (const field of section.fields) {
-            if (field.type === "computed" && field.computation) {
-              next[field.id] = evaluateFormula(
-                field.computation.formula, next, datasetRows, field.computation
-              );
-            }
-          }
+      for (const fieldId of patchKeys) {
+        clearDeps(fieldId);
+      }
+
+      return recomputeComputedFields(schema, next, tableData, datasetRowsById);
+    });
+
+    setErrors((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const fieldId of patchKeys) {
+        if (fieldId in next) {
+          delete next[fieldId];
+          changed = true;
         }
       }
-      return next;
+      return changed ? next : prev;
     });
-    // Clear error for this field
-    if (errors[fieldId]) {
-      setErrors((e) => {
-        const { [fieldId]: _, ...rest } = e;
-        return rest;
-      });
-    }
-  }, [schema.sections, errors, cascadeDeps, datasetRows]);
+  }, [cascadeDeps, datasetRowsById, schema, tableData]);
+
+  const handleFieldChange = useCallback((fieldId: string, value: unknown) => {
+    handleValuesPatch({ [fieldId]: value });
+  }, [handleValuesPatch]);
 
   const handleTableDataChange = useCallback((tableId: string, rows: Record<string, unknown>[]) => {
-    setTableData((prev) => ({ ...prev, [tableId]: rows }));
-  }, []);
+    setTableData((prev) => {
+      const next = { ...prev, [tableId]: rows };
+      setValues((currentValues) => recomputeComputedFields(schema, currentValues, next, datasetRowsById));
+      return next;
+    });
+  }, [datasetRowsById, schema]);
 
   const handleScoringDataChange = useCallback((scoringId: string, scores: Record<string, number>) => {
     setScoringData((prev) => ({ ...prev, [scoringId]: scores }));
@@ -1177,11 +1548,13 @@ export function PluginRuntime({
           section={section}
           values={values}
           onChange={handleFieldChange}
+          onPatch={handleValuesPatch}
           tableData={tableData}
           onTableDataChange={handleTableDataChange}
           scoringData={scoringData}
           onScoringDataChange={handleScoringDataChange}
-          datasetRows={datasetRows}
+          errors={errors}
+          datasetRowsById={datasetRowsById}
         />
       ))}
 

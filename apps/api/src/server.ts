@@ -4282,6 +4282,174 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     }
   });
 
+  const getFirstString = (...values: unknown[]) => {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+    return "";
+  };
+
+  const getNumericValue = (...values: unknown[]) => {
+    for (const value of values) {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === "string") {
+        const parsed = Number(value.replace(/[^0-9.-]+/g, ""));
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+    return null;
+  };
+
+  app.get("/plugins/helpers/:pluginSlug/search", async (request, reply) => {
+    const { pluginSlug } = request.params as { pluginSlug: string };
+    const plugin = await request.store!.getPluginBySlug(pluginSlug);
+    if (!plugin) {
+      return reply.code(404).send({ message: "Plugin helper not found" });
+    }
+    if (!plugin.enabled) {
+      return reply.code(403).send({ message: "Plugin is disabled" });
+    }
+
+    const apiKey = String(plugin.config.apiKey ?? process.env.SERPAPI_API_KEY ?? "").trim();
+    if (!apiKey) {
+      return reply.code(400).send({ message: "No SerpAPI key configured for this plugin." });
+    }
+
+    const query = request.query as Record<string, string | undefined>;
+    const q = String(query.q ?? "").trim();
+    if (!q) {
+      return [];
+    }
+
+    const gl = String(plugin.config.gl ?? process.env.SERPAPI_GL ?? "us");
+    const hl = String(plugin.config.hl ?? process.env.SERPAPI_HL ?? "en");
+    const currency = String(plugin.config.currency ?? process.env.SERPAPI_CURRENCY ?? "USD");
+
+    const params = new URLSearchParams({ api_key: apiKey });
+    const maxResults = Number.isFinite(Number(query.limit))
+      ? Math.max(1, Math.min(20, Number(query.limit)))
+      : 10;
+
+    if (pluginSlug === "home-depot") {
+      params.set("engine", "home_depot");
+      params.set("q", q);
+      params.set("country", String(plugin.config.country ?? process.env.SERPAPI_HOME_DEPOT_COUNTRY ?? "us"));
+      if (plugin.config.storeId) params.set("store_id", String(plugin.config.storeId));
+      if (plugin.config.deliveryZip) params.set("delivery_zip", String(plugin.config.deliveryZip));
+      params.set("ps", String(Math.min(maxResults, 24)));
+    } else if (pluginSlug === "google-shopping") {
+      params.set("engine", "google_shopping");
+      params.set("q", q);
+      params.set("gl", gl);
+      params.set("hl", hl);
+      if (plugin.config.location) params.set("location", String(plugin.config.location));
+      if (plugin.config.googleDomain) params.set("google_domain", String(plugin.config.googleDomain));
+      params.set("num", String(Math.min(maxResults, 20)));
+    } else if (pluginSlug === "google-hotels") {
+      const checkInDate = String(query.checkin ?? "").trim();
+      const checkOutDate = String(query.checkout ?? "").trim();
+      if (!checkInDate || !checkOutDate) {
+        return [];
+      }
+
+      params.set("engine", "google_hotels");
+      params.set("q", q);
+      params.set("gl", gl);
+      params.set("hl", hl);
+      params.set("currency", currency);
+      params.set("check_in_date", checkInDate);
+      params.set("check_out_date", checkOutDate);
+      params.set("adults", String(plugin.config.adults ?? 2));
+      params.set("children", String(plugin.config.children ?? 0));
+    } else {
+      return reply.code(404).send({ message: "Unsupported plugin helper" });
+    }
+
+    try {
+      const response = await fetch(`https://serpapi.com/search.json?${params.toString()}`, {
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) {
+        return reply.code(502).send({ message: `SerpAPI request failed (${response.status})` });
+      }
+
+      const payload = await response.json() as Record<string, unknown>;
+
+      if (pluginSlug === "home-depot") {
+        const rawResults = (
+          (Array.isArray(payload.products) && payload.products) ||
+          (Array.isArray(payload.search_results) && payload.search_results) ||
+          (Array.isArray(payload.organic_results) && payload.organic_results) ||
+          []
+        ) as Array<Record<string, unknown>>;
+
+        return rawResults
+          .map((item, index) => ({
+            id: String(item.product_id ?? item.item_id ?? item.link ?? index),
+            title: getFirstString(item.title, item.name),
+            vendor: "Home Depot",
+            price: getNumericValue(item.extracted_price, item.price),
+            rating: getNumericValue(item.rating),
+            thumbnail: getFirstString(item.thumbnail, item.image),
+            link: getFirstString(item.link, item.product_link),
+            brand: getFirstString(item.brand),
+          }))
+          .filter((item) => item.title)
+          .slice(0, maxResults);
+      }
+
+      if (pluginSlug === "google-shopping") {
+        const rawResults = (Array.isArray(payload.shopping_results) ? payload.shopping_results : []) as Array<Record<string, unknown>>;
+        return rawResults
+          .map((item, index) => ({
+            id: String(item.product_id ?? item.position ?? item.product_link ?? index),
+            title: getFirstString(item.title),
+            vendor: getFirstString(item.source, item.seller, item.vendor),
+            price: getNumericValue(item.extracted_price, item.price),
+            rating: getNumericValue(item.rating),
+            thumbnail: getFirstString(item.thumbnail),
+            link: getFirstString(item.product_link, item.link),
+          }))
+          .filter((item) => item.title)
+          .slice(0, maxResults);
+      }
+
+      const rawHotels = [
+        ...(Array.isArray(payload.properties) ? payload.properties : []),
+        ...(Array.isArray(payload.ads) ? payload.ads : []),
+      ] as Array<Record<string, unknown>>;
+
+      return rawHotels
+        .map((item, index) => ({
+          id: String(item.property_token ?? item.name ?? index),
+          name: getFirstString(item.name),
+          price: getNumericValue(
+            (item.rate_per_night as Record<string, unknown> | undefined)?.extracted_lowest,
+            (item.total_rate as Record<string, unknown> | undefined)?.extracted_lowest,
+            item.extracted_price,
+            item.price,
+          ),
+          rating: getNumericValue(item.overall_rating, item.rating),
+          type: getFirstString(item.type),
+          vendor: getFirstString(item.source, item.brand),
+          thumbnail: getFirstString(item.thumbnail),
+          link: getFirstString(item.link),
+          address: getFirstString(item.address),
+        }))
+        .filter((item) => item.name)
+        .slice(0, maxResults);
+    } catch (error) {
+      request.log.error({ error, pluginSlug }, "Plugin helper search failed");
+      return reply.code(502).send({ message: "Plugin helper search failed" });
+    }
+  });
+
   app.post("/plugins/:pluginId/execute", async (request, reply) => {
     const { pluginId } = request.params as { pluginId: string };
     const body = request.body as {

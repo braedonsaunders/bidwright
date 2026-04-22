@@ -117,7 +117,13 @@ export function PluginsPage({
         projectId,
         revisionId,
         data.values,
-        { formState: { ...data.values, _tables: data.tableData, _scores: data.scoringData } },
+        {
+          formState: {
+            values: data.values,
+            tableData: data.tableData,
+            scoringData: data.scoringData,
+          },
+        },
       );
       setExecutionOutput(result.output as PluginOutput);
     } catch (err) {
