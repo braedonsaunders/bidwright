@@ -1912,7 +1912,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
         );
       }
 
-      const valueDisplay = value || <span className="text-fg/20">â€“</span>;
+      const valueDisplay = value || <span className="text-fg/20">-</span>;
 
       if (disabled) {
         return (
@@ -1955,7 +1955,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
         <div className="flex items-center justify-center gap-0">
           {visibleUnitSlots.map((field, index) => (
             <div key={field} className="contents">
-              {index > 0 ? <span className="text-fg/15 text-[9px] select-none">Â·</span> : null}
+              {index > 0 ? <span className="text-fg/15 text-[9px] select-none">{"\u00B7"}</span> : null}
               {renderUnitSlot(field, hourBreakdown[field], unitLabels[field])}
             </div>
           ))}
