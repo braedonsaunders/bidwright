@@ -51,6 +51,10 @@ import {
   TagInput,
 } from "@/components/settings-page-helpers";
 import {
+  getCalculationPreset,
+  getCalculationTypeOption,
+} from "@/lib/entity-category-calculation";
+import {
   CALCULATION_TYPES,
   CURRENCIES,
   DATA_SUBTABS,
@@ -480,6 +484,11 @@ export function SettingsPage({
 
   const updateCatEdit = (id: string, patch: Partial<EntityCategory>) =>
     setCatEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+
+  const applyCatCalculationPreset = (id: string, calculationType: CalculationType) => {
+    const preset = getCalculationPreset(calculationType);
+    updateCatEdit(id, preset);
+  };
 
   const saveCat = useCallback(async (cat: EntityCategory) => {
     const merged = { ...cat, ...(catEdits[cat.id] || {}), editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) }, unitLabels: { ...cat.unitLabels, ...(catEdits[cat.id]?.unitLabels || {}) } };
@@ -1725,6 +1734,7 @@ export function SettingsPage({
                     <span className="font-medium text-fg truncate">{cat.name || "Untitled"}</span>
                     <Badge className="text-[10px] shrink-0">{cat.shortform || "—"}</Badge>
                     <Badge tone="default" className="text-[10px] shrink-0">{(cat.itemSource || "freeform").replace(/_/g, " ")}</Badge>
+                    <Badge tone="info" className="text-[10px] shrink-0">{getCalculationTypeOption(cat.calculationType).label}</Badge>
                     <span className="flex-1" />
                     <span onClick={(e) => e.stopPropagation()}>
                       <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
@@ -1739,6 +1749,7 @@ export function SettingsPage({
                     const cat = categories.find((c) => c.id === expandedCatId);
                     if (!cat) return null;
                     const edited = getCatEdit(cat);
+                    const calculationOption = getCalculationTypeOption(edited.calculationType);
                     return (
                       <motion.div
                         key="category-drawer"
@@ -1868,6 +1879,9 @@ export function SettingsPage({
                           {/* Editable Fields */}
                           <div>
                             <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Editable Fields</p>
+                            <p className="mb-3 text-[11px] text-fg/40">
+                              These are the estimator-facing controls for this category. The calculation preset can populate a starting point, and you can still fine-tune it here.
+                            </p>
                             <div className="flex flex-wrap gap-4">
                               {EDITABLE_FIELD_KEYS.map((f) => (
                                 <label key={f.key} className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
@@ -1888,7 +1902,9 @@ export function SettingsPage({
                           {/* Unit Column Labels */}
                           <div>
                             <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Unit Column Labels</p>
-                            <p className="text-[11px] text-fg/40 mb-3">Custom labels for the unit columns shown in the estimator grid. These map to rate schedule tiers when using rate schedule item source.</p>
+                            <p className="text-[11px] text-fg/40 mb-3">
+                              Define what the three unit slots mean for this category. These labels flow into the estimator grid and can map to linked rate tiers when applicable.
+                            </p>
                             <div className="grid grid-cols-3 gap-3">
                               <div>
                                 <Label>Unit 1</Label>
@@ -1911,12 +1927,37 @@ export function SettingsPage({
                           <div>
                             <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Calculation</p>
                             <div>
-                              <Label>Calculation Type</Label>
+                              <div className="mb-1 flex items-center justify-between gap-3">
+                                <Label>Calculation Mode</Label>
+                                <Button
+                                  variant="secondary"
+                                  size="xs"
+                                  onClick={() => applyCatCalculationPreset(cat.id, edited.calculationType)}
+                                >
+                                  Apply Preset
+                                </Button>
+                              </div>
                               <Select value={edited.calculationType} onChange={(e) => updateCatEdit(cat.id, { calculationType: e.target.value as CalculationType })}>
                                 {CALCULATION_TYPES.map((ct) => (
                                   <option key={ct.value} value={ct.value}>{ct.label}</option>
                                 ))}
                               </Select>
+                            </div>
+                            <div className="mt-3 rounded-lg border border-line bg-panel2/30 px-3 py-2.5">
+                              <p className="text-xs font-medium text-fg">{calculationOption.label}</p>
+                              <p className="mt-1 text-[11px] leading-relaxed text-fg/45">{calculationOption.description}</p>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <Badge tone="default" className="text-[10px]">
+                                  {calculationOption.unitMode === "tiered"
+                                    ? "All 3 unit slots stay available"
+                                    : calculationOption.unitMode === "single"
+                                      ? "Single primary unit slot"
+                                      : "No unit slots required"}
+                                </Badge>
+                                <Badge tone="default" className="text-[10px]">
+                                  Preset updates fields + unit labels
+                                </Badge>
+                              </div>
                             </div>
                             {edited.calculationType === "formula" && (
                               <div className="mt-3">
