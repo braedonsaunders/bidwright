@@ -299,6 +299,12 @@ function isCellDisabledByCategory(
   if (column === "entityName" || column === "vendor" || column === "description" || column === "phaseId") {
     return false;
   }
+  if (
+    category.calculationType === "auto_equipment" &&
+    (column === "unit1" || column === "unit2" || column === "unit3")
+  ) {
+    return false;
+  }
   const fieldMap: Record<string, keyof EntityCategory["editableFields"]> = {
     quantity: "quantity",
     cost: "cost",
@@ -1292,12 +1298,12 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
       patch.uom = catalogData?.uom ?? newCatDef.defaultUom;
 
       // Clear computed fields that are non-editable in the new category
-      if (!newCatDef.editableFields.unit1) patch.unit1 = 0;
-      if (!newCatDef.editableFields.unit2) patch.unit2 = 0;
-      if (!newCatDef.editableFields.unit3) patch.unit3 = 0;
-      if (!newCatDef.editableFields.cost) patch.cost = catalogData?.cost ?? 0;
-      if (!newCatDef.editableFields.markup) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
-      if (!newCatDef.editableFields.price) patch.price = 0;
+      if (isCellDisabledByCategory(newCatDef, "unit1")) patch.unit1 = 0;
+      if (isCellDisabledByCategory(newCatDef, "unit2")) patch.unit2 = 0;
+      if (isCellDisabledByCategory(newCatDef, "unit3")) patch.unit3 = 0;
+      if (isCellDisabledByCategory(newCatDef, "cost")) patch.cost = catalogData?.cost ?? 0;
+      if (isCellDisabledByCategory(newCatDef, "markup")) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
+      if (isCellDisabledByCategory(newCatDef, "price")) patch.price = 0;
     }
 
     commitItemPatch(rowId, patch as WorksheetItemPatchInput);
@@ -1877,11 +1883,12 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
     const catDef = findCategoryForRow(row, entityCategories);
     const isTemporary = isTemporaryWorksheetItemId(row.id);
     const hasAutoLabour = catDef?.calculationType === "auto_labour";
+    const hasAutoEquipment = catDef?.calculationType === "auto_equipment";
     const hourBreakdown = getRowHourBreakdown(row);
     const unitLabels = getRowUnitSlotLabels(row, catDef);
     const hasDerivedSecondaryUnits = hourBreakdown.unit2 > 0 || hourBreakdown.unit3 > 0;
     const visibleUnitSlots =
-      hasAutoLabour
+      hasAutoLabour || hasAutoEquipment
         ? (["unit1", "unit2", "unit3"] as const)
         : hasDerivedSecondaryUnits
           ? ((["unit1", "unit2", "unit3"] as const).filter((slot) => hourBreakdown[slot] > 0))
@@ -2232,14 +2239,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
           }
         }}
       >
-        {disabled ? (
-          <span className="flex items-center gap-1 italic opacity-40">
-            {displayValue}
-            <span className="text-[8px] font-medium uppercase tracking-wide text-fg/30 not-italic">auto</span>
-          </span>
-        ) : (
-          displayValue
-        )}
+        {disabled ? <span className="italic opacity-40">{displayValue}</span> : displayValue}
       </td>
     );
   }
