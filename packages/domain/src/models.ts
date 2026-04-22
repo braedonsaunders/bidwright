@@ -835,12 +835,14 @@ export interface PluginField {
     resultColumnMap?: Record<string, string>; // map field value -> result column name
   };
   searchConfig?: {                          // for "search" type fields
-    endpoint: string;
-    queryParam: string;
-    displayField: string;
-    valueField: string;
+    endpoint?: string;
+    datasetId?: string;
+    queryParam?: string;
+    displayField: string | string[];
+    valueField: string | string[];
+    searchFields?: string[];
     resultFields?: string[];
-    params?: Record<string, string>;        // query param -> field id mapping
+    params?: Record<string, string>;        // endpoint query param or dataset field -> field id mapping
     minQueryLength?: number;
     populateFields?: Record<string, string | string[]>;
   };

@@ -450,19 +450,25 @@ export interface ComboboxOption {
 }
 
 export function Combobox({
+  id,
   options,
   value,
   onChange,
   placeholder = "Select...",
   disabled = false,
   className,
+  searchPlaceholder = "Search...",
+  emptyStateText = "No matches",
 }: {
+  id?: string;
   options: ComboboxOption[];
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  searchPlaceholder?: string;
+  emptyStateText?: string;
 }) {
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -490,6 +496,7 @@ export function Combobox({
     >
       <Popover.Trigger asChild>
         <button
+          id={id}
           type="button"
           disabled={disabled}
           className={cn(
@@ -522,7 +529,7 @@ export function Combobox({
               ref={searchRef}
               type="text"
               className="w-full rounded border border-line bg-bg px-2.5 py-1.5 text-xs text-fg outline-none placeholder:text-fg/30 focus:border-accent/50"
-              placeholder="Search..."
+              placeholder={searchPlaceholder}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -530,7 +537,7 @@ export function Combobox({
           <div className="max-h-[240px] overflow-y-auto px-1 pb-1">
             {filtered.length === 0 && (
               <div className="px-2.5 py-3 text-center text-xs text-fg/30">
-                No matches
+                {emptyStateText}
               </div>
             )}
             {filtered.map((opt) => (
@@ -583,17 +590,21 @@ export interface MultiSelectOption {
 }
 
 export function MultiSelect({
+  id,
   options,
   selected,
   onChange,
   placeholder = "Select...",
   className,
+  disabled = false,
 }: {
+  id?: string;
   options: MultiSelectOption[];
   selected: string[];
   onChange: (values: string[]) => void;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   const [search, setSearch] = React.useState("");
   const filtered = options.filter(
@@ -618,9 +629,11 @@ export function MultiSelect({
     <Popover.Root>
       <Popover.Trigger asChild>
         <button
+          id={id}
           type="button"
+          disabled={disabled}
           className={cn(
-            "flex min-h-[36px] w-full items-center gap-1.5 rounded-lg border border-line bg-bg/50 px-3 py-1.5 text-left text-sm outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20",
+            "flex min-h-[36px] w-full items-center gap-1.5 rounded-lg border border-line bg-bg/50 px-3 py-1.5 text-left text-sm outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
             className,
           )}
         >

@@ -16,10 +16,11 @@ import { cn } from "@/lib/utils";
 import {
   Badge,
   Button,
+  Combobox,
   FadeIn,
   Input,
   Label,
-  Select,
+  MultiSelect,
   Textarea,
   Toggle,
 } from "@/components/ui";
@@ -45,8 +46,10 @@ import {
   computeNecaExtendedDuration,
   computeNecaTemperatureAdjustment,
   datasetRowMatchesFilters,
+  getDatasetCellValue,
   getDatasetCellNumber,
   getDatasetCellString,
+  normalizeDatasetKey,
 } from "@bidwright/domain";
 
 // ── Dataset Options Hook ────────────────────────────────────────────
@@ -487,9 +490,37 @@ function recomputeComputedFields(
   return next;
 }
 
+type SearchSelector = string | string[] | undefined;
+
+function flattenSearchSelectors(selectors: SearchSelector[]): string[] {
+  const seen = new Set<string>();
+  const flattened: string[] = [];
+
+  for (const selector of selectors) {
+    const values = Array.isArray(selector) ? selector : selector ? [selector] : [];
+    for (const value of values) {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        continue;
+      }
+
+      const normalized = normalizeDatasetKey(trimmed);
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+
+      seen.add(normalized);
+      flattened.push(trimmed);
+    }
+  }
+
+  return flattened;
+}
+
 function resolveSearchResultValue(
   result: PluginSearchResult,
-  selector?: string | string[],
+  selector?: SearchSelector,
+  datasetColumns?: DatasetColumnRecord[],
 ): unknown {
   if (!selector) {
     return undefined;
@@ -497,7 +528,7 @@ function resolveSearchResultValue(
 
   if (Array.isArray(selector)) {
     for (const key of selector) {
-      const value = result[key];
+      const value = resolveSearchResultValue(result, key, datasetColumns);
       if (value !== undefined && value !== null && value !== "") {
         return value;
       }
@@ -505,7 +536,87 @@ function resolveSearchResultValue(
     return undefined;
   }
 
+  if (datasetColumns?.length) {
+    return getDatasetCellValue(result, selector, datasetColumns);
+  }
+
   return result[selector];
+}
+
+function collectSearchFieldKeys(searchConfig?: PluginField["searchConfig"]): string[] {
+  if (!searchConfig) {
+    return [];
+  }
+
+  return flattenSearchSelectors([
+    ...(searchConfig.searchFields ?? []),
+    searchConfig.displayField,
+    searchConfig.valueField,
+    ...(searchConfig.resultFields ?? []),
+    ...Object.values(searchConfig.populateFields ?? {}),
+  ]);
+}
+
+function scoreSearchCandidate(values: string[], query: string): number {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return 0;
+  }
+
+  const candidates = values
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (candidates.length === 0) {
+    return 0;
+  }
+
+  const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const joined = candidates.join(" ");
+  let score = 0;
+
+  for (const candidate of candidates) {
+    if (candidate === normalizedQuery) {
+      score = Math.max(score, 220);
+      continue;
+    }
+    if (candidate.startsWith(normalizedQuery)) {
+      score = Math.max(score, 170);
+    } else if (candidate.includes(normalizedQuery)) {
+      score = Math.max(score, 130);
+    }
+
+    const tokenMatches = tokens.filter((token) => candidate.includes(token)).length;
+    if (tokenMatches > 0) {
+      score = Math.max(score, 80 + tokenMatches * 10);
+    }
+  }
+
+  if (tokens.length > 0 && tokens.every((token) => joined.includes(token))) {
+    score += 25;
+  }
+
+  return score;
+}
+
+function formatSearchResultMetaValue(rawValue: unknown, key: string): string | null {
+  if (rawValue === undefined || rawValue === null || rawValue === "") {
+    return null;
+  }
+
+  if (typeof rawValue === "number") {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey.includes("price") || normalizedKey.includes("cost") || normalizedKey.includes("rate")) {
+      return `$${rawValue.toFixed(2)}`;
+    }
+    if (normalizedKey.includes("hour")) {
+      return `${rawValue.toLocaleString("en-US", {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 4,
+      })} hrs`;
+    }
+  }
+
+  return String(rawValue);
 }
 
 // ── Field Visibility Check ─────────────────────────────────────────────
@@ -554,19 +665,28 @@ function PluginSearchField({
   onChange,
   onPatch,
   allValues,
+  datasetRowsById,
+  datasetColumnsById,
 }: {
   field: PluginField;
   value: unknown;
   onChange: (value: unknown) => void;
   onPatch?: (patch: Record<string, unknown>) => void;
   allValues: Record<string, unknown>;
+  datasetRowsById?: DatasetRowsById;
+  datasetColumnsById?: DatasetColumnsById;
 }) {
   const searchConfig = field.searchConfig;
   const [query, setQuery] = useState(String(value ?? ""));
-  const [results, setResults] = useState<PluginSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [remoteResults, setRemoteResults] = useState<PluginSearchResult[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const requestIdRef = useRef(0);
   const minQueryLength = searchConfig?.minQueryLength ?? field.validation?.minLength ?? 1;
+  const datasetId = searchConfig?.datasetId;
+  const datasetRows = datasetId ? datasetRowsById?.[datasetId] ?? [] : [];
+  const datasetColumns = datasetId ? datasetColumnsById?.[datasetId] ?? [] : [];
+  const isDatasetSearch = Boolean(datasetId);
+  const datasetReady = !datasetId || Object.prototype.hasOwnProperty.call(datasetRowsById ?? {}, datasetId);
 
   useEffect(() => {
     setQuery(String(value ?? ""));
@@ -586,32 +706,89 @@ function PluginSearchField({
   const extraParamsKey = useMemo(() => JSON.stringify(extraParams), [extraParams]);
   const paramFieldCount = Object.keys(searchConfig?.params ?? {}).length;
   const hasAllParamValues = Object.keys(extraParams).length >= paramFieldCount;
+  const datasetSearchFields = useMemo(
+    () => collectSearchFieldKeys(searchConfig),
+    [searchConfig],
+  );
+
+  const datasetResults = useMemo(() => {
+    const trimmed = query.trim();
+    if (!isDatasetSearch || !datasetReady || trimmed.length < minQueryLength || !hasAllParamValues) {
+      return [] as PluginSearchResult[];
+    }
+
+    const filters = Object.entries(extraParams).map(([key, filterValue]) => ({
+      key,
+      value: filterValue,
+    }));
+    const searchableRows = filters.length > 0
+      ? datasetRows.filter((row) => datasetRowMatchesFilters(row, filters, datasetColumns))
+      : datasetRows;
+
+    return searchableRows
+      .map((row) => {
+        const candidateValues = datasetSearchFields
+          .map((fieldKey) => getDatasetCellString(row, fieldKey, datasetColumns))
+          .filter(Boolean);
+        return {
+          row,
+          score: scoreSearchCandidate(candidateValues, trimmed),
+          display: String(resolveSearchResultValue(row, searchConfig?.displayField, datasetColumns) ?? ""),
+        };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => {
+        if (right.score !== left.score) {
+          return right.score - left.score;
+        }
+        return left.display.localeCompare(right.display);
+      })
+      .slice(0, 25)
+      .map((entry) => entry.row);
+  }, [
+    datasetColumns,
+    datasetReady,
+    datasetRows,
+    datasetSearchFields,
+    extraParams,
+    hasAllParamValues,
+    isDatasetSearch,
+    minQueryLength,
+    query,
+    searchConfig?.displayField,
+  ]);
+
+  const results = isDatasetSearch ? datasetResults : remoteResults;
+  const loading = isDatasetSearch
+    ? query.trim().length >= minQueryLength && hasAllParamValues && !datasetReady
+    : remoteLoading;
 
   useEffect(() => {
-    if (!searchConfig?.endpoint) {
-      setResults([]);
-      setLoading(false);
+    if (isDatasetSearch || !searchConfig?.endpoint) {
+      setRemoteResults([]);
+      setRemoteLoading(false);
       return;
     }
 
     const trimmed = query.trim();
     if (trimmed.length < minQueryLength) {
-      setResults([]);
-      setLoading(false);
+      setRemoteResults([]);
+      setRemoteLoading(false);
       return;
     }
     if (!hasAllParamValues) {
-      setResults([]);
-      setLoading(false);
+      setRemoteResults([]);
+      setRemoteLoading(false);
       return;
     }
 
+    const queryParam = searchConfig.queryParam ?? "q";
     const currentRequestId = ++requestIdRef.current;
     const timer = window.setTimeout(async () => {
-      setLoading(true);
+      setRemoteLoading(true);
       try {
         const params = new URLSearchParams({
-          [searchConfig.queryParam]: trimmed,
+          [queryParam]: trimmed,
           ...extraParams,
         });
         const response = await fetch(
@@ -634,15 +811,15 @@ function PluginSearchField({
             : [];
 
         if (currentRequestId === requestIdRef.current) {
-          setResults(nextResults);
+          setRemoteResults(nextResults);
         }
       } catch {
         if (currentRequestId === requestIdRef.current) {
-          setResults([]);
+          setRemoteResults([]);
         }
       } finally {
         if (currentRequestId === requestIdRef.current) {
-          setLoading(false);
+          setRemoteLoading(false);
         }
       }
     }, 250);
@@ -651,6 +828,7 @@ function PluginSearchField({
   }, [
     extraParamsKey,
     hasAllParamValues,
+    isDatasetSearch,
     minQueryLength,
     query,
     searchConfig?.endpoint,
@@ -681,24 +859,35 @@ function PluginSearchField({
         <div className="max-h-64 overflow-y-auto rounded-lg border border-line bg-panel2/50">
           {results.map((result, index) => {
             const selectedValue =
-              resolveSearchResultValue(result, searchConfig?.valueField) ??
-              resolveSearchResultValue(result, searchConfig?.displayField) ??
+              resolveSearchResultValue(
+                result,
+                searchConfig?.valueField,
+                isDatasetSearch ? datasetColumns : undefined,
+              ) ??
+              resolveSearchResultValue(
+                result,
+                searchConfig?.displayField,
+                isDatasetSearch ? datasetColumns : undefined,
+              ) ??
               query;
             const displayValue = String(
-              resolveSearchResultValue(result, searchConfig?.displayField) ?? selectedValue ?? "",
+              resolveSearchResultValue(
+                result,
+                searchConfig?.displayField,
+                isDatasetSearch ? datasetColumns : undefined,
+              ) ?? selectedValue ?? "",
             );
             const meta = (searchConfig?.resultFields ?? [])
               .map((key) => {
-                const rawValue = result[key];
-                if (rawValue === undefined || rawValue === null || rawValue === "") {
-                  return null;
-                }
-                if (key.toLowerCase().includes("price") && typeof rawValue === "number") {
-                  return `$${rawValue.toFixed(2)}`;
-                }
-                return String(rawValue);
+                const rawValue = resolveSearchResultValue(
+                  result,
+                  key,
+                  isDatasetSearch ? datasetColumns : undefined,
+                );
+                return formatSearchResultMetaValue(rawValue, key);
               })
-              .filter((entry): entry is string => Boolean(entry));
+              .filter((entry): entry is string => Boolean(entry))
+              .filter((entry, metaIndex, entries) => entry !== displayValue && entries.indexOf(entry) === metaIndex);
 
             return (
               <button
@@ -708,14 +897,16 @@ function PluginSearchField({
                 onClick={() => {
                   const patch: Record<string, unknown> = { [field.id]: selectedValue };
                   for (const [targetFieldId, selector] of Object.entries(searchConfig?.populateFields ?? {})) {
-                    const resolvedValue = resolveSearchResultValue(result, selector);
-                    if (resolvedValue !== undefined) {
-                      patch[targetFieldId] = resolvedValue;
-                    }
+                    const resolvedValue = resolveSearchResultValue(
+                      result,
+                      selector,
+                      isDatasetSearch ? datasetColumns : undefined,
+                    );
+                    patch[targetFieldId] = resolvedValue ?? "";
                   }
 
                   setQuery(displayValue);
-                  setResults([]);
+                  setRemoteResults([]);
                   if (onPatch) {
                     onPatch(patch);
                   } else {
@@ -900,43 +1091,27 @@ function PluginFieldRenderer({
       )}
 
       {field.type === "select" && (
-        <div className="relative">
-          <Select
-            id={field.id}
-            value={String(value ?? "")}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={optionsLoading}
-          >
-            <option value="">
-              {optionsLoading ? "Loading..." : field.placeholder ?? "Select..."}
-            </option>
-            {resolvedOptions.map((opt) => (
-              <option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                {opt.label}
-              </option>
-            ))}
-          </Select>
-          {optionsLoading && (
-            <Loader2 className="absolute right-8 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-fg/30" />
-          )}
-        </div>
+        <Combobox
+          id={field.id}
+          value={String(value ?? "")}
+          onChange={onChange}
+          options={resolvedOptions}
+          placeholder={optionsLoading ? "Loading..." : field.placeholder ?? "Select..."}
+          disabled={optionsLoading}
+          searchPlaceholder={`Search ${field.label.toLowerCase()}...`}
+        />
       )}
 
       {field.type === "multi-select" && (
-        <select
+        <MultiSelect
           id={field.id}
-          multiple
-          className="h-auto min-h-[80px] w-full rounded-lg border border-line bg-bg/50 px-3 py-2 text-sm text-fg outline-none"
-          value={Array.isArray(value) ? value.map(String) : []}
-          onChange={(e) => {
-            const selected = Array.from(e.target.selectedOptions).map((o) => o.value);
-            onChange(selected);
-          }}
-        >
-          {(field.options ?? []).map((opt) => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
+          options={resolvedOptions}
+          selected={Array.isArray(value) ? value.map(String) : []}
+          onChange={onChange}
+          placeholder={field.placeholder ?? "Select..."}
+          disabled={optionsLoading}
+          className="min-h-[80px]"
+        />
       )}
 
       {field.type === "radio" && (
@@ -1024,6 +1199,8 @@ function PluginFieldRenderer({
           onChange={onChange}
           onPatch={onPatch}
           allValues={allValues}
+          datasetRowsById={datasetRowsById}
+          datasetColumnsById={datasetColumnsById}
         />
       )}
 
@@ -1129,17 +1306,15 @@ function PluginTableRenderer({
                         {formatValue(Number(row[col.id]) || 0, col.computation?.format)}
                       </span>
                     ) : col.type === "select" ? (
-                      <select
-                        className="h-7 w-full rounded border border-line/50 bg-transparent px-2 text-xs text-fg outline-none focus:border-accent/50"
+                      <Combobox
+                        id={`${table.id}-${col.id}-${rowIdx}`}
+                        className="h-7 rounded border-line/50 bg-transparent px-2 text-xs"
                         value={String(row[col.id] ?? "")}
-                        onChange={(e) => updateCell(rowIdx, col.id, e.target.value)}
+                        onChange={(nextValue) => updateCell(rowIdx, col.id, nextValue)}
+                        options={col.options ?? []}
+                        placeholder="Select..."
                         disabled={!col.editable}
-                      >
-                        <option value="">Select...</option>
-                        {(col.options ?? []).map((opt) => (
-                          <option key={opt.value} value={opt.value}>{opt.label}</option>
-                        ))}
-                      </select>
+                      />
                     ) : col.type === "number" || col.type === "currency" ? (
                       <input
                         type="number"
@@ -1479,6 +1654,7 @@ export function PluginRuntime({
       for (const field of section.fields) {
         if (field.computation?.datasetId) dsIds.add(field.computation.datasetId);
         if (field.optionsSource?.datasetId) dsIds.add(field.optionsSource.datasetId);
+        if (field.searchConfig?.datasetId) dsIds.add(field.searchConfig.datasetId);
       }
     }
     if (dsIds.size === 0) {
@@ -1754,16 +1930,15 @@ export function PluginOutputDisplay({
             </div>
             {onAddItemsToWorksheet && (
               <div className="mt-3 flex items-center gap-2">
-                <Select
+                <Combobox
+                  id="plugin-output-worksheet"
                   value={selectedWorksheet}
-                  onChange={(e) => setSelectedWorksheet(e.target.value)}
-                  className="text-xs h-7"
-                >
-                  <option value="">Select worksheet...</option>
-                  {(worksheets ?? []).map(ws => (
-                    <option key={ws.id} value={ws.id}>{ws.name}</option>
-                  ))}
-                </Select>
+                  onChange={setSelectedWorksheet}
+                  className="h-7 text-xs"
+                  placeholder="Select worksheet..."
+                  searchPlaceholder="Search worksheets..."
+                  options={(worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
+                />
                 <Button
                   variant="accent"
                   size="sm"
