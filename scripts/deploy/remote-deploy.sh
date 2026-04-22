@@ -85,6 +85,7 @@ if is_local_embeddings; then
   compose_up_profiles run --rm ollama-init
 fi
 
+compose build db-migrate
 cleanup_db_migrate_container
 compose run --rm db-migrate
 compose run --rm db-migrate sh -lc "pnpm --filter @bidwright/db exec tsx src/run-seed-datasets.ts && pnpm --filter @bidwright/db exec tsx src/run-seed-plugins.ts"
