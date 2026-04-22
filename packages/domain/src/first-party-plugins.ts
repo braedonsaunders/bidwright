@@ -86,6 +86,48 @@ function replaceServiceItemWithRateSchedule(tool: PluginToolDefinition, fieldId 
   }
 }
 
+function upsertSectionField(tool: PluginToolDefinition, sectionId: string, field: PluginField) {
+  const section = tool.ui?.sections.find((entry) => entry.id === sectionId);
+  if (!section?.fields) {
+    throw new Error(`Missing section ${sectionId} in ${tool.id}`);
+  }
+
+  const existingIndex = section.fields.findIndex((entry) => entry.id === field.id);
+  if (existingIndex >= 0) {
+    section.fields[existingIndex] = field;
+  } else {
+    section.fields.unshift(field);
+  }
+}
+
+function addLabourHierarchySearch(tool: PluginToolDefinition, args: {
+  datasetId: string;
+  providerLabel: string;
+}) {
+  upsertSectionField(tool, "lookup", {
+    id: "globalSearch",
+    type: "search",
+    label: `${args.providerLabel} Global Search`,
+    description: `Search any ${args.providerLabel} category, class, or sub-class and auto-fill the hierarchy.`,
+    placeholder: `Search ${args.providerLabel} class or sub-class...`,
+    width: "full",
+    order: -1,
+    searchConfig: {
+      datasetId: args.datasetId,
+      displayField: ["subClass", "class", "category"],
+      valueField: ["subClass", "class", "category"],
+      searchFields: ["class", "subClass", "category"],
+      resultFields: ["category", "class", "subClass", "hourNormal"],
+      populateFields: {
+        category: "category",
+        class: "class",
+        subClass: "subClass",
+      },
+      minQueryLength: 1,
+    },
+  });
+}
+
 function necaCriteria(): PluginScoringCriterion[] {
   return LEGACY_NECA_JOB_CONDITION_CRITERIA.map((criterion) => ({
     id: criterion.id,
@@ -101,6 +143,10 @@ function buildNecaPlugin(): Plugin {
 
   const labourTool = findTool(plugin, "neca.labourUnits");
   replaceServiceItemWithRateSchedule(labourTool);
+  addLabourHierarchySearch(labourTool, {
+    datasetId: "ds-neca-labour",
+    providerLabel: "NECA",
+  });
   const hoursPerUnitField = findField(labourTool, "hoursPerUnit");
   hoursPerUnitField.computation = {
     formula: "lookup(category, class, subClass)",
@@ -268,6 +314,10 @@ function buildNecaPlugin(): Plugin {
 function buildPhccPlugin(): Plugin {
   const plugin = clonePlugin("phcc-labour");
   const labourTool = findTool(plugin, "phcc.labourUnits");
+  addLabourHierarchySearch(labourTool, {
+    datasetId: "ds-phcc-labour",
+    providerLabel: "PHCC",
+  });
   labourTool.parameters = [
     { name: "category", type: "string", description: "PHCC labour category", required: true },
     { name: "class", type: "string", description: "PHCC labour class", required: true },
