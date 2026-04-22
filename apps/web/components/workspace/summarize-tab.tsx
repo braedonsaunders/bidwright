@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -43,6 +43,7 @@ const SUMMARY_PRESETS: Array<{ id: SummaryPreset; label: string; description: st
   { id: "quick_total", label: "Quick Total", description: "Single grand total with pricing ladder." },
   { id: "by_phase", label: "By Phase", description: "One row per phase with a unified pricing ladder." },
   { id: "by_category", label: "By Category", description: "One row per category with a unified pricing ladder." },
+  { id: "phase_x_category", label: "Pivot", description: "Phase rows with category columns." },
 ];
 
 const DIMENSION_LABELS: Record<SummaryBuilderDimension, string> = {
@@ -291,31 +292,44 @@ function createPresetBuilder(
   return normalizeBuilder({ version: 1, preset: preset === "custom" ? "phase_x_category" : preset, mode: "pivot", rowDimension: "phase", columnDimension: "category", rows: [], columns: [], totals: { label: "Grand Total", visible: true } }, totals);
 }
 
-function sanitizeBuilderForUi(
-  raw: Partial<SummaryBuilderConfig>,
-  totals: ProjectWorkspaceData["estimate"]["totals"],
-): SummaryBuilderConfig {
-  const normalized = normalizeBuilder(raw, totals);
-  return normalizeBuilder(
-    {
-      ...normalized,
-      mode: normalized.rowDimension === "none" ? "total" : "grouped",
-      columnDimension: "none",
-      columns: [],
-      totals: {
-        label: "Grand Total",
-        visible: true,
-      },
-    },
-    totals,
-  );
-}
-
 function buildInitialBuilder(workspace: ProjectWorkspaceData) {
-  return sanitizeBuilderForUi(
+  return normalizeBuilder(
     workspace.summaryBuilder ?? createPresetBuilder(workspace.currentRevision.summaryLayoutPreset, workspace.estimate.totals),
     workspace.estimate.totals,
   );
+}
+
+function buildPhaseCategoryKey(phaseId: string | null | undefined, categoryId: string) {
+  return `${phaseId ?? "__unphased__"}::${categoryId}`;
+}
+
+function resolvePivotCell(
+  config: SummaryBuilderConfig,
+  row: SummaryBuilderAxisItem,
+  column: SummaryBuilderAxisItem,
+  totals: ProjectWorkspaceData["estimate"]["totals"],
+) {
+  const phaseId = config.rowDimension === "phase" ? row.sourceId : column.sourceId;
+  const categoryId = config.rowDimension === "category" ? row.sourceId : column.sourceId;
+  const entry = totals.phaseCategoryTotals.find((candidate) => candidate.id === buildPhaseCategoryKey(phaseId, categoryId ?? ""));
+  return entry ?? { id: "", name: "", label: "", value: 0, cost: 0, margin: 0 };
+}
+
+function builderSignature(config: SummaryBuilderConfig) {
+  return JSON.stringify({
+    version: config.version,
+    preset: config.preset,
+    mode: config.mode,
+    rowDimension: config.rowDimension,
+    columnDimension: config.columnDimension,
+    rows: [...config.rows]
+      .sort((left, right) => left.order - right.order)
+      .map((item) => ({ key: item.key, sourceId: item.sourceId, label: item.label, visible: item.visible, order: item.order })),
+    columns: [...config.columns]
+      .sort((left, right) => left.order - right.order)
+      .map((item) => ({ key: item.key, sourceId: item.sourceId, label: item.label, visible: item.visible, order: item.order })),
+    totals: config.totals,
+  });
 }
 
 function resolveAxisTotal(
@@ -461,14 +475,20 @@ export function SummarizeTab({
   const totals = workspace.estimate.totals;
   const revisionKey = `${workspace.project.id}:${workspace.currentRevision.id}`;
   const [draftBuilder, setDraftBuilder] = useState(() => buildInitialBuilder(workspace));
+  const pendingBuilderSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
+    pendingBuilderSignatureRef.current = null;
     setDraftBuilder(buildInitialBuilder(workspace));
   }, [revisionKey]);
 
   useEffect(() => {
     if (!workspace.summaryBuilder) return;
-    setDraftBuilder(sanitizeBuilderForUi(workspace.summaryBuilder, totals));
+    const nextBuilder = normalizeBuilder(workspace.summaryBuilder, totals);
+    const nextSignature = builderSignature(nextBuilder);
+    if (pendingBuilderSignatureRef.current && pendingBuilderSignatureRef.current !== nextSignature) return;
+    if (pendingBuilderSignatureRef.current === nextSignature) pendingBuilderSignatureRef.current = null;
+    setDraftBuilder((current) => (builderSignature(current) === nextSignature ? current : nextBuilder));
   }, [workspace.summaryBuilder, totals]);
 
   const adjustments = useMemo(
@@ -495,6 +515,7 @@ export function SummarizeTab({
   }
 
   function handleError(cause: unknown) {
+    pendingBuilderSignatureRef.current = null;
     setError(cause instanceof Error ? cause.message : "Operation failed.");
   }
 
@@ -509,7 +530,8 @@ export function SummarizeTab({
   }
 
   function persistBuilder(next: SummaryBuilderConfig) {
-    const normalized = sanitizeBuilderForUi(next, totals);
+    const normalized = normalizeBuilder(next, totals);
+    pendingBuilderSignatureRef.current = builderSignature(normalized);
     setDraftBuilder(normalized);
     runMutation(() => saveSummaryBuilder(projectId, normalized));
   }
@@ -518,6 +540,13 @@ export function SummarizeTab({
     persistBuilder({
       ...draftBuilder,
       rows: draftBuilder.rows.map((item) => (item.key === key ? { ...item, ...patch } : item)),
+    });
+  }
+
+  function updateColumn(key: string, patch: Partial<SummaryBuilderAxisItem>) {
+    persistBuilder({
+      ...draftBuilder,
+      columns: draftBuilder.columns.map((item) => (item.key === key ? { ...item, ...patch } : item)),
     });
   }
 
@@ -534,6 +563,19 @@ export function SummarizeTab({
     });
   }
 
+  function moveColumn(key: string, direction: "up" | "down") {
+    const items = [...draftBuilder.columns].sort((left, right) => left.order - right.order);
+    const index = items.findIndex((item) => item.key === key);
+    if (index < 0) return;
+    const nextIndex = direction === "up" ? index - 1 : index + 1;
+    if (nextIndex < 0 || nextIndex >= items.length) return;
+    [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
+    persistBuilder({
+      ...draftBuilder,
+      columns: items.map((item, order) => ({ ...item, order })),
+    });
+  }
+
   function handleRowDimensionChange(value: SummaryBuilderDimension) {
     if (value === "none") {
       persistBuilder({ ...draftBuilder, mode: "total", rowDimension: "none", columnDimension: "none" });
@@ -541,14 +583,22 @@ export function SummarizeTab({
     }
     persistBuilder({
       ...draftBuilder,
-      mode: "grouped",
+      mode: draftBuilder.columnDimension === "none" ? "grouped" : "pivot",
       rowDimension: value,
-      columnDimension: "none",
     });
   }
 
+  function handleColumnDimensionChange(value: SummaryBuilderDimension) {
+    if (draftBuilder.rowDimension === "none") return;
+    if (value === "none") {
+      persistBuilder({ ...draftBuilder, mode: "grouped", columnDimension: "none" });
+      return;
+    }
+    persistBuilder({ ...draftBuilder, mode: "pivot", columnDimension: value });
+  }
+
   function handlePreset(preset: SummaryPreset) {
-    setDraftBuilder(sanitizeBuilderForUi(createPresetBuilder(preset, totals), totals));
+    setDraftBuilder(createPresetBuilder(preset, totals));
     runMutation(() => applySummaryPreset(projectId, preset));
   }
 
@@ -580,6 +630,7 @@ export function SummarizeTab({
   }
 
   const sortedRows = [...draftBuilder.rows].sort((left, right) => left.order - right.order);
+  const sortedColumns = [...draftBuilder.columns].sort((left, right) => left.order - right.order);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
@@ -589,7 +640,7 @@ export function SummarizeTab({
             <div className="space-y-2">
               <h4 className="text-sm font-semibold text-fg">Summary Builder</h4>
               <p className="max-w-3xl text-xs text-fg/60">
-                Build the quote breakdown from real project structure on the left and control commercial adders on the right.
+                Build the quote breakdown from real project structure and shape the final pricing adjustments in one connected table.
                 The summary stays tied to current phases and categories instead of hand-editing presentation rows.
               </p>
             </div>
@@ -630,8 +681,19 @@ export function SummarizeTab({
                   />
                 </div>
 
-                <div className="inline-flex h-8 items-center rounded-lg border border-line bg-panel2/30 px-3 text-[11px] text-fg/60">
-                  Integrated summary and commercial ladder
+                <div className="inline-flex items-center gap-2 rounded-lg border border-line bg-panel2/25 px-2 py-1.5">
+                  <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-fg/45">Columns</span>
+                  <BuilderSelect
+                    value={draftBuilder.columnDimension}
+                    onValueChange={(value) => handleColumnDimensionChange(value as SummaryBuilderDimension)}
+                    disabled={draftBuilder.rowDimension === "none"}
+                    options={[
+                      { value: "none", label: "None" },
+                      ...(draftBuilder.rowDimension !== "phase" ? [{ value: "phase", label: "Phase" }] : []),
+                      ...(draftBuilder.rowDimension !== "category" ? [{ value: "category", label: "Category" }] : []),
+                    ]}
+                    className="h-8 min-w-[132px] text-xs"
+                  />
                 </div>
               </div>
             </div>
@@ -645,6 +707,7 @@ export function SummarizeTab({
             builder={draftBuilder}
             totals={totals}
             rows={sortedRows}
+            columns={sortedColumns}
             adjustments={adjustments}
             adjustmentTotalsById={adjustmentTotalsById}
             categoryOptions={modifierTargetOptions}
@@ -654,6 +717,8 @@ export function SummarizeTab({
             onAddAdjustment={handleAddAdjustment}
             onMoveRow={moveRow}
             onUpdateRow={updateRow}
+            onMoveColumn={moveColumn}
+            onUpdateColumn={updateColumn}
             onMoveAdjustment={handleMoveAdjustment}
             onPatchAdjustment={handlePatchAdjustment}
             onDeleteAdjustment={handleDeleteAdjustment}
@@ -668,6 +733,7 @@ function SummaryBreakdownPanel({
   builder,
   totals,
   rows,
+  columns,
   adjustments,
   adjustmentTotalsById,
   categoryOptions,
@@ -677,6 +743,8 @@ function SummaryBreakdownPanel({
   onAddAdjustment,
   onMoveRow,
   onUpdateRow,
+  onMoveColumn,
+  onUpdateColumn,
   onMoveAdjustment,
   onPatchAdjustment,
   onDeleteAdjustment,
@@ -684,6 +752,7 @@ function SummaryBreakdownPanel({
   builder: SummaryBuilderConfig;
   totals: ProjectWorkspaceData["estimate"]["totals"];
   rows: SummaryBuilderAxisItem[];
+  columns: SummaryBuilderAxisItem[];
   adjustments: ProjectAdjustment[];
   adjustmentTotalsById: Map<string, AdjustmentTotalEntry>;
   categoryOptions: Array<{ id: string; label: string }>;
@@ -693,41 +762,70 @@ function SummaryBreakdownPanel({
   onAddAdjustment: () => void;
   onMoveRow: (key: string, direction: "up" | "down") => void;
   onUpdateRow: (key: string, patch: Partial<SummaryBuilderAxisItem>) => void;
+  onMoveColumn: (key: string, direction: "up" | "down") => void;
+  onUpdateColumn: (key: string, patch: Partial<SummaryBuilderAxisItem>) => void;
   onMoveAdjustment: (adjustmentId: string, direction: "up" | "down") => void;
   onPatchAdjustment: (adjustmentId: string, patch: Partial<ProjectAdjustment>) => void;
   onDeleteAdjustment: (adjustmentId: string) => void;
 }) {
-  return (
-    <section className="min-h-0 overflow-auto rounded-2xl border border-line bg-panel2/20">
-      <table className="w-full min-w-[1180px] text-xs">
-        <thead className="sticky top-0 z-10 bg-panel">
-          <tr className="border-b border-line text-left text-[11px] font-medium uppercase tracking-[0.14em] text-fg/40">
-            <th className="w-[92px] px-3 py-2.5">Order</th>
-            <th className="min-w-[240px] px-3 py-2.5">Breakdown</th>
-            <th className="min-w-[180px] px-3 py-2.5">Source / Type</th>
-            <th className="min-w-[240px] px-3 py-2.5">Scope / Notes</th>
-            <th className="w-[180px] px-3 py-2.5 text-right">Amount</th>
-            <th className="w-[140px] px-3 py-2.5 text-right">Cost</th>
-            <th className="w-[140px] px-3 py-2.5 text-right">Margin</th>
-            <th className="w-[72px] px-3 py-2.5 text-right">Show</th>
-            <th className="w-[72px] px-3 py-2.5 text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {builder.mode === "total" ? (
-            <tr>
-              <td className="px-3 py-2" />
+  const visibleColumns = columns.filter((column) => column.visible !== false);
+  const adjustmentColSpan = builder.mode === "pivot" ? visibleColumns.length + 5 : builder.mode === "grouped" ? 7 : 4;
+
+  if (builder.mode === "total") {
+    return (
+      <section className="min-h-0 overflow-auto rounded-2xl border border-line bg-panel2/20">
+        <table className="w-full min-w-[760px] text-xs">
+          <thead className="sticky top-0 z-10 bg-panel">
+            <tr className="border-b border-line text-left text-[11px] font-medium uppercase tracking-[0.14em] text-fg/40">
+              <th className="px-3 py-2.5">Summary</th>
+              <th className="px-3 py-2.5 text-right">Amount</th>
+              <th className="px-3 py-2.5 text-right">Cost</th>
+              <th className="px-3 py-2.5 text-right">Margin</th>
+            </tr>
+          </thead>
+          <tbody>
+            <AdjustmentSectionRows
+              colSpan={adjustmentColSpan}
+              adjustments={adjustments}
+              adjustmentTotalsById={adjustmentTotalsById}
+              categoryOptions={categoryOptions}
+              nextAdjustmentTemplate={nextAdjustmentTemplate}
+              busy={busy}
+              onNextAdjustmentTemplateChange={onNextAdjustmentTemplateChange}
+              onAddAdjustment={onAddAdjustment}
+              onMoveAdjustment={onMoveAdjustment}
+              onPatchAdjustment={onPatchAdjustment}
+              onDeleteAdjustment={onDeleteAdjustment}
+            />
+            <tr className="bg-panel2/35">
               <td className="px-3 py-3 font-semibold text-fg">Grand Total</td>
-              <td className="px-3 py-2 text-[11px] text-fg/55">Full quote rollup</td>
-              <td className="px-3 py-2 text-[11px] text-fg/45">Commercial ladder rows below flow into the quoted amount automatically.</td>
               <MetricCell value={formatMoney(totals.subtotal)} />
               <MetricCell value={formatMoney(totals.cost)} />
               <MetricCell value={formatPercent(totals.estimatedMargin)} />
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
             </tr>
-          ) : (
-            rows.map((row, index) => (
+          </tbody>
+        </table>
+      </section>
+    );
+  }
+
+  if (builder.mode === "grouped") {
+    return (
+      <section className="min-h-0 overflow-auto rounded-2xl border border-line bg-panel2/20">
+        <table className="w-full min-w-[980px] text-xs">
+          <thead className="sticky top-0 z-10 bg-panel">
+            <tr className="border-b border-line text-left text-[11px] font-medium uppercase tracking-[0.14em] text-fg/40">
+              <th className="w-[90px] px-3 py-2.5">Order</th>
+              <th className="min-w-[240px] px-3 py-2.5">Label</th>
+              <th className="min-w-[160px] px-3 py-2.5">Source</th>
+              <th className="w-[140px] px-3 py-2.5 text-right">Amount</th>
+              <th className="w-[140px] px-3 py-2.5 text-right">Cost</th>
+              <th className="w-[140px] px-3 py-2.5 text-right">Margin</th>
+              <th className="w-[72px] px-3 py-2.5 text-right">Show</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, index) => (
               <SummarySourceRow
                 key={row.key}
                 row={row}
@@ -739,73 +837,215 @@ function SummaryBreakdownPanel({
                 onMoveRow={onMoveRow}
                 onUpdateRow={onUpdateRow}
               />
-            ))
-          )}
-
-          {builder.mode !== "total" ? (
+            ))}
+            <AdjustmentSectionRows
+              colSpan={adjustmentColSpan}
+              adjustments={adjustments}
+              adjustmentTotalsById={adjustmentTotalsById}
+              categoryOptions={categoryOptions}
+              nextAdjustmentTemplate={nextAdjustmentTemplate}
+              busy={busy}
+              onNextAdjustmentTemplateChange={onNextAdjustmentTemplateChange}
+              onAddAdjustment={onAddAdjustment}
+              onMoveAdjustment={onMoveAdjustment}
+              onPatchAdjustment={onPatchAdjustment}
+              onDeleteAdjustment={onDeleteAdjustment}
+            />
             <tr className="bg-panel2/35">
               <td className="px-3 py-2" />
               <td className="px-3 py-2 font-semibold text-fg">Grand Total</td>
               <td className="px-3 py-2 text-[11px] text-fg/45">Current quote total</td>
-              <td className="px-3 py-2 text-[11px] text-fg/45">All visible summary rows and ladder entries are reflected here.</td>
               <MetricCell value={formatMoney(totals.subtotal)} />
               <MetricCell value={formatMoney(totals.cost)} />
               <MetricCell value={formatPercent(totals.estimatedMargin)} />
               <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
             </tr>
-          ) : null}
+          </tbody>
+        </table>
+      </section>
+    );
+  }
 
-          <tr className="bg-panel/70">
-            <td colSpan={9} className="px-3 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-fg">Commercial Ladder</div>
-                  <div className="mt-1 text-[11px] text-fg/55">
-                    Add quote-level modifiers, alternates, standalone items, and custom totals directly inside the main summary table.
+  return (
+    <section className="min-h-0 overflow-auto rounded-2xl border border-line bg-panel2/20">
+      <table className="w-full min-w-[1040px] text-xs">
+        <thead className="sticky top-0 z-10 bg-panel">
+          <tr className="border-b border-line text-left text-[11px] font-medium uppercase tracking-[0.14em] text-fg/40">
+            <th className="sticky left-0 z-10 min-w-[280px] bg-panel px-3 py-2.5">{DIMENSION_LABELS[builder.rowDimension]}</th>
+            {visibleColumns.map((column, index) => {
+              const total = resolveAxisTotal(builder.columnDimension, column.sourceId, totals);
+              return (
+                <th key={column.key} className="min-w-[140px] border-l border-line px-3 py-2.5">
+                  <div className="flex items-center gap-1">
+                    <Button type="button" variant="ghost" size="xs" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "up")} disabled={busy || index === 0}>
+                      <ArrowUp className="h-3 w-3" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="xs" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "down")} disabled={busy || index === visibleColumns.length - 1}>
+                      <ArrowDown className="h-3 w-3" />
+                    </Button>
+                    <IconToggleButton active={column.visible} onClick={() => onUpdateColumn(column.key, { visible: !column.visible })} disabled={busy} />
                   </div>
-                </div>
-                <div className="flex w-full max-w-[480px] gap-2 sm:w-auto">
-                  <BuilderSelect
-                    value={nextAdjustmentTemplate}
-                    onValueChange={onNextAdjustmentTemplateChange}
-                    options={ADJUSTMENT_TEMPLATES.map((template) => ({ value: template.id, label: template.label }))}
-                    className="h-9 min-w-[220px] text-xs"
-                  />
-                  <Button onClick={onAddAdjustment} disabled={busy} size="sm" variant="secondary">
-                    <Plus className="h-4 w-4" />
-                    Add Ladder Row
-                  </Button>
-                </div>
-              </div>
-            </td>
+                  <CommitInput value={column.label} onCommit={(value) => onUpdateColumn(column.key, { label: value })} disabled={busy} className="mt-1 h-8 text-xs" />
+                  <div className="mt-1 text-right font-mono text-[10px] text-fg/45">{formatMoney(total?.value ?? 0)}</div>
+                </th>
+              );
+            })}
+            <th className="border-l border-line px-3 py-2.5 text-right">Amount</th>
+            <th className="px-3 py-2.5 text-right">Cost</th>
+            <th className="px-3 py-2.5 text-right">Margin</th>
+            <th className="px-3 py-2.5 text-right">Show</th>
           </tr>
-
-          {adjustments.length === 0 ? (
-            <tr>
-              <td colSpan={9} className="px-4 py-8 text-center text-sm text-fg/45">
-                No pricing ladder entries yet.
-              </td>
-            </tr>
-          ) : (
-            adjustments.map((adjustment, index) => (
-              <AdjustmentTableRow
-                key={adjustment.id}
-                adjustment={adjustment}
-                totals={adjustmentTotalsById.get(adjustment.id) ?? null}
-                categoryOptions={categoryOptions}
-                canMoveUp={index > 0}
-                canMoveDown={index < adjustments.length - 1}
-                busy={busy}
-                onMove={onMoveAdjustment}
-                onPatch={onPatchAdjustment}
-                onDelete={onDeleteAdjustment}
-              />
-            ))
-          )}
+        </thead>
+        <tbody>
+          {rows.map((row, index) => {
+            const total = resolveAxisTotal(builder.rowDimension, row.sourceId, totals);
+            return (
+              <tr key={row.key} className={cn("border-b border-line/60", !row.visible && "opacity-45")}>
+                <td className="sticky left-0 z-10 bg-inherit px-3 py-2">
+                  <div className="flex items-center gap-1">
+                    <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "up")} disabled={busy || index === 0}>
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "down")} disabled={busy || index === rows.length - 1}>
+                      <ArrowDown className="h-3.5 w-3.5" />
+                    </Button>
+                    <CommitInput value={row.label} onCommit={(value) => onUpdateRow(row.key, { label: value })} disabled={busy} className="h-8 min-w-0 flex-1 text-xs" />
+                  </div>
+                </td>
+                {visibleColumns.map((column) => {
+                  const cell = resolvePivotCell(builder, row, column, totals);
+                  return (
+                    <td key={`${row.key}:${column.key}`} className="border-l border-line px-3 py-2 text-right font-mono text-[11px]">
+                      {formatMoney(cell.value)}
+                    </td>
+                  );
+                })}
+                <MetricCell value={formatMoney(total?.value ?? 0)} />
+                <MetricCell value={formatMoney(total?.cost ?? 0)} />
+                <MetricCell value={formatPercent(total?.margin ?? 0)} />
+                <td className="px-3 py-2 text-right">
+                  <IconToggleButton active={row.visible} onClick={() => onUpdateRow(row.key, { visible: !row.visible })} disabled={busy} />
+                </td>
+              </tr>
+            );
+          })}
+          <AdjustmentSectionRows
+            colSpan={adjustmentColSpan}
+            adjustments={adjustments}
+            adjustmentTotalsById={adjustmentTotalsById}
+            categoryOptions={categoryOptions}
+            nextAdjustmentTemplate={nextAdjustmentTemplate}
+            busy={busy}
+            onNextAdjustmentTemplateChange={onNextAdjustmentTemplateChange}
+            onAddAdjustment={onAddAdjustment}
+            onMoveAdjustment={onMoveAdjustment}
+            onPatchAdjustment={onPatchAdjustment}
+            onDeleteAdjustment={onDeleteAdjustment}
+          />
+          <tr className="bg-panel2/35">
+            <td colSpan={visibleColumns.length + 1} className="px-3 py-2 font-semibold text-fg">Grand Total</td>
+            <MetricCell value={formatMoney(totals.subtotal)} />
+            <MetricCell value={formatMoney(totals.cost)} />
+            <MetricCell value={formatPercent(totals.estimatedMargin)} />
+            <td className="px-3 py-2" />
+          </tr>
         </tbody>
       </table>
     </section>
+  );
+}
+
+function AdjustmentSectionRows({
+  colSpan,
+  adjustments,
+  adjustmentTotalsById,
+  categoryOptions,
+  nextAdjustmentTemplate,
+  busy,
+  onNextAdjustmentTemplateChange,
+  onAddAdjustment,
+  onMoveAdjustment,
+  onPatchAdjustment,
+  onDeleteAdjustment,
+}: {
+  colSpan: number;
+  adjustments: ProjectAdjustment[];
+  adjustmentTotalsById: Map<string, AdjustmentTotalEntry>;
+  categoryOptions: Array<{ id: string; label: string }>;
+  nextAdjustmentTemplate: string;
+  busy: boolean;
+  onNextAdjustmentTemplateChange: (value: string) => void;
+  onAddAdjustment: () => void;
+  onMoveAdjustment: (adjustmentId: string, direction: "up" | "down") => void;
+  onPatchAdjustment: (adjustmentId: string, patch: Partial<ProjectAdjustment>) => void;
+  onDeleteAdjustment: (adjustmentId: string) => void;
+}) {
+  return (
+    <>
+      <tr className="bg-panel/70">
+        <td colSpan={colSpan} className="px-0 py-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+            <div>
+              <div className="text-sm font-semibold text-fg">Pricing Adjustments</div>
+              <div className="mt-1 text-[11px] text-fg/55">
+                Quote-level modifiers, alternates, allowances, and custom totals that feed into the final quoted total.
+              </div>
+            </div>
+            <div className="flex w-full max-w-[420px] gap-2 sm:w-auto">
+              <BuilderSelect
+                value={nextAdjustmentTemplate}
+                onValueChange={onNextAdjustmentTemplateChange}
+                options={ADJUSTMENT_TEMPLATES.map((template) => ({ value: template.id, label: template.label }))}
+                className="h-8 min-w-[200px] text-xs"
+              />
+              <Button onClick={onAddAdjustment} disabled={busy} size="sm" variant="secondary" className="shrink-0">
+                <Plus className="h-4 w-4" />
+                Add Row
+              </Button>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td colSpan={colSpan} className="px-0 py-0">
+          {adjustments.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-fg/45">No pricing adjustments yet.</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-panel/50">
+                <tr className="border-y border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
+                  <th className="w-[92px] px-3 py-2">Order</th>
+                  <th className="min-w-[220px] px-3 py-2">Row</th>
+                  <th className="min-w-[180px] px-3 py-2">Type</th>
+                  <th className="min-w-[240px] px-3 py-2">Scope / Notes</th>
+                  <th className="w-[180px] px-3 py-2 text-right">Amount</th>
+                  <th className="w-[140px] px-3 py-2 text-right">Cost</th>
+                  <th className="w-[140px] px-3 py-2 text-right">Margin</th>
+                  <th className="w-[72px] px-3 py-2 text-right">Show</th>
+                  <th className="w-[72px] px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adjustments.map((adjustment, index) => (
+                  <AdjustmentTableRow
+                    key={adjustment.id}
+                    adjustment={adjustment}
+                    totals={adjustmentTotalsById.get(adjustment.id) ?? null}
+                    categoryOptions={categoryOptions}
+                    canMoveUp={index > 0}
+                    canMoveDown={index < adjustments.length - 1}
+                    busy={busy}
+                    onMove={onMoveAdjustment}
+                    onPatch={onPatchAdjustment}
+                    onDelete={onDeleteAdjustment}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </td>
+      </tr>
+    </>
   );
 }
 
