@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { ChevronDown, Copy, Info, Trash2, X } from "lucide-react";
 import type {
   EntityCategory,
   ProjectWorkspaceData,
+  WorksheetItemPatchInput,
   WorkspaceWorksheetItem,
 } from "@/lib/api";
-import { updateWorksheetItem } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge, Button, Input, Select } from "@/components/ui";
@@ -29,7 +29,7 @@ export interface ItemDetailDrawerProps {
   item: WorkspaceWorksheetItem;
   workspace: ProjectWorkspaceData;
   entityCategories: EntityCategory[];
-  onSave: (next: unknown) => void;
+  onPatchItem: (itemId: string, patch: WorksheetItemPatchInput) => void;
   onDelete: (itemId: string) => void;
   onDuplicate: (itemId: string) => void;
   onClose: () => void;
@@ -39,13 +39,11 @@ export function ItemDetailDrawer({
   item,
   workspace,
   entityCategories,
-  onSave,
+  onPatchItem,
   onDelete,
   onDuplicate,
   onClose,
 }: ItemDetailDrawerProps) {
-  const [isPending, startTransition] = useTransition();
-
   const [showSources, setShowSources] = useState(!!item.sourceNotes);
   const [form, setForm] = useState({
     entityName: item.entityName,
@@ -114,14 +112,7 @@ export function ItemDetailDrawer({
       patch = { [field]: value };
     }
 
-    startTransition(async () => {
-      try {
-        const next = await updateWorksheetItem(workspace.project.id, item.id, patch);
-        onSave(next);
-      } catch {
-        // handled by parent
-      }
-    });
+    onPatchItem(item.id, patch);
   }
 
   const isEditable = (field: string) =>

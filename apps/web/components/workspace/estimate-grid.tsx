@@ -32,6 +32,7 @@ import type {
   CreateWorksheetItemInput,
   EntityCategory,
   ProjectWorkspaceData,
+  WorksheetItemPatchInput,
   WorkspaceResponse,
   WorkspaceWorksheet,
   WorkspaceWorksheetItem,
@@ -39,11 +40,14 @@ import type {
 import {
   createWorksheet,
   createWorksheetItem,
+  createWorksheetItemFast,
   deleteWorksheet,
   deleteWorksheetItem,
+  deleteWorksheetItemFast,
   getEntityCategories,
   updateWorksheet,
   updateWorksheetItem,
+  updateWorksheetItemFast,
 } from "@/lib/api";
 import { formatMoney, formatPercent } from "@/lib/format";
 import {
@@ -65,14 +69,20 @@ import {
 } from "@/components/ui";
 import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
+import {
+  applyWorksheetItemDelete,
+  applyWorksheetItemMutation,
+  applyWorksheetItemUpsert,
+} from "@/lib/workspace-mutations";
 import { ItemDetailDrawer } from "./item-detail-drawer";
 
 /* ─── Types ─── */
 
 export interface EstimateGridProps {
   workspace: ProjectWorkspaceData;
-  onApply: (next: WorkspaceResponse) => void;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   onError: (msg: string) => void;
+  onRefresh: () => void;
   highlightItemId?: string;
 }
 
@@ -249,6 +259,7 @@ const ENTITY_DROPDOWN_GAP = 4;
 const ENTITY_DROPDOWN_MARGIN = 8;
 const ENTITY_DROPDOWN_HEADER_HEIGHT = 44;
 const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 256;
+const TEMP_WORKSHEET_ITEM_PREFIX = "temp-worksheet-item-";
 
 /* ─── Helpers ─── */
 
@@ -259,6 +270,14 @@ function parseNum(v: string, fb = 0) {
 
 function fmtPct(v: number) {
   return Number.isFinite(v) ? String(Math.round(v * 1000) / 10) : "0";
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function isTemporaryWorksheetItemId(itemId: string) {
+  return itemId.startsWith(TEMP_WORKSHEET_ITEM_PREFIX);
 }
 
 function findWs(workspace: ProjectWorkspaceData, id: string) {
@@ -486,7 +505,7 @@ function catalogKindToCategory(kind: string): string {
 
 /* ─── Component ─── */
 
-export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: EstimateGridProps) {
+export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlightItemId }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
 
   // Entity categories loaded from API
@@ -574,6 +593,168 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   const [showCatalogPicker, setShowCatalogPicker] = useState(false);
   const [catalogSearchTerm, setCatalogSearchTerm] = useState("");
   const [selectedCatalogItemIds, setSelectedCatalogItemIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!detailItem) return;
+    const updated = workspace.worksheets
+      .flatMap((worksheet) => worksheet.items)
+      .find((item) => item.id === detailItem.id);
+    if (!updated) {
+      setDetailItem(null);
+      return;
+    }
+    if (updated !== detailItem) {
+      setDetailItem(updated);
+    }
+  }, [detailItem, workspace]);
+
+  const applyMutationError = useCallback((message: string, error: unknown) => {
+    onRefresh();
+    onError(error instanceof Error ? error.message : message);
+  }, [onError, onRefresh]);
+
+  const buildOptimisticItem = useCallback((
+    row: WorkspaceWorksheetItem,
+    patch: WorksheetItemPatchInput,
+  ) => {
+    const nextRow: WorkspaceWorksheetItem = {
+      ...row,
+      ...patch,
+      vendor: patch.vendor === null ? undefined : patch.vendor ?? row.vendor,
+      phaseId: patch.phaseId === undefined ? row.phaseId : patch.phaseId,
+      rateScheduleItemId:
+        patch.rateScheduleItemId === undefined
+          ? row.rateScheduleItemId
+          : patch.rateScheduleItemId,
+      itemId: patch.itemId === undefined ? row.itemId : patch.itemId,
+      tierUnits: patch.tierUnits === undefined ? row.tierUnits : patch.tierUnits,
+      sourceNotes:
+        patch.sourceNotes === undefined ? row.sourceNotes : patch.sourceNotes,
+    };
+
+    if (
+      patch.price === undefined &&
+      (patch.quantity !== undefined ||
+        patch.cost !== undefined ||
+        patch.markup !== undefined)
+    ) {
+      nextRow.price = roundMoney(nextRow.cost * nextRow.quantity * (1 + nextRow.markup));
+    }
+
+    return nextRow;
+  }, []);
+
+  const commitItemPatch = useCallback((
+    rowId: string,
+    patch: WorksheetItemPatchInput,
+    fallbackMessage = "Save failed.",
+  ) => {
+    if (isTemporaryWorksheetItemId(rowId)) {
+      return;
+    }
+
+    const row = workspace.worksheets
+      .flatMap((worksheet) => worksheet.items)
+      .find((item) => item.id === rowId);
+    if (!row) {
+      return;
+    }
+
+    const optimisticItem = buildOptimisticItem(row, patch);
+    onApply((current) => applyWorksheetItemUpsert(current, optimisticItem));
+
+    startTransition(async () => {
+      try {
+        const mutation = await updateWorksheetItemFast(
+          workspace.project.id,
+          rowId,
+          patch,
+        );
+        onApply((current) => applyWorksheetItemMutation(current, mutation));
+      } catch (error) {
+        applyMutationError(fallbackMessage, error);
+      }
+    });
+  }, [applyMutationError, buildOptimisticItem, onApply, workspace.project.id, workspace.worksheets]);
+
+  const createItem = useCallback((
+    worksheetId: string,
+    payload: CreateWorksheetItemInput,
+    fallbackMessage = "Create failed.",
+  ) => {
+    const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
+    const worksheet = workspace.worksheets.find((entry) => entry.id === worksheetId);
+    const fallbackOrder =
+      worksheet?.items.reduce(
+        (maxOrder, item) => Math.max(maxOrder, item.lineOrder),
+        0,
+      ) ?? 0;
+
+    const optimisticItem: WorkspaceWorksheetItem = {
+      id: temporaryId,
+      worksheetId,
+      phaseId: payload.phaseId ?? null,
+      category: payload.category,
+      entityType: payload.entityType,
+      entityName: payload.entityName,
+      vendor: payload.vendor ?? undefined,
+      description: payload.description,
+      quantity: payload.quantity,
+      uom: payload.uom,
+      cost: payload.cost,
+      markup: payload.markup,
+      price: payload.price,
+      unit1: payload.unit1,
+      unit2: payload.unit2,
+      unit3: payload.unit3,
+      lineOrder: payload.lineOrder ?? fallbackOrder + 1,
+      rateScheduleItemId: payload.rateScheduleItemId ?? null,
+      itemId: payload.itemId ?? null,
+      tierUnits: payload.tierUnits ?? {},
+      sourceNotes: payload.sourceNotes,
+    };
+
+    onApply((current) => applyWorksheetItemUpsert(current, optimisticItem));
+
+    startTransition(async () => {
+      try {
+        const mutation = await createWorksheetItemFast(
+          workspace.project.id,
+          worksheetId,
+          payload,
+        );
+        onApply((current) => {
+          const withoutTemporary = applyWorksheetItemDelete(current, temporaryId);
+          return applyWorksheetItemMutation(withoutTemporary, mutation);
+        });
+        if (selectedRowId === temporaryId) {
+          setSelectedRowId(mutation.item.id);
+        }
+      } catch (error) {
+        applyMutationError(fallbackMessage, error);
+      }
+    });
+  }, [applyMutationError, onApply, selectedRowId, workspace.project.id, workspace.worksheets]);
+
+  const removeItem = useCallback((
+    itemId: string,
+    fallbackMessage = "Delete failed.",
+  ) => {
+    if (isTemporaryWorksheetItemId(itemId)) {
+      return;
+    }
+
+    onApply((current) => applyWorksheetItemDelete(current, itemId));
+
+    startTransition(async () => {
+      try {
+        const mutation = await deleteWorksheetItemFast(workspace.project.id, itemId);
+        onApply((current) => applyWorksheetItemMutation(current, mutation));
+      } catch (error) {
+        applyMutationError(fallbackMessage, error);
+      }
+    });
+  }, [applyMutationError, onApply, workspace.project.id]);
 
   const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null) => {
     const anchor = anchorEl ?? entityCellRef.current;
@@ -869,6 +1050,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   function startEditing(rowId: string, column: EditableColumn, currentValue: string | number) {
     const row = visibleRows.find((r) => r.id === rowId);
     if (!row) return;
+    if (isTemporaryWorksheetItemId(row.id)) return;
 
     const catDef = findCategoryForRow(row, entityCategories);
     if (isCellDisabledByCategory(catDef, column)) return;
@@ -972,15 +1154,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
     }
 
     setEditingCell(null);
-
-    startTransition(async () => {
-      try {
-        const next = await updateWorksheetItem(workspace.project.id, rowId, patch);
-        onApply(next);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Save failed.");
-      }
-    });
+    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
   }
 
   function cancelEdit() {
@@ -1126,14 +1300,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       if (!newCatDef.editableFields.price) patch.price = 0;
     }
 
-    startTransition(async () => {
-      try {
-        const next = await updateWorksheetItem(workspace.project.id, rowId, patch);
-        onApply(next);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Save failed.");
-      }
-    });
+    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
   }
 
   // ─── Row operations ───
@@ -1163,31 +1330,17 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       unit3: 0,
     };
 
-    startTransition(async () => {
-      try {
-        const next = await createWorksheetItem(workspace.project.id, wsId, payload);
-        onApply(next);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Create failed.");
-      }
-    });
+    createItem(wsId, payload);
   }
 
   function deleteRow(itemId: string) {
-    startTransition(async () => {
-      try {
-        const next = await deleteWorksheetItem(workspace.project.id, itemId);
-        onApply(next);
-        if (selectedRowId === itemId) setSelectedRowId(null);
-        if (detailItem?.id === itemId) setDetailItem(null);
-        setSelectedIds((prev) => {
-          const n = new Set(prev);
-          n.delete(itemId);
-          return n;
-        });
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Delete failed.");
-      }
+    removeItem(itemId);
+    if (selectedRowId === itemId) setSelectedRowId(null);
+    if (detailItem?.id === itemId) setDetailItem(null);
+    setSelectedIds((prev) => {
+      const n = new Set(prev);
+      n.delete(itemId);
+      return n;
     });
   }
 
@@ -1213,14 +1366,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       lineOrder: row.lineOrder + 1,
     };
 
-    startTransition(async () => {
-      try {
-        const next = await createWorksheetItem(workspace.project.id, row.worksheetId, payload);
-        onApply(next);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Duplicate failed.");
-      }
-    });
+    createItem(row.worksheetId, payload, "Duplicate failed.");
   }
 
   // ─── Reorder ───
@@ -1277,10 +1423,14 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   }
 
   function toggleSelectAll() {
-    if (selectedIds.size === visibleRows.length) {
+    const selectableRowIds = visibleRows
+      .filter((row) => !isTemporaryWorksheetItemId(row.id))
+      .map((row) => row.id);
+
+    if (selectedIds.size === selectableRowIds.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(visibleRows.map((r) => r.id)));
+      setSelectedIds(new Set(selectableRowIds));
     }
   }
 
@@ -1495,6 +1645,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
   function handleContextMenu(e: React.MouseEvent, rowId: string) {
     e.preventDefault();
+    if (isTemporaryWorksheetItemId(rowId)) return;
     setContextMenu({ rowId, x: e.clientX, y: e.clientY });
     setSelectedRowId(rowId);
   }
@@ -1593,6 +1744,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   // ─── Description click → open detail drawer ───
 
   function handleDescClick(rowId: string) {
+    if (isTemporaryWorksheetItemId(rowId)) return;
     const allItems = (workspace.worksheets ?? []).flatMap((w: { items: WorkspaceWorksheetItem[] }) => w.items);
     const item = allItems.find((i: WorkspaceWorksheetItem) => i.id === rowId);
     if (item) setDetailItem(item);
@@ -1723,6 +1875,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
 
   function renderResolvedUnitsCell(row: WorkspaceWorksheetItem) {
     const catDef = findCategoryForRow(row, entityCategories);
+    const isTemporary = isTemporaryWorksheetItemId(row.id);
     const hasAutoLabour = catDef?.calculationType === "auto_labour";
     const hourBreakdown = getRowHourBreakdown(row);
     const unitLabels = getRowUnitSlotLabels(row, catDef);
@@ -1740,7 +1893,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
       label: string,
     ) => {
       const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
-      const disabled = isCellDisabledByCategory(catDef, field);
+      const disabled = isTemporary || isCellDisabledByCategory(catDef, field);
 
       if (isEditing) {
         return (
@@ -1819,7 +1972,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
   ) {
     const isEditing = editingCell?.rowId === row.id && editingCell?.column === column;
     const catDef = findCategoryForRow(row, entityCategories);
-    const disabled = isCellDisabledByCategory(catDef, column);
+    const disabled = isTemporaryWorksheetItemId(row.id) || isCellDisabledByCategory(catDef, column);
 
     if (isEditing) {
       if (column === "uom") {
@@ -1834,14 +1987,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                 setEditValue(e.target.value);
                 const val = e.target.value;
                 setEditingCell(null);
-                startTransition(async () => {
-                  try {
-                    const next = await updateWorksheetItem(workspace.project.id, row.id, { uom: val });
-                    onApply(next);
-                  } catch (err) {
-                    onError(err instanceof Error ? err.message : "Save failed.");
-                  }
-                });
+                commitItemPatch(row.id, { uom: val });
               }}
               onBlur={commitEdit}
               onKeyDown={handleCellKeyDown}
@@ -1867,14 +2013,7 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
                 setEditValue(e.target.value);
                 const val = e.target.value || null;
                 setEditingCell(null);
-                startTransition(async () => {
-                  try {
-                    const next = await updateWorksheetItem(workspace.project.id, row.id, { phaseId: val });
-                    onApply(next);
-                  } catch (err) {
-                    onError(err instanceof Error ? err.message : "Save failed.");
-                  }
-                });
+                commitItemPatch(row.id, { phaseId: val });
               }}
               onBlur={commitEdit}
               onKeyDown={handleCellKeyDown}
@@ -2851,13 +2990,8 @@ export function EstimateGrid({ workspace, onApply, onError, highlightItemId }: E
             item={detailItem}
             workspace={workspace}
             entityCategories={entityCategories}
-            onSave={(next) => {
-              onApply(next as WorkspaceResponse);
-              // Keep the drawer open but refresh the item data
-              const updated = (next as WorkspaceResponse).workspace.worksheets
-                .flatMap((w) => w.items)
-                .find((i) => i.id === detailItem.id);
-              if (updated) setDetailItem(updated);
+            onPatchItem={(itemId, patch) => {
+              commitItemPatch(itemId, patch);
             }}
             onDelete={(id) => {
               deleteRow(id);
@@ -2977,6 +3111,7 @@ function GroupRows({
       {/* Items */}
       {!isCollapsed &&
         group.items.map((row, idx) => {
+          const isTemporary = isTemporaryWorksheetItemId(row.id);
           const isSelected = selectedRowId === row.id;
           const isChecked = selectedIds.has(row.id);
           const isDetailOpen = detailItem?.id === row.id;
@@ -2990,6 +3125,7 @@ function GroupRows({
               data-item-id={row.id}
               className={cn(
                 "transition-colors border-l-2",
+                isTemporary && "opacity-60",
                 isDetailOpen
                   ? "bg-accent/10"
                   : isSelected
@@ -2999,7 +3135,9 @@ function GroupRows({
               style={{ borderLeftColor: (catDef?.color ?? "#6b7280") + "40" }}
               onClick={() => {
                 onSelectRow(row.id);
-                onOpenDetail(row);
+                if (!isTemporary) {
+                  onOpenDetail(row);
+                }
               }}
               onContextMenu={(e) => onContextMenu(e, row.id)}
             >
@@ -3013,9 +3151,12 @@ function GroupRows({
                     )}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpenDetail(row);
+                      if (!isTemporary) {
+                        onOpenDetail(row);
+                      }
                     }}
                     title="Open detail"
+                    disabled={isTemporary}
                   >
                     <Maximize2 className="h-3 w-3" />
                   </button>
@@ -3029,6 +3170,7 @@ function GroupRows({
                     type="checkbox"
                     className="h-3.5 w-3.5 rounded border-line accent-accent cursor-pointer"
                     checked={isChecked}
+                    disabled={isTemporary}
                     onChange={(e) => {
                       e.stopPropagation();
                       onToggleSelectRow(row.id);
@@ -3045,11 +3187,11 @@ function GroupRows({
                     <button
                       className={cn(
                         "p-0.5 rounded transition-colors",
-                        idx === 0
+                        idx === 0 || isTemporary
                           ? "text-fg/10 cursor-not-allowed"
                           : "text-fg/30 hover:text-fg/60 hover:bg-panel2/60"
                       )}
-                      disabled={idx === 0 || isPending}
+                      disabled={idx === 0 || isPending || isTemporary}
                       onClick={(e) => {
                         e.stopPropagation();
                         onMoveUp(row, group.items);
@@ -3061,11 +3203,11 @@ function GroupRows({
                     <button
                       className={cn(
                         "p-0.5 rounded transition-colors",
-                        idx === group.items.length - 1
+                        idx === group.items.length - 1 || isTemporary
                           ? "text-fg/10 cursor-not-allowed"
                           : "text-fg/30 hover:text-fg/60 hover:bg-panel2/60"
                       )}
-                      disabled={idx === group.items.length - 1 || isPending}
+                      disabled={idx === group.items.length - 1 || isPending || isTemporary}
                       onClick={(e) => {
                         e.stopPropagation();
                         onMoveDown(row, group.items);
