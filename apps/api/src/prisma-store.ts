@@ -32,6 +32,7 @@ import type {
   CustomerContact,
   CustomerWithContacts,
   Dataset,
+  DatasetColumn,
   DatasetRow,
   Department,
   EntityCategory,
@@ -8037,6 +8038,10 @@ export class PrismaApiStore {
         });
         return rows.map((row) => (row.data as Record<string, unknown>) ?? {});
       },
+      lookupDatasetColumns: async (datasetRef) => {
+        const resolved = await this._resolveDatasetRecordForRead(datasetRef);
+        return resolved ? ((resolved.dataset.columns as DatasetColumn[]) ?? []) : [];
+      },
       resolveRateScheduleItem: async (rateScheduleItemId) => {
         const schedules = await this.db.rateSchedule.findMany({
           where: { revisionId },
@@ -8681,13 +8686,87 @@ export class PrismaApiStore {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
   }
 
-  private _getDatasetReferenceAliases(datasetRef: string) {
-    const normalized = this._normalizeDatasetReference(datasetRef);
-    const aliases: Record<string, string[]> = {
-      dsnecalabour: ["NECA Labour Units", "NECA Labour"],
-      dsphcclabour: ["PHCC Labour Units", "PHCC Labour"],
-    };
-    return aliases[normalized] ?? [];
+  private _tokenizeDatasetReference(value: string) {
+    return value
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter((token) =>
+        token &&
+        !new Set(["ds", "dataset", "data", "table", "template", "library", "row", "rows", "unit", "units"]).has(token),
+      );
+  }
+
+  private _scoreDatasetReferenceMatch(reference: string, candidate: string) {
+    if (!reference || !candidate) {
+      return 0;
+    }
+
+    if (reference === candidate) {
+      return 100;
+    }
+
+    const normalizedReference = this._normalizeDatasetReference(reference);
+    const normalizedCandidate = this._normalizeDatasetReference(candidate);
+    if (!normalizedReference || !normalizedCandidate) {
+      return 0;
+    }
+
+    if (normalizedReference === normalizedCandidate) {
+      return 95;
+    }
+
+    const referenceTokens = this._tokenizeDatasetReference(reference);
+    const candidateTokens = this._tokenizeDatasetReference(candidate);
+    if (
+      referenceTokens.length > 0 &&
+      referenceTokens.every((token) => candidateTokens.includes(token))
+    ) {
+      return 75 - Math.max(0, candidateTokens.length - referenceTokens.length);
+    }
+
+    if (
+      normalizedReference.length >= 4 &&
+      (normalizedCandidate.includes(normalizedReference) || normalizedReference.includes(normalizedCandidate))
+    ) {
+      return 60;
+    }
+
+    return 0;
+  }
+
+  private _findBestDatasetReferenceMatch<T extends { id?: string | null; name?: string | null; sourceTemplateId?: string | null }>(
+    datasetRef: string,
+    datasets: T[],
+  ): T | null {
+    const scored = datasets
+      .map((dataset) => ({
+        dataset,
+        score: Math.max(
+          this._scoreDatasetReferenceMatch(datasetRef, dataset.id ?? ""),
+          this._scoreDatasetReferenceMatch(datasetRef, dataset.name ?? ""),
+          this._scoreDatasetReferenceMatch(datasetRef, dataset.sourceTemplateId ?? ""),
+        ),
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (scored.length === 0) {
+      return null;
+    }
+
+    const best = scored[0];
+    const tied = scored.filter((entry) => entry.score === best.score);
+    if (tied.length > 1) {
+      const uniqueIds = new Set(tied.map((entry) => entry.dataset.id ?? entry.dataset.name ?? ""));
+      if (uniqueIds.size > 1) {
+        return null;
+      }
+    }
+
+    return best.dataset;
   }
 
   private async _resolveDatasetRecordForRead(datasetRef: string): Promise<{ dataset: any; client: PrismaClient } | null> {
@@ -8711,24 +8790,16 @@ export class PrismaApiStore {
     }
 
     const normalizedRef = this._normalizeDatasetReference(trimmed);
-    const aliases = this._getDatasetReferenceAliases(trimmed);
-    const normalizedAliases = aliases.map((alias) => this._normalizeDatasetReference(alias));
     const organizationDatasets = await this.db.dataset.findMany({
       where: { organizationId: this.organizationId },
     });
     const byOrgName = organizationDatasets.find((dataset) => {
       const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
-      return (
-        normalizedName === normalizedRef ||
-        normalizedAliases.some((alias) =>
-          normalizedName === alias ||
-          normalizedName.includes(alias) ||
-          alias.includes(normalizedName),
-        )
-      );
+      return normalizedName === normalizedRef;
     });
-    if (byOrgName) {
-      return { dataset: byOrgName, client: this.db };
+    const byOrgReference = byOrgName ?? this._findBestDatasetReferenceMatch(trimmed, organizationDatasets);
+    if (byOrgReference) {
+      return { dataset: byOrgReference, client: this.db };
     }
 
     const directTemplate = await sharedPrisma.dataset.findFirst({
@@ -8743,17 +8814,11 @@ export class PrismaApiStore {
     });
     const byTemplateName = templates.find((dataset) => {
       const normalizedName = this._normalizeDatasetReference(dataset.name ?? "");
-      return (
-        normalizedName === normalizedRef ||
-        normalizedAliases.some((alias) =>
-          normalizedName === alias ||
-          normalizedName.includes(alias) ||
-          alias.includes(normalizedName),
-        )
-      );
+      return normalizedName === normalizedRef;
     });
-    if (byTemplateName) {
-      return { dataset: byTemplateName, client: sharedPrisma };
+    const byTemplateReference = byTemplateName ?? this._findBestDatasetReferenceMatch(trimmed, templates);
+    if (byTemplateReference) {
+      return { dataset: byTemplateReference, client: sharedPrisma };
     }
 
     return null;

@@ -33,8 +33,10 @@ import type {
   PluginFieldOption,
   PluginFieldConditional,
   PluginOutput,
+  DatasetColumnRecord,
 } from "@/lib/api";
 import {
+  getDataset,
   listDatasetRows,
   listRateSchedules,
 } from "@/lib/api";
@@ -51,11 +53,28 @@ import {
 
 type DatasetRowData = Record<string, unknown>;
 type DatasetRowsById = Record<string, DatasetRowData[]>;
+type DatasetColumnsById = Record<string, DatasetColumnRecord[]>;
 type PluginSearchResult = Record<string, unknown>;
 
 // Cache for dataset rows to avoid redundant fetches
 const datasetRowsCache = new Map<string, { rows: DatasetRowData[]; ts: number }>();
+const datasetColumnsCache = new Map<string, { columns: DatasetColumnRecord[]; ts: number }>();
 const CACHE_TTL = 60_000; // 1 minute
+
+async function fetchDatasetColumns(datasetId: string): Promise<DatasetColumnRecord[]> {
+  const cacheKey = `columns:${datasetId}`;
+  const cached = datasetColumnsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.columns;
+
+  try {
+    const dataset = await getDataset(datasetId);
+    const columns = dataset.columns ?? [];
+    datasetColumnsCache.set(cacheKey, { columns, ts: Date.now() });
+    return columns;
+  } catch {
+    return [];
+  }
+}
 
 async function fetchDatasetRows(datasetId: string): Promise<DatasetRowData[]> {
   const cacheKey = `all:${datasetId}`;
@@ -96,6 +115,7 @@ function useDatasetOptions(
   optionsSource: PluginField["optionsSource"],
   parentValue?: unknown,
   filters: Array<{ key: string; value: unknown }> = [],
+  datasetColumns: DatasetColumnRecord[] = [],
 ): { options: PluginFieldOption[]; loading: boolean; allRows: DatasetRowData[] } {
   const [options, setOptions] = useState<PluginFieldOption[]>([]);
   const [allRows, setAllRows] = useState<DatasetRowData[]>([]);
@@ -129,14 +149,14 @@ function useDatasetOptions(
 
         let filtered = rows;
         if (filters.length > 0) {
-          filtered = rows.filter((row) => datasetRowMatchesFilters(row, filters));
+          filtered = rows.filter((row) => datasetRowMatchesFilters(row, filters, datasetColumns));
         }
 
         // Extract unique values for the column
         const seen = new Set<string>();
         const opts: PluginFieldOption[] = [];
         for (const row of filtered) {
-          const val = getDatasetCellString(row, optionsSource.column!);
+          const val = getDatasetCellString(row, optionsSource.column!, datasetColumns);
           if (val && !seen.has(val)) {
             seen.add(val);
             opts.push({ value: val, label: val });
@@ -159,7 +179,7 @@ function useDatasetOptions(
     })();
 
     return () => { cancelled = true; };
-  }, [filters, optionsSource?.datasetId, optionsSource?.column, optionsSource?.type, optionsSource?.parentColumn, parentValue]);
+  }, [datasetColumns, filters, optionsSource?.datasetId, optionsSource?.column, optionsSource?.type, optionsSource?.parentColumn, parentValue]);
 
   return { options, loading, allRows };
 }
@@ -208,16 +228,17 @@ function datasetLookup(
   matchColumns: string[],
   matchValues: unknown[],
   resultColumn: string,
+  datasetColumns?: DatasetColumnRecord[],
 ): number {
   for (const row of rows) {
     let match = true;
     for (let i = 0; i < matchColumns.length; i++) {
-      const rowVal = getDatasetCellString(row, matchColumns[i]);
+      const rowVal = getDatasetCellString(row, matchColumns[i], datasetColumns);
       const matchVal = String(matchValues[i] ?? "");
       if (!matchVal || rowVal !== matchVal) { match = false; break; }
     }
     if (match) {
-      return getDatasetCellNumber(row, resultColumn);
+      return getDatasetCellNumber(row, resultColumn, datasetColumns);
     }
   }
   return 0;
@@ -229,23 +250,24 @@ function datasetInterpolate(
   inputColumn: string,
   inputValue: number,
   resultColumn: string,
+  datasetColumns?: DatasetColumnRecord[],
 ): number {
   if (rows.length === 0) return 0;
   const sorted = [...rows].sort(
-    (a, b) => getDatasetCellNumber(a, inputColumn) - getDatasetCellNumber(b, inputColumn),
+    (a, b) => getDatasetCellNumber(a, inputColumn, datasetColumns) - getDatasetCellNumber(b, inputColumn, datasetColumns),
   );
-  const first = getDatasetCellNumber(sorted[0], inputColumn);
-  const last = getDatasetCellNumber(sorted[sorted.length - 1], inputColumn);
-  if (inputValue <= first) return getDatasetCellNumber(sorted[0], resultColumn);
-  if (inputValue >= last) return getDatasetCellNumber(sorted[sorted.length - 1], resultColumn);
+  const first = getDatasetCellNumber(sorted[0], inputColumn, datasetColumns);
+  const last = getDatasetCellNumber(sorted[sorted.length - 1], inputColumn, datasetColumns);
+  if (inputValue <= first) return getDatasetCellNumber(sorted[0], resultColumn, datasetColumns);
+  if (inputValue >= last) return getDatasetCellNumber(sorted[sorted.length - 1], resultColumn, datasetColumns);
 
   for (let i = 0; i < sorted.length - 1; i++) {
-    const lo = getDatasetCellNumber(sorted[i], inputColumn);
-    const hi = getDatasetCellNumber(sorted[i + 1], inputColumn);
+    const lo = getDatasetCellNumber(sorted[i], inputColumn, datasetColumns);
+    const hi = getDatasetCellNumber(sorted[i + 1], inputColumn, datasetColumns);
     if (inputValue >= lo && inputValue <= hi) {
       const t = hi !== lo ? (inputValue - lo) / (hi - lo) : 0;
-      const loVal = getDatasetCellNumber(sorted[i], resultColumn);
-      const hiVal = getDatasetCellNumber(sorted[i + 1], resultColumn);
+      const loVal = getDatasetCellNumber(sorted[i], resultColumn, datasetColumns);
+      const hiVal = getDatasetCellNumber(sorted[i + 1], resultColumn, datasetColumns);
       return loVal + t * (hiVal - loVal);
     }
   }
@@ -258,18 +280,19 @@ function datasetNearest(
   matchColumns: string[],
   matchValues: number[],
   resultColumn: string,
+  datasetColumns?: DatasetColumnRecord[],
 ): number {
   let bestDist = Infinity;
   let bestVal = 0;
   for (const row of rows) {
     let dist = 0;
     for (let i = 0; i < matchColumns.length; i++) {
-      const diff = getDatasetCellNumber(row, matchColumns[i]) - matchValues[i];
+      const diff = getDatasetCellNumber(row, matchColumns[i], datasetColumns) - matchValues[i];
       dist += diff * diff;
     }
     if (dist < bestDist) {
       bestDist = dist;
-      bestVal = getDatasetCellNumber(row, resultColumn);
+      bestVal = getDatasetCellNumber(row, resultColumn, datasetColumns);
     }
   }
   return bestVal;
@@ -312,6 +335,7 @@ function evaluateFormula(
   formula: string,
   values: Record<string, unknown>,
   datasetRows?: DatasetRowData[],
+  datasetColumns?: DatasetColumnRecord[],
   computation?: PluginField["computation"],
 ): number {
   try {
@@ -320,7 +344,7 @@ function evaluateFormula(
       const lookupCols = computation.lookupColumns ?? [];
       const resultCol = resolveComputationResultColumn(values, computation);
       const matchValues = lookupCols.map((col) => values[col]);
-      return datasetLookup(datasetRows, lookupCols, matchValues, resultCol);
+      return datasetLookup(datasetRows, lookupCols, matchValues, resultCol, datasetColumns);
     }
 
     // Handle interpolate() formula
@@ -328,7 +352,7 @@ function evaluateFormula(
       const inputCol = computation.lookupColumns?.[0] ?? "";
       const resultCol = resolveComputationResultColumn(values, computation);
       const inputValue = toNumber(values[inputCol]);
-      return datasetInterpolate(datasetRows, inputCol, inputValue, resultCol);
+      return datasetInterpolate(datasetRows, inputCol, inputValue, resultCol, datasetColumns);
     }
 
     // Handle nearest() formula
@@ -336,7 +360,7 @@ function evaluateFormula(
       const matchCols = computation.lookupColumns ?? [];
       const resultCol = resolveComputationResultColumn(values, computation);
       const matchValues = matchCols.map((col) => toNumber(values[col]));
-      return datasetNearest(datasetRows, matchCols, matchValues, resultCol);
+      return datasetNearest(datasetRows, matchCols, matchValues, resultCol, datasetColumns);
     }
 
     // Handle sum() aggregation for table data
@@ -432,6 +456,7 @@ function recomputeComputedFields(
   values: Record<string, unknown>,
   tableData: Record<string, Record<string, unknown>[]>,
   datasetRowsById: DatasetRowsById,
+  datasetColumnsById: DatasetColumnsById,
 ): Record<string, unknown> {
   const next = { ...values };
   const formulaValues = buildFormulaValues(next, tableData);
@@ -445,10 +470,14 @@ function recomputeComputedFields(
       const datasetRows = field.computation.datasetId
         ? datasetRowsById[field.computation.datasetId] ?? []
         : undefined;
+      const datasetColumns = field.computation.datasetId
+        ? datasetColumnsById[field.computation.datasetId] ?? []
+        : undefined;
       next[field.id] = evaluateFormula(
         field.computation.formula,
         formulaValues,
         datasetRows,
+        datasetColumns,
         field.computation,
       );
       formulaValues[field.id] = next[field.id];
@@ -728,6 +757,7 @@ function PluginFieldRenderer({
   allValues,
   error,
   datasetRowsById,
+  datasetColumnsById,
   sectionFields,
 }: {
   field: PluginField;
@@ -737,6 +767,7 @@ function PluginFieldRenderer({
   allValues: Record<string, unknown>;
   error?: string;
   datasetRowsById?: DatasetRowsById;
+  datasetColumnsById?: DatasetColumnsById;
   sectionFields: PluginField[];
 }) {
   if (!isFieldVisible(field, allValues)) return null;
@@ -771,12 +802,16 @@ function PluginFieldRenderer({
       }))
       .filter((filter) => String(filter.value ?? "").trim() !== "");
   }, [allValues, field.id, field.optionsSource, sectionFields]);
+  const fieldDatasetColumns = field.optionsSource?.datasetId
+    ? datasetColumnsById?.[field.optionsSource.datasetId] ?? []
+    : [];
   const dsOpts = useDatasetOptions(
     field.optionsSource?.type === "dataset" || field.optionsSource?.type === "cascade"
       ? field.optionsSource
       : undefined,
     parentValue,
     datasetFilters,
+    fieldDatasetColumns,
   );
   const rsOpts = useRateScheduleOptions(
     field.optionsSource?.type === "rate_schedule" ? field.optionsSource : undefined,
@@ -793,9 +828,12 @@ function PluginFieldRenderer({
   const fieldDatasetRows = field.computation?.datasetId
     ? datasetRowsById?.[field.computation.datasetId] ?? []
     : undefined;
+  const computedDatasetColumns = field.computation?.datasetId
+    ? datasetColumnsById?.[field.computation.datasetId] ?? []
+    : undefined;
 
   const computedValue = field.type === "computed" && field.computation
-    ? evaluateFormula(field.computation.formula, allValues, fieldDatasetRows, field.computation)
+    ? evaluateFormula(field.computation.formula, allValues, fieldDatasetRows, computedDatasetColumns, field.computation)
     : undefined;
 
   return (
@@ -1293,6 +1331,7 @@ function PluginSectionRenderer({
   onScoringDataChange,
   errors,
   datasetRowsById,
+  datasetColumnsById,
 }: {
   section: PluginUISection;
   values: Record<string, unknown>;
@@ -1304,6 +1343,7 @@ function PluginSectionRenderer({
   onScoringDataChange: (scoringId: string, scores: Record<string, number>) => void;
   errors: Record<string, string>;
   datasetRowsById?: DatasetRowsById;
+  datasetColumnsById?: DatasetColumnsById;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const fieldValues = useMemo(() => buildFormulaValues(values, tableData), [tableData, values]);
@@ -1350,6 +1390,7 @@ function PluginSectionRenderer({
                     allValues={fieldValues}
                     error={errors[field.id]}
                     datasetRowsById={datasetRowsById}
+                    datasetColumnsById={datasetColumnsById}
                     sectionFields={orderedFields}
                   />
                 ))}
@@ -1428,6 +1469,7 @@ export function PluginRuntime({
   const [scoringData, setScoringData] = useState<Record<string, Record<string, number>>>(initialScoringData ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [datasetRowsById, setDatasetRowsById] = useState<DatasetRowsById>({});
+  const [datasetColumnsById, setDatasetColumnsById] = useState<DatasetColumnsById>({});
 
   // Collect all dataset IDs referenced by computed fields (for lookup/interpolate/nearest)
   useEffect(() => {
@@ -1436,20 +1478,33 @@ export function PluginRuntime({
       if (!section.fields) continue;
       for (const field of section.fields) {
         if (field.computation?.datasetId) dsIds.add(field.computation.datasetId);
+        if (field.optionsSource?.datasetId) dsIds.add(field.optionsSource.datasetId);
       }
     }
     if (dsIds.size === 0) {
       setDatasetRowsById({});
+      setDatasetColumnsById({});
       return;
     }
 
     let cancelled = false;
     (async () => {
       const entries = await Promise.all(
-        [...dsIds].map(async (datasetId) => [datasetId, await fetchDatasetRows(datasetId)] as const),
+        [...dsIds].map(async (datasetId) => {
+          const [rows, columns] = await Promise.all([
+            fetchDatasetRows(datasetId),
+            fetchDatasetColumns(datasetId),
+          ]);
+          return [datasetId, { rows, columns }] as const;
+        }),
       );
       if (!cancelled) {
-        setDatasetRowsById(Object.fromEntries(entries));
+        setDatasetRowsById(
+          Object.fromEntries(entries.map(([datasetId, dataset]) => [datasetId, dataset.rows])),
+        );
+        setDatasetColumnsById(
+          Object.fromEntries(entries.map(([datasetId, dataset]) => [datasetId, dataset.columns])),
+        );
       }
     })();
 
@@ -1498,14 +1553,14 @@ export function PluginRuntime({
       const nextTables = Object.keys(tableDefs).length > 0
         ? { ...tableDefs, ...tableData }
         : tableData;
-      setValues((v) => recomputeComputedFields(schema, { ...defaults, ...v }, nextTables, datasetRowsById));
+      setValues((v) => recomputeComputedFields(schema, { ...defaults, ...v }, nextTables, datasetRowsById, datasetColumnsById));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    setValues((prev) => recomputeComputedFields(schema, prev, tableData, datasetRowsById));
-  }, [datasetRowsById, schema, tableData]);
+    setValues((prev) => recomputeComputedFields(schema, prev, tableData, datasetRowsById, datasetColumnsById));
+  }, [datasetColumnsById, datasetRowsById, schema, tableData]);
 
   const handleValuesPatch = useCallback((patch: Record<string, unknown>) => {
     const patchKeys = Object.keys(patch);
@@ -1531,7 +1586,7 @@ export function PluginRuntime({
         clearDeps(fieldId);
       }
 
-      return recomputeComputedFields(schema, next, tableData, datasetRowsById);
+      return recomputeComputedFields(schema, next, tableData, datasetRowsById, datasetColumnsById);
     });
 
     setErrors((prev) => {
@@ -1545,7 +1600,7 @@ export function PluginRuntime({
       }
       return changed ? next : prev;
     });
-  }, [cascadeDeps, datasetRowsById, schema, tableData]);
+  }, [cascadeDeps, datasetColumnsById, datasetRowsById, schema, tableData]);
 
   const handleFieldChange = useCallback((fieldId: string, value: unknown) => {
     handleValuesPatch({ [fieldId]: value });
@@ -1554,10 +1609,10 @@ export function PluginRuntime({
   const handleTableDataChange = useCallback((tableId: string, rows: Record<string, unknown>[]) => {
     setTableData((prev) => {
       const next = { ...prev, [tableId]: rows };
-      setValues((currentValues) => recomputeComputedFields(schema, currentValues, next, datasetRowsById));
+      setValues((currentValues) => recomputeComputedFields(schema, currentValues, next, datasetRowsById, datasetColumnsById));
       return next;
     });
-  }, [datasetRowsById, schema]);
+  }, [datasetColumnsById, datasetRowsById, schema]);
 
   const handleScoringDataChange = useCallback((scoringId: string, scores: Record<string, number>) => {
     setScoringData((prev) => ({ ...prev, [scoringId]: scores }));
@@ -1614,6 +1669,7 @@ export function PluginRuntime({
           onScoringDataChange={handleScoringDataChange}
           errors={errors}
           datasetRowsById={datasetRowsById}
+          datasetColumnsById={datasetColumnsById}
         />
       ))}
 

@@ -1,4 +1,4 @@
-import type { Plugin, PluginOutput, PluginOutputLineItem } from "@bidwright/domain";
+import type { DatasetColumn, Plugin, PluginOutput, PluginOutputLineItem } from "@bidwright/domain";
 import {
   computeLegacyNecaDifficulty,
   computeNecaExtendedDuration,
@@ -22,6 +22,7 @@ export interface BuiltinPluginExecutionContext {
   formState?: Record<string, unknown>;
   revisionDifficulty?: string;
   lookupDatasetRows: (datasetRef: string) => Promise<Array<Record<string, unknown>>>;
+  lookupDatasetColumns: (datasetRef: string) => Promise<DatasetColumn[]>;
   resolveRateScheduleItem: (rateScheduleItemId: string) => Promise<RateScheduleSelection | null>;
 }
 
@@ -59,9 +60,9 @@ function daysBetween(start: string, end: string) {
   return Math.max(0, Math.round((endTime - startTime) / 86_400_000));
 }
 
-function getRowString(row: Record<string, unknown>, keys: string[]) {
+function getRowString(row: Record<string, unknown>, keys: string[], columns?: DatasetColumn[]) {
   for (const key of keys) {
-    const value = getDatasetCellString(row, key);
+    const value = getDatasetCellString(row, key, columns);
     if (value) {
       return value;
     }
@@ -69,9 +70,9 @@ function getRowString(row: Record<string, unknown>, keys: string[]) {
   return "";
 }
 
-function getRowNumber(row: Record<string, unknown>, keys: string[]) {
+function getRowNumber(row: Record<string, unknown>, keys: string[], columns?: DatasetColumn[]) {
   for (const key of keys) {
-    const value = Number(getDatasetCellValue(row, key));
+    const value = Number(getDatasetCellValue(row, key, columns));
     if (Number.isFinite(value)) {
       return value;
     }
@@ -90,18 +91,19 @@ function normalizeDifficulty(value: string) {
 function findLabourDatasetRow(
   rows: Array<Record<string, unknown>>,
   input: Record<string, unknown>,
+  columns?: DatasetColumn[],
 ) {
   const category = toStringValue(input.category);
   const labourClass = toStringValue(input.class);
   const subClass = toStringValue(input.subClass);
 
   const matches = rows.filter((row) =>
-    getRowString(row, ["category"]) === category &&
-    getRowString(row, ["class"]) === labourClass,
+    getRowString(row, ["category"], columns) === category &&
+    getRowString(row, ["class"], columns) === labourClass,
   );
 
   if (subClass) {
-    const exact = matches.find((row) => getRowString(row, ["subClass"]) === subClass);
+    const exact = matches.find((row) => getRowString(row, ["subClass"], columns) === subClass);
     if (exact) {
       return exact;
     }
@@ -201,7 +203,8 @@ async function executeDatasetBackedLabourTool(
   }
 
   const datasetRows = await ctx.lookupDatasetRows(datasetRef);
-  const row = findLabourDatasetRow(datasetRows, ctx.input);
+  const datasetColumns = await ctx.lookupDatasetColumns(datasetRef);
+  const row = findLabourDatasetRow(datasetRows, ctx.input, datasetColumns);
   if (!row) {
     throw new Error(`No ${providerLabel} labour unit matched the selected category/class/sub-class.`);
   }
@@ -212,14 +215,14 @@ async function executeDatasetBackedLabourTool(
   const quantity = toNumber(ctx.input.quantity);
   const hoursPerUnit =
     difficulty === "Difficult"
-      ? getRowNumber(row, ["hourDifficult"])
+      ? getRowNumber(row, ["hourDifficult"], datasetColumns)
       : difficulty === "Very Difficult" || difficulty === "Extreme"
-        ? getRowNumber(row, ["hourVeryDifficult"])
-        : getRowNumber(row, ["hourNormal"]);
+        ? getRowNumber(row, ["hourVeryDifficult"], datasetColumns)
+        : getRowNumber(row, ["hourNormal"], datasetColumns);
   const totalHours = roundHours(quantity * hoursPerUnit);
-  const category = getRowString(row, ["category"]);
-  const labourClass = getRowString(row, ["class"]);
-  const subClass = getRowString(row, ["subClass"]);
+  const category = getRowString(row, ["category"], datasetColumns);
+  const labourClass = getRowString(row, ["class"], datasetColumns);
+  const subClass = getRowString(row, ["subClass"], datasetColumns);
   const description = [providerLabel, category, labourClass, subClass].filter(Boolean).join(" - ");
 
   const output: PluginOutput = {
