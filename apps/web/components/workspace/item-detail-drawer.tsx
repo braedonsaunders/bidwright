@@ -10,6 +10,7 @@ import type {
   WorkspaceWorksheetItem,
 } from "@/lib/api";
 import { listPluginExecutions } from "@/lib/api";
+import { getCalculationTypeOption } from "@/lib/entity-category-calculation";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
@@ -185,18 +186,10 @@ export function ItemDetailDrawer({
 
   const calcInfoText = (() => {
     if (!catDef) return null;
-    switch (catDef.calculationType) {
-      case "auto_labour":
-        return "Price calculated from labour rates \u00d7 hours \u00d7 quantity";
-      case "auto_equipment":
-        return "Price calculated from equipment rate \u00d7 duration \u00d7 quantity";
-      case "formula":
-        return catDef.calcFormula
-          ? `Formula: ${catDef.calcFormula}`
-          : null;
-      default:
-        return null;
+    if (catDef.calculationType === "formula" && catDef.calcFormula) {
+      return `Formula: ${catDef.calcFormula}`;
     }
+    return getCalculationTypeOption(catDef.calculationType).description;
   })();
 
   return (

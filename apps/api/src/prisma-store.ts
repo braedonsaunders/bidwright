@@ -16,6 +16,7 @@ import {
   inferSummaryPresetFromBuilder,
   materializeSummaryRowsFromBuilder,
   normalizeSummaryBuilderConfig,
+  normalizeCalculationType,
   summarizeProjectTotals,
 } from "@bidwright/domain";
 import type { SummaryBuilderConfig, SummaryPreset } from "@bidwright/domain";
@@ -3830,6 +3831,8 @@ export class PrismaApiStore {
     unitLabels?: Record<string, string>;
     calculationType?: string;
     calcFormula?: string;
+    itemSource?: string;
+    catalogId?: string | null;
     color?: string;
   }): Promise<EntityCategory> {
     const maxOrder = await this.db.entityCategory.aggregate({
@@ -3847,8 +3850,10 @@ export class PrismaApiStore {
         validUoms: input.validUoms ?? ["EA"],
         editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false }) as any,
         unitLabels: (input.unitLabels ?? { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" }) as any,
-        calculationType: input.calculationType ?? "manual",
+        calculationType: normalizeCalculationType(input.calculationType),
         calcFormula: input.calcFormula ?? "",
+        itemSource: input.itemSource ?? "freeform",
+        catalogId: input.catalogId ?? null,
         color: input.color ?? "#6b7280",
         order: (maxOrder._max.order ?? 0) + 1,
         isBuiltIn: false,
@@ -3872,7 +3877,7 @@ export class PrismaApiStore {
     if (patch.validUoms !== undefined) data.validUoms = patch.validUoms;
     if (patch.editableFields !== undefined) data.editableFields = patch.editableFields as any;
     if (patch.unitLabels !== undefined) data.unitLabels = patch.unitLabels as any;
-    if (patch.calculationType !== undefined) data.calculationType = patch.calculationType;
+    if (patch.calculationType !== undefined) data.calculationType = normalizeCalculationType(patch.calculationType);
     if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
     if (patch.itemSource !== undefined) data.itemSource = patch.itemSource;
     if (patch.catalogId !== undefined) data.catalogId = patch.catalogId;

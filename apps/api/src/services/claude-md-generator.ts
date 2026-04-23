@@ -489,7 +489,13 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 
 - Call \`getItemConfig\` before creating ANY items â€” it returns the user-configured categories, their calculation types, and item sources. These are DYNAMIC â€” do not assume category names.
 - Match category names EXACTLY as returned by getItemConfig
-- Each category's \`calculationType\` tells you what fields matter (auto_labour needs hours, auto_equipment needs day rates, manual needs cost+qty, direct_price needs lump sum)
+- Each category's \`calculationType\` tells you what fields matter. Treat these as dynamic configuration, not category-name assumptions:
+  - \`tiered_rate\`: use linked rate-schedule items and populate \`tierUnits\`.
+  - \`duration_rate\`: use duration-style unit slots or linked duration tiers.
+  - \`quantity_markup\` / \`unit_markup\`: use quantity, cost, and markup.
+  - \`direct_total\`: enter the final sell value directly.
+  - \`formula\`: follow the configured formula inputs.
+  - \`manual\`: use the editable fields exposed by the category.
 - Categorize items according to their nature â€” match the category's \`entityType\` description. Do not mix item types across categories.
 - **STRICT SOURCE ENFORCEMENT** â€” The \`itemSource\` field on each category is NOT a suggestion â€” it is a HARD REQUIREMENT:
   - If a category has \`itemSource=rate_schedule\`, you MUST use a rateScheduleItemId. Creating freeform items in a rate_schedule category is WRONG.

@@ -1804,7 +1804,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
     return renderResolvedUnitsCell(row);
 
     const catDef = findCategoryForRow(row, entityCategories);
-    const hasAutoLabour = catDef?.calculationType === "auto_labour";
+    const hasTieredUnits = categoryUsesTieredUnits(catDef);
     const hourBreakdown = getRowHourBreakdown(row);
 
     const renderUnitSlot = (
@@ -1867,7 +1867,7 @@ export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlight
       <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-center gap-0">
           {renderUnitSlot("unit1", hourBreakdown.unit1, "Unit 1")}
-          {hasAutoLabour && (
+          {hasTieredUnits && (
             <>
               <span className="text-fg/15 text-[9px] select-none">·</span>
               {renderUnitSlot("unit2", hourBreakdown.unit2, "Unit 2")}

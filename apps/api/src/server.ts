@@ -1993,7 +1993,7 @@ export function buildServer() {
       const itemSrc = (matchedCategory as any).itemSource;
 
       // Rate schedule categories MUST have a valid rateScheduleItemId
-      if (calcType === "auto_labour" || calcType === "auto_equipment" || itemSrc === "rate_schedule") {
+      if (calcType === "tiered_rate" || itemSrc === "rate_schedule") {
         if (!parsed.data.rateScheduleItemId) {
           // Check if rate schedules exist for this project
           const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);

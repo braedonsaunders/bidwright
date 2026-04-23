@@ -51,6 +51,7 @@ import type {
   WorksheetItem,
   BurdenPeriod,
 } from "@bidwright/domain";
+import { normalizeCalculationType } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 
 import { relativeWorkspacePath } from "../paths.js";
@@ -818,7 +819,7 @@ export function mapEntityCategory(e: any): EntityCategory {
     validUoms: e.validUoms ?? [],
     editableFields: (e.editableFields as any) ?? {},
     unitLabels: (e.unitLabels as any) ?? {},
-    calculationType: e.calculationType as EntityCategory["calculationType"],
+    calculationType: normalizeCalculationType(e.calculationType),
     calcFormula: e.calcFormula ?? "",
     itemSource: (e.itemSource as EntityCategory["itemSource"]) ?? "freeform",
     catalogId: e.catalogId ?? null,
