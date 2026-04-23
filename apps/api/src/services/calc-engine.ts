@@ -9,6 +9,7 @@
  */
 
 import type { EntityCategory, WorksheetItem } from "@bidwright/domain";
+import { normalizeCalculationType } from "@bidwright/domain";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -149,7 +150,7 @@ function resolveTierId(tierId: string, validKeys: string[]): string {
   return match ?? tierId;
 }
 
-function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | null {
+function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | null {
   const match = findRateScheduleItem(item, ctx);
   if (!match) return null;
 
@@ -283,16 +284,16 @@ function calcAutoRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult
 
 // ── Strategies ────────────────────────────────────────────────────────────
 
-function calcAutoLabour(item: WorksheetItem, ctx: CalcContext): CalcResult {
-  const rsResult = calcAutoRateSchedule(item, ctx);
+function calcTieredRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
+  const rsResult = calcRateSchedule(item, ctx);
   if (rsResult) return rsResult;
 
   return {};
 }
 
-function calcAutoEquipment(item: WorksheetItem, ctx: CalcContext): CalcResult {
+function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
   // Try rate schedule first
-  const rsResult = calcAutoRateSchedule(item, ctx);
+  const rsResult = calcRateSchedule(item, ctx);
   if (rsResult) return rsResult;
 
   // Duration is stored in unit1 (days)
@@ -335,14 +336,14 @@ function calcAutoEquipment(item: WorksheetItem, ctx: CalcContext): CalcResult {
   return { price, cost: price };
 }
 
-function calcAutoConsumable(item: WorksheetItem): CalcResult {
+function calcQuantityMarkup(item: WorksheetItem): CalcResult {
   const markup = normalizeMarkup(item.markup);
   const cost = round(item.quantity * item.cost);
   const price = round(cost * (1 + markup));
   return { price, cost };
 }
 
-function calcAutoSubcontract(item: WorksheetItem): CalcResult {
+function calcUnitMarkup(item: WorksheetItem): CalcResult {
   const markup = normalizeMarkup(item.markup);
   const price = round(item.quantity * item.cost * (1 + markup));
   return { price };
@@ -354,7 +355,7 @@ function calcManual(item: WorksheetItem): CalcResult {
   return { price };
 }
 
-function calcDirectPrice(_item: WorksheetItem): CalcResult {
+function calcDirectTotal(_item: WorksheetItem): CalcResult {
   // Price is entered directly by the user, no calculation needed
   return { cost: 0, markup: 0 };
 }
@@ -420,21 +421,19 @@ export function calculateItem(
   category: EntityCategory | undefined,
   ctx: CalcContext = {},
 ): CalcResult {
-  const calcType = category?.calculationType ?? "manual";
+  const calcType = normalizeCalculationType(category?.calculationType);
 
   switch (calcType) {
-    case "auto_labour":
-      return calcAutoLabour(item, ctx);
-    case "auto_equipment":
-      return calcAutoEquipment(item, ctx);
-    case "auto_consumable":
-      return calcAutoConsumable(item);
-    case "auto_subcontract":
-      return calcAutoSubcontract(item);
-    case "auto_stock":
-      return calcManual(item); // stock calc uses same as manual for now
-    case "direct_price":
-      return calcDirectPrice(item);
+    case "tiered_rate":
+      return calcTieredRate(item, ctx);
+    case "duration_rate":
+      return calcDurationRate(item, ctx);
+    case "quantity_markup":
+      return calcQuantityMarkup(item);
+    case "unit_markup":
+      return calcUnitMarkup(item);
+    case "direct_total":
+      return calcDirectTotal(item);
     case "formula":
       return calcFormula(item, category?.calcFormula ?? "");
     case "manual":

@@ -1,3 +1,5 @@
+import type { CalculationType } from "./calculation-types";
+
 export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted" | "estimating";
 export type QuoteStatus = "draft" | "review" | "submitted" | "awarded" | "lost";
 export type AiRunStatus = "queued" | "running" | "complete" | "failed";
@@ -1269,16 +1271,6 @@ export interface KnowledgeLibraryCabinet {
   createdAt: string;
   updatedAt: string;
 }
-
-export type CalculationType =
-  | "auto_labour"
-  | "auto_equipment"
-  | "auto_stock"
-  | "auto_consumable"
-  | "auto_subcontract"
-  | "direct_price"
-  | "manual"
-  | "formula";
 
 export interface EntityCategory {
   id: string;

@@ -706,13 +706,12 @@ export async function updateWorkspaceState(projectId: string, patch: Record<stri
 // ---------------------------------------------------------------------------
 
 export type CalculationType =
-  | "auto_labour"
-  | "auto_equipment"
-  | "auto_stock"
-  | "auto_consumable"
-  | "auto_subcontract"
-  | "direct_price"
   | "manual"
+  | "unit_markup"
+  | "quantity_markup"
+  | "tiered_rate"
+  | "duration_rate"
+  | "direct_total"
   | "formula";
 
 export interface EntityCategory {
