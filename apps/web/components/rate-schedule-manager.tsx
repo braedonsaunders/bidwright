@@ -383,7 +383,7 @@ export function RateScheduleManager({
             <div>
               <CardTitle>Rate Schedules</CardTitle>
               <p className="text-xs text-fg/40 mt-0.5">
-                Manage your organization&apos;s master rate library. Import these into projects.
+                                               Manage your organization's master rate library. Import these into projects.
               </p>
             </div>
             <Button variant="accent" size="xs" onClick={() => setShowCreate(true)}>

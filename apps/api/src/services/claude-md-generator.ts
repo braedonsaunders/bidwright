@@ -670,6 +670,7 @@ After reading ALL documents, prepare a structured scope summary covering:
 Then call the **askUser** MCP tool with the scope summary and ask: "Does this match your understanding? Anything to add or exclude?"
 
 If you need multiple structured answers, keep the top-level \`question\` short and use the tool's \`questions\` array so the UI can render one answer control per question.
+If a question should allow more than one selected option, set \`allowMultiple: true\` on that question (or on the top-level ask when using top-level \`options\`). Do not rely only on wording like "multi-select".
 
 **YOU MUST CALL THE askUser TOOL** â€” do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
 
@@ -686,6 +687,7 @@ Before estimating labour, call the **askUser** tool with ALL of these questions 
 **YOU MUST USE THE askUser TOOL for this step.** Do NOT print the questions as regular text output. Do NOT assume answers. The askUser tool blocks until the user responds. Collect ALL answers before creating labour line items. Log each answer as a working assumption.
 
 For this step, prefer a single **askUser** call with a short summary in \`question\` plus a structured \`questions\` array containing one entry per clarifying question and 2-4 suggested options for each.
+Use \`allowMultiple: true\` for checklist-style questions such as subcontracted activities, access equipment, included packages, exclusions, or any "pick all that apply" scope confirmation.
 
 **SUBCONTRACTOR IDENTIFICATION (CRITICAL â€” DO NOT SKIP)** â€” Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
 

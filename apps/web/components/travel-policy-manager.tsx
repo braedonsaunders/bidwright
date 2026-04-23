@@ -420,7 +420,7 @@ export function TravelPolicyManager() {
 
         {policies.length === 0 && (
           <div className="px-5 py-8 text-center text-xs text-fg/40">
-            No travel policies configured. Click &quot;New Policy&quot; to get started.
+            No travel policies configured. Click "New Policy" to get started.
           </div>
         )}
 

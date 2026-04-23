@@ -1098,18 +1098,29 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function deepMergeOptions(base: PdfLayoutOptions, overrides: Partial<PdfLayoutOptions>): PdfLayoutOptions {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeOptionBranch(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
   const result = { ...base };
-  for (const key of Object.keys(overrides) as (keyof PdfLayoutOptions)[]) {
-    const val = overrides[key];
-    if (val === undefined) continue;
-    if (typeof val === "object" && !Array.isArray(val) && val !== null) {
-      (result as any)[key] = { ...(base[key] as any), ...(val as any) };
+  for (const [key, val] of Object.entries(overrides ?? {})) {
+    if (!(key in base) || val === undefined) continue;
+    const baseValue = base[key];
+    if (isPlainObject(baseValue) && isPlainObject(val)) {
+      result[key] = mergeOptionBranch(baseValue, val);
     } else {
-      (result as any)[key] = val;
+      result[key] = val;
     }
   }
   return result;
+}
+
+function deepMergeOptions(base: PdfLayoutOptions, overrides: Partial<PdfLayoutOptions>): PdfLayoutOptions {
+  return mergeOptionBranch(
+    base as unknown as Record<string, unknown>,
+    (overrides ?? {}) as Record<string, unknown>,
+  ) as unknown as PdfLayoutOptions;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────

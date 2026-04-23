@@ -3569,11 +3569,13 @@ export async function getCliPendingQuestion(projectId: string) {
     questionId?: string | null;
     question?: string;
     options?: string[];
+    allowMultiple?: boolean;
     context?: string;
     questions?: Array<{
       id?: string;
       prompt: string;
       options?: string[];
+      allowMultiple?: boolean;
       placeholder?: string;
       context?: string;
     }>;

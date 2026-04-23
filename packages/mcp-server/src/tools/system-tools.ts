@@ -20,6 +20,7 @@ export function registerSystemTools(server: McpServer) {
     id: z.string().optional().describe("Stable identifier for this question"),
     prompt: z.string().describe("Question shown to the user"),
     options: z.array(z.string()).optional().describe("2-4 suggested answer choices"),
+    allowMultiple: z.boolean().optional().describe("Set true when the user can choose more than one option"),
     placeholder: z.string().optional().describe("Optional textbox placeholder for extra detail"),
     context: z.string().optional().describe("Optional short context for this individual question"),
   });
@@ -31,10 +32,11 @@ export function registerSystemTools(server: McpServer) {
     {
       question: z.string().describe("Short overall prompt or summary for this ask. If using `questions`, keep this concise."),
       options: z.array(z.string()).optional().describe("Optional suggested answer choices the user can click"),
+      allowMultiple: z.boolean().optional().describe("Set true when the top-level options support multiple selections"),
       context: z.string().optional().describe("Brief context explaining why you need this information"),
       questions: z.array(askUserQuestionSchema).optional().describe("Optional structured list of related questions. Prefer this when asking more than one thing at a time."),
     },
-    async ({ question, options, context, questions }) => {
+    async ({ question, options, allowMultiple, context, questions }) => {
       const projectId = process.env.BIDWRIGHT_PROJECT_ID || "";
       if (!projectId) {
         return { content: [{ type: "text" as const, text: "Error: No project ID configured" }] };
@@ -44,6 +46,7 @@ export function registerSystemTools(server: McpServer) {
         const created = await apiPost<{ ok: boolean; questionId: string }>(`/api/cli/${projectId}/question`, {
           question,
           options,
+          allowMultiple,
           context,
           questions,
         });

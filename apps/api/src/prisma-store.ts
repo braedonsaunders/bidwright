@@ -86,6 +86,7 @@ import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwrig
 import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma } from "@bidwright/db";
+import { decodeHtmlEntities } from "./text-utils.js";
 
 import {
   apiDataRoot,
@@ -4255,34 +4256,42 @@ export class PrismaApiStore {
       throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
     }
 
+    const normalizedInput: CreateWorksheetItemInput = {
+      ...input,
+      entityName: decodeHtmlEntities(input.entityName),
+      vendor: typeof input.vendor === "string" ? decodeHtmlEntities(input.vendor) : input.vendor,
+      description: decodeHtmlEntities(input.description),
+      sourceNotes: decodeHtmlEntities(input.sourceNotes ?? ""),
+    };
+
     const maxOrder = await this.db.worksheetItem.aggregate({
       where: { worksheetId },
       _max: { lineOrder: true },
     });
-    const lineOrder = input.lineOrder ?? ((maxOrder._max.lineOrder ?? 0) + 1);
+    const lineOrder = normalizedInput.lineOrder ?? ((maxOrder._max.lineOrder ?? 0) + 1);
 
     const item: WorksheetItem = {
       id: createId("li"),
       worksheetId,
-      phaseId: input.phaseId ?? null,
-      category: input.category,
-      entityType: input.entityType,
-      entityName: input.entityName,
-      vendor: input.vendor ?? undefined,
-      description: input.description,
-      quantity: input.quantity,
-      uom: input.uom,
-      cost: input.cost,
-      markup: input.markup,
-      price: input.price,
-      unit1: input.unit1,
-      unit2: input.unit2,
-      unit3: input.unit3,
+      phaseId: normalizedInput.phaseId ?? null,
+      category: normalizedInput.category,
+      entityType: normalizedInput.entityType,
+      entityName: normalizedInput.entityName,
+      vendor: normalizedInput.vendor ?? undefined,
+      description: normalizedInput.description,
+      quantity: normalizedInput.quantity,
+      uom: normalizedInput.uom,
+      cost: normalizedInput.cost,
+      markup: normalizedInput.markup,
+      price: normalizedInput.price,
+      unit1: normalizedInput.unit1,
+      unit2: normalizedInput.unit2,
+      unit3: normalizedInput.unit3,
       lineOrder,
-      rateScheduleItemId: input.rateScheduleItemId ?? null,
-      itemId: input.itemId ?? null,
-      tierUnits: input.tierUnits ?? {},
-      sourceNotes: input.sourceNotes ?? "",
+      rateScheduleItemId: normalizedInput.rateScheduleItemId ?? null,
+      itemId: normalizedInput.itemId ?? null,
+      tierUnits: normalizedInput.tierUnits ?? {},
+      sourceNotes: normalizedInput.sourceNotes ?? "",
     };
 
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
@@ -4487,10 +4496,18 @@ export class PrismaApiStore {
       throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
     }
 
+    const normalizedPatch: WorksheetItemPatchInput = {
+      ...patch,
+      ...(typeof patch.entityName === "string" ? { entityName: decodeHtmlEntities(patch.entityName) } : {}),
+      ...(typeof patch.vendor === "string" ? { vendor: decodeHtmlEntities(patch.vendor) } : {}),
+      ...(typeof patch.description === "string" ? { description: decodeHtmlEntities(patch.description) } : {}),
+      ...(typeof patch.sourceNotes === "string" ? { sourceNotes: decodeHtmlEntities(patch.sourceNotes) } : {}),
+    };
+
     // Apply patch to a domain item for recalculation
     const domainItem = mapWorksheetItem(item);
-    Object.assign(domainItem, patch);
-    if (patch.vendor === null) {
+    Object.assign(domainItem, normalizedPatch);
+    if (normalizedPatch.vendor === null) {
       domainItem.vendor = undefined;
     }
 
@@ -4521,7 +4538,7 @@ export class PrismaApiStore {
             : ` No rate schedule items exist. Import a rate schedule first via importRateSchedule.`)
         );
       }
-    } else if (updateItemSource === "rate_schedule" && patch.rateScheduleItemId === null) {
+    } else if (updateItemSource === "rate_schedule" && normalizedPatch.rateScheduleItemId === null) {
       // Only reject if explicitly clearing the ID on a rate_schedule category
       throw new Error(
         `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
@@ -4529,7 +4546,7 @@ export class PrismaApiStore {
       );
     }
 
-    if (domainItem.itemId && patch.itemId !== undefined) {
+    if (domainItem.itemId && normalizedPatch.itemId !== undefined) {
       const catalogItem = await this.db.catalogItem.findFirst({ where: { id: domainItem.itemId } });
       if (!catalogItem) {
         throw new Error(`Invalid itemId "${domainItem.itemId}" — no matching catalog item found.`);
@@ -4572,7 +4589,7 @@ export class PrismaApiStore {
       },
     });
 
-    const patchKeys = Object.keys(patch);
+    const patchKeys = Object.keys(normalizedPatch);
     const itemBefore = this.pick(mapWorksheetItem(item) as any, patchKeys);
     const mappedUpdated = mapWorksheetItem(updated);
     const itemAfter = this.pick(mappedUpdated as any, patchKeys);

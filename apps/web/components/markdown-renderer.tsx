@@ -2,7 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { cn } from "@/lib/utils";
+import { cn, decodeHtmlEntities } from "@/lib/utils";
 
 interface MarkdownRendererProps {
   content: string;
@@ -10,6 +10,8 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+  const decodedContent = decodeHtmlEntities(content);
+
   return (
     <div className={cn("prose prose-sm max-w-none dark:prose-invert", className)}>
     <ReactMarkdown
@@ -64,7 +66,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         hr: () => <hr className="border-line/50 my-2" />,
       }}
     >
-      {content}
+      {decodedContent}
     </ReactMarkdown>
     </div>
   );

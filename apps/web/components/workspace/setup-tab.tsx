@@ -1206,7 +1206,7 @@ function RatesSubTab({
           {/* Schedule list or empty state */}
           {workspace.rateSchedules.length === 0 ? (
             <EmptyState>
-              No rate schedules imported. Import from your organization&apos;s rate library.
+                                              No rate schedules imported. Import from your organization's rate library.
             </EmptyState>
           ) : (
             <div className="space-y-3">

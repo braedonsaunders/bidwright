@@ -1094,7 +1094,7 @@ export function SettingsPage({
                 </CardHeader>
                 <CardBody className="space-y-4">
                   <p className="text-xs text-fg/50">
-                    Enter your website URL and we&apos;ll automatically extract your brand identity using AI-powered analysis.
+                    Enter your website URL and we'll automatically extract your brand identity using AI-powered analysis.
                   </p>
                   <div className="flex gap-2">
                     <Input
@@ -1715,7 +1715,7 @@ export function SettingsPage({
               <div className="divide-y divide-line">
                 {categories.length === 0 && (
                   <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No categories configured. Click &quot;Add Category&quot; to get started.
+                    No categories configured. Click "Add Category" to get started.
                   </div>
                 )}
                 {categories.map((cat) => (
@@ -2000,7 +2000,7 @@ export function SettingsPage({
               <div className="divide-y divide-line">
                 {customers.length === 0 && (
                   <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No clients yet. Click &quot;Add Client&quot; to get started.
+                    No clients yet. Click "Add Client" to get started.
                   </div>
                 )}
                 {customers.map((cust) => (
@@ -2243,7 +2243,7 @@ export function SettingsPage({
               <div className="divide-y divide-line">
                 {departments.length === 0 && (
                   <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No departments yet. Click &quot;Add Department&quot; to get started.
+                    No departments yet. Click "Add Department" to get started.
                   </div>
                 )}
                 {departments.map((dept) => {
@@ -2357,7 +2357,7 @@ export function SettingsPage({
               <div className="divide-y divide-line">
                 {personas.length === 0 && (
                   <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No personas yet. Click &quot;Add Persona&quot; to get started.
+                    No personas yet. Click "Add Persona" to get started.
                   </div>
                 )}
                 {personas.map((persona) => {
@@ -2671,7 +2671,7 @@ export function SettingsPage({
               </CardHeader>
               <div className="px-5 pb-5">
                 <p className="text-xs text-fg/50 mb-4">
-                  Manage your organization&apos;s standard clause library. These are available to quickly add when setting up project quotes.
+                                              Manage your organization's standard clause library. These are available to quickly add when setting up project quotes.
                 </p>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 

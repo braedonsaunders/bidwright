@@ -234,7 +234,7 @@ export function ItemPluginTab({
         </div>
         <div className="rounded-xl border border-warning/20 bg-warning/5 p-4 text-sm text-warning">
           This plugin tool is no longer available in the current plugin catalog, so its saved parameters
-          can&apos;t be reopened here.
+                      can't be reopened here.
         </div>
       </div>
     );
