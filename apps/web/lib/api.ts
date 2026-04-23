@@ -2171,6 +2171,16 @@ export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "ma
   });
   if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
   const blob = await res.blob();
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/pdf")) {
+    const responseText = await blob.text().catch(() => "");
+    const detail = responseText ? `: ${responseText.slice(0, 160)}` : "";
+    throw new Error(`PDF fetch returned ${contentType || "a non-PDF response"}${detail}`);
+  }
+  const signature = await blob.slice(0, 5).text();
+  if (signature !== "%PDF-") {
+    throw new Error("PDF fetch returned invalid PDF bytes");
+  }
   return URL.createObjectURL(blob);
 }
 

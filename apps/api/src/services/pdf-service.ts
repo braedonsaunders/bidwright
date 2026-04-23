@@ -1281,7 +1281,6 @@ async function getBrowser(): Promise<import("playwright").Browser> {
 
 /**
  * Generate a PDF buffer from HTML content using Playwright.
- * Falls back to returning HTML if Playwright/Chromium is unavailable.
  */
 export async function generatePdfBuffer(
   html: string,
@@ -1294,9 +1293,10 @@ export async function generatePdfBuffer(
   const format = formatMap[opts.pageSetup.pageSize] || "Letter";
   const landscape = opts.pageSetup.orientation === "landscape";
 
+  let page: import("playwright").Page | null = null;
   try {
     const browser = await getBrowser();
-    const page = await browser.newPage();
+    page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle" });
     const pdfBuffer = await page.pdf({
       format: format as any,
@@ -1309,10 +1309,15 @@ export async function generatePdfBuffer(
         left: `${PDF_PAGE_MARGINS_MM.left}mm`,
       },
     });
-    await page.close();
-    return { buffer: Buffer.from(pdfBuffer), contentType: "application/pdf" };
-  } catch {
-    // Playwright/Chromium not available — fall back to HTML
-    return { buffer: Buffer.from(html, "utf-8"), contentType: "text/html" };
+    const buffer = Buffer.from(pdfBuffer);
+    if (buffer.subarray(0, 5).toString("utf8") !== "%PDF-") {
+      throw new Error("Playwright returned a non-PDF response");
+    }
+    return { buffer, contentType: "application/pdf" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`PDF generation failed: ${message}`);
+  } finally {
+    await page?.close().catch(() => {});
   }
 }
