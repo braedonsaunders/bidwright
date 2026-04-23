@@ -1,17 +1,15 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
 
-/** Old script kept for backwards compatibility */
+// Old script kept for backwards compatibility.
 const AUTO_COUNT_SCRIPT = path.join(PYTHON_DIR, "auto_count.py");
 
-/** New optimized counter (threshold=0.75, single-scale TM_CCOEFF_NORMED) */
+// New optimized counter (threshold=0.75, single-scale TM_CCOEFF_NORMED).
 const COUNT_SYMBOLS_SCRIPT = path.join(PYTHON_DIR, "tools", "count_symbols.py");
-
-/* ── Request / Response types ────────────────────────────────── */
 
 export interface BoundingBox {
   x: number;
@@ -23,29 +21,21 @@ export interface BoundingBox {
 }
 
 export interface SymbolCountRequest {
-  /** Absolute path to the PDF on disk */
   pdfPath: string;
-  /** Optional: absolute path to a template image (PNG/JPG) to match against */
   templateImagePath?: string;
-  /** 1-based page number (converted to 0-based internally for Python) */
   pageNumber?: number;
-  /** Bounding box of the selection region on the canvas */
   boundingBox?: BoundingBox;
-  /** Matching confidence threshold 0-1 (default 0.75) */
   threshold?: number;
-  /** Which methods to enable (default: all) — only used by legacy auto_count */
   methods?: ("template" | "ocr" | "visual" | "text" | "autostitch")[];
-  /** Enable cross-scale matching for cross-document searches (0.75x-1.25x scale range) */
   crossScale?: boolean;
-  /** Passed through to result */
   documentId?: string;
 }
 
 export interface SymbolMatch {
   rect: { x: number; y: number; width: number; height: number };
   confidence: number;
-  image?: string;       // data URL of the matched region
-  text?: string;        // OCR text found in the match
+  image?: string;
+  text?: string;
   detection_method: string;
   vector_count?: number;
 }
@@ -55,41 +45,18 @@ export interface SymbolCountResult {
   totalCount: number;
   pagesSearched: number;
   duration_ms: number;
-  snippetImage?: string; // data URL of the template/selection snippet
+  snippetImage?: string;
   imageWidth?: number;
   imageHeight?: number;
   errors: string[];
 }
 
-/* ── Helper: spawn a Python script with stdin JSON ────────── */
-
-function spawnPython(script: string, payload: string, timeoutMs: number = 120_000): Promise<{ stdout: string; stderr: string; code: number | null }> {
-  return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? (process.platform === "win32" ? "python" : "python3");
-    const proc = spawn(pythonPath, [script], {
-      cwd: PYTHON_DIR,
-      timeout: timeoutMs,
-      env: {
-        ...process.env,
-        PDF_BASE_PATH: process.env.DATA_DIR ?? "",
-      },
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    proc.stdin.write(payload);
-    proc.stdin.end();
-
-    proc.stdout.on("data", (data) => { stdout += data.toString(); });
-    proc.stderr.on("data", (data) => { stderr += data.toString(); });
-
-    proc.on("close", (code) => { resolve({ stdout, stderr, code }); });
-    proc.on("error", (err) => { resolve({ stdout: "", stderr: err.message, code: -1 }); });
-  });
+function buildPythonEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PDF_BASE_PATH: process.env.DATA_DIR ?? "",
+  };
 }
-
-/* ── Run the NEW count_symbols pipeline (optimized) ──────── */
 
 export async function runCountSymbols(request: SymbolCountRequest): Promise<SymbolCountResult> {
   const start = Date.now();
@@ -103,7 +70,13 @@ export async function runCountSymbols(request: SymbolCountRequest): Promise<Symb
     crossScale: request.crossScale ?? false,
   });
 
-  const { stdout, stderr, code } = await spawnPython(COUNT_SYMBOLS_SCRIPT, payload);
+  const { stdout, stderr, code } = await spawnPythonCommand({
+    scriptArgs: [COUNT_SYMBOLS_SCRIPT],
+    cwd: PYTHON_DIR,
+    timeoutMs: 120_000,
+    env: buildPythonEnv(),
+    stdin: payload,
+  });
   const duration_ms = Date.now() - start;
 
   if (code !== 0) {
@@ -129,10 +102,10 @@ export async function runCountSymbols(request: SymbolCountRequest): Promise<Symb
       };
     }
 
-    const matches: SymbolMatch[] = (result.matches ?? []).map((m: any) => ({
-      rect: { x: m.x ?? 0, y: m.y ?? 0, width: m.w ?? 0, height: m.h ?? 0 },
-      confidence: m.confidence ?? 0,
-      image: m.image ?? undefined,
+    const matches: SymbolMatch[] = (result.matches ?? []).map((match: any) => ({
+      rect: { x: match.x ?? 0, y: match.y ?? 0, width: match.w ?? 0, height: match.h ?? 0 },
+      confidence: match.confidence ?? 0,
+      image: match.image ?? undefined,
       detection_method: "template",
     }));
 
@@ -157,12 +130,9 @@ export async function runCountSymbols(request: SymbolCountRequest): Promise<Symb
   }
 }
 
-/* ── Run the OLD auto_count pipeline (legacy, kept working) ── */
-
 export async function runAutoCount(request: SymbolCountRequest): Promise<SymbolCountResult> {
   const start = Date.now();
 
-  // Build JSON payload matching what auto_count.py --json expects
   const payload = JSON.stringify({
     pdfPath: request.pdfPath,
     templateImagePath: request.templateImagePath ?? null,
@@ -173,92 +143,63 @@ export async function runAutoCount(request: SymbolCountRequest): Promise<SymbolC
     documentId: request.documentId ?? null,
   });
 
-  return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? (process.platform === "win32" ? "python" : "python3");
-    const proc = spawn(pythonPath, [AUTO_COUNT_SCRIPT, "--json"], {
-      cwd: PYTHON_DIR,
-      timeout: 120_000,
-      env: {
-        ...process.env,
-        // Pass the base data dir so Python can resolve relative paths if needed
-        PDF_BASE_PATH: process.env.DATA_DIR ?? "",
-      },
-    });
+  const { stdout, stderr, code } = await spawnPythonCommand({
+    scriptArgs: [AUTO_COUNT_SCRIPT, "--json"],
+    cwd: PYTHON_DIR,
+    timeoutMs: 120_000,
+    env: buildPythonEnv(),
+    stdin: payload,
+  });
+  const duration_ms = Date.now() - start;
 
-    let stdout = "";
-    let stderr = "";
+  if (code !== 0) {
+    return {
+      matches: [],
+      totalCount: 0,
+      pagesSearched: 1,
+      duration_ms,
+      errors: [stderr || `Process exited with code ${code}`],
+    };
+  }
 
-    proc.stdin.write(payload);
-    proc.stdin.end();
+  try {
+    const parsed = JSON.parse(stdout);
+    const result = parsed.result ?? parsed;
 
-    proc.stdout.on("data", (data) => { stdout += data.toString(); });
-    proc.stderr.on("data", (data) => { stderr += data.toString(); });
-
-    proc.on("close", (code) => {
-      const duration_ms = Date.now() - start;
-      if (code !== 0) {
-        resolve({
-          matches: [],
-          totalCount: 0,
-          pagesSearched: 1,
-          duration_ms,
-          errors: [stderr || `Process exited with code ${code}`],
-        });
-        return;
-      }
-
-      try {
-        const parsed = JSON.parse(stdout);
-        // auto_count.py wraps its output in { "result": { ... } }
-        const result = parsed.result ?? parsed;
-
-        if (result.error) {
-          resolve({
-            matches: [],
-            totalCount: 0,
-            pagesSearched: 1,
-            duration_ms,
-            errors: [result.error],
-          });
-          return;
-        }
-
-        const matches: SymbolMatch[] = (result.final_matches ?? result.matches ?? []).map((m: any) => ({
-          rect: m.rect ?? { x: m.x ?? 0, y: m.y ?? 0, width: m.width ?? 0, height: m.height ?? 0 },
-          confidence: m.confidence ?? 0,
-          image: m.image ?? undefined,
-          text: m.text ?? undefined,
-          detection_method: m.detection_method ?? m.method ?? "unknown",
-          vector_count: m.vector_count ?? 0,
-        }));
-
-        resolve({
-          matches,
-          totalCount: matches.length,
-          pagesSearched: 1,
-          duration_ms,
-          snippetImage: result.pdf_snippet_image ?? undefined,
-          errors: [],
-        });
-      } catch {
-        resolve({
-          matches: [],
-          totalCount: 0,
-          pagesSearched: 1,
-          duration_ms,
-          errors: [`Failed to parse Python output: ${stdout.slice(0, 500)}`],
-        });
-      }
-    });
-
-    proc.on("error", (err) => {
-      resolve({
+    if (result.error) {
+      return {
         matches: [],
         totalCount: 0,
         pagesSearched: 1,
-        duration_ms: Date.now() - start,
-        errors: [err.message],
-      });
-    });
-  });
+        duration_ms,
+        errors: [result.error],
+      };
+    }
+
+    const matches: SymbolMatch[] = (result.final_matches ?? result.matches ?? []).map((match: any) => ({
+      rect: match.rect ?? { x: match.x ?? 0, y: match.y ?? 0, width: match.width ?? 0, height: match.height ?? 0 },
+      confidence: match.confidence ?? 0,
+      image: match.image ?? undefined,
+      text: match.text ?? undefined,
+      detection_method: match.detection_method ?? match.method ?? "unknown",
+      vector_count: match.vector_count ?? 0,
+    }));
+
+    return {
+      matches,
+      totalCount: matches.length,
+      pagesSearched: 1,
+      duration_ms,
+      snippetImage: result.pdf_snippet_image ?? undefined,
+      errors: [],
+    };
+  } catch {
+    return {
+      matches: [],
+      totalCount: 0,
+      pagesSearched: 1,
+      duration_ms,
+      errors: [`Failed to parse Python output: ${stdout.slice(0, 500)}`],
+    };
+  }
 }

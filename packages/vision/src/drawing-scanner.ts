@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
@@ -57,70 +57,46 @@ export async function runScanDrawing(request: ScanDrawingRequest): Promise<ScanD
     maxSize: request.maxSize ?? 180,
   });
 
-  return new Promise((resolve) => {
-    const pythonPath = process.env.PYTHON_PATH ?? "python3";
-    const proc = spawn(pythonPath, [SCAN_DRAWING_SCRIPT], {
-      cwd: PYTHON_DIR,
-      timeout: 120_000,
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    proc.stdin.write(payload);
-    proc.stdin.end();
-
-    proc.stdout.on("data", (d) => { stdout += d.toString(); });
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-
-    proc.on("close", (code) => {
-      const duration_ms = Date.now() - start;
-      if (code !== 0) {
-        resolve({
-          clusters: [],
-          imageWidth: 0,
-          imageHeight: 0,
-          totalClusters: 0,
-          totalSymbolsFound: 0,
-          scanDuration_ms: duration_ms,
-          error: stderr || `Process exited with code ${code}`,
-        });
-        return;
-      }
-      try {
-        const result = JSON.parse(stdout);
-        resolve({
-          clusters: result.clusters ?? [],
-          imageWidth: result.imageWidth ?? 0,
-          imageHeight: result.imageHeight ?? 0,
-          totalClusters: result.totalClusters ?? 0,
-          totalSymbolsFound: result.totalSymbolsFound ?? 0,
-          scanDuration_ms: result.scanDuration_ms ?? duration_ms,
-        });
-      } catch {
-        resolve({
-          clusters: [],
-          imageWidth: 0,
-          imageHeight: 0,
-          totalClusters: 0,
-          totalSymbolsFound: 0,
-          scanDuration_ms: duration_ms,
-          error: `Failed to parse Python output: ${stdout.slice(0, 500)}`,
-        });
-      }
-    });
-
-    proc.on("error", (err) => {
-      resolve({
-        clusters: [],
-        imageWidth: 0,
-        imageHeight: 0,
-        totalClusters: 0,
-        totalSymbolsFound: 0,
-        scanDuration_ms: Date.now() - start,
-        error: err.message,
-      });
-    });
+  const { stdout, stderr, code } = await spawnPythonCommand({
+    scriptArgs: [SCAN_DRAWING_SCRIPT],
+    cwd: PYTHON_DIR,
+    timeoutMs: 120_000,
+    env: { ...process.env },
+    stdin: payload,
   });
+  const duration_ms = Date.now() - start;
+
+  if (code !== 0) {
+    return {
+      clusters: [],
+      imageWidth: 0,
+      imageHeight: 0,
+      totalClusters: 0,
+      totalSymbolsFound: 0,
+      scanDuration_ms: duration_ms,
+      error: stderr || `Process exited with code ${code}`,
+    };
+  }
+
+  try {
+    const result = JSON.parse(stdout);
+    return {
+      clusters: result.clusters ?? [],
+      imageWidth: result.imageWidth ?? 0,
+      imageHeight: result.imageHeight ?? 0,
+      totalClusters: result.totalClusters ?? 0,
+      totalSymbolsFound: result.totalSymbolsFound ?? 0,
+      scanDuration_ms: result.scanDuration_ms ?? duration_ms,
+    };
+  } catch {
+    return {
+      clusters: [],
+      imageWidth: 0,
+      imageHeight: 0,
+      totalClusters: 0,
+      totalSymbolsFound: 0,
+      scanDuration_ms: duration_ms,
+      error: `Failed to parse Python output: ${stdout.slice(0, 500)}`,
+    };
+  }
 }
