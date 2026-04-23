@@ -4296,12 +4296,14 @@ A plugin has:
 - name, slug (url-safe), icon (lucide icon name), category (one of: ${categoryList}), description, llmDescription (for AI agent), version, author, tags
 - toolDefinitions: array of tools, each with:
   - id, name, description, llmDescription, parameters (array of {name, type, description, required}), outputType (line_items|worksheet|text_content|revision_patch|score|modifier|summary)
+  - outputTemplate for declarative line item outputs when the tool creates estimate rows. Use field references, defaults, first/join/template values, and validation rules instead of relying on backend plugin IDs.
+  - execution only when the tool needs a supported generic server capability such as dataset_labour_units, scoring_result_patch, table_hours, shop_pipe_estimate, or shop_weld_estimate. Never invent backend helper endpoints or exact slug/tool-name handlers.
   - ui: declarative UI schema with sections, each section has type (fields|table|scoring) and contains:
-    - fields: array of {id, type (text|number|currency|percentage|select|computed|boolean|slider|textarea|date), label, description, placeholder, defaultValue, validation:{required,min,max}, width (full|half|third|quarter), options:[{value,label}], computation:{formula,dependencies,format(number|hours|currency|percentage)}}
+    - fields: array of {id, type (text|number|currency|percentage|select|search|computed|boolean|slider|textarea|date), label, description, placeholder, defaultValue, validation:{required,min,max}, width (full|half|third|quarter), options:[{value,label}], optionsSource, searchConfig, computation:{formula,dependencies,format(number|hours|currency|percentage)}}
     - table: {id, label, columns:[{id,label,type,width,editable,options,computation,aggregate(sum|avg)}], defaultRows, allowAddRow, allowDeleteRow, totalsRow, rowTemplate}
     - scoring: {id, label, criteria:[{id,label,description,weight,scale:{min,max,step,labels}}], resultMapping:[{minScore,maxScore,label,value,color}], outputField}
 
-For computed fields, use formulas like "quantity * hoursPerUnit" referencing other field IDs. For selects with static options, include the options array. For scoring tools, use outputType "score" with revision_patch effect.
+For computed fields, use formulas like "quantity * hoursPerUnit" referencing other field IDs. For selects with static options, include the options array. For searchable external data, put the HTTP API mapping in searchConfig.dataSource on the search field; do not use /api/plugins/helpers routes.
 
 Return ONLY valid JSON — the complete plugin object. No markdown, no explanation.`;
 

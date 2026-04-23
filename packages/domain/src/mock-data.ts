@@ -1,4 +1,9 @@
 import type { BidwrightStore } from "./models";
+import {
+  googleHotelsOutputTemplate,
+  googleShoppingOutputTemplate,
+  homeDepotSearchOutputTemplate,
+} from "./plugin-output-templates";
 
 export const mockStore: BidwrightStore = {
   projects: [
@@ -531,6 +536,7 @@ export const mockStore: BidwrightStore = {
             { name: "difficulty", type: "string", description: "Difficulty level: Normal, Difficult, Very Difficult, Extreme", required: false, enum: ["Normal", "Difficult", "Very Difficult", "Extreme"], default: "Normal" },
           ],
           outputType: "line_items",
+          execution: { type: "dataset_labour_units", datasetId: "ds-neca-labour", providerLabel: "NECA" },
           requiresConfirmation: false,
           mutates: true,
           tags: ["neca", "labour", "lookup"],
@@ -602,6 +608,12 @@ export const mockStore: BidwrightStore = {
           llmDescription: "Evaluate 15 job site criteria to calculate a NECA difficulty score. Each criterion is scored on a weighted scale. The total score maps to a difficulty level which affects all NECA labour calculations for the quote. This tool writes the result directly to the revision's necaDifficulty field.",
           parameters: [],
           outputType: "revision_patch",
+          execution: {
+            type: "scoring_result_patch",
+            scoringId: "necaJobCondition",
+            revisionField: "necaDifficulty",
+            summaryTitle: "NECA Job Condition",
+          },
           requiresConfirmation: true,
           mutates: true,
           tags: ["neca", "assessment", "difficulty"],
@@ -644,6 +656,7 @@ export const mockStore: BidwrightStore = {
                     { minScore: 70.01, maxScore: 100, label: "Extreme", value: "Extreme", color: "#ef4444", description: "Major productivity impact — 1.50x factor" },
                   ],
                   outputField: "necaDifficulty",
+                  outputEffect: { type: "revision_patch", revisionField: "necaDifficulty" },
                 },
               },
             ],
@@ -660,6 +673,7 @@ export const mockStore: BidwrightStore = {
             { name: "baseHours", type: "number", description: "Base labour hours to adjust", required: true },
           ],
           outputType: "line_items",
+          execution: { type: "neca_temperature_adjustment" },
           tags: ["neca", "temperature", "productivity"],
           ui: {
             layout: "single",
@@ -703,6 +717,7 @@ export const mockStore: BidwrightStore = {
             { name: "monthsExtended", type: "number", description: "Number of months the project is extended", required: true },
           ],
           outputType: "line_items",
+          execution: { type: "neca_extended_duration" },
           tags: ["neca", "duration", "extension"],
           ui: {
             layout: "single",
@@ -765,6 +780,7 @@ export const mockStore: BidwrightStore = {
             { name: "quantity", type: "number", description: "Quantity of units", required: true },
           ],
           outputType: "line_items",
+          execution: { type: "dataset_labour_units", datasetId: "ds-phcc-labour", providerLabel: "PHCC" },
           tags: ["phcc", "labour", "lookup"],
           ui: {
             layout: "single",
@@ -819,6 +835,16 @@ export const mockStore: BidwrightStore = {
             { name: "efficiencyModifier", type: "number", description: "Efficiency modifier (0.5 - 2.0, default 1.0)", required: false, default: 1.0 },
           ],
           outputType: "line_items",
+          execution: {
+            type: "table_hours",
+            tableId: "weldComponents",
+            totalField: "totalMH",
+            quantityField: "quantity",
+            rateField: "mhPerUnit",
+            multiplierField: "efficiencyModifier",
+            defaultMultiplier: 1,
+            descriptionDefault: "Methvin pipe welding",
+          },
           requiresConfirmation: false,
           mutates: true,
           tags: ["welding", "pipe", "methvin"],
@@ -918,6 +944,14 @@ export const mockStore: BidwrightStore = {
           llmDescription: "Fabrication labour calculator using a task-based table. List fabrication tasks with quantities and hours per unit. Returns total fabrication labour.",
           parameters: [],
           outputType: "line_items",
+          execution: {
+            type: "table_hours",
+            tableId: "fabTasks",
+            totalField: "totalHours",
+            quantityField: "quantity",
+            rateField: "hoursPerUnit",
+            descriptionDefault: "Methvin fabrication",
+          },
           tags: ["fabrication", "methvin"],
           ui: {
             layout: "single",
@@ -972,6 +1006,14 @@ export const mockStore: BidwrightStore = {
             { name: "distance", type: "number", description: "Total run distance in feet", required: true },
           ],
           outputType: "line_items",
+          execution: {
+            type: "table_hours",
+            tableId: "cableRuns",
+            totalField: "totalMH",
+            quantityField: "distance",
+            rateField: "mhPerFoot",
+            descriptionDefault: "Methvin conduit & cable",
+          },
           tags: ["conduit", "cable", "electrical", "methvin"],
           ui: {
             layout: "single",
@@ -1048,6 +1090,7 @@ export const mockStore: BidwrightStore = {
             { name: "maxResults", type: "number", description: "Maximum number of results (default 10)", required: false, default: 10 },
           ],
           outputType: "line_items",
+          outputTemplate: homeDepotSearchOutputTemplate,
           tags: ["search", "material", "pricing"],
           ui: {
             layout: "single",
@@ -1148,6 +1191,7 @@ export const mockStore: BidwrightStore = {
         llmDescription: "Search Google Shopping for product pricing. Returns results from multiple vendors for price comparison.",
         parameters: [{ name: "query", type: "string", description: "Search query", required: true }],
         outputType: "line_items",
+        outputTemplate: googleShoppingOutputTemplate,
         tags: ["search", "material", "comparison"],
         ui: {
           layout: "single",
@@ -1250,6 +1294,7 @@ export const mockStore: BidwrightStore = {
           { name: "crewSize", type: "number", description: "Number of crew members needing rooms", required: false, default: 1 },
         ],
         outputType: "line_items",
+        outputTemplate: googleHotelsOutputTemplate,
         tags: ["travel", "hotels", "search"],
         ui: {
           layout: "single",

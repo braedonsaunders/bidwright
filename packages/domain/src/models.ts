@@ -1067,6 +1067,56 @@ export interface PluginOutput {
 
 // ── Plugin Tool Definition (enhanced) ─────────────────────────────────────
 
+export type PluginOutputTemplateValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { from: "input"; key: string; type?: "string" | "number" | "boolean"; default?: PluginOutputTemplateValue; min?: number; max?: number }
+  | { first: PluginOutputTemplateValue[] }
+  | { join: PluginOutputTemplateValue[]; separator?: string }
+  | { template: string };
+
+export interface PluginOutputValidationRule {
+  field?: string;
+  value?: PluginOutputTemplateValue;
+  rule: "required" | "positive";
+  message: string;
+}
+
+export interface PluginToolOutputTemplate {
+  type: "line_items";
+  validation?: PluginOutputValidationRule[];
+  lineItems: Array<Partial<Record<keyof PluginOutputLineItem, PluginOutputTemplateValue>>>;
+  summary?: {
+    title: PluginOutputTemplateValue;
+    sections: Array<{
+      label: string;
+      value: PluginOutputTemplateValue;
+      format?: "text" | "number" | "currency" | "percentage" | "hours";
+    }>;
+  };
+  displayText?: PluginOutputTemplateValue;
+}
+
+export type PluginToolExecutionDefinition =
+  | { type: "dataset_labour_units"; datasetId: string; providerLabel: string }
+  | { type: "scoring_result_patch"; scoringId: string; revisionField: string; summaryTitle?: string }
+  | { type: "neca_temperature_adjustment" }
+  | { type: "neca_extended_duration" }
+  | {
+      type: "table_hours";
+      tableId: string;
+      totalField: string;
+      quantityField: string;
+      rateField: string;
+      multiplierField?: string;
+      defaultMultiplier?: number;
+      descriptionDefault: string;
+    }
+  | { type: "shop_pipe_estimate"; tableId: string; descriptionDefault: string }
+  | { type: "shop_weld_estimate"; tableId: string; descriptionDefault: string };
+
 export interface PluginToolDefinition {
   id: string;
   name: string;
@@ -1082,6 +1132,8 @@ export interface PluginToolDefinition {
   }>;
   outputType: PluginOutput["type"];
   ui?: PluginUISchema;           // declarative UI for this tool
+  outputTemplate?: PluginToolOutputTemplate;
+  execution?: PluginToolExecutionDefinition;
   requiresConfirmation?: boolean;
   mutates?: boolean;
   tags?: string[];
