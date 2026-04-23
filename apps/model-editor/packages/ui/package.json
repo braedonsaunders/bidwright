@@ -1,0 +1,10 @@
+{
+    "name": "@chili3d/ui",
+    "version": "0.7.0-beta",
+    "description": "",
+    "main": "src/index.ts",
+    "devDependencies": {
+        "@chili3d/core": "*",
+        "@chili3d/element": "*"
+    }
+}

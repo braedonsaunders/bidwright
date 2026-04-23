@@ -1,0 +1,56 @@
+// Part of the Chili3d Project, under the AGPL-3.0 License.
+// See LICENSE file in the project root for full license information.
+
+/**
+ * Author information type
+ */
+export type PluginAuthor =
+    | string
+    | {
+          name: string;
+          email?: string;
+          url?: string;
+      };
+
+/**
+ * Engine requirements type
+ */
+export type PluginEngines = {
+    /** BidWright model editor version requirement (semver range, e.g., ">=0.1.0") */
+    bidwrightModelEditor?: string;
+};
+
+/**
+ * Plugin manifest type
+ */
+export type PluginManifest = {
+    /** Plugin name */
+    name: string;
+
+    /** Version number (semver format) */
+    version: string;
+
+    /** Main entry file (relative path) */
+    main: string;
+
+    /** Author information */
+    author?: PluginAuthor;
+
+    /** Plugin description */
+    description?: string;
+
+    /** Plugin icon path (relative path) */
+    icon?: string;
+
+    /** Engine compatibility requirements */
+    engines?: PluginEngines;
+
+    /** Dependencies on other plugins (plugin ID -> version range) */
+    dependencies?: Record<string, string>;
+
+    /** CSS file path(s) to load (relative path) */
+    css?: string | string[];
+
+    /** Import map for module resolution, see https://developer.mozilla.org/zh-CN/docs/Web/HTML/Reference/Elements/script/type/importmap */
+    importmap?: string;
+};

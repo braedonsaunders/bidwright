@@ -1,0 +1,9 @@
+{
+    "name": "@chili3d/web",
+    "version": "0.7.0-beta",
+    "description": "",
+    "main": "src/index.ts",
+    "devDependencies": {
+        "@chili3d/builder": "*"
+    }
+}

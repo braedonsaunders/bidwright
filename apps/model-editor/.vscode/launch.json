@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug(Test)",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/node_modules/@rstest/core/bin/rstest.js",
+            "args": ["run", "${file}"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "skipFiles": ["<node_internals>/**"]
+        },
+        {
+            "name": "Debug",
+            "type": "msedge",
+            "request": "launch",
+            "url": "http://localhost:8080/"
+        }
+    ]
+}

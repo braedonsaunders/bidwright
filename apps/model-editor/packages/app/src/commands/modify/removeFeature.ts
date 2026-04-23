@@ -1,0 +1,61 @@
+// Part of the Chili3d Project, under the AGPL-3.0 License.
+// See LICENSE file in the project root for full license information.
+
+import {
+    command,
+    EditableShapeNode,
+    type IFace,
+    SelectShapeStep,
+    type ShapeNode,
+    ShapeTypes,
+    Transaction,
+    VisualStates,
+} from "@chili3d/core";
+import { MultistepCommand } from "../multistepCommand";
+
+@command({
+    key: "modify.removeFeature",
+    icon: "icon-removeFeature",
+})
+export class RemoveFaceCommand extends MultistepCommand {
+    protected override executeMainTask() {
+        Transaction.execute(this.document, `excute ${Object.getPrototypeOf(this).data.name}`, () => {
+            const node = this.stepDatas[0].shapes[0].owner.node as ShapeNode;
+            const faces = this.stepDatas.at(-1)!.shapes.map((x) => x.shape as IFace);
+            const filetShape = this.document.application.shapeFactory.removeFeature(node.shape.value, faces);
+
+            const model = new EditableShapeNode({
+                document: this.document,
+                name: node.name,
+                shape: filetShape,
+                materialId: node.materialId,
+            });
+            model.transform = node.transform;
+
+            this.document.modelManager.addNode(model);
+            node.parent?.remove(node);
+            this.document.visual.update();
+        });
+    }
+
+    protected override getSteps() {
+        return [
+            new SelectShapeStep(ShapeTypes.shape, "prompt.select.shape", {
+                shapeFilter: {
+                    allow: (shape) => {
+                        return (
+                            shape.shapeType === ShapeTypes.solid ||
+                            shape.shapeType === ShapeTypes.compound ||
+                            shape.shapeType === ShapeTypes.compoundSolid
+                        );
+                    },
+                },
+                selectedState: VisualStates.faceTransparent,
+            }),
+            new SelectShapeStep(ShapeTypes.face, "prompt.select.faces", {
+                multiple: true,
+                keepSelection: true,
+            }),
+        ];
+    }
+}

@@ -1,0 +1,13 @@
+{
+    "name": "@chili3d/builder",
+    "version": "0.7.0-beta",
+    "description": "",
+    "main": "src/index.ts",
+    "devDependencies": {
+        "@chili3d/app": "*",
+        "@chili3d/i18n": "*",
+        "@chili3d/three": "*",
+        "@chili3d/ui": "*",
+        "@chili3d/wasm": "*"
+    }
+}

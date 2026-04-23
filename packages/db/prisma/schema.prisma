@@ -162,6 +162,9 @@ model Project {
   pluginExecutions   PluginExecution[]
   takeoffAnnotations TakeoffAnnotation[]
   takeoffLinks       TakeoffLink[]
+  modelAssets        ModelAsset[]
+  modelTakeoffLinks  ModelTakeoffLink[]
+  modelRevisionDiffs ModelRevisionDiff[]
   scheduleTasks      ScheduleTask[]
   scheduleCalendars  ScheduleCalendar[]
   scheduleBaselines  ScheduleBaseline[]
@@ -189,6 +192,7 @@ model SourceDocument {
   updatedAt      DateTime @updatedAt
 
   citations Citation[]
+  modelAssets ModelAsset[]
 
   @@index([projectId])
 }
@@ -327,6 +331,7 @@ model WorksheetItem {
   sourceNotes         String   @default("")
 
   takeoffLinks TakeoffLink[]
+  modelTakeoffLinks ModelTakeoffLink[]
 
   @@index([worksheetId])
   @@index([phaseId])
@@ -806,6 +811,8 @@ model FileNode {
   updatedAt   DateTime @updatedAt
   createdBy   String?
 
+  modelAssets ModelAsset[]
+
   @@index([projectId])
   @@index([parentId])
   @@index([scope])
@@ -862,6 +869,170 @@ model TakeoffLink {
 }
 
 // ── AI Runs ───────────────────────────────────────────────────────────────
+
+// ── Model Assets & 3D Takeoff ─────────────────────────────────────────────
+
+model ModelAsset {
+  id               String          @id @default(cuid())
+  projectId        String
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceDocumentId String?
+  sourceDocument   SourceDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  fileNodeId       String?
+  fileNode         FileNode?       @relation(fields: [fileNodeId], references: [id], onDelete: SetNull)
+  fileName         String
+  fileType         String          @default("")
+  format           String          @default("")
+  status           String          @default("indexed")
+  units            String          @default("")
+  checksum         String          @default("")
+  storagePath      String          @default("")
+  manifest         Json            @default("{}")
+  bom              Json            @default("[]")
+  elementStats     Json            @default("{}")
+  metadata         Json            @default("{}")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  elements          ModelElement[]
+  quantities        ModelQuantity[]
+  boms              ModelBom[]
+  issues            ModelIssue[]
+  takeoffLinks      ModelTakeoffLink[]
+  revisionDiffsBase ModelRevisionDiff[] @relation("ModelRevisionBase")
+  revisionDiffsHead ModelRevisionDiff[] @relation("ModelRevisionHead")
+
+  @@unique([projectId, sourceDocumentId])
+  @@unique([projectId, fileNodeId])
+  @@index([projectId])
+  @@index([sourceDocumentId])
+  @@index([fileNodeId])
+}
+
+model ModelElement {
+  id           String         @id @default(cuid())
+  modelId      String
+  model        ModelAsset     @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  externalId   String         @default("")
+  parentId     String?
+  parent       ModelElement?  @relation("ModelElementTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children     ModelElement[] @relation("ModelElementTree")
+  name         String         @default("")
+  elementClass String         @default("")
+  elementType  String         @default("")
+  system       String         @default("")
+  level        String         @default("")
+  material     String         @default("")
+  bbox         Json           @default("{}")
+  geometryRef  String         @default("")
+  properties   Json           @default("{}")
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  quantities   ModelQuantity[]
+  takeoffLinks ModelTakeoffLink[]
+  issues       ModelIssue[]
+
+  @@index([modelId])
+  @@index([modelId, externalId])
+  @@index([elementClass])
+}
+
+model ModelQuantity {
+  id           String             @id @default(cuid())
+  modelId      String
+  model        ModelAsset         @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  elementId    String?
+  element      ModelElement?      @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  quantityType String
+  value        Float              @default(0)
+  unit         String             @default("")
+  method       String             @default("computed")
+  confidence   Float              @default(1)
+  metadata     Json               @default("{}")
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  takeoffLinks ModelTakeoffLink[]
+
+  @@index([modelId])
+  @@index([elementId])
+  @@index([quantityType])
+}
+
+model ModelBom {
+  id        String     @id @default(cuid())
+  modelId   String
+  model     ModelAsset @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  grouping  String     @default("native")
+  filters   Json       @default("{}")
+  rows      Json       @default("[]")
+  createdBy String     @default("")
+  createdAt DateTime   @default(now())
+
+  @@index([modelId])
+}
+
+model ModelTakeoffLink {
+  id              String         @id @default(cuid())
+  projectId       String
+  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  modelId         String
+  model           ModelAsset     @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  modelElementId  String?
+  modelElement    ModelElement?  @relation(fields: [modelElementId], references: [id], onDelete: SetNull)
+  modelQuantityId String?
+  modelQuantity   ModelQuantity? @relation(fields: [modelQuantityId], references: [id], onDelete: SetNull)
+  worksheetItemId String
+  worksheetItem   WorksheetItem  @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
+  quantityField   String         @default("quantity")
+  multiplier      Float          @default(1.0)
+  derivedQuantity Float          @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([projectId])
+  @@index([modelId])
+  @@index([modelElementId])
+  @@index([modelQuantityId])
+  @@index([worksheetItemId])
+}
+
+model ModelIssue {
+  id        String        @id @default(cuid())
+  modelId   String
+  model     ModelAsset    @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  elementId String?
+  element   ModelElement? @relation(fields: [elementId], references: [id], onDelete: SetNull)
+  severity  String        @default("info")
+  code      String        @default("")
+  message   String
+  metadata  Json          @default("{}")
+  resolved  Boolean       @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([modelId])
+  @@index([elementId])
+  @@index([severity])
+}
+
+model ModelRevisionDiff {
+  id          String     @id @default(cuid())
+  projectId   String
+  project     Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  baseModelId String
+  baseModel   ModelAsset @relation("ModelRevisionBase", fields: [baseModelId], references: [id], onDelete: Cascade)
+  headModelId String
+  headModel   ModelAsset @relation("ModelRevisionHead", fields: [headModelId], references: [id], onDelete: Cascade)
+  summary     Json       @default("{}")
+  rows        Json       @default("[]")
+  createdAt   DateTime   @default(now())
+
+  @@index([projectId])
+  @@index([baseModelId])
+  @@index([headModelId])
+}
 
 model AiRun {
   id            String   @id @default(cuid())
