@@ -1,0 +1,8 @@
+{
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    "editor.inlineSuggest.showToolbar": "onHover",
+    "cmake.sourceDirectory": "${workspaceFolder}/cpp"
+}

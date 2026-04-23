@@ -1,0 +1,63 @@
+dialog {
+    border: none;
+    box-shadow: 0px 5px 10px var(--foreground-muted-color);
+    padding: 0px;
+    background-color: var(--panel-background-color);
+    backdrop-filter: blur(5px);
+}
+
+dialog::backdrop {
+    background-color: var(--backdrop-color);
+}
+
+.root {
+    display: flex;
+    flex-direction: column;
+    margin: 0px;
+    padding: 0px;
+}
+
+.title {
+    padding-top: 16px;
+    padding-bottom: 8px;
+    font-size: 1.5em;
+    font-weight: bold;
+    margin: 0px auto;
+    flex-shrink: 0;
+}
+
+.content {
+    padding: 16px;
+    max-width: 1080px;
+    max-height: 680px;
+    flex: 1 1 auto;
+    overflow: auto;
+}
+
+.buttons {
+    display: flex;
+    flex-direction: row;
+    flex-shrink: 0;
+    justify-content: flex-end;
+    padding: 8px;
+    background-color: rgba(128, 128, 128, 0.25);
+
+    & button {
+        width: fit-content;
+        margin: 6px;
+        padding: 8px 16px;
+        font-size: 1em;
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        background-color: var(--panel-background-color);
+        color: var(--foreground-color);
+
+        &:hover {
+            background-color: var(--hover-background-color);
+        }
+        &:active {
+            background-color: var(--primary-color);
+            color: var(--title-checked);
+        }
+    }
+}

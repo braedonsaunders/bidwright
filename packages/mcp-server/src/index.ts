@@ -21,6 +21,7 @@ import { registerSystemTools } from "./tools/system-tools.js";
 import { registerVisionTools } from "./tools/vision-tools.js";
 import { registerReviewTools } from "./tools/review-tools.js";
 import { registerEstimateTools } from "./tools/estimate-tools.js";
+import { registerModelTools } from "./tools/model-tools.js";
 
 const server = new McpServer({
   name: "bidwright",
@@ -32,6 +33,7 @@ registerQuoteTools(server);
 registerKnowledgeTools(server);
 registerSystemTools(server);
 registerVisionTools(server);
+registerModelTools(server);
 registerReviewTools(server);
 registerEstimateTools(server);
 

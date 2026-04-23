@@ -1,0 +1,230 @@
+// Part of the Chili3d Project, under the AGPL-3.0 License.
+// See LICENSE file in the project root for full license information.
+
+import { VisualConfig } from "../config";
+import type { IDocument } from "../document";
+import { type IEqualityComparer, Logger, PubSub, Result } from "../foundation";
+import { I18n, type I18nKeys } from "../i18n";
+import { Matrix4 } from "../math";
+import { serializable, serialize } from "../serialize";
+import type { EdgeMeshData, FaceMeshData, IShape, IShapeMeshData, VertexMeshData } from "../shape";
+import { MeshUtils } from "../visual/meshUtils";
+import { GeometryNode } from "./geometryNode";
+
+const SHAPE_UNDEFINED = "Shape not initialized";
+
+export abstract class ShapeNode extends GeometryNode {
+    protected _shape: Result<IShape> = Result.err(SHAPE_UNDEFINED);
+    get shape(): Result<IShape> {
+        return this._shape;
+    }
+
+    protected setShape(shape: Result<IShape>) {
+        if (this._shape.isOk && this._shape.value.isEqual(shape.value)) {
+            return;
+        }
+
+        if (!shape.isOk) {
+            PubSub.default.pub("displayError", shape.error);
+            return;
+        }
+
+        const oldShape = this._shape;
+        this._shape = shape;
+        this._mesh = undefined;
+
+        this.emitPropertyChanged("shape", oldShape);
+
+        oldShape.unchecked()?.dispose();
+    }
+
+    protected override createMesh(): IShapeMeshData {
+        if (!this.shape.isOk) {
+            Logger.warn(this.shape.error);
+            return { edges: undefined, faces: undefined, vertexs: undefined };
+        }
+        const mesh = this.shape.value.mesh;
+        this._originFaceMesh = mesh.faces;
+        if (mesh.faces)
+            mesh.faces = MeshUtils.mergeFaceMesh(
+                mesh.faces,
+                this.faceMaterialPair.map((x) => [x.faceIndex, x.materialIndex]),
+            );
+        return mesh;
+    }
+
+    override disposeInternal(): void {
+        super.disposeInternal();
+        this._shape.unchecked()?.dispose();
+        this._shape = null as any;
+    }
+}
+
+export class MultiShapeMesh implements IShapeMeshData {
+    private readonly _vertexs: VertexMeshData;
+    private readonly _edges: EdgeMeshData;
+    private readonly _faces: FaceMeshData;
+
+    get vertexs() {
+        return this._vertexs.position.length > 0 ? this._vertexs : undefined;
+    }
+
+    get edges() {
+        return this._edges.position.length > 0 ? this._edges : undefined;
+    }
+
+    get faces() {
+        return this._faces.position.length > 0 ? this._faces : undefined;
+    }
+
+    constructor() {
+        this._vertexs = {
+            position: new Float32Array(),
+            range: [],
+            size: 0,
+        };
+        this._edges = {
+            lineType: "solid",
+            position: new Float32Array(),
+            range: [],
+            color: VisualConfig.defaultEdgeColor,
+        };
+
+        this._faces = {
+            index: new Uint32Array(),
+            normal: new Float32Array(),
+            position: new Float32Array(),
+            uv: new Float32Array(),
+            range: [],
+            groups: [],
+            color: VisualConfig.defaultFaceColor,
+        };
+    }
+
+    public addShape(shape: IShape, matrix: Matrix4) {
+        const mesh = shape.mesh;
+        const totleMatrix = shape.matrix.multiply(matrix);
+        if (mesh.faces) {
+            MeshUtils.combineFaceMeshData(this._faces, mesh.faces, totleMatrix);
+        }
+        if (mesh.edges) {
+            MeshUtils.combineEdgeMeshData(this._edges, mesh.edges, totleMatrix);
+        }
+    }
+}
+
+export interface MultiShapeNodeOptions {
+    document: IDocument;
+    name: string;
+    shapes: IShape[];
+    materialId?: string;
+    id?: string;
+}
+
+@serializable()
+export class MultiShapeNode extends GeometryNode {
+    private readonly _shapes: IShape[];
+    @serialize()
+    get shapes(): ReadonlyArray<IShape> {
+        return this._shapes;
+    }
+
+    constructor(options: MultiShapeNodeOptions) {
+        super({
+            document: options.document,
+            name: options.name,
+            materialId: options.materialId,
+            id: options.id,
+        });
+        this._shapes = options.shapes;
+    }
+
+    protected override createMesh(): IShapeMeshData {
+        const meshes = new MultiShapeMesh();
+
+        this._shapes.forEach((shape) => {
+            meshes.addShape(shape, Matrix4.identity());
+        });
+
+        return meshes;
+    }
+
+    override display(): I18nKeys {
+        return "body.multiShape";
+    }
+}
+
+export interface ParameterShapeNodeOptions {
+    document: IDocument;
+    materialId?: string;
+    id?: string;
+}
+
+export abstract class ParameterShapeNode extends ShapeNode {
+    override get shape(): Result<IShape> {
+        if (!this._shape.isOk && this._shape.error === SHAPE_UNDEFINED) {
+            this._shape = this.generateShape();
+        }
+        return this._shape;
+    }
+
+    protected setPropertyEmitShapeChanged<K extends keyof this>(
+        property: K,
+        newValue: this[K],
+        onPropertyChanged?: (property: K, oldValue: this[K]) => void,
+        equals?: IEqualityComparer<this[K]> | undefined,
+    ): boolean {
+        if (this.setProperty(property, newValue, onPropertyChanged, equals)) {
+            this.setShape(this.generateShape());
+            return true;
+        }
+
+        return false;
+    }
+
+    constructor(options: ParameterShapeNodeOptions) {
+        super({
+            document: options.document,
+            name: undefined as any,
+            materialId: options.materialId,
+            id: options.id,
+        });
+        this.setPrivateValue("name", I18n.translate(this.display()));
+    }
+
+    protected abstract generateShape(): Result<IShape>;
+}
+
+export interface EditableShapeNodeOptions {
+    document: IDocument;
+    name: string;
+    shape: IShape | Result<IShape>;
+    materialId?: string | string[];
+    id?: string;
+}
+
+@serializable()
+export class EditableShapeNode extends ShapeNode {
+    override display(): I18nKeys {
+        return "body.editableShape";
+    }
+
+    @serialize()
+    override get shape() {
+        return this._shape;
+    }
+
+    override set shape(shape: Result<IShape>) {
+        this.setShape(shape);
+    }
+
+    constructor(options: EditableShapeNodeOptions) {
+        super({
+            document: options.document,
+            name: options.name,
+            materialId: options.materialId,
+            id: options.id,
+        });
+        this._shape = options.shape instanceof Result ? options.shape : Result.ok(options.shape);
+    }
+}

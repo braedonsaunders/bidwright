@@ -3958,3 +3958,103 @@ export async function updateTravelPolicy(id: string, patch: {
 export async function deleteTravelPolicy(id: string): Promise<void> {
   await apiRequest<{ deleted: boolean }>(`/api/travel-policies/${id}`, { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// 3D Model Intelligence
+// ---------------------------------------------------------------------------
+
+export interface ModelAsset {
+  id: string;
+  projectId: string;
+  sourceDocumentId?: string | null;
+  fileNodeId?: string | null;
+  fileName: string;
+  fileType: string;
+  format: string;
+  status: "indexed" | "partial" | "failed";
+  units: string;
+  checksum: string;
+  storagePath: string;
+  manifest: Record<string, unknown>;
+  bom: Array<Record<string, unknown>>;
+  elementStats: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  _count?: {
+    elements: number;
+    quantities: number;
+    issues: number;
+    takeoffLinks: number;
+  };
+}
+
+export interface ModelElement {
+  id: string;
+  modelId: string;
+  externalId: string;
+  name: string;
+  elementClass: string;
+  elementType: string;
+  system: string;
+  level: string;
+  material: string;
+  bbox: Record<string, unknown>;
+  geometryRef: string;
+  properties: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelQuantity {
+  id: string;
+  modelId: string;
+  elementId?: string | null;
+  quantityType: string;
+  value: number;
+  unit: string;
+  method: string;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelIssue {
+  id: string;
+  modelId: string;
+  elementId?: string | null;
+  severity: string;
+  code: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export async function listModelAssets(projectId: string, refresh = false) {
+  const qs = refresh ? "?refresh=1" : "";
+  return apiRequest<{ assets: ModelAsset[]; syncedIds?: string[]; sourceCount?: number }>(`/api/models/${projectId}/assets${qs}`);
+}
+
+export async function syncModelAssets(projectId: string) {
+  return apiRequest<{ assets: ModelAsset[]; syncedIds: string[]; sourceCount: number }>(`/api/models/${projectId}/assets/scan`, {
+    method: "POST",
+  });
+}
+
+export async function getModelAsset(projectId: string, modelId: string) {
+  return apiRequest<{
+    asset: ModelAsset & {
+      elements: ModelElement[];
+      quantities: ModelQuantity[];
+      issues: ModelIssue[];
+      boms: Array<{ id: string; grouping: string; rows: Array<Record<string, unknown>>; createdAt: string }>;
+    };
+  }>(`/api/models/${projectId}/assets/${modelId}`);
+}
+
+export async function getModelBom(projectId: string, modelId: string) {
+  return apiRequest<{ model: ModelAsset; rows: Array<Record<string, unknown>>; rowCount: number }>(
+    `/api/models/${projectId}/assets/${modelId}/bom`,
+  );
+}

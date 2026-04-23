@@ -71,6 +71,9 @@ importers:
       nodemailer:
         specifier: ^6.9.16
         version: 6.10.1
+      occt-import-js:
+        specifier: ^0.0.23
+        version: 0.0.23
       playwright:
         specifier: ^1.58.2
         version: 1.58.2

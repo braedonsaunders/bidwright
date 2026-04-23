@@ -57,6 +57,10 @@ const CadViewer = dynamic(
   () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
   { ssr: false }
 );
+const BidwrightModelEditor = dynamic(
+  () => import("./editors/bidwright-model-editor").then((m) => ({ default: m.BidwrightModelEditor })),
+  { ssr: false }
+);
 const WhiteboardEditor = dynamic(
   () => import("./editors/whiteboard-editor").then((m) => ({ default: m.WhiteboardEditor })),
   { ssr: false }
@@ -122,6 +126,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 
 /* ─── Types ─── */
 
@@ -1575,7 +1580,15 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
             {filePreviewType === "pdf" && previewUrl && <PdfPreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "image" && previewUrl && <ImagePreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "text" && <TextPreview key={selectedItem.id} url={previewUrl} extractedText={!hasExtracted ? selectedItem.extractedText : undefined} />}
-            {filePreviewType === "cad" && previewUrl && <div className="flex-1 min-h-[400px]"><CadViewer fileUrl={previewUrl} fileName={selectedItem.name} /></div>}
+            {filePreviewType === "cad" && previewUrl && (
+              <div className="flex-1 min-h-[400px]">
+                {isBidwrightEditableModel(selectedItem.name) ? (
+                  <BidwrightModelEditor fileUrl={previewUrl} fileName={selectedItem.name} title="BidWright Model Editor" />
+                ) : (
+                  <CadViewer fileUrl={previewUrl} fileName={selectedItem.name} />
+                )}
+              </div>
+            )}
             {filePreviewType === "docx" && previewUrl && <DocxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "xlsx" && previewUrl && <div className="flex-1 min-h-0"><XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
             {filePreviewType === "email" && previewUrl && <EmailViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}

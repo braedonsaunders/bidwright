@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - '!apps/model-editor'
   - packages/*
 
 ignoredBuiltDependencies:

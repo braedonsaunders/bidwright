@@ -26,6 +26,7 @@
     "ioredis": "^5.4.2",
     "jszip": "^3.10.1",
     "nodemailer": "^6.9.16",
+    "occt-import-js": "^0.0.23",
     "playwright": "^1.58.2",
     "postal-mime": "^2.7.4",
     "xlsx": "^0.18.5",

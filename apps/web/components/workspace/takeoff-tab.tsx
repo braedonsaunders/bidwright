@@ -10,6 +10,9 @@ import {
   Expand,
   Shrink,
   ExternalLink,
+  RefreshCw,
+  Box,
+  FileText,
   Scan,
   Minus,
   MousePointer2,
@@ -40,7 +43,7 @@ import {
   Highlighter,
   StretchHorizontal,
 } from "lucide-react";
-import type { ProjectWorkspaceData, VisionMatch, VisionBoundingBox, TakeoffLinkRecord } from "@/lib/api";
+import type { ProjectWorkspaceData, VisionMatch, VisionBoundingBox, TakeoffLinkRecord, ModelAsset } from "@/lib/api";
 import {
   listTakeoffAnnotations,
   createTakeoffAnnotation,
@@ -57,6 +60,8 @@ import {
   listTakeoffLinks,
   createTakeoffLink,
   createWorksheetItem,
+  listModelAssets,
+  syncModelAssets,
 } from "@/lib/api";
 import {
   Badge,
@@ -71,12 +76,18 @@ import * as RadixSelect from "@radix-ui/react-select";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import type { Calibration, Point } from "@/lib/takeoff-math";
+import { isBidwrightEditableModel } from "./editors/bidwright-model-editor";
+import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 const PdfCanvasViewer = dynamic(
   () => import("./takeoff/pdf-canvas-viewer").then((m) => m.PdfCanvasViewer),
   { ssr: false }
 );
 const CadViewer = dynamic(
   () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
+  { ssr: false }
+);
+const BidwrightModelEditor = dynamic(
+  () => import("./editors/bidwright-model-editor").then((m) => ({ default: m.BidwrightModelEditor })),
   { ssr: false }
 );
 import {
@@ -194,6 +205,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
+  kind: "pdf" | "model";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -231,6 +243,25 @@ type TakeoffSyncPayload =
 
 function takeoffChannelName(projectId: string): string {
   return `bw-takeoff-${projectId}`;
+}
+
+function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
+  return isCadFile(fileName) ? "model" : "pdf";
+}
+
+function formatModelSelectionQuantity(value: number, unit: string): string {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.000001) return `0 ${unit}`;
+  return `${Intl.NumberFormat(undefined, { maximumFractionDigits: value >= 100 ? 0 : 2 }).format(value)} ${unit}`;
+}
+
+function primaryModelSelectionQuantity(selection: BidwrightModelSelectionMessage) {
+  if (selection.totals.surfaceArea > 0) {
+    return { quantity: selection.totals.surfaceArea, uom: "model^2", label: "3D surface area" };
+  }
+  if (selection.totals.volume > 0) {
+    return { quantity: selection.totals.volume, uom: "model^3", label: "3D volume" };
+  }
+  return { quantity: selection.selectedCount, uom: "EA", label: "3D selected elements" };
 }
 
 function sameCalibration(a: Calibration | null, b: Calibration | null): boolean {
@@ -336,6 +367,7 @@ export function TakeoffTab({
       id: d.id,
       label: d.fileName,
       fileName: d.fileName,
+      kind: getTakeoffDocumentKind(d.fileName),
       source: "project" as const,
       projectId,
     }));
@@ -356,6 +388,7 @@ export function TakeoffTab({
               id: `kb-${b.id}`,
               label: b.name || b.sourceFileName,
               fileName: b.sourceFileName ?? b.name ?? "",
+              kind: getTakeoffDocumentKind(b.sourceFileName ?? b.name ?? ""),
               source: "knowledge" as const,
               bookId: b.id,
             }))
@@ -470,7 +503,43 @@ export function TakeoffTab({
   const initialDocumentAppliedRef = useRef(!initialDocumentId);
 
   const selectedDoc = drawings.find((d) => d.id === selectedDocId);
-  const isCadDocument = selectedDoc ? isCadFile(selectedDoc.fileName) : false;
+  const pdfDocuments = drawings.filter((d) => d.kind === "pdf");
+  const modelDocuments = drawings.filter((d) => d.kind === "model");
+  const isCadDocument = selectedDoc?.kind === "model";
+  const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
+  const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
+  const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
+  const [modelSyncing, setModelSyncing] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const selectedModelAsset = isCadDocument
+    ? modelAssets.find((asset) =>
+        (selectedDoc?.source === "project" && asset.sourceDocumentId === selectedDoc.id) ||
+        asset.fileName.toLowerCase() === (selectedDoc?.fileName ?? "").toLowerCase()
+      )
+    : undefined;
+
+  const refreshModelAssets = useCallback(async (forceSync = false) => {
+    if (!projectId) return;
+    setModelSyncing(true);
+    setModelError(null);
+    try {
+      const result = forceSync ? await syncModelAssets(projectId) : await listModelAssets(projectId, true);
+      setModelAssets(result.assets ?? []);
+    } catch (error) {
+      setModelError(error instanceof Error ? error.message : "Model indexing failed.");
+    } finally {
+      setModelSyncing(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (modelDocuments.length === 0) return;
+    void refreshModelAssets(false);
+  }, [modelDocuments.length, refreshModelAssets]);
+
+  useEffect(() => {
+    setModelSelection(null);
+  }, [selectedDocId]);
 
   useEffect(() => {
     selectedDocIdRef.current = selectedDocId;
@@ -1195,6 +1264,8 @@ export function TakeoffTab({
 
   async function handleMultiDocSearch() {
     if (!crossPageLastBbox) return;
+    const searchableDocs = pdfDocuments;
+    if (searchableDocs.length === 0) return;
 
     setMultiDocRunning(true);
     setMultiDocResults([]);
@@ -1202,7 +1273,7 @@ export function TakeoffTab({
     try {
       const results: { docId: string; docLabel: string; total: number }[] = [];
 
-      for (const doc of drawings) {
+      for (const doc of searchableDocs) {
         const realDocId = doc.source === "knowledge" && doc.bookId ? doc.bookId : doc.id;
 
         try {
@@ -1222,7 +1293,7 @@ export function TakeoffTab({
       }
 
       const total = results.filter((r) => r.total >= 0).reduce((s, r) => s + r.total, 0);
-      setToastMessage(`Multi-document search: ${total} total across ${drawings.length} documents`);
+      setToastMessage(`Multi-document search: ${total} total across ${searchableDocs.length} PDFs`);
       setToastType("success");
     } catch (err) {
       console.error("Multi-document search failed:", err);
@@ -1370,10 +1441,66 @@ export function TakeoffTab({
     }
   }
 
+  async function handleSendModelSelectionToEstimate(selection: BidwrightModelSelectionMessage) {
+    const targetWs = workspace.worksheets[0];
+    if (!targetWs) {
+      setToastType("error");
+      setToastMessage("Create a worksheet before sending model quantities.");
+      return;
+    }
+
+    const primary = primaryModelSelectionQuantity(selection);
+    const selectedNames = selection.nodes.map((node) => node.name).filter(Boolean).slice(0, 8);
+
+    try {
+      await createWorksheetItem(projectId, targetWs.id, {
+        category: "Model Takeoff",
+        entityType: "Model Quantity",
+        entityName: selectedNames[0] || `${selection.selectedCount} model elements`,
+        description: selectedDoc?.fileName ?? "",
+        quantity: primary.quantity,
+        uom: primary.uom,
+        cost: 0,
+        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        sourceNotes: [
+          `From 3D model selection: ${selectedDoc?.fileName ?? "selected model"}`,
+          `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
+          `Surface area: ${formatModelSelectionQuantity(selection.totals.surfaceArea, "model^2")}`,
+          `Volume: ${formatModelSelectionQuantity(selection.totals.volume, "model^3")}`,
+          selectedNames.length > 0 ? `Selected: ${selectedNames.join(", ")}` : "",
+        ].filter(Boolean).join("\n"),
+      });
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Model quantity sent to the estimate.");
+    } catch (err) {
+      console.error("[takeoff] Failed to send model selection to estimate:", err);
+      setToastType("error");
+      setToastMessage("Could not send model quantity to the estimate.");
+    }
+  }
+
   /* Build document URL */
   const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
 
   const zoomPercent = Math.round(zoom * 100);
+
+  function handleTakeoffModeSwitch(kind: TakeoffDocument["kind"]) {
+    const nextDoc = kind === "model" ? modelDocuments[0] : pdfDocuments[0];
+    if (!nextDoc || nextDoc.id === selectedDocId) return;
+    setSelectedDocId(nextDoc.id);
+    setPage(1);
+    setZoom(1);
+    fitOnLoadRef.current = true;
+    setAnnotations([]);
+    setSelectedAnnotationId(null);
+    setAutoCountResults(null);
+    setAutoCountSnippet(null);
+  }
 
   /* Determine if special tools are active */
   const isAutoCountActive = activeTool === "auto-count";
@@ -1392,9 +1519,40 @@ export function TakeoffTab({
     >
       {/* ─── Top Toolbar ─── */}
       <div className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2 shrink-0">
+        <div className="flex items-center rounded-lg border border-line bg-bg/50 p-0.5">
+          <button
+            type="button"
+            disabled={pdfDocuments.length === 0}
+            onClick={() => handleTakeoffModeSwitch("pdf")}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+              !isCadDocument ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
+            )}
+            title="2D PDF takeoff"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            PDF
+            <span className="text-[10px] text-fg/35">{pdfDocuments.length}</span>
+          </button>
+          <button
+            type="button"
+            disabled={modelDocuments.length === 0}
+            onClick={() => handleTakeoffModeSwitch("model")}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+              isCadDocument ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
+            )}
+            title="3D model takeoff"
+          >
+            <Box className="h-3.5 w-3.5" />
+            Model
+            <span className="text-[10px] text-fg/35">{modelDocuments.length}</span>
+          </button>
+        </div>
+
         {/* Document selector */}
         <div className="flex items-center gap-2">
-          <label className="text-xs font-medium text-fg/50">Drawing:</label>
+          <label className="text-xs font-medium text-fg/50">Source:</label>
           <RadixSelect.Root
             value={selectedDocId}
             onValueChange={(v) => {
@@ -1536,66 +1694,70 @@ export function TakeoffTab({
 
         <div className="flex-1" />
 
-        {/* Active tool indicator */}
-        <Badge tone="info" className="text-[11px]">
-          {TOOLS.find((t) => t.id === activeTool)?.label ?? "Select"} tool
-        </Badge>
+        {!isCadDocument && (
+          <>
+            {/* Active tool indicator */}
+            <Badge tone="info" className="text-[11px]">
+              {TOOLS.find((t) => t.id === activeTool)?.label ?? "Select"} tool
+            </Badge>
 
-        {/* Clear all */}
-        {annotations.length > 0 && (
-          <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all annotations">
-            <RotateCcw className="h-3.5 w-3.5" />
-          </Button>
-        )}
+            {/* Clear all */}
+            {annotations.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all annotations">
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            )}
 
-        {/* Export with dropdown */}
-        <div className="relative" ref={exportDropdownRef}>
-          <div className="flex items-center">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => exportAnnotationsCsv(annotations, calibration)}
-              disabled={annotations.length === 0}
-              className="rounded-r-none"
-            >
-              <Download className="h-3.5 w-3.5" />
-              CSV
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setExportDropdownOpen((v) => !v)}
-              disabled={annotations.length === 0}
-              className="rounded-l-none border-l border-line/50 px-1.5"
-            >
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </div>
-          {exportDropdownOpen && (
-            <div className="absolute right-0 top-full mt-1 z-50 rounded-lg border border-line bg-panel shadow-xl p-1 min-w-[120px]">
-              <button
-                className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                onClick={() => {
-                  exportAnnotationsCsv(annotations, calibration);
-                  setExportDropdownOpen(false);
-                }}
-              >
-                <Download className="h-3 w-3" />
-                Export CSV
-              </button>
-              <button
-                className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                onClick={() => {
-                  exportAnnotationsJson(annotations, calibration);
-                  setExportDropdownOpen(false);
-                }}
-              >
-                <FileJson className="h-3 w-3" />
-                Export JSON
-              </button>
+            {/* Export with dropdown */}
+            <div className="relative" ref={exportDropdownRef}>
+              <div className="flex items-center">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => exportAnnotationsCsv(annotations, calibration)}
+                  disabled={annotations.length === 0}
+                  className="rounded-r-none"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  CSV
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setExportDropdownOpen((v) => !v)}
+                  disabled={annotations.length === 0}
+                  className="rounded-l-none border-l border-line/50 px-1.5"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </Button>
+              </div>
+              {exportDropdownOpen && (
+                <div className="absolute right-0 top-full mt-1 z-50 rounded-lg border border-line bg-panel shadow-xl p-1 min-w-[120px]">
+                  <button
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
+                    onClick={() => {
+                      exportAnnotationsCsv(annotations, calibration);
+                      setExportDropdownOpen(false);
+                    }}
+                  >
+                    <Download className="h-3 w-3" />
+                    Export CSV
+                  </button>
+                  <button
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
+                    onClick={() => {
+                      exportAnnotationsJson(annotations, calibration);
+                      setExportDropdownOpen(false);
+                    }}
+                  >
+                    <FileJson className="h-3 w-3" />
+                    Export JSON
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
         {/* ─── Fullscreen / Detach ─── */}
         <Separator className="!h-6 !w-px" />
@@ -1623,7 +1785,7 @@ export function TakeoffTab({
       </div>
 
       {/* ─── Auto-Count Banner ─── */}
-      {isAutoCountActive && (
+      {!isCadDocument && isAutoCountActive && (
         <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
@@ -1709,10 +1871,10 @@ export function TakeoffTab({
                   All Pages ({totalPages})
                 </Button>
               )}
-              {drawings.length > 1 && (
+              {pdfDocuments.length > 1 && (
                 <Button variant="secondary" size="xs" onClick={handleMultiDocSearch} disabled={multiDocRunning}>
                   {multiDocRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
-                  All Documents ({drawings.length})
+                  All PDFs ({pdfDocuments.length})
                 </Button>
               )}
               <label className="flex items-center gap-1.5 text-[11px] text-fg/50 cursor-pointer ml-auto">
@@ -1753,8 +1915,8 @@ export function TakeoffTab({
             <div className="pt-1 border-t border-green-500/10">
               <div className="flex items-center gap-2 mb-1.5">
                 <p className="text-[11px] font-medium text-fg/60">
-                  All documents{!multiDocRunning && `: ${multiDocResults.filter((r) => r.total >= 0).reduce((s, r) => s + r.total, 0)} total`}
-                  {multiDocRunning && <span className="text-fg/40 ml-1">(scanning {multiDocResults.length}/{drawings.length}...)</span>}
+                  All PDFs{!multiDocRunning && `: ${multiDocResults.filter((r) => r.total >= 0).reduce((s, r) => s + r.total, 0)} total`}
+                  {multiDocRunning && <span className="text-fg/40 ml-1">(scanning {multiDocResults.length}/{pdfDocuments.length}...)</span>}
                 </p>
                 {multiDocRunning && <Loader2 className="h-3 w-3 animate-spin text-green-500" />}
               </div>
@@ -1775,7 +1937,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── Ask AI Banner ─── */}
-      {isAskAiActive && (
+      {!isCadDocument && isAskAiActive && (
         <div className="flex items-center gap-3 border-b border-violet-500/30 bg-violet-500/5 px-4 py-2.5 shrink-0">
           <BrainCircuit className="h-4 w-4 text-violet-500 shrink-0" />
           <div className="flex-1">
@@ -1807,6 +1969,7 @@ export function TakeoffTab({
       {/* ─── Main Area ─── */}
       <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Left: Tool palette */}
+        {!isCadDocument && (
         <div className="flex w-12 flex-col gap-0.5 border-r border-line bg-panel p-1.5 overflow-y-auto shrink-0">
           {TOOL_GROUPS.map((group) => {
             const groupTools = TOOLS.filter((t) => t.group === group.key);
@@ -1834,9 +1997,16 @@ export function TakeoffTab({
             );
           })}
         </div>
+        )}
 
         {/* Center: Document viewer area */}
-        <div ref={viewerContainerRef} className="flex flex-1 items-start justify-center overflow-auto bg-bg/50">
+        <div
+          ref={viewerContainerRef}
+          className={cn(
+            "flex flex-1 bg-bg/50",
+            isCadDocument ? "items-stretch justify-stretch overflow-hidden" : "items-start justify-center overflow-auto"
+          )}
+        >
           {!selectedDoc ? (
             <div className="flex flex-1 items-center justify-center h-full">
               <EmptyState className="border-none">
@@ -1849,14 +2019,23 @@ export function TakeoffTab({
                 </p>
               </EmptyState>
             </div>
+          ) : isCadDocument ? (
+            <div className="h-full w-full">
+              {selectedModelIsEditable ? (
+                <BidwrightModelEditor
+                  fileUrl={documentUrl}
+                  fileName={selectedDoc?.fileName}
+                  title="3D Takeoff Model"
+                  variant="takeoff"
+                  onModelSelection={setModelSelection}
+                  onSendSelectionToEstimate={handleSendModelSelectionToEstimate}
+                />
+              ) : (
+                <CadViewer fileUrl={documentUrl} fileName={selectedDoc?.fileName} />
+              )}
+            </div>
           ) : (
             <div className="relative inline-block m-4">
-              {isCadDocument ? (
-                <div className="w-[800px] h-[600px]">
-                  <CadViewer fileUrl={documentUrl} fileName={selectedDoc?.fileName} />
-                </div>
-              ) : (
-                <>
                   {/* PDF canvas */}
                   <PdfCanvasViewer
                     documentUrl={documentUrl}
@@ -1911,29 +2090,146 @@ export function TakeoffTab({
                       </div>
                     </div>
                   )}
-                </>
-              )}
             </div>
           )}
         </div>
 
         {/* Right: Annotation sidebar (embedded — border provided by wrapper) */}
-        <div className="flex w-72 shrink-0 flex-col border-l border-line overflow-hidden">
-          <AnnotationSidebar
-            embedded
-            annotations={annotations}
-            onToggleVisibility={handleToggleVisibility}
-            onDelete={handleDeleteAnnotation}
-            onEdit={handleEditAnnotation}
-            onSaveEdit={handleSaveAnnotationEdit}
-            onSelectAnnotation={setSelectedAnnotationId}
-            selectedAnnotationId={selectedAnnotationId}
-            editingAnnotationId={editingAnnotationId}
-            takeoffLinks={takeoffLinks}
-            onLinkToLineItem={handleLinkToLineItem}
-            onSendToEstimate={handleSendToEstimate}
-          />
-        </div>
+        {!isCadDocument ? (
+          <div className="flex w-72 shrink-0 flex-col border-l border-line overflow-hidden">
+            <AnnotationSidebar
+              embedded
+              annotations={annotations}
+              onToggleVisibility={handleToggleVisibility}
+              onDelete={handleDeleteAnnotation}
+              onEdit={handleEditAnnotation}
+              onSaveEdit={handleSaveAnnotationEdit}
+              onSelectAnnotation={setSelectedAnnotationId}
+              selectedAnnotationId={selectedAnnotationId}
+              editingAnnotationId={editingAnnotationId}
+              takeoffLinks={takeoffLinks}
+              onLinkToLineItem={handleLinkToLineItem}
+              onSendToEstimate={handleSendToEstimate}
+            />
+          </div>
+        ) : (
+          <div className="flex w-72 shrink-0 flex-col border-l border-line bg-panel overflow-hidden">
+            <div className="border-b border-line px-4 py-3">
+              <p className="text-xs font-semibold text-fg">Model Takeoff</p>
+              <p className="mt-1 truncate text-[11px] text-fg/45">{selectedDoc?.fileName}</p>
+            </div>
+            <div className="space-y-3 p-4 text-xs text-fg/60">
+              <div className="rounded-md border border-line bg-bg/50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Editor</span>
+                  <Badge tone={selectedModelIsEditable ? "success" : "warning"} className="text-[10px]">
+                    {selectedModelIsEditable ? "BidWright 3D" : "Preview"}
+                  </Badge>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Source</span>
+                  <span className="truncate text-fg/70">{selectedDoc?.source === "knowledge" ? "Knowledge" : "Project"}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Index</span>
+                  <Badge
+                    tone={selectedModelAsset?.status === "indexed" ? "success" : selectedModelAsset ? "warning" : "info"}
+                    className="text-[10px]"
+                  >
+                    {modelSyncing ? "Syncing" : selectedModelAsset?.status ?? "Pending"}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-line bg-bg/50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Elements</span>
+                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.elements ?? 0}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Quantities</span>
+                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.quantities ?? 0}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">BOM Rows</span>
+                  <span className="font-medium text-fg/80">{selectedModelAsset?.bom?.length ?? 0}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Issues</span>
+                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.issues ?? 0}</span>
+                </div>
+              </div>
+
+              {modelSelection && modelSelection.selectedCount > 0 && (
+                <div className="rounded-md border border-accent/30 bg-accent/5 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-fg/45">Selected</span>
+                    <span className="font-medium text-fg/80">{modelSelection.selectedCount}</span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-fg/45">Area</span>
+                    <span className="font-medium text-fg/80">
+                      {formatModelSelectionQuantity(modelSelection.totals.surfaceArea, "model^2")}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-fg/45">Volume</span>
+                    <span className="font-medium text-fg/80">
+                      {formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}
+                    </span>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-3 w-full justify-center"
+                    onClick={() => void handleSendModelSelectionToEstimate(modelSelection)}
+                  >
+                    <ArrowDownToLine className="h-3.5 w-3.5" />
+                    Send Selection
+                  </Button>
+                </div>
+              )}
+
+              {modelError && (
+                <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-[11px] text-danger">
+                  {modelError}
+                </div>
+              )}
+
+              {selectedModelAsset && (
+                <div className="rounded-md border border-line bg-bg/50 p-3">
+                  <p className="text-[10px] uppercase tracking-wide text-fg/35">Manifest</p>
+                  <p className="mt-1 truncate text-[11px] text-fg/70">
+                    {String(selectedModelAsset.manifest?.parser ?? selectedModelAsset.format)}
+                  </p>
+                </div>
+              )}
+
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-center"
+                disabled={modelSyncing}
+                onClick={() => void refreshModelAssets(true)}
+              >
+                {modelSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                Sync Model Index
+              </Button>
+
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full justify-center"
+                onClick={() => onOpenAgentChat?.(
+                  `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Use listModels, getModelManifest, queryModelElements, and extractModelBom, then prepare model takeoff quantities for this estimate.`
+                )}
+              >
+                <BrainCircuit className="h-3.5 w-3.5" />
+                Ask AI
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Create Annotation Modal ─── */}
@@ -2167,20 +2463,28 @@ export function TakeoffTab({
       {/* ─── Status Bar ─── */}
       <div className="flex items-center gap-3 border-t border-line bg-panel px-3 py-1.5 shrink-0">
         <p className="text-[11px] text-fg/40">
-          {TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
+          {isCadDocument
+            ? selectedModelIsEditable
+              ? "BidWright model editor active."
+              : "3D model preview active."
+            : TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>
         <div className="flex-1" />
-        {calibration && (
+        {!isCadDocument && calibration && (
           <span className="text-[11px] text-fg/30">
             Scale: 1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
           </span>
         )}
-        <span className="text-[11px] text-fg/30">
-          Page {page}/{totalPages}
-        </span>
-        <span className="text-[11px] text-fg/30">
-          {zoomPercent}%
-        </span>
+        {!isCadDocument && (
+          <>
+            <span className="text-[11px] text-fg/30">
+              Page {page}/{totalPages}
+            </span>
+            <span className="text-[11px] text-fg/30">
+              {zoomPercent}%
+            </span>
+          </>
+        )}
       </div>
 
       {/* ─── Toast Notification ─── */}

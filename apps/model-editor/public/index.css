@@ -1,0 +1,13 @@
+html,
+body {
+    margin: 0px;
+    padding: 0px;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+    font-size: 14px;
+    font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    touch-action: none;
+    color: var(--foreground-color);
+    background-color: var(--background-color);
+}

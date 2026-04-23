@@ -1,0 +1,17 @@
+{
+    "name": "helloworld-js",
+    "version": "1.0.0",
+    "description": "A demo plugin for Chili3D showing plugin system capabilities",
+    "main": "extension.js",
+    "type": "module",
+    "scripts": {
+        "preview": "echo 'Debug URL: http://localhost:8080?plugin=http://localhost:8686' && npx servitsy -p 8686 --cors",
+        "package": "node ../scripts/package-plugin.mjs dist/helloworld-js.chiliplugin src manifest.json importmap.json icons"
+    },
+    "keywords": [
+        "chili3d",
+        "plugin",
+        "demo"
+    ],
+    "author": "Chili3D Team"
+}

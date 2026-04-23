@@ -1,0 +1,238 @@
+.root {
+    position: relative;
+}
+
+.actsContainer {
+    position: absolute;
+    bottom: 12px;
+    z-index: 99999;
+    width: 100%;
+    pointer-events: all;
+
+    .border {
+        display: inline-block;
+        position: relative;
+        margin: auto;
+        width: fit-content;
+        max-width: 75%;
+
+        &::before {
+            position: absolute;
+            bottom: 0;
+            left: 1px;
+            height: 50px;
+            width: calc(100% - 2px);
+            margin-top: 40px;
+            content: "";
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            background-color: var(--panel-background-color);
+            backdrop-filter: blur(10px);
+        }
+
+        .acts {
+            display: flex;
+            align-items: center;
+            flex-direction: row;
+            gap: 6px;
+            cursor: pointer;
+            height: 96px;
+            margin: 0px 8px;
+            overflow-y: hidden;
+            overflow-x: auto;
+            pointer-events: all;
+            --floatControlVisible: none;
+
+            &::-webkit-scrollbar {
+                height: 6px;
+            }
+
+            &::-webkit-scrollbar-thumb {
+                background-color: var(--foreground-muted-color);
+                border-radius: 3px;
+            }
+
+            &::-webkit-scrollbar-track {
+                background-color: transparent;
+            }
+
+            div {
+                position: relative;
+                flex: 0 0 auto;
+                padding: 8px;
+                margin-top: 43px;
+                width: 72px;
+                border-radius: 8px;
+                user-select: none;
+                background-color: var(--panel-background-color);
+                border: 1px solid var(--border-color);
+                color: var(--foreground-color);
+                font-size: 14px;
+                justify-content: center;
+                opacity: 0.75;
+                height: 18px;
+
+                span {
+                    display: block;
+                    max-width: 64px;
+                    text-overflow: ellipsis;
+                    overflow: hidden;
+                    white-space: nowrap;
+                    text-align: center;
+                }
+
+                &:hover {
+                    opacity: 1;
+                    --floatControlVisible: flex;
+                }
+
+                .tools {
+                    display: var(--floatControlVisible);
+                    background-color: transparent;
+                    border: none;
+                    position: absolute;
+                    margin: 0;
+                    padding: 8px;
+                    top: -34px;
+                    left: 0px;
+                    gap: 4px;
+
+                    svg {
+                        width: 14px;
+                        height: 14px;
+                        padding: 4px;
+                        border-radius: 100%;
+                        background-color: var(--panel-background-color);
+                        opacity: 0.75;
+
+                        &:hover {
+                            opacity: 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+.viewControls {
+    position: absolute;
+    height: 100%;
+    top: 0;
+    right: 16px;
+    z-index: 999;
+    pointer-events: none;
+    padding-top: 160px;
+    color: var(--foreground-color);
+
+    svg {
+        border: none;
+        background: transparent;
+        width: 22px;
+        height: 22px;
+        padding: 8px;
+        border-radius: 7.5px;
+        color: inherit;
+        fill: currentColor;
+
+        &:hover {
+            background: var(--hover-background-color);
+        }
+
+        &:active {
+            background: var(--active-background-color);
+        }
+    }
+
+    .actived {
+        background: var(--checked-color);
+    }
+
+    .border {
+        border: 1px solid var(--border-color);
+        background: var(--panel-background-color);
+        border-radius: 10px;
+        margin: 1px 0px;
+        padding: 2px;
+        pointer-events: all;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        color: var(--foreground-color);
+
+        div {
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-radius: 7.5px;
+            color: inherit;
+        }
+    }
+}
+
+@media (max-width: 680px) {
+    .viewControls {
+        display: none;
+    }
+}
+
+.viewModeControl {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 30;
+    color: var(--foreground-color);
+
+    .viewModeDisplay {
+        padding: 6px;
+        cursor: pointer;
+        user-select: none;
+        font-size: 14px;
+        transition: background-color 0.2s;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        border-radius: 6px;
+        gap: 4px;
+
+        &:hover {
+            background-color: var(--hover-background-color);
+        }
+    }
+
+    .viewModeMenu {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 4px;
+        background-color: var(--background-color);
+        border-radius: 6px;
+        padding: 4px;
+        width: fit-content;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+
+        &.visible {
+            display: block;
+        }
+
+        div {
+            padding: 8px;
+            cursor: pointer;
+            user-select: none;
+            font-size: 14px;
+            border-radius: 4px;
+            text-wrap-mode: nowrap;
+
+            &:hover {
+                background-color: var(--hover-background-color);
+            }
+
+            &.actived {
+                background-color: var(--checked-color);
+            }
+        }
+    }
+}

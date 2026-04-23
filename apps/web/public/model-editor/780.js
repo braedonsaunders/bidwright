@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunk_bidwright_model_editor=self.webpackChunk_bidwright_model_editor||[]).push([["780"],{8703(e,c,t){t.r(e.exports={button:"cc5dc23f8ecc0cf3"})}}]);
