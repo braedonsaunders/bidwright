@@ -195,6 +195,8 @@ export function PluginToolsPanel({
               {selectedTool.tool.ui ? (
                 <PluginRuntime
                   schema={selectedTool.tool.ui}
+                  pluginId={selectedTool.plugin.id}
+                  toolId={selectedTool.tool.id}
                   onSubmit={handleExecute}
                   onCancel={() => { setSelectedTool(null); setExecutionOutput(null); }}
                   submitting={executing}

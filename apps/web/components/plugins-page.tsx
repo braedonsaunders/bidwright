@@ -536,6 +536,8 @@ export function PluginsPage({
                         <div className="rounded-lg border border-line bg-panel2/20 p-4">
                           <PluginRuntime
                             schema={activeTool.ui}
+                            pluginId={detailPlugin.id}
+                            toolId={activeTool.id}
                             onSubmit={() => {}}
                             submitting={false}
                           />
@@ -583,6 +585,8 @@ export function PluginsPage({
               {executionModal.tool.ui ? (
                 <PluginRuntime
                   schema={executionModal.tool.ui}
+                  pluginId={executionModal.plugin.id}
+                  toolId={executionModal.tool.id}
                   onSubmit={handleExecuteTool}
                   onCancel={() => setExecutionModal(null)}
                   submitting={executing}
