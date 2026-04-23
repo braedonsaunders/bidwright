@@ -138,22 +138,9 @@ const CALCULATION_TYPE_MAP = new Map(
   CALCULATION_TYPE_OPTIONS.map((option) => [option.value, option]),
 );
 
-const LEGACY_CALCULATION_TYPE_MAP: Record<string, CalculationType> = {
-  auto_labour: "tiered_rate",
-  auto_equipment: "duration_rate",
-  auto_stock: "unit_markup",
-  auto_consumable: "quantity_markup",
-  auto_subcontract: "unit_markup",
-  direct_price: "direct_total",
-};
-
-export function getCalculationTypeOption(value: CalculationType | string | undefined) {
-  const normalized =
-    value && value in LEGACY_CALCULATION_TYPE_MAP
-      ? LEGACY_CALCULATION_TYPE_MAP[value]
-      : value;
+export function getCalculationTypeOption(value: CalculationType | undefined) {
   return (
-    CALCULATION_TYPE_MAP.get((normalized ?? "manual") as CalculationType) ??
+    CALCULATION_TYPE_MAP.get(value ?? "manual") ??
     CALCULATION_TYPE_MAP.get("manual")!
   );
 }
