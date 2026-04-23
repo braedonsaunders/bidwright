@@ -252,10 +252,10 @@ export const getItemConfigTool = createQuoteTool({
   name: "Get Item Configuration",
   description: `Discover how line items work in this organization. Returns:
 1. Entity categories — the types of line items (e.g. Labour, Material) with their calculation types and editable fields. Categories are user-configured and vary per organization.
-2. Rate schedule items — pre-configured rates (labour rates, equipment rates) that should be linked to line items via rateScheduleItemId for categories with auto-calculation.
+2. Rate schedule items — pre-configured rates that should be linked to line items via rateScheduleItemId for rate-schedule categories.
 3. Catalog items — equipment/material catalog with pricing.
 
-CALL THIS FIRST before creating any line items. The response tells you which categories use rate schedules (calculationType=auto_labour or auto_equipment) and which are freeform (calculationType=manual or direct_price).`,
+CALL THIS FIRST before creating any line items. The response tells you which categories use rate schedules, catalogs, direct totals, formula pricing, or freeform editable fields.`,
   inputSchema: z.object({}),
   tags: ["item", "read", "rates", "config"],
 }, async (ctx, _input) => {
@@ -296,8 +296,7 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
     unitLabels: ec.unitLabels ?? {},
     itemSource: ec.itemSource, // "rate_schedule", "catalog", or "freeform"
     catalogId: ec.catalogId ?? null,
-    // Derive whether this category needs rate schedule linking
-    usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
+    usesRateSchedule: ec.itemSource === "rate_schedule",
   }));
 
   // Build rate schedule items — only if there are schedules configured
@@ -339,15 +338,15 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
   }
 
   // Build dynamic instructions from the actual configuration
-  const autoCategories = categoryConfig.filter((c: any) => c.usesRateSchedule);
-  const manualCategories = categoryConfig.filter((c: any) => !c.usesRateSchedule);
+  const rateScheduleCategories = categoryConfig.filter((c: any) => c.usesRateSchedule);
+  const nonRateScheduleCategories = categoryConfig.filter((c: any) => !c.usesRateSchedule);
 
   // Identify categories that have catalogs
   const catalogCategories = categoryConfig.filter((c: any) => c.itemSource === "catalog");
 
   let instructions = "";
-  if (autoCategories.length > 0) {
-    const names = autoCategories.map((c: any) => c.name).join(", ");
+  if (rateScheduleCategories.length > 0) {
+    const names = rateScheduleCategories.map((c: any) => c.name).join(", ");
     if (rateItems.length > 0) {
       // Build tier examples from the first rate item
       const exampleItem = rateItems[0];
@@ -368,15 +367,15 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
         }
       }
     } else {
-      instructions += `Categories [${names}] are configured for auto-calculation but NO rate schedules are set up yet. You MUST import rate schedules using rateSchedule.import before creating items in these categories. `;
+      instructions += `Categories [${names}] are configured for rate-schedule pricing but NO rate schedules are set up yet. You MUST import rate schedules using rateSchedule.import before creating items in these categories. `;
     }
   }
   if (catalogCategories.length > 0) {
     const names = catalogCategories.map((c: any) => c.name).join(", ");
     instructions += `CATALOG CATEGORIES [${names}]: Items must be selected from the catalogItems list. Do NOT invent items — pick from the available catalog entries only. `;
   }
-  if (manualCategories.length > 0) {
-    const freeformManual = manualCategories.filter((c: any) => c.itemSource === "freeform");
+  if (nonRateScheduleCategories.length > 0) {
+    const freeformManual = nonRateScheduleCategories.filter((c: any) => c.itemSource === "freeform");
     if (freeformManual.length > 0) {
       const names = freeformManual.map((c: any) => c.name).join(", ");
       instructions += `FREEFORM CATEGORIES [${names}]: Set cost and quantity directly. `;
@@ -384,7 +383,7 @@ CALL THIS FIRST before creating any line items. The response tells you which cat
   }
 
   // Add explicit warning about consumables if applicable
-  const consumableCat = categoryConfig.find((c: any) => c.calculationType === "auto_consumable");
+  const consumableCat = categoryConfig.find((c: any) => c.calculationType === "quantity_markup");
   if (consumableCat) {
     const hasConsumableRates = rateItems.some((r: any) => r.forCategory === "consumable" || r.forCategory === "consumables");
     const hasConsumableCatalog = catalogItems.some((c: any) => c.catalogKind === "consumable" || c.catalogKind === "consumables");

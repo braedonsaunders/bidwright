@@ -197,7 +197,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── getItemConfig ─────────────────────────────────────────
   server.tool(
     "getItemConfig",
-    `Discover how line items work in this organization. Returns entity categories (with calculation types), available rate schedule items for labour/equipment, and catalog items. CALL THIS FIRST before creating any line items. Categories with calculationType=auto_labour or auto_equipment need rateScheduleItemId. Manual categories use direct cost/quantity.`,
+    `Discover how line items work in this organization. Returns entity categories (with calculation types), available rate schedule items, and catalog items. CALL THIS FIRST before creating any line items. Categories with itemSource=rate_schedule need rateScheduleItemId. Freeform categories use their editable fields directly.`,
     {},
     async () => {
       const data = await apiGet(projectPath("/workspace"));
@@ -213,7 +213,7 @@ export function registerQuoteTools(server: McpServer) {
         unitLabels: ec.unitLabels ?? {},
         itemSource: ec.itemSource ?? "freeform",
         catalogId: ec.catalogId ?? null,
-        usesRateSchedule: ec.calculationType === "auto_labour" || ec.calculationType === "auto_equipment",
+        usesRateSchedule: (ec.itemSource ?? "freeform") === "rate_schedule",
       }));
 
       const rateItems: any[] = [];
@@ -452,8 +452,8 @@ export function registerQuoteTools(server: McpServer) {
 
           // Validate calculationType requirements
           const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
-          if (calcType === "auto_labour" && !hasTierUnits && !rest.unit1 && !rest.unit2 && !rest.unit3) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses auto_labour calculation — unit values are required. Set unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
+          if ((calcType === "tiered_rate" || calcType === "duration_rate") && src === "rate_schedule" && !hasTierUnits && !rest.unit1 && !rest.unit2 && !rest.unit3) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses ${calcType} calculation with rate-schedule pricing, so unit values are required. Set tierUnits or unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
           }
 
           // Auto-apply default markup for markup-eligible categories when not explicitly set
