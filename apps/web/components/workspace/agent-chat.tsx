@@ -45,6 +45,7 @@ interface PendingQuestionStep {
   id?: string;
   prompt: string;
   options?: string[];
+  allowMultiple?: boolean;
   placeholder?: string;
   context?: string;
 }
@@ -53,6 +54,7 @@ interface PendingQuestionPrompt {
   id?: string | null;
   question: string;
   options?: string[];
+  allowMultiple?: boolean;
   context?: string;
   questions?: PendingQuestionStep[];
 }
@@ -62,7 +64,7 @@ interface IntakeStatusResult {
   projectId: string;
   scope: string;
   status: "running" | "completed" | "failed" | "stopped" | "waiting_for_user";
-  pendingQuestion?: { question: string; options?: string[]; context?: string } | null;
+  pendingQuestion?: { question: string; options?: string[]; allowMultiple?: boolean; context?: string } | null;
   toolCallCount: number;
   messageCount: number;
   summary: string | null;
@@ -353,6 +355,7 @@ interface GuidedQuestion {
   id: string;
   prompt: string;
   options: string[];
+  allowMultiple: boolean;
   placeholder: string;
   context?: string;
 }
@@ -363,6 +366,13 @@ interface GuidedQuestionnaire {
 }
 
 const DEFAULTS_PATTERN = /(reasonable defaults|use defaults|proceed .*defaults)/i;
+const MULTI_SELECT_PATTERN = /\b(multi[-\s]?select|select all that apply|pick all|choose all|check all|all that apply|multiple selections?)\b/i;
+
+type GuidedResponse = { choice?: string; choices?: string[]; detail: string };
+
+function allowsMultipleSelection(prompt: string, allowMultiple?: boolean): boolean {
+  return allowMultiple === true || MULTI_SELECT_PATTERN.test(stripMarkdown(prompt));
+}
 
 function stripMarkdown(text: string): string {
   return text
@@ -504,6 +514,7 @@ function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestion
         id: question.id || `guided-${index + 1}`,
         prompt: question.prompt,
         options: question.options && question.options.length > 0 ? question.options : deriveQuestionOptions(question.prompt),
+        allowMultiple: allowsMultipleSelection(question.prompt, question.allowMultiple),
         placeholder: question.placeholder || deriveQuestionPlaceholder(question.prompt),
         context: question.context,
       })),
@@ -526,6 +537,7 @@ function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestion
       id: "scope-confirmation",
       prompt: "Does the scope summary match your understanding?",
       options: deriveQuestionOptions("scope summary"),
+      allowMultiple: false,
       placeholder: deriveQuestionPlaceholder("scope summary"),
     },
   ];
@@ -553,6 +565,7 @@ function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestion
           id: `${questions.length + 1}`,
           prompt: stripMarkdown(derivedPrompt),
           options: deriveQuestionOptions(`${promptText} ${bullet}`),
+          allowMultiple: allowsMultipleSelection(`${promptText} ${bullet}`),
           placeholder: deriveQuestionPlaceholder(`${promptText} ${bullet}`),
         });
       }
@@ -565,6 +578,7 @@ function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestion
       id: `${questions.length + 1}`,
       prompt: promptText,
       options: deriveQuestionOptions(promptText),
+      allowMultiple: allowsMultipleSelection(promptText),
       placeholder: deriveQuestionPlaceholder(promptText),
     });
   }
@@ -572,7 +586,7 @@ function buildGuidedQuestionnaire(prompt: PendingQuestionPrompt): GuidedQuestion
   return questions.length > 0 ? { summary, questions } : null;
 }
 
-function compileGuidedAnswer(questionnaire: GuidedQuestionnaire, responses: Record<string, { choice?: string; detail: string }>) {
+function compileGuidedAnswer(questionnaire: GuidedQuestionnaire, responses: Record<string, GuidedResponse>) {
   const lines = ["I answered each question individually."];
 
   questionnaire.questions.forEach((question, index) => {
@@ -580,16 +594,33 @@ function compileGuidedAnswer(questionnaire: GuidedQuestionnaire, responses: Reco
     if (!response) return;
 
     const detail = response.detail.trim();
+    const choices = response.choices && response.choices.length > 0
+      ? response.choices
+      : response.choice
+        ? [response.choice]
+        : [];
 
     lines.push(`${index + 1}. ${question.prompt}`);
-    if (response.choice) {
-      lines.push(`   Choice: ${response.choice}`);
+    if (choices.length > 0) {
+      lines.push(`   ${question.allowMultiple ? "Choices" : "Choice"}: ${choices.join("; ")}`);
     }
     if (detail) {
       lines.push(`   Detail: ${detail}`);
     }
   });
 
+  return lines.join("\n");
+}
+
+function compileMultiSelectAnswer(prompt: PendingQuestionPrompt, selections: string[], detail: string) {
+  const lines = [`${prompt.question}`, "", "Selected options:"];
+  for (const selection of selections) {
+    lines.push(`- ${selection}`);
+  }
+  const trimmedDetail = detail.trim();
+  if (trimmedDetail) {
+    lines.push("", "Additional detail:", trimmedDetail);
+  }
   return lines.join("\n");
 }
 
@@ -657,6 +688,7 @@ function appendTimelineEvent(events: any[] | undefined, event: any): any[] {
       id: (event?.data?.questionId as string | undefined) || (event?.data?.id as string | undefined) || null,
       question: event?.data?.question || "",
       options: event?.data?.options || [],
+      allowMultiple: event?.data?.allowMultiple === true,
       context: event?.data?.context || "",
       questions: event?.data?.questions || [],
     };
@@ -690,6 +722,7 @@ function ensurePromptTimelineEvent(events: any[] | undefined, prompt: PendingQue
       id: prompt.id || undefined,
       question: prompt.question,
       options: prompt.options || [],
+      allowMultiple: prompt.allowMultiple === true,
       context: prompt.context || "",
       questions: prompt.questions || [],
     },
@@ -707,15 +740,20 @@ function PendingQuestionCard({
 }) {
   const questionnaire = buildGuidedQuestionnaire(prompt);
   const hasQuestionnaire = Boolean(questionnaire && questionnaire.questions.length > 0);
+  const topLevelAllowsMultiple = !hasQuestionnaire
+    && (prompt.options?.length ?? 0) > 0
+    && allowsMultipleSelection(prompt.question, prompt.allowMultiple);
   const quickBypassOptions = hasQuestionnaire
     ? (prompt.options ?? []).filter((option) => DEFAULTS_PATTERN.test(option))
     : [];
   const [customAnswer, setCustomAnswer] = useState("");
-  const [responses, setResponses] = useState<Record<string, { choice?: string; detail: string }>>({});
+  const [topLevelSelections, setTopLevelSelections] = useState<string[]>([]);
+  const [responses, setResponses] = useState<Record<string, GuidedResponse>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setCustomAnswer("");
+    setTopLevelSelections([]);
     setResponses({});
     setIsSubmitting(false);
   }, [promptKey]);
@@ -730,10 +768,24 @@ function PendingQuestionCard({
     }
   }, [isSubmitting, onSubmit]);
 
+  const toggleTopLevelSelection = useCallback((option: string) => {
+    setTopLevelSelections((prev) =>
+      prev.includes(option)
+        ? prev.filter((candidate) => candidate !== option)
+        : [...prev, option],
+    );
+  }, []);
+
+  const submitTopLevelMultiSelect = useCallback(async () => {
+    const detail = customAnswer.trim();
+    if (topLevelSelections.length === 0 && !detail) return;
+    await submitAnswer(compileMultiSelectAnswer(prompt, topLevelSelections, detail));
+  }, [customAnswer, prompt, submitAnswer, topLevelSelections]);
+
   const canSubmitGuided = questionnaire
     ? questionnaire.questions.every((question) => {
       const response = responses[question.id];
-      return Boolean(response?.choice || response?.detail.trim());
+      return Boolean(response?.choice || response?.choices?.length || response?.detail.trim());
     })
     : false;
 
@@ -760,15 +812,22 @@ function PendingQuestionCard({
                   key={`${option}-${index}`}
                   type="button"
                   disabled={isSubmitting}
-                  onClick={() => void submitAnswer(option)}
+                  onClick={() => topLevelAllowsMultiple ? toggleTopLevelSelection(option) : void submitAnswer(option)}
                   className={cn(
-                    "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
-                    DEFAULTS_PATTERN.test(option)
+                    "inline-flex max-w-full items-start gap-1.5 rounded-md border px-3 py-1.5 text-left text-xs font-medium transition-colors",
+                    topLevelAllowsMultiple && topLevelSelections.includes(option)
+                      ? "border-accent bg-accent text-white"
+                      : DEFAULTS_PATTERN.test(option)
                       ? "border-line/60 bg-bg/40 text-fg/75 hover:bg-bg/60"
                       : "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10",
                   )}
                 >
-                  {option}
+                  {topLevelAllowsMultiple && (
+                    topLevelSelections.includes(option)
+                      ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      : <Square className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="min-w-0 break-words">{option}</span>
                 </button>
               ))}
             </div>
@@ -784,11 +843,11 @@ function PendingQuestionCard({
             <div className="flex justify-end">
               <Button
                 size="sm"
-                onClick={() => void submitAnswer(customAnswer)}
-                disabled={isSubmitting || !customAnswer.trim()}
+                onClick={() => topLevelAllowsMultiple ? void submitTopLevelMultiSelect() : void submitAnswer(customAnswer)}
+                disabled={isSubmitting || (topLevelAllowsMultiple ? topLevelSelections.length === 0 && !customAnswer.trim() : !customAnswer.trim())}
               >
                 {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                Send Answer
+                {topLevelAllowsMultiple ? "Submit Selections" : "Send Answer"}
               </Button>
             </div>
           </div>
@@ -803,6 +862,11 @@ function PendingQuestionCard({
 
           {questionnaire.questions.map((question, index) => {
             const response = responses[question.id] ?? { detail: "" };
+            const selectedChoices = response.choices && response.choices.length > 0
+              ? response.choices
+              : response.choice
+                ? [response.choice]
+                : [];
             return (
               <div key={question.id} className="rounded-md border border-line/50 bg-bg/20 p-3 space-y-2">
                 <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">
@@ -823,19 +887,29 @@ function PendingQuestionCard({
                           ...prev,
                           [question.id]: {
                             ...prev[question.id],
-                            choice: option,
+                            choice: question.allowMultiple ? undefined : option,
+                            choices: question.allowMultiple
+                              ? (selectedChoices.includes(option)
+                                ? selectedChoices.filter((candidate) => candidate !== option)
+                                : [...selectedChoices, option])
+                              : undefined,
                             detail: prev[question.id]?.detail ?? "",
                           },
                         }));
                       }}
                       className={cn(
-                        "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
-                        response.choice === option
+                        "inline-flex max-w-full items-start gap-1.5 rounded-md border px-3 py-1.5 text-left text-xs font-medium transition-colors",
+                        selectedChoices.includes(option)
                           ? "border-accent bg-accent text-white"
                           : "border-accent/30 bg-accent/5 text-accent hover:bg-accent/10",
                       )}
                     >
-                      {option}
+                      {question.allowMultiple && (
+                        selectedChoices.includes(option)
+                          ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          : <Square className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      )}
+                      <span className="min-w-0 break-words">{option}</span>
                     </button>
                   ))}
                 </div>
@@ -848,6 +922,7 @@ function PendingQuestionCard({
                       [question.id]: {
                         ...prev[question.id],
                         choice: prev[question.id]?.choice,
+                        choices: prev[question.id]?.choices,
                         detail: value,
                       },
                     }));
@@ -1418,6 +1493,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
             id: data.questionId || data.id || null,
             question: data.question,
             options: data.options,
+            allowMultiple: data.allowMultiple === true,
             context: data.context,
             questions: data.questions,
           });
@@ -1610,6 +1686,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               id: q.questionId || null,
               question: q.question,
               options: q.options,
+              allowMultiple: q.allowMultiple === true,
               context: q.context,
               questions: q.questions,
             });

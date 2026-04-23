@@ -311,7 +311,7 @@ export function AppShell({
           )}
           {searchOpen && searchResults.length === 0 && searchQuery.trim() && (
             <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel shadow-lg px-3 py-3 text-xs text-fg/40">
-              No tools found for &quot;{searchQuery}&quot;
+              No tools found for "{searchQuery}"
             </div>
           )}
           </div>

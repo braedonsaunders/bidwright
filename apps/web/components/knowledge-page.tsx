@@ -1229,7 +1229,7 @@ function BookDetailPanel({
                 <Database className="h-8 w-8 text-fg/15 mx-auto mb-2" />
                 <p className="text-sm text-fg/50">No datasets extracted yet.</p>
                 <p className="text-xs text-fg/30 mt-1">
-                  Click &quot;Extract Datasets&quot; to have the AI read this book and create structured datasets.
+                  Click "Extract Datasets" to have the AI read this book and create structured datasets.
                 </p>
               </div>
             ) : (

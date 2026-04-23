@@ -335,7 +335,7 @@ export function LabourCostManager() {
         {/* Table list */}
         {tables.length === 0 && !showCreate && (
           <div className="px-5 py-8 text-center text-xs text-fg/40">
-            No labour cost tables configured. Click &quot;New Table&quot; to get started.
+            No labour cost tables configured. Click "New Table" to get started.
           </div>
         )}
 
@@ -520,7 +520,7 @@ export function LabourCostManager() {
                               {filteredEntries.length === 0 && (
                                 <tr>
                                   <td colSpan={6} className="px-3 py-6 text-center text-fg/40">
-                                    No entries yet. Click &quot;Add&quot; to add labour classifications.
+                      No entries yet. Click "Add" to add labour classifications.
                                   </td>
                                 </tr>
                               )}

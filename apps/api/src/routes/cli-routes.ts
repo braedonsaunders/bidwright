@@ -324,6 +324,7 @@ type CliQuestionStep = {
   id?: string;
   prompt: string;
   options?: string[];
+  allowMultiple?: boolean;
   placeholder?: string;
   context?: string;
 };
@@ -332,9 +333,11 @@ type PendingQuestionState = {
   id: string;
   question: string;
   options?: string[];
+  allowMultiple?: boolean;
   context?: string;
   questions?: CliQuestionStep[];
   createdAt: string;
+  runId?: string | null;
 };
 
 function cliEventFingerprint(event: PersistedCliEvent): string {
@@ -359,8 +362,78 @@ function mergeCliEvents(existing: PersistedCliEvent[], incoming: PersistedCliEve
   return merged;
 }
 
-async function appendCliEventsToLatestRun(projectId: string, incoming: PersistedCliEvent[]) {
-  if (incoming.length === 0) return;
+const cliRunWriteLocks = new Map<string, Promise<void>>();
+
+async function withCliRunWriteLock<T>(runId: string, work: () => Promise<T>): Promise<T> {
+  const previous = cliRunWriteLocks.get(runId) || Promise.resolve();
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const lock = previous.catch(() => undefined).then(() => barrier);
+  cliRunWriteLocks.set(runId, lock);
+
+  await previous.catch(() => undefined);
+  try {
+    return await work();
+  } finally {
+    release();
+    if (cliRunWriteLocks.get(runId) === lock) {
+      cliRunWriteLocks.delete(runId);
+    }
+  }
+}
+
+type PersistedCliRunRef = {
+  id: string;
+  events: PersistedCliEvent[];
+};
+
+function readCliRunEvents(run: { output?: unknown } | null | undefined): PersistedCliEvent[] {
+  return (((run?.output as any)?.events || []) as PersistedCliEvent[]);
+}
+
+async function getCliRunById(projectId: string, runId: string): Promise<PersistedCliRunRef | null> {
+  const run = await prisma.aiRun.findFirst({
+    where: { id: runId, projectId, kind: "cli-intake" },
+    select: { id: true, output: true },
+  });
+  if (!run) return null;
+  return { id: run.id, events: readCliRunEvents(run) };
+}
+
+async function findCliRunByQuestionId(projectId: string, questionId: string): Promise<PersistedCliRunRef | null> {
+  const runs = await prisma.aiRun.findMany({
+    where: { projectId, kind: "cli-intake" },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, output: true },
+  });
+
+  for (const run of runs) {
+    const events = readCliRunEvents(run);
+    if (hasCliQuestionEvent(events, questionId)) {
+      return { id: run.id, events };
+    }
+  }
+
+  return null;
+}
+
+async function getCliRunContext(
+  projectId: string,
+  options?: { questionId?: string; runId?: string | null },
+): Promise<PersistedCliRunRef | null> {
+  if (options?.runId) {
+    const run = await getCliRunById(projectId, options.runId);
+    if (run && (!options.questionId || hasCliQuestionEvent(run.events, options.questionId))) {
+      return run;
+    }
+  }
+
+  if (options?.questionId) {
+    const run = await findCliRunByQuestionId(projectId, options.questionId);
+    if (run) return run;
+  }
 
   const latestRun = await prisma.aiRun.findFirst({
     where: { projectId, kind: "cli-intake" },
@@ -371,26 +444,41 @@ async function appendCliEventsToLatestRun(projectId: string, incoming: Persisted
     },
   });
 
-  if (!latestRun) return;
-
-  const existing = (((latestRun.output as any)?.events || []) as PersistedCliEvent[]);
-  await prisma.aiRun.update({
-    where: { id: latestRun.id },
-    data: {
-      output: {
-        events: mergeCliEvents(existing, incoming),
-      } as any,
-    },
-  });
+  if (!latestRun) return null;
+  return { id: latestRun.id, events: readCliRunEvents(latestRun) };
 }
 
-async function getLatestCliRunEvents(projectId: string): Promise<PersistedCliEvent[]> {
-  const latestRun = await prisma.aiRun.findFirst({
-    where: { projectId, kind: "cli-intake" },
-    orderBy: { createdAt: "desc" },
-    select: { output: true },
+async function appendCliEventsToLatestRun(
+  projectId: string,
+  incoming: PersistedCliEvent[],
+  options?: { questionId?: string; runId?: string | null },
+): Promise<string | null> {
+  if (incoming.length === 0) return null;
+
+  const targetRun = await getCliRunContext(projectId, options);
+  if (!targetRun) return null;
+
+  await withCliRunWriteLock(targetRun.id, async () => {
+    const freshRun = await getCliRunById(projectId, targetRun.id);
+    const existing = freshRun?.events ?? [];
+    await prisma.aiRun.update({
+      where: { id: targetRun.id },
+      data: {
+        output: {
+          events: mergeCliEvents(existing, incoming),
+        } as any,
+      },
+    });
   });
-  return (((latestRun?.output as any)?.events || []) as PersistedCliEvent[]);
+
+  return targetRun.id;
+}
+
+async function getLatestCliRunEvents(
+  projectId: string,
+  options?: { questionId?: string; runId?: string | null },
+): Promise<PersistedCliEvent[]> {
+  return (await getCliRunContext(projectId, options))?.events ?? [];
 }
 
 function makeCliQuestionId() {
@@ -429,6 +517,7 @@ function findPendingCliQuestionFromEvents(
         id: id || "",
         question: typeof data.question === "string" ? data.question : "",
         options: Array.isArray(data.options) ? data.options as string[] : [],
+        allowMultiple: data.allowMultiple === true,
         context: typeof data.context === "string" ? data.context : "",
         questions: Array.isArray(data.questions) ? data.questions as CliQuestionStep[] : [],
         createdAt: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
@@ -693,25 +782,27 @@ function attachCliRunPersistence(
   let eventBuffer: PersistedCliEvent[] = [];
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const flushEvents = async () => {
-    if (eventBuffer.length === 0) return;
-    const toSave = [...eventBuffer];
-    eventBuffer = [];
-    try {
-      const run = await prisma.aiRun.findFirst({ where: { id: runId } });
-      const existing = ((run?.output as any)?.events || []) as PersistedCliEvent[];
-      await prisma.aiRun.update({
-        where: { id: runId },
-        data: {
-          output: {
-            events: mergeCliEvents(existing, toSave),
-          } as any,
-        },
-      });
-    } catch (err) {
-      console.error(`[cli] Failed to persist events for ${runId}:`, err);
-      eventBuffer.unshift(...toSave);
-    }
+    const flushEvents = async () => {
+      if (eventBuffer.length === 0) return;
+      const toSave = [...eventBuffer];
+      eventBuffer = [];
+      try {
+        await withCliRunWriteLock(runId, async () => {
+          const run = await prisma.aiRun.findFirst({ where: { id: runId } });
+          const existing = ((run?.output as any)?.events || []) as PersistedCliEvent[];
+          await prisma.aiRun.update({
+            where: { id: runId },
+            data: {
+              output: {
+                events: mergeCliEvents(existing, toSave),
+              } as any,
+            },
+          });
+        });
+      } catch (err) {
+        console.error(`[cli] Failed to persist events for ${runId}:`, err);
+        eventBuffer.unshift(...toSave);
+      }
   };
 
   const scheduleFlush = () => {
@@ -1531,9 +1622,10 @@ Merge tables that span multiple pages. Skip non-data pages.
   // POST /api/cli/:projectId/question — MCP tool calls this to register a pending askUser prompt
   app.post("/api/cli/:projectId/question", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { question, options, context, questions } = (request.body || {}) as {
+    const { question, options, allowMultiple, context, questions } = (request.body || {}) as {
       question: string;
       options?: string[];
+      allowMultiple?: boolean;
       context?: string;
       questions?: CliQuestionStep[];
     };
@@ -1559,7 +1651,10 @@ Merge tables that span multiple pages. Skip non-data pages.
       if (existingSession) {
         existingSession.events.emit("event", supersededEvent);
       }
-      await appendCliEventsToLatestRun(projectId, [supersededEvent]).catch(() => {});
+      await appendCliEventsToLatestRun(projectId, [supersededEvent], {
+        questionId: existing.id,
+        runId: existing.runId ?? null,
+      }).catch(() => null);
       pendingQuestions.delete(projectId);
     }
 
@@ -1571,6 +1666,7 @@ Merge tables that span multiple pages. Skip non-data pages.
         id: questionId,
         question,
         options: options || [],
+        allowMultiple: allowMultiple === true,
         context: context || "",
         questions: questions || [],
       },
@@ -1580,15 +1676,17 @@ Merge tables that span multiple pages. Skip non-data pages.
     if (session) {
       session.events.emit("event", promptEvent);
     }
-    await appendCliEventsToLatestRun(projectId, [promptEvent]).catch(() => {});
+    const runId = await appendCliEventsToLatestRun(projectId, [promptEvent]).catch(() => null);
 
     pendingQuestions.set(projectId, {
       id: questionId,
       question,
       options,
+      allowMultiple: allowMultiple === true,
       context,
       questions,
       createdAt: timestamp,
+      runId,
     });
 
     return { ok: true, questionId };
@@ -1598,7 +1696,11 @@ Merge tables that span multiple pages. Skip non-data pages.
   app.get("/api/cli/:projectId/pending-question", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const { questionId } = (request.query ?? {}) as { questionId?: string };
-    const latestEvents = await getLatestCliRunEvents(projectId);
+    const inMemory = pendingQuestions.get(projectId);
+    const latestEvents = await getLatestCliRunEvents(projectId, {
+      questionId,
+      runId: inMemory?.id === questionId ? inMemory?.runId ?? null : inMemory?.runId ?? null,
+    });
 
     if (questionId) {
       const answered = findCliQuestionAnswer(latestEvents, questionId);
@@ -1612,7 +1714,6 @@ Merge tables that span multiple pages. Skip non-data pages.
       }
     }
 
-    const inMemory = pendingQuestions.get(projectId);
     const exactInMemory = questionId
       ? (inMemory?.id === questionId ? inMemory : null)
       : inMemory;
@@ -1636,6 +1737,7 @@ Merge tables that span multiple pages. Skip non-data pages.
         questionId: derived.id || questionId || null,
         question: derived.question,
         options: derived.options || [],
+        allowMultiple: derived.allowMultiple === true,
         context: derived.context || "",
         questions: derived.questions || [],
       };
@@ -1649,6 +1751,7 @@ Merge tables that span multiple pages. Skip non-data pages.
       questionId: pending.id,
       question: pending.question,
       options: pending.options || [],
+      allowMultiple: pending.allowMultiple === true,
       context: pending.context || "",
       questions: pending.questions || [],
     };
@@ -1660,7 +1763,10 @@ Merge tables that span multiple pages. Skip non-data pages.
     const { answer, questionId } = (request.body || {}) as { answer: string; questionId?: string };
 
     const pending = pendingQuestions.get(projectId);
-    const latestEvents = await getLatestCliRunEvents(projectId);
+    const latestEvents = await getLatestCliRunEvents(projectId, {
+      questionId,
+      runId: pending?.runId ?? null,
+    });
     const resolvedQuestionId = typeof questionId === "string" && questionId
       ? questionId
       : pending?.id || findPendingCliQuestionFromEvents(latestEvents)?.id || "";
@@ -1688,7 +1794,10 @@ Merge tables that span multiple pages. Skip non-data pages.
     if (session) {
       session.events.emit("event", answerEvent);
     }
-    await appendCliEventsToLatestRun(projectId, [answerEvent]).catch(() => {});
+    await appendCliEventsToLatestRun(projectId, [answerEvent], {
+      questionId: resolvedQuestionId,
+      runId: pending?.runId ?? null,
+    }).catch(() => null);
 
     return { ok: true, message: "Answer delivered to agent" };
   });
@@ -1696,10 +1805,14 @@ Merge tables that span multiple pages. Skip non-data pages.
   app.post("/api/cli/:projectId/question-timeout", async (request) => {
     const { projectId } = request.params as { projectId: string };
     const { questionId } = (request.body || {}) as { questionId?: string };
-    const latestEvents = await getLatestCliRunEvents(projectId);
+    const pending = pendingQuestions.get(projectId);
+    const latestEvents = await getLatestCliRunEvents(projectId, {
+      questionId,
+      runId: pending?.runId ?? null,
+    });
     const resolvedQuestionId = typeof questionId === "string" && questionId
       ? questionId
-      : pendingQuestions.get(projectId)?.id || "";
+      : pending?.id || "";
 
     if (!resolvedQuestionId) {
       return { ok: true, cleared: false };
@@ -1727,7 +1840,10 @@ Merge tables that span multiple pages. Skip non-data pages.
     if (session) {
       session.events.emit("event", timeoutEvent);
     }
-    await appendCliEventsToLatestRun(projectId, [timeoutEvent]).catch(() => {});
+    await appendCliEventsToLatestRun(projectId, [timeoutEvent], {
+      questionId: resolvedQuestionId,
+      runId: pending?.runId ?? null,
+    }).catch(() => null);
 
     return { ok: true, cleared: true };
   });

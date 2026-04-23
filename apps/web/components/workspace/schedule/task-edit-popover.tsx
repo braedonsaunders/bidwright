@@ -556,7 +556,7 @@ export function TaskEditPopover({
                       <div className="rounded-xl border border-line bg-panel2/15 px-4 py-3 text-xs text-fg/55">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fg/35">Summary Rollup</p>
                         <p className="mt-2">
-                          Start, finish, duration, and progress are being calculated from this task&apos;s child activities.
+                        Start, finish, duration, and progress are being calculated from this task's child activities.
                         </p>
                       </div>
                     ) : null}

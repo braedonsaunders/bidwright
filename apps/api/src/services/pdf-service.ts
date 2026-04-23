@@ -191,13 +191,19 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
   };
 }
 
-function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T>): T {
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function deepMerge<T extends Record<string, any>>(base: T, overrides: Partial<T> | Record<string, unknown>): T {
   const result = { ...base };
-  for (const key of Object.keys(overrides) as (keyof T)[]) {
-    const val = overrides[key];
-    if (val !== undefined && typeof val === "object" && !Array.isArray(val) && val !== null) {
-      result[key] = deepMerge(base[key] as any, val as any);
-    } else if (val !== undefined) {
+  for (const [rawKey, val] of Object.entries(overrides ?? {})) {
+    if (!(rawKey in base) || val === undefined) continue;
+    const key = rawKey as keyof T;
+    const baseValue = base[key];
+    if (isPlainObject(baseValue) && isPlainObject(val)) {
+      result[key] = deepMerge(baseValue as Record<string, any>, val) as T[keyof T];
+    } else {
       result[key] = val as T[keyof T];
     }
   }

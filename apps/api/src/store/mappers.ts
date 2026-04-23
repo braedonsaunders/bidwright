@@ -55,6 +55,7 @@ import { normalizeCalculationType } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 
 import { relativeWorkspacePath } from "../paths.js";
+import { decodeHtmlEntities } from "../text-utils.js";
 import type { IngestionJobRecord, StoredPackageRecord, WorkspaceStateRecord } from "./types.js";
 
 export const DEFAULT_BRAND: AppSettings["brand"] = {
@@ -255,9 +256,9 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     phaseId: i.phaseId ?? null,
     category: i.category,
     entityType: i.entityType,
-    entityName: i.entityName,
-    vendor: i.vendor ?? undefined,
-    description: i.description,
+    entityName: decodeHtmlEntities(i.entityName ?? ""),
+    vendor: i.vendor ? decodeHtmlEntities(i.vendor) : undefined,
+    description: decodeHtmlEntities(i.description ?? ""),
     quantity: i.quantity,
     uom: i.uom,
     cost: i.cost,
@@ -270,7 +271,7 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     rateScheduleItemId: i.rateScheduleItemId ?? null,
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
-    sourceNotes: i.sourceNotes ?? "",
+    sourceNotes: decodeHtmlEntities(i.sourceNotes ?? ""),
   };
 }
 

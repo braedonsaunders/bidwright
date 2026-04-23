@@ -1,7 +1,3 @@
-export function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
-
 const NAMED_HTML_ENTITIES: Record<string, string> = {
   amp: "&",
   lt: "<",
@@ -31,6 +27,7 @@ export function decodeHtmlEntities(value: string): string {
   if (!value || !value.includes("&")) return value;
 
   let decoded = value;
+
   for (let pass = 0; pass < 3; pass += 1) {
     const next = decoded.replace(/&(#(?:x|X)?[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);/g, (match, entity) => {
       const resolved = decodeSingleEntity(entity);

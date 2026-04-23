@@ -275,7 +275,7 @@ export function BurdenManager() {
               {filtered.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-fg/40">
-                    No burden periods configured. Click &quot;Add&quot; to get started.
+                    No burden periods configured. Click "Add" to get started.
                   </td>
                 </tr>
               )}
