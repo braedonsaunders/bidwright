@@ -96,6 +96,7 @@ import { executePluginSearchDataSource } from "./services/plugin-search-data-sou
 const createProjectSchema = z.object({
   name: z.string().min(1),
   clientName: z.string().min(1),
+  customerId: z.string().nullable().optional(),
   location: z.string().min(1),
   packageName: z.string().min(1).optional(),
   summary: z.string().optional()
@@ -1210,6 +1211,7 @@ function createProjectInputFromUpload(fields: UploadFieldMap, originalFileName: 
   return {
     name: fields.projectName?.trim() || fields.name?.trim() || packageName,
     clientName: fields.clientName?.trim() || "Unassigned Client",
+    customerId: fields.customerId?.trim() || undefined,
     location: fields.location?.trim() || "TBD",
     packageName,
     scope: fields.scope?.trim() || undefined,
@@ -1338,14 +1340,8 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
 
   // Sync customerId to the Quote so the client dropdown is populated on the quote page
   const ingestCustomerId = multipartUpload.fields.customerId?.trim();
-  if (ingestCustomerId) {
-    const quote = await prisma.quote.findFirst({ where: { projectId: targetProjectId } });
-    if (quote) {
-      await prisma.quote.update({
-        where: { id: quote.id },
-        data: { customerId: ingestCustomerId },
-      });
-    }
+  if (ingestCustomerId && projectId) {
+    await store.assignProjectCustomer(targetProjectId, ingestCustomerId);
   }
 
   const packageName =

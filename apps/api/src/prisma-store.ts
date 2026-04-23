@@ -372,6 +372,7 @@ export type CreatePluginInput = Omit<Plugin, "id" | "createdAt" | "updatedAt">;
 export interface CreateProjectInput {
   name: string;
   clientName: string;
+  customerId?: string | null;
   location: string;
   packageName?: string;
   scope?: string;
@@ -4760,6 +4761,50 @@ export class PrismaApiStore {
 
   // ── Create Project ─────────────────────────────────────────────────────
 
+  private async resolveCustomerSelection(
+    db: PrismaClient | Prisma.TransactionClient,
+    input: {
+      customerId?: string | null;
+      fallbackClientName?: string | null;
+    },
+  ): Promise<{
+    customerId: string | null;
+    clientName: string;
+    customerString: string;
+    customerExistingNew: Quote["customerExistingNew"];
+  }> {
+    const requestedCustomerId = input.customerId?.trim();
+    const fallbackClientName = input.fallbackClientName?.trim() || "Unassigned Client";
+
+    if (!requestedCustomerId) {
+      return {
+        customerId: null,
+        clientName: fallbackClientName,
+        customerString: fallbackClientName,
+        customerExistingNew: "New",
+      };
+    }
+
+    const customer = await db.customer.findFirst({
+      where: {
+        id: requestedCustomerId,
+        organizationId: this.organizationId,
+      },
+    });
+
+    if (!customer) {
+      throw new Error(`Customer ${requestedCustomerId} not found`);
+    }
+
+    const resolvedName = customer.name.trim() || fallbackClientName;
+    return {
+      customerId: customer.id,
+      clientName: resolvedName,
+      customerString: resolvedName,
+      customerExistingNew: "Existing",
+    };
+  }
+
   async createProject(input: CreateProjectInput) {
     const now = new Date();
     const nowISO = now.toISOString();
@@ -4774,18 +4819,23 @@ export class PrismaApiStore {
     const defaultMarkup = typeof orgDefaults.defaultMarkup === "number" ? orgDefaults.defaultMarkup / 100 : 0.2;
 
     return await this.db.$transaction(async (tx) => {
+      const customerSelection = await this.resolveCustomerSelection(tx, {
+        customerId: input.customerId,
+        fallbackClientName: input.clientName,
+      });
+
       const project = await tx.project.create({
         data: {
           id: projectId,
           organizationId: this.organizationId,
           name: input.name,
-          clientName: input.clientName,
+          clientName: customerSelection.clientName,
           location: input.location,
           packageName,
           packageUploadedAt: nowISO,
           ingestionStatus: "queued",
           scope: input.scope ?? "",
-          summary: input.summary ?? defaultProjectSummary(packageName, input.clientName),
+          summary: input.summary ?? defaultProjectSummary(packageName, customerSelection.clientName),
           createdAt: now,
           updatedAt: now,
         },
@@ -4801,10 +4851,11 @@ export class PrismaApiStore {
           projectId,
           quoteNumber: makeQuoteNumber(),
           title: input.name,
-          customerString: input.clientName ?? "",
+          customerId: customerSelection.customerId,
+          customerString: customerSelection.customerString,
           status: "draft",
           currentRevisionId: revisionId,
-          customerExistingNew: "New",
+          customerExistingNew: customerSelection.customerExistingNew,
           createdAt: now,
           updatedAt: now,
         },
@@ -4849,7 +4900,10 @@ export class PrismaApiStore {
         },
       });
 
-      const quote = await tx.quote.findFirst({ where: { id: quoteId } });
+      const quote = await tx.quote.findFirst({
+        where: { id: quoteId },
+        include: { customer: true },
+      });
       const revision = await tx.quoteRevision.findFirst({ where: { id: revisionId } });
 
       const wsRecord: WorkspaceStateRecord = {
@@ -4870,6 +4924,47 @@ export class PrismaApiStore {
   }
 
   // ── Package Registration ───────────────────────────────────────────────
+
+  async assignProjectCustomer(projectId: string, customerId: string | null): Promise<void> {
+    await this.requireProject(projectId);
+
+    await this.db.$transaction(async (tx) => {
+      const project = await tx.project.findFirst({
+        where: { id: projectId, organizationId: this.organizationId },
+      });
+      if (!project) throw new Error(`Project ${projectId} not found`);
+
+      const quote = await tx.quote.findFirst({
+        where: { projectId },
+        orderBy: { createdAt: "asc" },
+      });
+
+      const customerSelection = await this.resolveCustomerSelection(tx, {
+        customerId,
+        fallbackClientName: quote?.customerString || project.clientName,
+      });
+
+      await tx.project.update({
+        where: { id: projectId },
+        data: {
+          clientName: customerSelection.clientName,
+          updatedAt: new Date(),
+        },
+      });
+
+      if (quote) {
+        await tx.quote.update({
+          where: { id: quote.id },
+          data: {
+            customerId: customerSelection.customerId,
+            customerString: customerSelection.customerString,
+            customerExistingNew: customerSelection.customerExistingNew,
+            updatedAt: new Date(),
+          },
+        });
+      }
+    });
+  }
 
   async registerUploadedPackage(input: RegisterPackageInput & UploadArtifact) {
     await this.requireProject(input.projectId);

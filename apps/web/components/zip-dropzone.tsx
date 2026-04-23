@@ -44,6 +44,14 @@ function SelectItem({ value, children }: { value: string; children: React.ReactN
   );
 }
 
+function mergeCustomers(existing: Customer[], incoming: Customer[]): Customer[] {
+  const merged = new Map(existing.map((customer) => [customer.id, customer]));
+  for (const customer of incoming) {
+    merged.set(customer.id, customer);
+  }
+  return [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 type DataTransferItemWithFileSystemHandle = DataTransferItem & {
   getAsFileSystemHandle?: () => Promise<{
     kind?: string;
@@ -642,22 +650,35 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const customerIdRef = useRef(customerId);
+  const customerOptionsRef = useRef<Customer[]>(customerOptions);
+
+  customerIdRef.current = customerId;
+  customerOptionsRef.current = customerOptions;
 
   useEffect(() => {
-    getCustomers().then(setCustomerOptions).catch(() => {});
+    getCustomers()
+      .then((loadedCustomers) => {
+        setCustomerOptions((prev) => mergeCustomers(prev, loadedCustomers));
+      })
+      .catch(() => {});
   }, []);
 
   async function handleQuickAdd() {
     if (!quickAddName.trim()) return;
+    setError(null);
     setQuickAddSaving(true);
     try {
       const created = await createCustomer({ name: quickAddName.trim(), active: true });
-      setCustomerOptions((prev) => [...prev, created]);
+      const nextCustomerOptions = mergeCustomers(customerOptionsRef.current, [created]);
+      customerOptionsRef.current = nextCustomerOptions;
+      customerIdRef.current = created.id;
+      setCustomerOptions(nextCustomerOptions);
       setCustomerId(created.id);
       setQuickAddName("");
       setQuickAddOpen(false);
-    } catch {
-      /* ignore */
+    } catch (quickAddError) {
+      setError(quickAddError instanceof Error ? quickAddError.message : "Failed to create client.");
     } finally {
       setQuickAddSaving(false);
     }
@@ -716,12 +737,14 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
 
     startTransition(async () => {
       try {
+        const selectedCustomer =
+          customerOptionsRef.current.find((customer) => customer.id === customerIdRef.current) ?? null;
         const result = await submitPackageIngest({
           files,
           projectId: projectId || undefined,
           packageName,
-          clientName: customerOptions.find((c) => c.id === customerId)?.name || undefined,
-          customerId: customerId || undefined,
+          clientName: selectedCustomer?.name || undefined,
+          customerId: customerIdRef.current || undefined,
           location: location || undefined,
           dueDate: dueDate || undefined,
           scope: scope || undefined,
