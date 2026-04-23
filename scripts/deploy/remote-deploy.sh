@@ -76,6 +76,19 @@ wait_for_url() {
   return 1
 }
 
+smoke_pdf_generation() {
+  compose exec -T api node --input-type=module -e '
+    const { generatePdfBuffer } = await import("./apps/api/dist/apps/api/src/services/pdf-service.js");
+    const result = await generatePdfBuffer("<!doctype html><html><body><h1>Bidwright PDF smoke</h1></body></html>");
+    const signature = result.buffer.subarray(0, 5).toString("utf8");
+    if (result.contentType !== "application/pdf" || signature !== "%PDF-") {
+      throw new Error(`Expected PDF bytes, got ${result.contentType} ${signature}`);
+    }
+    console.log(`PDF smoke ok: ${result.buffer.length} bytes`);
+    process.exit(0);
+  '
+}
+
 compose_up_profiles config >/dev/null
 compose up -d postgres redis
 wait_for_postgres
@@ -94,6 +107,7 @@ cleanup_db_migrate_container
 
 wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
 wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}"
+smoke_pdf_generation
 
 compose ps
 

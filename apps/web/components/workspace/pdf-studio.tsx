@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import * as pdfjs from "pdfjs-dist";
 import {
   AlertTriangle,
   ArrowDown,
@@ -26,6 +27,13 @@ import {
 import { Button, Input, Label, Select, Toggle } from "@/components/ui";
 import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+if (typeof window !== "undefined") {
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/build/pdf.worker.min.mjs",
+    import.meta.url
+  ).toString();
+}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -112,6 +120,7 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
 const DEFAULT_SECTION_ORDER = [...DEFAULT_OPTIONS.sectionOrder];
 const BASE_SECTION_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const CUSTOM_SECTION_PREFIX = "custom:";
+const PDF_PREVIEW_BASE_SCALE = 96 / 72;
 
 const SECTION_LABELS: Record<string, string> = {
   coverPage: "Cover Page",
@@ -234,6 +243,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const [previewLoading, setPreviewLoading] = useState(true);
   const [zoom, setZoom] = useState(100);
   const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadingPrefs, setLoadingPrefs] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -243,7 +253,6 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
   const saveDebounceRef = useRef<ReturnType<typeof setTimeout>>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
   const loadedRef = useRef(false);
 
   // Debounced preview refresh
@@ -364,6 +373,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
 
   const handleDownload = async () => {
     setDownloading(true);
+    setDownloadError(null);
     try {
       const committedOptions = withCommittedCustomSectionDrafts(options);
       if (committedOptions !== options) {
@@ -381,6 +391,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       URL.revokeObjectURL(blobUrl);
     } catch (e) {
       console.error("PDF download failed:", e);
+      setDownloadError(e instanceof Error ? e.message : "PDF download failed");
     } finally {
       setDownloading(false);
     }
@@ -1017,6 +1028,9 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                     {dirty && (
                       <div className="text-[10px] text-fg/30 text-center">Unsaved changes (auto-saves in 2s)</div>
                     )}
+                    {downloadError && (
+                      <div className="text-center text-[10px] text-danger">{downloadError}</div>
+                    )}
                   </div>
                 </>
               )}
@@ -1067,26 +1081,14 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                 </div>
               )}
 
-              {/* Preview iframe */}
+              {/* Preview pages */}
               <div className="flex-1 overflow-auto p-6">
-                <div
-                  className="mx-auto bg-white rounded-lg shadow-lg overflow-hidden transition-transform origin-top-left"
-                  style={{
-                    width: options.pageSetup.orientation === "landscape" ? 1056 : 816,
-                    height: options.pageSetup.orientation === "landscape" ? 816 : 1056,
-                    transform: `scale(${zoom / 100})`,
-                    transformOrigin: "top center",
-                  }}
-                >
-                  <iframe
-                    ref={iframeRef}
-                    key={previewKey}
-                    src={previewUrl}
-                    className="h-full w-full border-0"
-                    title="PDF Preview"
-                    onLoad={() => setPreviewLoading(false)}
-                  />
-                </div>
+                <PdfPagePreview
+                  url={previewUrl}
+                  refreshKey={previewKey}
+                  zoom={zoom}
+                  onLoadingChange={setPreviewLoading}
+                />
               </div>
             </div>
           </motion.div>
@@ -1097,6 +1099,153 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+interface PdfPagePreviewProps {
+  url: string;
+  refreshKey: number;
+  zoom: number;
+  onLoadingChange: (loading: boolean) => void;
+}
+
+function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePreviewProps) {
+  const [pageNumbers, setPageNumbers] = useState<number[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const pdfDocRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
+  const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
+  const renderTasksRef = useRef(new Map<number, pdfjs.RenderTask>());
+
+  const cancelRenderTasks = useCallback(() => {
+    for (const task of renderTasksRef.current.values()) {
+      task.cancel();
+    }
+    renderTasksRef.current.clear();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadingTask = pdfjs.getDocument({ url, withCredentials: true });
+
+    async function loadPdf() {
+      try {
+        setError(null);
+        setPageNumbers([]);
+        onLoadingChange(true);
+        cancelRenderTasks();
+
+        if (pdfDocRef.current) {
+          pdfDocRef.current.destroy();
+          pdfDocRef.current = null;
+        }
+
+        const doc = await loadingTask.promise;
+        if (cancelled) {
+          doc.destroy();
+          return;
+        }
+
+        pdfDocRef.current = doc;
+        setPageNumbers(Array.from({ length: doc.numPages }, (_, index) => index + 1));
+        onLoadingChange(false);
+      } catch (err) {
+        if (!cancelled) {
+          const message = err instanceof Error ? err.message : "Failed to load PDF preview";
+          setError(message.includes("Invalid PDF")
+            ? "Preview could not load a PDF response."
+            : message);
+          onLoadingChange(false);
+        }
+      }
+    }
+
+    loadPdf();
+
+    return () => {
+      cancelled = true;
+      loadingTask.destroy();
+      cancelRenderTasks();
+    };
+  }, [cancelRenderTasks, onLoadingChange, refreshKey, url]);
+
+  useEffect(() => {
+    const doc = pdfDocRef.current;
+    if (!doc || pageNumbers.length === 0) return;
+    const activeDoc = doc;
+
+    let cancelled = false;
+    cancelRenderTasks();
+
+    async function renderPages() {
+      for (const pageNumber of pageNumbers) {
+        if (cancelled) return;
+        const canvas = canvasRefs.current.get(pageNumber);
+        if (!canvas) continue;
+
+        try {
+          const page = await activeDoc.getPage(pageNumber);
+          if (cancelled) return;
+
+          const viewport = page.getViewport({ scale: PDF_PREVIEW_BASE_SCALE * (zoom / 100) });
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          canvas.style.width = `${viewport.width}px`;
+          canvas.style.height = `${viewport.height}px`;
+
+          const renderTask = page.render({ canvas, viewport });
+          renderTasksRef.current.set(pageNumber, renderTask);
+          await renderTask.promise;
+          renderTasksRef.current.delete(pageNumber);
+        } catch (err) {
+          if (err instanceof Error && err.message.includes("Rendering cancelled")) continue;
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : "Failed to render PDF preview");
+          }
+        }
+      }
+    }
+
+    renderPages();
+
+    return () => {
+      cancelled = true;
+      cancelRenderTasks();
+    };
+  }, [cancelRenderTasks, pageNumbers, zoom]);
+
+  if (error) {
+    return (
+      <div className="mx-auto flex min-h-[18rem] max-w-md items-center justify-center rounded-lg border border-line bg-panel px-6 text-center text-xs text-fg/50">
+        {error}
+      </div>
+    );
+  }
+
+  if (pageNumbers.length === 0) {
+    return (
+      <div className="flex min-h-[18rem] items-center justify-center text-xs text-fg/35">
+        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+        Loading preview...
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto flex w-max flex-col items-center gap-6 pb-10">
+      {pageNumbers.map((pageNumber) => (
+        <div
+          key={pageNumber}
+          className="overflow-hidden rounded-[2px] bg-white shadow-lg ring-1 ring-black/10"
+        >
+          <canvas
+            ref={(canvas) => {
+              if (canvas) canvasRefs.current.set(pageNumber, canvas);
+              else canvasRefs.current.delete(pageNumber);
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

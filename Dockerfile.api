@@ -51,5 +51,6 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 WORKDIR /app
 COPY --from=builder /app .
+RUN pnpm --filter @bidwright/api exec playwright install --with-deps chromium
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@bidwright/api", "exec", "tsx", "src/index.ts"]
