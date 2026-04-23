@@ -1,6 +1,11 @@
 import type { Plugin, PluginField, PluginScoringCriterion, PluginToolDefinition } from "./models";
 import { mockStore } from "./mock-data";
 import { LEGACY_NECA_JOB_CONDITION_CRITERIA, SHOP_WELD_COMPONENTS, SHOP_PIPE_DATA } from "./plugin-calculators";
+import {
+  googleHotelsOutputTemplate,
+  googleShoppingOutputTemplate,
+  homeDepotSearchOutputTemplate,
+} from "./plugin-output-templates";
 
 const pluginMap = new Map(mockStore.plugins.map((plugin) => [plugin.slug, plugin]));
 
@@ -142,6 +147,7 @@ function buildNecaPlugin(): Plugin {
   const plugin = clonePlugin("neca-labour");
 
   const labourTool = findTool(plugin, "neca.labourUnits");
+  labourTool.execution = { type: "dataset_labour_units", datasetId: "ds-neca-labour", providerLabel: "NECA" };
   replaceServiceItemWithRateSchedule(labourTool);
   addLabourHierarchySearch(labourTool, {
     datasetId: "ds-neca-labour",
@@ -181,6 +187,13 @@ function buildNecaPlugin(): Plugin {
   });
 
   const jobConditionTool = findTool(plugin, "neca.jobCondition");
+  jobConditionTool.outputType = "revision_patch";
+  jobConditionTool.execution = {
+    type: "scoring_result_patch",
+    scoringId: "necaJobCondition",
+    revisionField: "necaDifficulty",
+    summaryTitle: "NECA Job Condition",
+  };
   if (jobConditionTool.ui?.sections[0]?.scoring) {
     jobConditionTool.ui.sections[0].scoring.criteria = necaCriteria();
     jobConditionTool.ui.sections[0].scoring.description = "Score each factor from 0-5 to determine the NECA difficulty band.";
@@ -189,9 +202,14 @@ function buildNecaPlugin(): Plugin {
       { minScore: 76, maxScore: 134, label: "Difficult", value: "Difficult", color: "#eab308", description: "Elevated field difficulty" },
       { minScore: 135, maxScore: 999, label: "Very Difficult", value: "Very Difficult", color: "#ef4444", description: "Severely constrained productivity" },
     ];
+    jobConditionTool.ui.sections[0].scoring.outputEffect = {
+      type: "revision_patch",
+      revisionField: "necaDifficulty",
+    };
   }
 
   const temperatureTool = findTool(plugin, "neca.temperature");
+  temperatureTool.execution = { type: "neca_temperature_adjustment" };
   temperatureTool.parameters = [
     { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
     { name: "baseHours", type: "number", description: "Base labour hours to adjust", required: true },
@@ -257,6 +275,7 @@ function buildNecaPlugin(): Plugin {
   };
 
   const durationTool = findTool(plugin, "neca.extendedDuration");
+  durationTool.execution = { type: "neca_extended_duration" };
   durationTool.parameters = [
     { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
     { name: "baseHours", type: "number", description: "Base labour hours for the scope", required: true },
@@ -314,6 +333,7 @@ function buildNecaPlugin(): Plugin {
 function buildPhccPlugin(): Plugin {
   const plugin = clonePlugin("phcc-labour");
   const labourTool = findTool(plugin, "phcc.labourUnits");
+  labourTool.execution = { type: "dataset_labour_units", datasetId: "ds-phcc-labour", providerLabel: "PHCC" };
   addLabourHierarchySearch(labourTool, {
     datasetId: "ds-phcc-labour",
     providerLabel: "PHCC",
@@ -468,15 +488,47 @@ function buildPhccPlugin(): Plugin {
 
 function buildMethvinPlugin(): Plugin {
   const plugin = clonePlugin("methvin");
-  replaceServiceItemWithRateSchedule(findTool(plugin, "methvin.pipe"));
-  replaceServiceItemWithRateSchedule(findTool(plugin, "methvin.fabrication"));
-  replaceServiceItemWithRateSchedule(findTool(plugin, "methvin.conduit"));
+  const pipeTool = findTool(plugin, "methvin.pipe");
+  pipeTool.execution = {
+    type: "table_hours",
+    tableId: "weldComponents",
+    totalField: "totalMH",
+    quantityField: "quantity",
+    rateField: "mhPerUnit",
+    multiplierField: "efficiencyModifier",
+    defaultMultiplier: 1,
+    descriptionDefault: "Methvin pipe welding",
+  };
+  replaceServiceItemWithRateSchedule(pipeTool);
+
+  const fabricationTool = findTool(plugin, "methvin.fabrication");
+  fabricationTool.execution = {
+    type: "table_hours",
+    tableId: "fabTasks",
+    totalField: "totalHours",
+    quantityField: "quantity",
+    rateField: "hoursPerUnit",
+    descriptionDefault: "Methvin fabrication",
+  };
+  replaceServiceItemWithRateSchedule(fabricationTool);
+
+  const conduitTool = findTool(plugin, "methvin.conduit");
+  conduitTool.execution = {
+    type: "table_hours",
+    tableId: "cableRuns",
+    totalField: "totalMH",
+    quantityField: "distance",
+    rateField: "mhPerFoot",
+    descriptionDefault: "Methvin conduit & cable",
+  };
+  replaceServiceItemWithRateSchedule(conduitTool);
   return plugin;
 }
 
 function buildHomeDepotPlugin(): Plugin {
   const plugin = clonePlugin("home-depot");
   const tool = findTool(plugin, "homedepot.search");
+  tool.outputTemplate = homeDepotSearchOutputTemplate;
   const searchField = findField(tool, "query");
   searchField.searchConfig = {
     queryParam: "q",
@@ -525,6 +577,7 @@ function buildHomeDepotPlugin(): Plugin {
 function buildGoogleShoppingPlugin(): Plugin {
   const plugin = clonePlugin("google-shopping");
   const tool = findTool(plugin, "google.shopping");
+  tool.outputTemplate = googleShoppingOutputTemplate;
   const searchField = findField(tool, "query");
   searchField.searchConfig = {
     queryParam: "q",
@@ -579,6 +632,7 @@ function buildGoogleShoppingPlugin(): Plugin {
 function buildGoogleHotelsPlugin(): Plugin {
   const plugin = clonePlugin("google-hotels");
   const tool = findTool(plugin, "google.hotels");
+  tool.outputTemplate = googleHotelsOutputTemplate;
   removeSection(tool, "results");
   const locationField = findField(tool, "location");
   locationField.type = "search";
@@ -681,6 +735,7 @@ function buildShopToolsPlugin(): Plugin {
           { name: "efficiencyModifier", type: "number", description: "Crew efficiency percentage", required: false, default: 75 },
         ],
         outputType: "line_items",
+        execution: { type: "shop_pipe_estimate", tableId: "pipeRows", descriptionDefault: "Shop pipe fabrication" },
         requiresConfirmation: false,
         mutates: true,
         tags: ["shop", "pipe", "fabrication"],
@@ -765,6 +820,7 @@ function buildShopToolsPlugin(): Plugin {
           { name: "description", type: "string", description: "Line item description", required: false },
         ],
         outputType: "line_items",
+        execution: { type: "shop_weld_estimate", tableId: "weldRows", descriptionDefault: "Shop weld prep" },
         requiresConfirmation: false,
         mutates: true,
         tags: ["shop", "weld", "prep"],

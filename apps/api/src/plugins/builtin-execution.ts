@@ -1,6 +1,12 @@
-import type { DatasetColumn, Plugin, PluginOutput, PluginOutputLineItem } from "@bidwright/domain";
+import type {
+  DatasetColumn,
+  Plugin,
+  PluginOutput,
+  PluginOutputLineItem,
+  PluginOutputTemplateValue,
+  PluginToolOutputTemplate,
+} from "@bidwright/domain";
 import {
-  computeLegacyNecaDifficulty,
   computeNecaExtendedDuration,
   computeNecaTemperatureAdjustment,
   computeShopPipeEstimate,
@@ -51,13 +57,151 @@ function getFormScores(formState: Record<string, unknown> | undefined, scoringId
   return values && typeof values === "object" ? (values as Record<string, number>) : {};
 }
 
-function daysBetween(start: string, end: string) {
-  const startTime = Date.parse(start);
-  const endTime = Date.parse(end);
-  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || endTime <= startTime) {
-    return 0;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEmptyTemplateValue(value: unknown) {
+  return value === undefined || value === null || value === "";
+}
+
+function getInputPathValue(input: Record<string, unknown>, path: string): unknown {
+  return path.split(".").reduce<unknown>((current, segment) => (
+    isRecord(current) ? current[segment] : undefined
+  ), input);
+}
+
+function renderOutputTemplateValue(template: PluginOutputTemplateValue | undefined, input: Record<string, unknown>): unknown {
+  if (template === undefined || template === null) {
+    return template ?? "";
   }
-  return Math.max(0, Math.round((endTime - startTime) / 86_400_000));
+  if (typeof template === "string") {
+    return template;
+  }
+  if (typeof template === "number" || typeof template === "boolean") {
+    return template;
+  }
+  if (!isRecord(template)) {
+    return "";
+  }
+
+  if ("first" in template && Array.isArray(template.first)) {
+    for (const candidate of template.first) {
+      const value = renderOutputTemplateValue(candidate, input);
+      if (!isEmptyTemplateValue(value)) {
+        return value;
+      }
+    }
+    return "";
+  }
+
+  if ("join" in template && Array.isArray(template.join)) {
+    return template.join
+      .map((candidate) => renderOutputTemplateValue(candidate, input))
+      .filter((value) => !isEmptyTemplateValue(value))
+      .map((value) => String(value))
+      .join(template.separator ?? " ");
+  }
+
+  if ("template" in template && typeof template.template === "string") {
+    return template.template.replace(/{{\s*([\w.]+)\s*}}/g, (_match, key: string) => {
+      const value = getInputPathValue(input, key);
+      return value === undefined || value === null ? "" : String(value);
+    });
+  }
+
+  if ("from" in template && template.from === "input") {
+    const rawValue = getInputPathValue(input, template.key);
+    const defaultValue = template.default !== undefined
+      ? renderOutputTemplateValue(template.default, input)
+      : undefined;
+    const value = isEmptyTemplateValue(rawValue) ? defaultValue : rawValue;
+    if (template.type === "number") {
+      const parsed = toNumber(value);
+      let next = parsed;
+      if (template.min !== undefined) {
+        next = Math.max(template.min, next);
+      }
+      if (template.max !== undefined) {
+        next = Math.min(template.max, next);
+      }
+      return next;
+    }
+    if (template.type === "boolean") {
+      return value === true || value === "true";
+    }
+    if (template.type === "string") {
+      return value === undefined || value === null ? "" : String(value).trim();
+    }
+    return value ?? "";
+  }
+
+  return "";
+}
+
+function validateOutputTemplate(template: PluginToolOutputTemplate, input: Record<string, unknown>) {
+  for (const rule of template.validation ?? []) {
+    const value = rule.value !== undefined
+      ? renderOutputTemplateValue(rule.value, input)
+      : rule.field
+        ? getInputPathValue(input, rule.field)
+        : undefined;
+
+    if (rule.rule === "required" && isEmptyTemplateValue(value)) {
+      throw new Error(rule.message);
+    }
+    if (rule.rule === "positive" && toNumber(value) <= 0) {
+      throw new Error(rule.message);
+    }
+  }
+}
+
+function validateRenderedLineItem(lineItem: Record<string, unknown>, index: number) {
+  for (const field of ["category", "entityType", "entityName", "description", "uom"]) {
+    if (isEmptyTemplateValue(lineItem[field])) {
+      throw new Error(`Plugin output template produced an empty ${field} for line item ${index + 1}.`);
+    }
+  }
+
+  if (toNumber(lineItem.quantity) <= 0) {
+    throw new Error(`Plugin output template produced a non-positive quantity for line item ${index + 1}.`);
+  }
+}
+
+function renderDeclarativeOutput(template: PluginToolOutputTemplate | undefined, input: Record<string, unknown>): PluginOutput | null {
+  if (!template || template.type !== "line_items") {
+    return null;
+  }
+
+  validateOutputTemplate(template, input);
+  const lineItems = template.lineItems.map((lineItemTemplate, index) => {
+    const lineItem: Record<string, unknown> = {};
+    for (const [key, valueTemplate] of Object.entries(lineItemTemplate)) {
+      lineItem[key] = renderOutputTemplateValue(valueTemplate, input);
+    }
+    validateRenderedLineItem(lineItem, index);
+    return lineItem as unknown as PluginOutputLineItem;
+  });
+
+  const output: PluginOutput = {
+    type: "line_items",
+    lineItems,
+  };
+  if (template.summary) {
+    output.summary = {
+      title: String(renderOutputTemplateValue(template.summary.title, input) ?? ""),
+      sections: template.summary.sections.map((section) => ({
+        label: section.label,
+        value: renderOutputTemplateValue(section.value, input) as string | number,
+        format: section.format,
+      })),
+    };
+  }
+  if (template.displayText !== undefined) {
+    output.displayText = String(renderOutputTemplateValue(template.displayText, input) ?? "");
+  }
+
+  return output;
 }
 
 function getRowString(row: Record<string, unknown>, keys: string[], columns?: DatasetColumn[]) {
@@ -139,58 +283,6 @@ function buildLabourLineItem(args: {
   return lineItem;
 }
 
-function buildMaterialLineItem(args: {
-  name: string;
-  description: string;
-  vendor: string;
-  quantity: number;
-  cost: number;
-  markup: number;
-}) {
-  const lineItem: PluginOutputLineItem = {
-    category: "Material",
-    entityType: "Material",
-    entityName: args.name,
-    vendor: args.vendor,
-    description: args.description,
-    quantity: Math.max(1, toNumber(args.quantity)),
-    uom: "EA",
-    cost: toNumber(args.cost),
-    markup: toNumber(args.markup),
-    price: 0,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
-  };
-  return lineItem;
-}
-
-function buildTravelLineItem(args: {
-  name: string;
-  location: string;
-  totalCost: number;
-  markup: number;
-  crewSize: number;
-  nights: number;
-}) {
-  const lineItem: PluginOutputLineItem = {
-    category: "Travel & Per Diem",
-    entityType: "Travel",
-    entityName: args.name,
-    vendor: "Hotel",
-    description: `${args.name}${args.location ? ` - ${args.location}` : ""}`,
-    quantity: 1,
-    uom: "EA",
-    cost: toNumber(args.totalCost),
-    markup: toNumber(args.markup),
-    price: 0,
-    unit1: Math.max(0, toNumber(args.nights)),
-    unit2: Math.max(1, toNumber(args.crewSize)),
-    unit3: 0,
-  };
-  return lineItem;
-}
-
 async function executeDatasetBackedLabourTool(
   ctx: BuiltinPluginExecutionContext,
   datasetRef: string,
@@ -254,35 +346,60 @@ async function executeDatasetBackedLabourTool(
 export async function executeBuiltinPluginTool(
   ctx: BuiltinPluginExecutionContext,
 ): Promise<PluginOutput | null> {
-  switch (ctx.toolId) {
-    case "neca.labourUnits":
-      return executeDatasetBackedLabourTool(ctx, "ds-neca-labour", "NECA");
+  const toolDefinition = ctx.plugin.toolDefinitions.find((tool) => tool.id === ctx.toolId);
+  const declarativeOutput = renderDeclarativeOutput(toolDefinition?.outputTemplate, ctx.input);
+  if (declarativeOutput) {
+    return declarativeOutput;
+  }
 
-    case "phcc.labourUnits":
-      return executeDatasetBackedLabourTool(ctx, "ds-phcc-labour", "PHCC");
+  const execution = toolDefinition?.execution;
+  if (!execution) {
+    return null;
+  }
 
-    case "neca.jobCondition": {
-      const scores = getFormScores(ctx.formState, "necaJobCondition");
+  switch (execution.type) {
+    case "dataset_labour_units":
+      return executeDatasetBackedLabourTool(ctx, execution.datasetId, execution.providerLabel);
+
+    case "scoring_result_patch": {
+      const scores = getFormScores(ctx.formState, execution.scoringId);
       if (Object.keys(scores).length === 0) {
-        throw new Error("Complete the NECA job condition score sheet before applying it.");
+        throw new Error("Complete the scoring sheet before applying it.");
       }
 
-      const { totalScore, difficulty } = computeLegacyNecaDifficulty(scores);
+      const scoring = toolDefinition?.ui?.sections
+        .map((section) => section.scoring)
+        .find((entry) => entry?.id === execution.scoringId);
+      if (!scoring) {
+        throw new Error(`Plugin scoring definition ${execution.scoringId} was not found.`);
+      }
+
+      const totalScore = scoring.criteria.reduce((total, criterion) => {
+        const rawScore = scores[criterion.id] ?? criterion.scale.min ?? 0;
+        return total + toNumber(rawScore) * (criterion.weight ?? 1);
+      }, 0);
+      const resultBand = scoring.resultMapping.find((band) =>
+        totalScore >= band.minScore && totalScore <= band.maxScore
+      );
+      if (!resultBand) {
+        throw new Error(`No scoring result matched score ${totalScore.toFixed(2)}.`);
+      }
+
       return {
         type: "revision_patch",
-        revisionPatches: [{ field: "necaDifficulty", value: difficulty }],
+        revisionPatches: [{ field: execution.revisionField, value: resultBand.value }],
         summary: {
-          title: "NECA Job Condition",
+          title: execution.summaryTitle ?? scoring.label,
           sections: [
             { label: "Total Score", value: totalScore, format: "number" },
-            { label: "Difficulty", value: difficulty, format: "text" },
+            { label: "Result", value: resultBand.label, format: "text" },
           ],
         },
-        displayText: `Set the revision NECA difficulty to ${difficulty}.`,
+        displayText: `Set ${execution.revisionField} to ${resultBand.value}.`,
       };
     }
 
-    case "neca.temperature": {
+    case "neca_temperature_adjustment": {
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
@@ -318,7 +435,7 @@ export async function executeBuiltinPluginTool(
       };
     }
 
-    case "neca.extendedDuration": {
+    case "neca_extended_duration": {
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
@@ -356,47 +473,24 @@ export async function executeBuiltinPluginTool(
       };
     }
 
-    case "methvin.pipe":
-    case "methvin.fabrication":
-    case "methvin.conduit": {
+    case "table_hours": {
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
         throw new Error("Select a valid labour rate from the current revision rate schedule.");
       }
 
-      const tableId =
-        ctx.toolId === "methvin.pipe" ? "weldComponents" :
-        ctx.toolId === "methvin.fabrication" ? "fabTasks" :
-        "cableRuns";
-      const rows = getFormTableRows(ctx.formState, tableId);
-      const totalHours =
-        ctx.toolId === "methvin.pipe"
-          ? sumTableHours(rows, {
-              totalField: "totalMH",
-              quantityField: "quantity",
-              rateField: "mhPerUnit",
-              multiplier: toNumber(ctx.input.efficiencyModifier) || 1,
-            })
-          : ctx.toolId === "methvin.fabrication"
-            ? sumTableHours(rows, {
-                totalField: "totalHours",
-                quantityField: "quantity",
-                rateField: "hoursPerUnit",
-              })
-            : sumTableHours(rows, {
-                totalField: "totalMH",
-                quantityField: "distance",
-                rateField: "mhPerFoot",
-              });
-
-      const description =
-        toStringValue(ctx.input.description) ||
-        (ctx.toolId === "methvin.pipe"
-          ? "Methvin pipe welding"
-          : ctx.toolId === "methvin.fabrication"
-            ? "Methvin fabrication"
-            : "Methvin conduit & cable");
+      const rows = getFormTableRows(ctx.formState, execution.tableId);
+      const multiplier = execution.multiplierField
+        ? toNumber(ctx.input[execution.multiplierField]) || execution.defaultMultiplier || 1
+        : execution.defaultMultiplier;
+      const totalHours = sumTableHours(rows, {
+        totalField: execution.totalField,
+        quantityField: execution.quantityField,
+        rateField: execution.rateField,
+        multiplier,
+      });
+      const description = toStringValue(ctx.input.description) || execution.descriptionDefault;
 
       return {
         type: "line_items",
@@ -420,14 +514,14 @@ export async function executeBuiltinPluginTool(
       };
     }
 
-    case "shop.pipe": {
+    case "shop_pipe_estimate": {
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
         throw new Error("Select a valid labour rate from the current revision rate schedule.");
       }
 
-      const rows = getFormTableRows(ctx.formState, "pipeRows");
+      const rows = getFormTableRows(ctx.formState, execution.tableId);
       const result = computeShopPipeEstimate({
         rows,
         pipeType: toStringValue(ctx.input.pipeType) || "carbon",
@@ -447,7 +541,7 @@ export async function executeBuiltinPluginTool(
           buildLabourLineItem({
             rateScheduleItemId: serviceItem.id,
             entityName: serviceItem.name,
-            description: toStringValue(ctx.input.description) || "Shop pipe fabrication",
+            description: toStringValue(ctx.input.description) || execution.descriptionDefault,
             hours: result.totalHours,
             sourceNotes: `Shop pipe estimate from ${rows.length} pipe rows.`,
           }),
@@ -465,14 +559,14 @@ export async function executeBuiltinPluginTool(
       };
     }
 
-    case "shop.weld": {
+    case "shop_weld_estimate": {
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
         throw new Error("Select a valid labour rate from the current revision rate schedule.");
       }
 
-      const rows = getFormTableRows(ctx.formState, "weldRows");
+      const rows = getFormTableRows(ctx.formState, execution.tableId);
       const result = computeShopWeldEstimate({ rows });
 
       return {
@@ -481,7 +575,7 @@ export async function executeBuiltinPluginTool(
           buildLabourLineItem({
             rateScheduleItemId: serviceItem.id,
             entityName: serviceItem.name,
-            description: toStringValue(ctx.input.description) || "Shop weld prep",
+            description: toStringValue(ctx.input.description) || execution.descriptionDefault,
             hours: result.totalHours,
             sourceNotes: `Shop weld estimate from ${rows.length} task rows.`,
           }),
@@ -494,101 +588,6 @@ export async function executeBuiltinPluginTool(
           ],
         },
         displayText: `Prepared ${result.totalHours.toFixed(2)} shop weld hours.`,
-      };
-    }
-
-    case "homedepot.search": {
-      const name = toStringValue(ctx.input.name);
-      const cost = toNumber(ctx.input.cost);
-      if (!name || cost <= 0) {
-        throw new Error("Select or enter a Home Depot product with a unit cost before adding it.");
-      }
-
-      return {
-        type: "line_items",
-        lineItems: [
-          buildMaterialLineItem({
-            name,
-            description: toStringValue(ctx.input.description) || name,
-            vendor: toStringValue(ctx.input.vendor) || "Home Depot",
-            quantity: toNumber(ctx.input.quantity) || 1,
-            cost,
-            markup: toNumber(ctx.input.markup) || 15,
-          }),
-        ],
-        summary: {
-          title: "Home Depot Search",
-          sections: [
-            { label: "Vendor", value: toStringValue(ctx.input.vendor) || "Home Depot", format: "text" },
-            { label: "Unit Cost", value: cost, format: "currency" },
-          ],
-        },
-        displayText: `Prepared material pricing for ${name}.`,
-      };
-    }
-
-    case "google.shopping": {
-      const name = toStringValue(ctx.input.name);
-      const cost = toNumber(ctx.input.cost);
-      if (!name || cost <= 0) {
-        throw new Error("Select or enter a Google Shopping result with a unit cost before adding it.");
-      }
-
-      return {
-        type: "line_items",
-        lineItems: [
-          buildMaterialLineItem({
-            name,
-            description: toStringValue(ctx.input.description) || name,
-            vendor: toStringValue(ctx.input.vendor) || "Google Shopping",
-            quantity: toNumber(ctx.input.quantity) || 1,
-            cost,
-            markup: toNumber(ctx.input.markup) || 15,
-          }),
-        ],
-        summary: {
-          title: "Google Shopping",
-          sections: [
-            { label: "Vendor", value: toStringValue(ctx.input.vendor) || "Google Shopping", format: "text" },
-            { label: "Unit Cost", value: cost, format: "currency" },
-          ],
-        },
-        displayText: `Prepared comparison pricing for ${name}.`,
-      };
-    }
-
-    case "google.hotels": {
-      const hotelName = toStringValue(ctx.input.hotelName) || toStringValue(ctx.input.location);
-      const nightlyRate = toNumber(ctx.input.nightlyRate);
-      const nights = toNumber(ctx.input.nights) || daysBetween(toStringValue(ctx.input.checkin), toStringValue(ctx.input.checkout));
-      const crewSize = Math.max(1, toNumber(ctx.input.crewSize) || 1);
-      const totalCost = toNumber(ctx.input.totalCost) || roundHours(nightlyRate * nights * crewSize);
-
-      if (!hotelName || totalCost <= 0) {
-        throw new Error("Select a hotel and confirm the nightly rate before adding travel costs.");
-      }
-
-      return {
-        type: "line_items",
-        lineItems: [
-          buildTravelLineItem({
-            name: hotelName,
-            location: toStringValue(ctx.input.location),
-            totalCost,
-            markup: toNumber(ctx.input.markup) || 15,
-            crewSize,
-            nights,
-          }),
-        ],
-        summary: {
-          title: "Google Hotels",
-          sections: [
-            { label: "Nights", value: nights, format: "number" },
-            { label: "Crew Size", value: crewSize, format: "number" },
-            { label: "Total Cost", value: totalCost, format: "currency" },
-          ],
-        },
-        displayText: `Prepared travel costs for ${hotelName}.`,
       };
     }
 
