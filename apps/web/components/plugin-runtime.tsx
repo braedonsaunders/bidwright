@@ -35,6 +35,7 @@ import type {
   PluginFieldConditional,
   PluginOutput,
   DatasetColumnRecord,
+  RateSchedule,
 } from "@/lib/api";
 import {
   getDataset,
@@ -189,36 +190,137 @@ function useDatasetOptions(
 
 // ── Rate schedule options hook ──────────────────────────────────────
 
+function normalizeRateScheduleToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\blabour\b/g, "labor");
+}
+
+function asSourceList(value: string | string[] | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map(normalizeRateScheduleToken).filter(Boolean);
+  }
+  return value ? [normalizeRateScheduleToken(value)] : [];
+}
+
+function rateScheduleMatchesSource(schedule: RateSchedule, optionsSource: PluginField["optionsSource"]): boolean {
+  const categories = asSourceList(optionsSource?.category);
+  if (categories.length === 0) {
+    return true;
+  }
+  return categories.includes(normalizeRateScheduleToken(schedule.category));
+}
+
+function resolveScheduleRate(
+  schedule: RateSchedule,
+  item: RateSchedule["items"][number],
+  optionsSource: PluginField["optionsSource"],
+): { rate: number | null; tierName: string | null } {
+  const rates = optionsSource?.rateKind === "cost" ? item.costRates : item.rates;
+  const requestedTier = optionsSource?.tierName;
+  if (requestedTier && typeof rates?.[requestedTier] === "number") {
+    return { rate: rates[requestedTier], tierName: requestedTier };
+  }
+
+  const sortedTiers = [...(schedule.tiers ?? [])].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  for (const tier of sortedTiers) {
+    const rate = rates?.[tier.name];
+    if (typeof rate === "number" && Number.isFinite(rate)) {
+      return { rate, tierName: tier.name };
+    }
+  }
+
+  for (const [tierName, rate] of Object.entries(rates ?? {})) {
+    if (typeof rate === "number" && Number.isFinite(rate)) {
+      return { rate, tierName };
+    }
+  }
+
+  return { rate: null, tierName: null };
+}
+
+function buildRateScheduleOptions(
+  schedules: RateSchedule[],
+  optionsSource: PluginField["optionsSource"],
+): PluginFieldOption[] {
+  const options: PluginFieldOption[] = [];
+  const seen = new Set<string>();
+
+  for (const schedule of schedules.filter((entry) => rateScheduleMatchesSource(entry, optionsSource))) {
+    for (const item of schedule.items ?? []) {
+      if (seen.has(item.id)) {
+        continue;
+      }
+      seen.add(item.id);
+      const { rate, tierName } = resolveScheduleRate(schedule, item, optionsSource);
+      const codePrefix = item.code ? `${item.code} - ` : "";
+      const unit = item.unit || "hr";
+      const rateText = rate === null
+        ? "No rate set"
+        : `${formatValue(rate, "currency")}/${unit.toLowerCase()}`;
+      const tierText = tierName ? `${tierName}: ` : "";
+      options.push({
+        value: item.id,
+        label: `${codePrefix}${item.name}`,
+        description: `${tierText}${rateText} - ${schedule.name}`,
+      });
+    }
+  }
+
+  return options.sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function useRateScheduleOptions(
   optionsSource: PluginField["optionsSource"],
+  rateSchedules?: RateSchedule[],
 ): { options: PluginFieldOption[]; loading: boolean } {
   const [options, setOptions] = useState<PluginFieldOption[]>([]);
   const [loading, setLoading] = useState(false);
+  const optionsSourceKey = JSON.stringify(optionsSource ?? null);
 
   useEffect(() => {
-    if (optionsSource?.type !== "rate_schedule") return;
+    if (optionsSource?.type !== "rate_schedule") {
+      setOptions([]);
+      setLoading(false);
+      return;
+    }
+
+    const suppliedSchedules = rateSchedules ?? [];
+    const sourceScope = optionsSource.scope ?? (suppliedSchedules.length > 0 ? "revision" : "global");
+    const wantsGlobal = sourceScope === "global" || sourceScope === "all";
+    const wantsSupplied = sourceScope !== "global";
+
+    if (!wantsGlobal) {
+      setOptions(buildRateScheduleOptions(wantsSupplied ? suppliedSchedules : [], optionsSource));
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
+    let cancelled = false;
     (async () => {
       try {
-        const schedules = await listRateSchedules();
-        const opts: PluginFieldOption[] = [];
-        for (const sched of schedules ?? []) {
-          for (const item of (sched as any).items ?? []) {
-            opts.push({
-              value: item.id,
-              label: `${item.name}${item.trade ? ` (${item.trade})` : ""}`,
-              description: `$${item.rate?.toFixed(2) ?? "0.00"}/hr`,
-            });
-          }
+        const globalSchedules = await listRateSchedules();
+        const schedules = sourceScope === "all"
+          ? [...suppliedSchedules, ...(globalSchedules ?? [])]
+          : globalSchedules ?? [];
+        if (!cancelled) {
+          setOptions(buildRateScheduleOptions(schedules, optionsSource));
         }
-        setOptions(opts);
       } catch {
-        setOptions([]);
+        if (!cancelled) {
+          setOptions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-      setLoading(false);
     })();
-  }, [optionsSource?.type]);
+
+    return () => { cancelled = true; };
+  }, [optionsSourceKey, rateSchedules]);
 
   return { options, loading };
 }
@@ -995,6 +1097,7 @@ function PluginFieldRenderer({
   sectionFields,
   pluginId,
   toolId,
+  rateSchedules,
 }: {
   field: PluginField;
   value: unknown;
@@ -1007,6 +1110,7 @@ function PluginFieldRenderer({
   sectionFields: PluginField[];
   pluginId?: string;
   toolId?: string;
+  rateSchedules?: RateSchedule[];
 }) {
   if (!isFieldVisible(field, allValues)) return null;
 
@@ -1053,6 +1157,7 @@ function PluginFieldRenderer({
   );
   const rsOpts = useRateScheduleOptions(
     field.optionsSource?.type === "rate_schedule" ? field.optionsSource : undefined,
+    rateSchedules,
   );
 
   // Merge: dataset/rate_schedule options override static options
@@ -1558,6 +1663,7 @@ function PluginSectionRenderer({
   datasetColumnsById,
   pluginId,
   toolId,
+  rateSchedules,
 }: {
   section: PluginUISection;
   values: Record<string, unknown>;
@@ -1572,6 +1678,7 @@ function PluginSectionRenderer({
   datasetColumnsById?: DatasetColumnsById;
   pluginId?: string;
   toolId?: string;
+  rateSchedules?: RateSchedule[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const fieldValues = useMemo(() => buildFormulaValues(values, tableData), [tableData, values]);
@@ -1622,6 +1729,7 @@ function PluginSectionRenderer({
                     sectionFields={orderedFields}
                     pluginId={pluginId}
                     toolId={toolId}
+                    rateSchedules={rateSchedules}
                   />
                 ))}
             </div>
@@ -1682,6 +1790,7 @@ export interface PluginRuntimeProps {
   output?: PluginOutput | null;
   onAddItemsToWorksheet?: (items: NonNullable<PluginOutput["lineItems"]>, worksheetId: string) => void;
   worksheets?: Array<{ id: string; name: string }>;
+  rateSchedules?: RateSchedule[];
 }
 
 export function PluginRuntime({
@@ -1697,6 +1806,7 @@ export function PluginRuntime({
   output,
   onAddItemsToWorksheet,
   worksheets,
+  rateSchedules,
 }: PluginRuntimeProps) {
   const [values, setValues] = useState<Record<string, unknown>>(initialValues ?? {});
   const [tableData, setTableData] = useState<Record<string, Record<string, unknown>[]>>(initialTableData ?? {});
@@ -1907,6 +2017,7 @@ export function PluginRuntime({
           datasetColumnsById={datasetColumnsById}
           pluginId={pluginId}
           toolId={toolId}
+          rateSchedules={rateSchedules}
         />
       ))}
 

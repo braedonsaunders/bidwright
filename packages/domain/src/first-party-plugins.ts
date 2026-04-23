@@ -8,6 +8,15 @@ import {
 } from "./plugin-output-templates";
 
 const pluginMap = new Map(mockStore.plugins.map((plugin) => [plugin.slug, plugin]));
+const LABOR_RATE_OPTIONS_SOURCE = { type: "rate_schedule", scope: "revision", category: "Labor" } as const;
+
+function americanizeLaborText(value: string | undefined): string {
+  return (value ?? "").replaceAll("labour", "labor").replaceAll("Labour", "Labor");
+}
+
+function americanizeLaborList(values: string[] | undefined): string[] {
+  return (values ?? []).map((value) => americanizeLaborText(value));
+}
 
 function clonePlugin(slug: string): Plugin {
   const plugin = pluginMap.get(slug);
@@ -70,22 +79,22 @@ function replaceServiceItemWithRateSchedule(tool: PluginToolDefinition, fieldId 
   replaceField(tool, fieldId, {
     ...field,
     id: "serviceItemId",
-    label: "Labour Rate",
-    description: "Select the labour rate schedule item to price these hours against",
-    optionsSource: { type: "rate_schedule" },
+    label: "Labor Rate",
+    description: "Select the labor rate schedule item to price these hours against",
+    optionsSource: LABOR_RATE_OPTIONS_SOURCE,
     validation: { ...(field.validation ?? {}), required: true },
   });
 
   const existing = tool.parameters.find((entry) => entry.name === fieldId || entry.name === "serviceItemId");
   if (existing) {
     existing.name = "serviceItemId";
-    existing.description = "Revision labour rate schedule item ID";
+    existing.description = "Revision labor rate schedule item ID";
     existing.required = true;
   } else {
     tool.parameters.push({
       name: "serviceItemId",
       type: "string",
-      description: "Revision labour rate schedule item ID",
+      description: "Revision labor rate schedule item ID",
       required: true,
     });
   }
@@ -145,8 +154,17 @@ function necaCriteria(): PluginScoringCriterion[] {
 
 function buildNecaPlugin(): Plugin {
   const plugin = clonePlugin("neca-labour");
+  plugin.name = "NECA Labor Units";
+  plugin.description = "Calculate labor hours using NECA industry standards. Supports Normal, Difficult, and Very Difficult conditions with cascading category/class/subclass lookups.";
+  plugin.llmDescription = americanizeLaborText(plugin.llmDescription);
+  plugin.documentation = americanizeLaborText(plugin.documentation);
+  plugin.tags = americanizeLaborList(plugin.tags);
+  plugin.supportedCategories = americanizeLaborList(plugin.supportedCategories);
 
   const labourTool = findTool(plugin, "neca.labourUnits");
+  labourTool.name = "NECA Labor Unit Calculator";
+  labourTool.description = "Calculate labor hours from NECA standards by category/class/subclass";
+  labourTool.llmDescription = americanizeLaborText(labourTool.llmDescription);
   labourTool.execution = { type: "dataset_labour_units", datasetId: "ds-neca-labour", providerLabel: "NECA" };
   replaceServiceItemWithRateSchedule(labourTool);
   addLabourHierarchySearch(labourTool, {
@@ -211,8 +229,8 @@ function buildNecaPlugin(): Plugin {
   const temperatureTool = findTool(plugin, "neca.temperature");
   temperatureTool.execution = { type: "neca_temperature_adjustment" };
   temperatureTool.parameters = [
-    { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
-    { name: "baseHours", type: "number", description: "Base labour hours to adjust", required: true },
+    { name: "serviceItemId", type: "string", description: "Revision labor rate schedule item ID", required: true },
+    { name: "baseHours", type: "number", description: "Base labor hours to adjust", required: true },
     { name: "temperature", type: "number", description: "Ambient temperature", required: true },
     { name: "temperatureUnit", type: "string", description: "Temperature unit", required: false, enum: ["C", "F"], default: "C" },
     { name: "humidity", type: "number", description: "Relative humidity percentage", required: true },
@@ -229,7 +247,7 @@ function buildNecaPlugin(): Plugin {
         description: "Estimate additional hours caused by ambient heat, cold, and humidity.",
         order: 0,
         fields: [
-          { id: "serviceItemId", type: "select", label: "Labour Rate", optionsSource: { type: "rate_schedule" }, validation: { required: true }, width: "full", order: 0 },
+          { id: "serviceItemId", type: "select", label: "Labor Rate", optionsSource: LABOR_RATE_OPTIONS_SOURCE, validation: { required: true }, width: "full", order: 0 },
           { id: "baseHours", type: "number", label: "Base Hours", validation: { required: true, min: 0 }, width: "third", order: 1 },
           { id: "temperature", type: "number", label: "Temperature", validation: { required: true }, width: "third", order: 2 },
           {
@@ -277,8 +295,8 @@ function buildNecaPlugin(): Plugin {
   const durationTool = findTool(plugin, "neca.extendedDuration");
   durationTool.execution = { type: "neca_extended_duration" };
   durationTool.parameters = [
-    { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
-    { name: "baseHours", type: "number", description: "Base labour hours for the scope", required: true },
+    { name: "serviceItemId", type: "string", description: "Revision labor rate schedule item ID", required: true },
+    { name: "baseHours", type: "number", description: "Base labor hours for the scope", required: true },
     { name: "workers", type: "number", description: "Crew size to model against the NECA recommendation", required: false },
     { name: "monthsExtended", type: "number", description: "Months added to the project duration", required: true },
   ];
@@ -291,11 +309,11 @@ function buildNecaPlugin(): Plugin {
         id: "inputs",
         type: "fields",
         label: "Extended Duration Adjustment",
-        description: "Model the additional labour hours created by prolonged project duration.",
+        description: "Model the additional labor hours created by prolonged project duration.",
         order: 0,
         fields: [
-          { id: "serviceItemId", type: "select", label: "Labour Rate", optionsSource: { type: "rate_schedule" }, validation: { required: true }, width: "full", order: 0 },
-          { id: "baseHours", type: "number", label: "Base Labour Hours", validation: { required: true, min: 0 }, width: "half", order: 1 },
+          { id: "serviceItemId", type: "select", label: "Labor Rate", optionsSource: LABOR_RATE_OPTIONS_SOURCE, validation: { required: true }, width: "full", order: 0 },
+          { id: "baseHours", type: "number", label: "Base Labor Hours", validation: { required: true, min: 0 }, width: "half", order: 1 },
           { id: "workers", type: "number", label: "Crew Size", validation: { min: 1 }, width: "half", order: 2 },
           { id: "monthsExtended", type: "number", label: "Months Extended", validation: { required: true, min: 1, max: 36 }, width: "half", order: 3 },
           {
@@ -332,16 +350,24 @@ function buildNecaPlugin(): Plugin {
 
 function buildPhccPlugin(): Plugin {
   const plugin = clonePlugin("phcc-labour");
+  plugin.name = "PHCC Labor Units";
+  plugin.description = "Calculate plumbing/mechanical labor hours using PHCC standards.";
+  plugin.llmDescription = americanizeLaborText(plugin.llmDescription);
+  plugin.tags = americanizeLaborList(plugin.tags);
+  plugin.supportedCategories = americanizeLaborList(plugin.supportedCategories);
   const labourTool = findTool(plugin, "phcc.labourUnits");
+  labourTool.name = "PHCC Labor Calculator";
+  labourTool.description = "Calculate labor hours from PHCC standards";
+  labourTool.llmDescription = americanizeLaborText(labourTool.llmDescription);
   labourTool.execution = { type: "dataset_labour_units", datasetId: "ds-phcc-labour", providerLabel: "PHCC" };
   addLabourHierarchySearch(labourTool, {
     datasetId: "ds-phcc-labour",
     providerLabel: "PHCC",
   });
   labourTool.parameters = [
-    { name: "category", type: "string", description: "PHCC labour category", required: true },
-    { name: "class", type: "string", description: "PHCC labour class", required: true },
-    { name: "subClass", type: "string", description: "PHCC labour subclass", required: false },
+    { name: "category", type: "string", description: "PHCC labor category", required: true },
+    { name: "class", type: "string", description: "PHCC labor class", required: true },
+    { name: "subClass", type: "string", description: "PHCC labor subclass", required: false },
     { name: "quantity", type: "number", description: "Quantity of units to estimate", required: true },
     {
       name: "difficulty",
@@ -351,17 +377,17 @@ function buildPhccPlugin(): Plugin {
       enum: ["Normal", "Difficult", "Very Difficult", "Extreme"],
       default: "Normal",
     },
-    { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
+    { name: "serviceItemId", type: "string", description: "Revision labor rate schedule item ID", required: true },
   ];
   labourTool.ui = {
     layout: "single",
-    submitLabel: "Add Labour Item",
+    submitLabel: "Add Labor Item",
     showPreview: true,
     sections: [
       {
         id: "lookup",
         type: "fields",
-        label: "PHCC Labour Lookup",
+        label: "PHCC Labor Lookup",
         description: "Select PHCC category, class, and subclass to find standard hours.",
         order: 0,
         fields: [
@@ -369,7 +395,7 @@ function buildPhccPlugin(): Plugin {
             id: "category",
             type: "select",
             label: "Category",
-            description: "Primary PHCC labour category",
+            description: "Primary PHCC labor category",
             placeholder: "Select category...",
             optionsSource: { type: "dataset", datasetId: "ds-phcc-labour", column: "category" },
             validation: { required: true },
@@ -380,7 +406,7 @@ function buildPhccPlugin(): Plugin {
             id: "class",
             type: "select",
             label: "Class",
-            description: "PHCC labour class",
+            description: "PHCC labor class",
             placeholder: "Select class...",
             optionsSource: {
               type: "cascade",
@@ -397,7 +423,7 @@ function buildPhccPlugin(): Plugin {
             id: "subClass",
             type: "select",
             label: "Sub-Class",
-            description: "Specific PHCC labour subclass",
+            description: "Specific PHCC labor subclass",
             placeholder: "Select sub-class...",
             optionsSource: {
               type: "cascade",
@@ -459,9 +485,9 @@ function buildPhccPlugin(): Plugin {
           {
             id: "serviceItemId",
             type: "select",
-            label: "Labour Rate",
-            description: "Select the labour rate schedule item to price these hours against",
-            optionsSource: { type: "rate_schedule" },
+            label: "Labor Rate",
+            description: "Select the labor rate schedule item to price these hours against",
+            optionsSource: LABOR_RATE_OPTIONS_SOURCE,
             validation: { required: true },
             width: "half",
             order: 6,
@@ -709,15 +735,15 @@ function buildShopToolsPlugin(): Plugin {
     slug: "shop-tools",
     icon: "Factory",
     category: "labour",
-    description: "Clean shop-floor labour tools for pipe fabrication and weld prep based on the legacy quoting module.",
-    llmDescription: "Use these shop tools when you need shop fabrication or weld-prep labour hours from the legacy quoting workflow. They create labour line items tied to the selected revision rate schedule item.",
+    description: "Clean shop-floor labor tools for pipe fabrication and weld prep based on the legacy quoting module.",
+    llmDescription: "Use these shop tools when you need shop fabrication or weld-prep labor hours from the legacy quoting workflow. They create labor line items tied to the selected revision rate schedule item.",
     version: "1.0.0",
     author: "Bidwright",
     enabled: true,
     config: {},
     configSchema: [],
-    tags: ["shop", "pipe", "weld", "fabrication", "labour"],
-    supportedCategories: ["Labour"],
+    tags: ["shop", "pipe", "weld", "fabrication", "labor"],
+    supportedCategories: ["Labor"],
     defaultOutputType: "line_items",
     documentation: "# Shop Pipe & Weld\n\nIncludes a clean shop pipe estimator and a shop weld/prep calculator derived from the legacy quote tools.",
     createdAt: "2026-03-20T00:00:00.000Z",
@@ -729,7 +755,7 @@ function buildShopToolsPlugin(): Plugin {
         description: "Estimate shop pipe weld, fit-up, handling, and QA hours from nominal pipe size and weld counts.",
         llmDescription: "Use this tool for estimator-style piping shop hours. It models welds, olets, fit-up, cutting, beveling, and optional QA/heat treatment steps from the legacy shop-pipe calculator.",
         parameters: [
-          { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
+          { name: "serviceItemId", type: "string", description: "Revision labor rate schedule item ID", required: true },
           { name: "description", type: "string", description: "Line item description", required: false },
           { name: "pipeType", type: "string", description: "Pipe material type", required: false, enum: ["carbon", "stainless"], default: "carbon" },
           { name: "efficiencyModifier", type: "number", description: "Crew efficiency percentage", required: false, default: 75 },
@@ -750,7 +776,7 @@ function buildShopToolsPlugin(): Plugin {
               label: "Shop Pipe Setup",
               order: 0,
               fields: [
-                { id: "serviceItemId", type: "select", label: "Labour Rate", optionsSource: { type: "rate_schedule" }, validation: { required: true }, width: "full", order: 0 },
+                { id: "serviceItemId", type: "select", label: "Labor Rate", optionsSource: LABOR_RATE_OPTIONS_SOURCE, validation: { required: true }, width: "full", order: 0 },
                 { id: "description", type: "text", label: "Description", placeholder: "e.g. Shop fabricated carbon steel spool", width: "full", order: 1 },
                 {
                   id: "pipeType",
@@ -816,7 +842,7 @@ function buildShopToolsPlugin(): Plugin {
         description: "Calculate welding, drilling, and cleaning man-hours from standard shop tasks.",
         llmDescription: "Use this tool for shop weld prep, hole drilling, fillet welds, and buffing/cleaning. It rounds the result to the nearest quarter hour like the legacy tool.",
         parameters: [
-          { name: "serviceItemId", type: "string", description: "Revision labour rate schedule item ID", required: true },
+          { name: "serviceItemId", type: "string", description: "Revision labor rate schedule item ID", required: true },
           { name: "description", type: "string", description: "Line item description", required: false },
         ],
         outputType: "line_items",
@@ -835,7 +861,7 @@ function buildShopToolsPlugin(): Plugin {
               label: "Shop Weld Setup",
               order: 0,
               fields: [
-                { id: "serviceItemId", type: "select", label: "Labour Rate", optionsSource: { type: "rate_schedule" }, validation: { required: true }, width: "full", order: 0 },
+                { id: "serviceItemId", type: "select", label: "Labor Rate", optionsSource: LABOR_RATE_OPTIONS_SOURCE, validation: { required: true }, width: "full", order: 0 },
                 { id: "description", type: "text", label: "Description", placeholder: "e.g. Tank shell weld prep", width: "full", order: 1 },
               ],
             },

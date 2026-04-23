@@ -21,11 +21,16 @@ import {
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
   labour: "success",
+  labor: "success",
   equipment: "warning",
   material: "default",
   travel: "danger",
   general: "info",
 };
+
+function displayPluginCategory(category: string): string {
+  return category.toLowerCase() === "labour" ? "labor" : category;
+}
 
 interface ItemPluginTabProps {
   item: WorkspaceWorksheetItem;
@@ -240,7 +245,7 @@ export function ItemPluginTab({
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <Badge tone={CATEGORY_COLORS[plugin.category] ?? "default"} className="capitalize">
-            {plugin.category}
+            {displayPluginCategory(plugin.category)}
           </Badge>
           <Badge tone="info">{tool.outputType}</Badge>
           {!plugin.enabled && <Badge tone="warning">Disabled</Badge>}
@@ -258,7 +263,7 @@ export function ItemPluginTab({
       <div className="rounded-xl border border-line bg-panel2/20 p-4">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone={CATEGORY_COLORS[plugin.category] ?? "default"} className="capitalize">
-            {plugin.category}
+            {displayPluginCategory(plugin.category)}
           </Badge>
           <Badge tone="info">{tool.outputType}</Badge>
           <Badge tone="default">
@@ -296,6 +301,7 @@ export function ItemPluginTab({
           onSubmit={handleSubmit}
           submitting={executing}
           output={executionOutput}
+          rateSchedules={workspace.rateSchedules}
         />
       )}
 

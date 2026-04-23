@@ -291,14 +291,14 @@ async function executeDatasetBackedLabourTool(
   const serviceItemId = toStringValue(ctx.input.serviceItemId ?? ctx.input.serviceItem);
   const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
   if (!serviceItem) {
-    throw new Error("Select a valid labour rate from the current revision rate schedule.");
+    throw new Error("Select a valid labor rate from the current revision rate schedule.");
   }
 
   const datasetRows = await ctx.lookupDatasetRows(datasetRef);
   const datasetColumns = await ctx.lookupDatasetColumns(datasetRef);
   const row = findLabourDatasetRow(datasetRows, ctx.input, datasetColumns);
   if (!row) {
-    throw new Error(`No ${providerLabel} labour unit matched the selected category/class/sub-class.`);
+    throw new Error(`No ${providerLabel} labor unit matched the selected category/class/sub-class.`);
   }
 
   const difficulty = normalizeDifficulty(
@@ -325,11 +325,11 @@ async function executeDatasetBackedLabourTool(
         entityName: serviceItem.name,
         description,
         hours: totalHours,
-        sourceNotes: `${providerLabel} labour unit ${hoursPerUnit.toFixed(2)} hrs per unit x ${quantity} @ ${difficulty}.`,
+      sourceNotes: `${providerLabel} labor unit ${hoursPerUnit.toFixed(2)} hrs per unit x ${quantity} @ ${difficulty}.`,
       }),
     ],
     summary: {
-      title: `${providerLabel} Labour Units`,
+      title: `${providerLabel} Labor Units`,
       sections: [
         { label: "Hours / Unit", value: hoursPerUnit, format: "hours" },
         { label: "Quantity", value: quantity, format: "number" },
@@ -403,7 +403,7 @@ export async function executeBuiltinPluginTool(
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
-        throw new Error("Select a valid labour rate from the current revision rate schedule.");
+        throw new Error("Select a valid labor rate from the current revision rate schedule.");
       }
 
       const result = computeNecaTemperatureAdjustment({
@@ -439,7 +439,7 @@ export async function executeBuiltinPluginTool(
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
-        throw new Error("Select a valid labour rate from the current revision rate schedule.");
+        throw new Error("Select a valid labor rate from the current revision rate schedule.");
       }
 
       const result = computeNecaExtendedDuration({
@@ -477,7 +477,7 @@ export async function executeBuiltinPluginTool(
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
-        throw new Error("Select a valid labour rate from the current revision rate schedule.");
+        throw new Error("Select a valid labor rate from the current revision rate schedule.");
       }
 
       const rows = getFormTableRows(ctx.formState, execution.tableId);
@@ -518,7 +518,7 @@ export async function executeBuiltinPluginTool(
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
-        throw new Error("Select a valid labour rate from the current revision rate schedule.");
+        throw new Error("Select a valid labor rate from the current revision rate schedule.");
       }
 
       const rows = getFormTableRows(ctx.formState, execution.tableId);
@@ -563,7 +563,7 @@ export async function executeBuiltinPluginTool(
       const serviceItemId = toStringValue(ctx.input.serviceItemId);
       const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
       if (!serviceItem) {
-        throw new Error("Select a valid labour rate from the current revision rate schedule.");
+        throw new Error("Select a valid labor rate from the current revision rate schedule.");
       }
 
       const rows = getFormTableRows(ctx.formState, execution.tableId);

@@ -44,6 +44,7 @@ import {
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
   labour: "success",
+  labor: "success",
   equipment: "warning",
   material: "default",
   travel: "danger",
@@ -53,6 +54,10 @@ const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "dange
 
 function getCategoryTone(cat: string): "default" | "success" | "warning" | "danger" | "info" {
   return CATEGORY_COLORS[cat.toLowerCase()] ?? "default";
+}
+
+function displayPluginCategory(category: string): string {
+  return category.toLowerCase() === "labour" ? "labor" : category;
 }
 
 interface ToolExecutionModalState {
@@ -324,7 +329,7 @@ export function PluginsPage({
                       <Puzzle className="h-4 w-4 text-fg/40 shrink-0" />
                       <CardTitle className="text-sm truncate">{plugin.name}</CardTitle>
                       <Badge tone={tone} className="shrink-0 capitalize text-[10px]">
-                        {plugin.category}
+                        {displayPluginCategory(plugin.category)}
                       </Badge>
                     </div>
                     <p className="text-[11px] text-fg/50 line-clamp-2">{plugin.description}</p>
@@ -421,7 +426,7 @@ export function PluginsPage({
                     <div className="flex items-center gap-2 mb-1">
                       <Puzzle className="h-5 w-5 text-fg/40 shrink-0" />
                       <CardTitle className="text-base">{detailPlugin.name}</CardTitle>
-                      <Badge tone={tone} className="capitalize text-[10px]">{detailPlugin.category}</Badge>
+                      <Badge tone={tone} className="capitalize text-[10px]">{displayPluginCategory(detailPlugin.category)}</Badge>
                       {detailPlugin.version && (
                         <span className="text-[10px] text-fg/30">v{detailPlugin.version}</span>
                       )}
@@ -570,8 +575,8 @@ export function PluginsPage({
                 <CardTitle>{executionModal.tool.name}</CardTitle>
                 <p className="text-[11px] text-fg/50 mt-0.5">{executionModal.tool.description}</p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge tone={CATEGORY_COLORS[executionModal.plugin.category]} className="text-[9px] capitalize">
-                    {executionModal.plugin.category}
+                  <Badge tone={CATEGORY_COLORS[executionModal.plugin.category] ?? "default"} className="text-[9px] capitalize">
+                    {displayPluginCategory(executionModal.plugin.category)}
                   </Badge>
                   <Badge tone="info" className="text-[9px]">{executionModal.tool.outputType}</Badge>
                   <span className="text-[10px] text-fg/30">{executionModal.plugin.name}</span>
