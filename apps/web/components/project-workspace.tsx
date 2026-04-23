@@ -736,7 +736,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
                 {estimateSubTab === "takeoff" && (
                   <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <TakeoffTab workspace={workspace} onOpenAgentChat={() => setChatOpen(true)} />
+                    <TakeoffTab workspace={workspace} onOpenAgentChat={() => setChatOpen(true)} onWorkspaceMutated={refreshWorkspace} />
                   </motion.div>
                 )}
 
