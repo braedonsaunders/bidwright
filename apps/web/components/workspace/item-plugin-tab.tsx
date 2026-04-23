@@ -288,6 +288,8 @@ export function ItemPluginTab({
         <PluginRuntime
           key={execution.id}
           schema={tool.ui}
+          pluginId={plugin.id}
+          toolId={tool.id}
           initialValues={initialValues}
           initialTableData={initialTableData}
           initialScoringData={initialScoringData}

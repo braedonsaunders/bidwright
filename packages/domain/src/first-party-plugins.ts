@@ -479,7 +479,6 @@ function buildHomeDepotPlugin(): Plugin {
   const tool = findTool(plugin, "homedepot.search");
   const searchField = findField(tool, "query");
   searchField.searchConfig = {
-    endpoint: "/plugins/helpers/home-depot/search",
     queryParam: "q",
     displayField: "title",
     valueField: "title",
@@ -491,6 +490,34 @@ function buildHomeDepotPlugin(): Plugin {
       cost: "price",
       description: "title",
     },
+    dataSource: {
+      type: "http-json",
+      url: "https://serpapi.com/search.json",
+      query: {
+        engine: "home_depot",
+        api_key: { from: "config", key: "apiKey", env: "SERPAPI_API_KEY", required: true, label: "SerpAPI key" },
+        q: { from: "query", key: "q", required: true, label: "Search query" },
+        country: { from: "config", key: "country", env: "SERPAPI_HOME_DEPOT_COUNTRY", default: "us" },
+        store_id: { from: "config", key: "storeId", env: "SERPAPI_HOME_DEPOT_STORE_ID" },
+        delivery_zip: { from: "config", key: "deliveryZip", env: "SERPAPI_HOME_DEPOT_DELIVERY_ZIP" },
+        ps: { from: "limit", default: 10, max: 24 },
+      },
+      resultPaths: ["products", "search_results", "organic_results"],
+      resultDefaults: { vendor: "Home Depot" },
+      resultMap: {
+        id: ["product_id", "item_id", "model_number", "link"],
+        product_id: ["product_id", "item_id"],
+        title: ["title", "name"],
+        price: ["extracted_price", "price"],
+        rating: "rating",
+        thumbnail: ["thumbnail", "image", "thumbnails"],
+        link: ["link", "product_link"],
+        brand: "brand",
+        model: ["model_number", "model"],
+      },
+      resultTypes: { price: "number", rating: "number", thumbnail: "image" },
+      dedupeFields: ["product_id", "link", "title"],
+    },
   };
   return plugin;
 }
@@ -500,7 +527,6 @@ function buildGoogleShoppingPlugin(): Plugin {
   const tool = findTool(plugin, "google.shopping");
   const searchField = findField(tool, "query");
   searchField.searchConfig = {
-    endpoint: "/plugins/helpers/google-shopping/search",
     queryParam: "q",
     displayField: "title",
     valueField: "title",
@@ -511,6 +537,40 @@ function buildGoogleShoppingPlugin(): Plugin {
       vendor: "vendor",
       cost: "price",
       description: "title",
+    },
+    dataSource: {
+      type: "http-json",
+      url: "https://serpapi.com/search.json",
+      query: {
+        engine: "google_shopping",
+        api_key: { from: "config", key: "apiKey", env: "SERPAPI_API_KEY", required: true, label: "SerpAPI key" },
+        q: { from: "query", key: "q", required: true, label: "Search query" },
+        gl: { from: "config", key: "gl", env: "SERPAPI_GL", default: "us" },
+        hl: { from: "config", key: "hl", env: "SERPAPI_HL", default: "en" },
+        location: { from: "config", key: "location", env: "SERPAPI_GOOGLE_LOCATION" },
+        google_domain: { from: "config", key: "googleDomain", env: "SERPAPI_GOOGLE_DOMAIN" },
+        num: { from: "limit", default: 10, max: 20 },
+      },
+      resultPaths: [
+        "shopping_results",
+        "inline_shopping_results",
+        "organic_results",
+        "categorized_shopping_results.*.shopping_results",
+        "categorized_shopping_results.*.products",
+      ],
+      resultMap: {
+        id: ["product_id", "position", "product_link", "link"],
+        product_id: "product_id",
+        title: "title",
+        vendor: ["source", "seller", "vendor"],
+        price: ["extracted_price", "price"],
+        rating: "rating",
+        thumbnail: ["thumbnail", "serpapi_thumbnail", "thumbnails"],
+        link: ["product_link", "link"],
+        delivery: "delivery",
+      },
+      resultTypes: { price: "number", rating: "number", thumbnail: "image" },
+      dedupeFields: ["product_id", "link", "title"],
     },
   };
   return plugin;
@@ -524,7 +584,6 @@ function buildGoogleHotelsPlugin(): Plugin {
   locationField.type = "search";
   locationField.placeholder = "Search for hotels near the project";
   locationField.searchConfig = {
-    endpoint: "/plugins/helpers/google-hotels/search",
     queryParam: "q",
     displayField: "name",
     valueField: "name",
@@ -533,10 +592,49 @@ function buildGoogleHotelsPlugin(): Plugin {
     params: {
       checkin: "checkin",
       checkout: "checkout",
+      adults: "crewSize",
     },
     populateFields: {
       hotelName: "name",
       nightlyRate: "price",
+    },
+    dataSource: {
+      type: "http-json",
+      url: "https://serpapi.com/search.json",
+      query: {
+        engine: "google_hotels",
+        api_key: { from: "config", key: "apiKey", env: "SERPAPI_API_KEY", required: true, label: "SerpAPI key" },
+        q: { from: "query", key: "q", required: true, label: "Hotel search" },
+        gl: { from: "config", key: "gl", env: "SERPAPI_GL", default: "us" },
+        hl: { from: "config", key: "hl", env: "SERPAPI_HL", default: "en" },
+        currency: { from: "config", key: "currency", env: "SERPAPI_CURRENCY", default: "USD" },
+        check_in_date: { from: "field", key: "checkin", required: true, label: "Check-in date" },
+        check_out_date: { from: "field", key: "checkout", required: true, label: "Check-out date" },
+        adults: { from: "field", key: "adults", default: "2" },
+        children: { from: "config", key: "children", env: "SERPAPI_HOTELS_CHILDREN", default: "0" },
+      },
+      resultPaths: ["properties", "ads", "hotel_results", "hotels_results", "$"],
+      resultMap: {
+        id: ["property_token", "hotel_id", "name"],
+        property_token: "property_token",
+        name: ["name", "title"],
+        price: [
+          "rate_per_night.extracted_lowest",
+          "rate_per_night.extracted_price",
+          "total_rate.extracted_lowest",
+          "total_rate.extracted_price",
+          "extracted_price",
+          "price",
+        ],
+        rating: ["overall_rating", "rating"],
+        type: "type",
+        vendor: ["source", "brand"],
+        thumbnail: "thumbnail",
+        link: ["link", "serpapi_property_details_link"],
+        address: "address",
+      },
+      resultTypes: { price: "number", rating: "number", thumbnail: "image" },
+      dedupeFields: ["property_token", "link", "name"],
     },
   };
   return plugin;

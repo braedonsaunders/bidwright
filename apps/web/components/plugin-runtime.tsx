@@ -619,6 +619,20 @@ function formatSearchResultMetaValue(rawValue: unknown, key: string): string | n
   return String(rawValue);
 }
 
+async function readPluginSearchErrorMessage(response: Response): Promise<string> {
+  const payload = await response.clone().json().catch(() => null) as { message?: unknown; error?: unknown } | null;
+  const message = typeof payload?.message === "string" && payload.message.trim()
+    ? payload.message.trim()
+    : typeof payload?.error === "string" && payload.error.trim()
+      ? payload.error.trim()
+      : "";
+  if (message) {
+    return message;
+  }
+  const text = await response.text().catch(() => "");
+  return text.trim() || `Search request failed (${response.status})`;
+}
+
 // ── Field Visibility Check ─────────────────────────────────────────────
 
 function evaluateConditional(conditional: PluginFieldConditional, values: Record<string, unknown>): boolean {
@@ -667,6 +681,8 @@ function PluginSearchField({
   allValues,
   datasetRowsById,
   datasetColumnsById,
+  pluginId,
+  toolId,
 }: {
   field: PluginField;
   value: unknown;
@@ -675,11 +691,14 @@ function PluginSearchField({
   allValues: Record<string, unknown>;
   datasetRowsById?: DatasetRowsById;
   datasetColumnsById?: DatasetColumnsById;
+  pluginId?: string;
+  toolId?: string;
 }) {
   const searchConfig = field.searchConfig;
   const [query, setQuery] = useState(String(value ?? ""));
   const [remoteResults, setRemoteResults] = useState<PluginSearchResult[]>([]);
   const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const minQueryLength = searchConfig?.minQueryLength ?? field.validation?.minLength ?? 1;
   const datasetId = searchConfig?.datasetId;
@@ -687,6 +706,11 @@ function PluginSearchField({
   const datasetColumns = datasetId ? datasetColumnsById?.[datasetId] ?? [] : [];
   const isDatasetSearch = Boolean(datasetId);
   const datasetReady = !datasetId || Object.prototype.hasOwnProperty.call(datasetRowsById ?? {}, datasetId);
+  const dataSourceEndpoint = searchConfig?.dataSource && pluginId && toolId
+    ? `/plugins/${encodeURIComponent(pluginId)}/tools/${encodeURIComponent(toolId)}/fields/${encodeURIComponent(field.id)}/search`
+    : undefined;
+  const remoteEndpoint = searchConfig?.endpoint ?? dataSourceEndpoint;
+  const remoteUnavailable = Boolean(searchConfig?.dataSource && !remoteEndpoint);
 
   useEffect(() => {
     setQuery(String(value ?? ""));
@@ -764,9 +788,10 @@ function PluginSearchField({
     : remoteLoading;
 
   useEffect(() => {
-    if (isDatasetSearch || !searchConfig?.endpoint) {
+    if (isDatasetSearch || !remoteEndpoint) {
       setRemoteResults([]);
       setRemoteLoading(false);
+      setRemoteError(null);
       return;
     }
 
@@ -774,25 +799,28 @@ function PluginSearchField({
     if (trimmed.length < minQueryLength) {
       setRemoteResults([]);
       setRemoteLoading(false);
+      setRemoteError(null);
       return;
     }
     if (!hasAllParamValues) {
       setRemoteResults([]);
       setRemoteLoading(false);
+      setRemoteError(null);
       return;
     }
 
-    const queryParam = searchConfig.queryParam ?? "q";
+    const queryParam = searchConfig?.queryParam ?? "q";
     const currentRequestId = ++requestIdRef.current;
     const timer = window.setTimeout(async () => {
       setRemoteLoading(true);
+      setRemoteError(null);
       try {
         const params = new URLSearchParams({
           [queryParam]: trimmed,
           ...extraParams,
         });
         const response = await fetch(
-          resolveApiUrl(`${searchConfig.endpoint}?${params.toString()}`),
+          resolveApiUrl(`${remoteEndpoint}?${params.toString()}`),
           {
             cache: "no-store",
             credentials: "include",
@@ -800,7 +828,7 @@ function PluginSearchField({
           },
         );
         if (!response.ok) {
-          throw new Error(`Search request failed (${response.status})`);
+          throw new Error(await readPluginSearchErrorMessage(response));
         }
 
         const payload = (await response.json()) as PluginSearchResult[] | { results?: PluginSearchResult[] };
@@ -812,10 +840,12 @@ function PluginSearchField({
 
         if (currentRequestId === requestIdRef.current) {
           setRemoteResults(nextResults);
+          setRemoteError(null);
         }
-      } catch {
+      } catch (error) {
         if (currentRequestId === requestIdRef.current) {
           setRemoteResults([]);
+          setRemoteError(error instanceof Error ? error.message : "Search failed.");
         }
       } finally {
         if (currentRequestId === requestIdRef.current) {
@@ -831,7 +861,7 @@ function PluginSearchField({
     isDatasetSearch,
     minQueryLength,
     query,
-    searchConfig?.endpoint,
+    remoteEndpoint,
     searchConfig?.queryParam,
   ]);
 
@@ -845,6 +875,7 @@ function PluginSearchField({
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            setRemoteError(null);
             onChange(e.target.value);
           }}
           placeholder={field.placeholder}
@@ -907,6 +938,7 @@ function PluginSearchField({
 
                   setQuery(displayValue);
                   setRemoteResults([]);
+                  setRemoteError(null);
                   if (onPatch) {
                     onPatch(patch);
                   } else {
@@ -933,7 +965,18 @@ function PluginSearchField({
         <p className="text-[10px] text-fg/40">Complete the related fields before searching.</p>
       )}
 
-      {!loading && query.trim().length >= minQueryLength && hasAllParamValues && results.length === 0 && (
+      {!loading && remoteUnavailable && query.trim().length >= minQueryLength && (
+        <p className="text-[10px] text-fg/40">Run this plugin tool to search external data.</p>
+      )}
+
+      {!loading && remoteError && (
+        <p className="text-[10px] text-danger flex items-center gap-1">
+          <AlertCircle className="h-3 w-3" />
+          {remoteError}
+        </p>
+      )}
+
+      {!loading && !remoteUnavailable && !remoteError && query.trim().length >= minQueryLength && hasAllParamValues && results.length === 0 && (
         <p className="text-[10px] text-fg/40">No matches found.</p>
       )}
     </div>
@@ -950,6 +993,8 @@ function PluginFieldRenderer({
   datasetRowsById,
   datasetColumnsById,
   sectionFields,
+  pluginId,
+  toolId,
 }: {
   field: PluginField;
   value: unknown;
@@ -960,6 +1005,8 @@ function PluginFieldRenderer({
   datasetRowsById?: DatasetRowsById;
   datasetColumnsById?: DatasetColumnsById;
   sectionFields: PluginField[];
+  pluginId?: string;
+  toolId?: string;
 }) {
   if (!isFieldVisible(field, allValues)) return null;
 
@@ -1201,6 +1248,8 @@ function PluginFieldRenderer({
           allValues={allValues}
           datasetRowsById={datasetRowsById}
           datasetColumnsById={datasetColumnsById}
+          pluginId={pluginId}
+          toolId={toolId}
         />
       )}
 
@@ -1507,6 +1556,8 @@ function PluginSectionRenderer({
   errors,
   datasetRowsById,
   datasetColumnsById,
+  pluginId,
+  toolId,
 }: {
   section: PluginUISection;
   values: Record<string, unknown>;
@@ -1519,6 +1570,8 @@ function PluginSectionRenderer({
   errors: Record<string, string>;
   datasetRowsById?: DatasetRowsById;
   datasetColumnsById?: DatasetColumnsById;
+  pluginId?: string;
+  toolId?: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const fieldValues = useMemo(() => buildFormulaValues(values, tableData), [tableData, values]);
@@ -1567,6 +1620,8 @@ function PluginSectionRenderer({
                     datasetRowsById={datasetRowsById}
                     datasetColumnsById={datasetColumnsById}
                     sectionFields={orderedFields}
+                    pluginId={pluginId}
+                    toolId={toolId}
                   />
                 ))}
             </div>
@@ -1612,6 +1667,8 @@ function PluginSectionRenderer({
 
 export interface PluginRuntimeProps {
   schema: PluginUISchema;
+  pluginId?: string;
+  toolId?: string;
   initialValues?: Record<string, unknown>;
   initialTableData?: Record<string, Record<string, unknown>[]>;
   initialScoringData?: Record<string, Record<string, number>>;
@@ -1629,6 +1686,8 @@ export interface PluginRuntimeProps {
 
 export function PluginRuntime({
   schema,
+  pluginId,
+  toolId,
   initialValues,
   initialTableData,
   initialScoringData,
@@ -1846,6 +1905,8 @@ export function PluginRuntime({
           errors={errors}
           datasetRowsById={datasetRowsById}
           datasetColumnsById={datasetColumnsById}
+          pluginId={pluginId}
+          toolId={toolId}
         />
       ))}
 

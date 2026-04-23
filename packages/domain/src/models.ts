@@ -808,6 +808,32 @@ export interface PluginFieldConditional {
   actionValue?: unknown;
 }
 
+export type PluginSearchDataSourceParam =
+  | string
+  | number
+  | boolean
+  | { from: "static"; value: string | number | boolean; required?: boolean; label?: string; key?: string; default?: string | number | boolean }
+  | { from: "query"; key?: string; required?: boolean; label?: string; default?: string | number | boolean }
+  | { from: "field"; key: string; required?: boolean; label?: string; default?: string | number | boolean }
+  | { from: "config"; key: string; env?: string; required?: boolean; label?: string; default?: string | number | boolean }
+  | { from: "env"; key: string; required?: boolean; label?: string; default?: string | number | boolean }
+  | { from: "limit"; min?: number; max?: number; default?: number; required?: boolean; label?: string; key?: string };
+
+export interface PluginSearchDataSource {
+  type: "http-json";
+  url: string;
+  method?: "GET";
+  timeoutMs?: number;
+  query?: Record<string, PluginSearchDataSourceParam>;
+  headers?: Record<string, PluginSearchDataSourceParam>;
+  resultPaths: string[];
+  resultMap: Record<string, string | string[]>;
+  resultDefaults?: Record<string, unknown>;
+  resultTypes?: Record<string, "string" | "number" | "boolean" | "image">;
+  errorPaths?: string[];
+  dedupeFields?: string[];
+}
+
 export interface PluginField {
   id: string;
   type: PluginFieldType;
@@ -847,6 +873,7 @@ export interface PluginField {
     params?: Record<string, string>;        // endpoint query param or dataset field -> field id mapping
     minQueryLength?: number;
     populateFields?: Record<string, string | string[]>;
+    dataSource?: PluginSearchDataSource;
   };
   width?: "full" | "half" | "third" | "quarter";
   group?: string;                           // group fields visually
