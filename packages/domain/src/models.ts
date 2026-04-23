@@ -849,6 +849,10 @@ export interface PluginField {
     endpoint?: string;
     dependsOn?: string;                     // cascade: parent field id
     parentColumn?: string;                  // cascade: filter by parent value
+    scope?: "revision" | "global" | "all";  // rate_schedule: which imported/master schedules to read
+    category?: string | string[];           // rate_schedule: filter by schedule category
+    rateKind?: "sell" | "cost";             // rate_schedule: choose sell rates or cost rates
+    tierName?: string;                      // rate_schedule: prefer a named tier
   };
   validation?: PluginFieldValidation;
   conditionals?: PluginFieldConditional[];  // show/hide/modify based on other fields

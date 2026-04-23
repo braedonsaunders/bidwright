@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useMemo } from "react";
 import { motion } from "motion/react";
 import {
+  ArrowLeft,
   Puzzle,
   Wrench,
   Play,
@@ -21,6 +22,7 @@ import type {
   PluginRecord,
   PluginToolDefinition,
   PluginOutput,
+  RateSchedule,
 } from "@/lib/api";
 import {
   listPlugins,
@@ -29,11 +31,16 @@ import {
 
 const CATEGORY_COLORS: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
   labour: "success",
+  labor: "success",
   equipment: "warning",
   material: "default",
   travel: "danger",
   general: "info",
 };
+
+function displayPluginCategory(category: string): string {
+  return category.toLowerCase() === "labour" ? "labor" : category;
+}
 
 interface SelectedTool {
   plugin: PluginRecord;
@@ -44,6 +51,7 @@ export function PluginToolsPanel({
   projectId,
   revisionId,
   worksheetId,
+  rateSchedules,
   open,
   onClose,
   onItemsCreated,
@@ -51,6 +59,7 @@ export function PluginToolsPanel({
   projectId: string;
   revisionId: string;
   worksheetId?: string;
+  rateSchedules?: RateSchedule[];
   open: boolean;
   onClose: () => void;
   onItemsCreated?: () => void;
@@ -162,7 +171,13 @@ export function PluginToolsPanel({
         </div>
         <div className="flex items-center gap-2">
           {selectedTool && (
-            <Button variant="ghost" size="xs" onClick={() => { setSelectedTool(null); setExecutionOutput(null); }}>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => { setSelectedTool(null); setExecutionOutput(null); }}
+              aria-label="Back to all plugin tools"
+            >
+              <ArrowLeft className="h-3 w-3" />
               All Tools
             </Button>
           )}
@@ -183,8 +198,8 @@ export function PluginToolsPanel({
             <div className="p-4">
               <div className="mb-4">
                 <div className="flex items-center gap-2 mb-1">
-                  <Badge tone={CATEGORY_COLORS[selectedTool.plugin.category]} className="text-[9px] capitalize">
-                    {selectedTool.plugin.category}
+                  <Badge tone={CATEGORY_COLORS[selectedTool.plugin.category] ?? "default"} className="text-[9px] capitalize">
+                    {displayPluginCategory(selectedTool.plugin.category)}
                   </Badge>
                   <Badge tone="info" className="text-[9px]">{selectedTool.tool.outputType}</Badge>
                   <span className="text-[10px] text-fg/30">{selectedTool.plugin.name}</span>
@@ -201,6 +216,7 @@ export function PluginToolsPanel({
                   onCancel={() => { setSelectedTool(null); setExecutionOutput(null); }}
                   submitting={executing}
                   output={executionOutput}
+                  rateSchedules={rateSchedules}
                 />
               ) : (
                 <div className="py-8 text-center text-xs text-fg/40">
@@ -256,8 +272,8 @@ export function PluginToolsPanel({
                         <span className="text-xs font-medium text-fg/80 truncate">{tool.name}</span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge tone={CATEGORY_COLORS[plugin.category]} className="text-[9px] capitalize">
-                          {plugin.category}
+                        <Badge tone={CATEGORY_COLORS[plugin.category] ?? "default"} className="text-[9px] capitalize">
+                          {displayPluginCategory(plugin.category)}
                         </Badge>
                         {tool.ui && (
                           <Play className="h-3 w-3 text-accent opacity-0 group-hover:opacity-100 transition-opacity" />

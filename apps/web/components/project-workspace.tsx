@@ -8,7 +8,6 @@ import {
   ClipboardList,
   Copy,
   FileText,
-  GitCompareArrows,
   Layers3,
   MessageSquareText,
   Plus,
@@ -622,13 +621,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </div>
           </div>
 
-          <Button size="sm" variant="secondary" onClick={() => handleAction("compare")}>
-            <GitCompareArrows className="h-3 w-3" />
-          </Button>
-
-          <Button size="sm" variant="secondary" onClick={() => setPluginToolsOpen(true)}>
-            <Puzzle className="h-3 w-3" />
-          </Button>
+          <ToolbarTooltip label="Open plugin tools">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setPluginToolsOpen(true)}
+              aria-label="Open plugin tools"
+            >
+              <Puzzle className="h-3 w-3" />
+            </Button>
+          </ToolbarTooltip>
 
           <Button size="sm" variant="accent" onClick={() => setChatOpen(true)}>
             <Sparkles className="h-3 w-3" /> AI
@@ -653,6 +655,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   </MenuSection>
                   <MenuSection label="Revisions">
                     <MenuItem onClick={() => handleAction("createRevision")}>New Revision</MenuItem>
+                    <MenuItem onClick={() => handleAction("compare")} title="Compare revisions">Compare Revisions</MenuItem>
                     <MenuItem onClick={() => handleAction("makeRevZero")}>Make Current Rev. 0</MenuItem>
                     <MenuItem onClick={() => handleAction("deleteRevision")} className="text-danger">Delete Revision</MenuItem>
                   </MenuSection>
@@ -926,6 +929,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         projectId={workspace.project.id}
         revisionId={workspace.currentRevision.id}
         worksheetId={selectedWsId === "all" ? undefined : selectedWsId}
+        rateSchedules={workspace.rateSchedules}
         open={pluginToolsOpen}
         onClose={() => setPluginToolsOpen(false)}
         onItemsCreated={() => {
@@ -967,11 +971,25 @@ function MenuSection({ label, children }: { label: string; children: React.React
   );
 }
 
-function MenuItem({ children, onClick, className }: { children: React.ReactNode; onClick: () => void; className?: string }) {
+function MenuItem({ children, onClick, className, title }: { children: React.ReactNode; onClick: () => void; className?: string; title?: string }) {
   return (
-    <button onClick={onClick} className={cn("block w-full px-3 py-1.5 text-left transition-colors hover:bg-panel2", className)}>
+    <button title={title} onClick={onClick} className={cn("block w-full px-3 py-1.5 text-left transition-colors hover:bg-panel2", className)}>
       {children}
     </button>
+  );
+}
+
+function ToolbarTooltip({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="group relative inline-flex">
+      {children}
+      <div
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-md border border-line bg-panel px-2 py-1 text-[10px] font-medium text-fg/70 opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {label}
+      </div>
+    </div>
   );
 }
 
