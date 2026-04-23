@@ -7,9 +7,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  Maximize2,
-  Maximize,
-  Minimize2,
+  Expand,
+  Shrink,
   ExternalLink,
   Scan,
   Minus,
@@ -39,8 +38,9 @@ import {
   Cloud,
   MoveRight,
   Highlighter,
+  StretchHorizontal,
 } from "lucide-react";
-import type { ProjectWorkspaceData, KnowledgeBookRecord, VisionMatch, VisionBoundingBox, TakeoffLinkRecord } from "@/lib/api";
+import type { ProjectWorkspaceData, VisionMatch, VisionBoundingBox, TakeoffLinkRecord } from "@/lib/api";
 import {
   listTakeoffAnnotations,
   createTakeoffAnnotation,
@@ -201,6 +201,44 @@ interface TakeoffDocument {
   bookId?: string;
 }
 
+interface TakeoffTabProps {
+  workspace: ProjectWorkspaceData;
+  onOpenAgentChat?: (prefill?: string) => void;
+  onWorkspaceMutated?: () => void;
+  initialDocumentId?: string | null;
+  initialPage?: number;
+  detached?: boolean;
+}
+
+interface TakeoffSyncBase {
+  originId: string;
+  projectId: string;
+}
+
+type TakeoffSyncMessage =
+  | (TakeoffSyncBase & { type: "view-change"; docId: string; page: number; zoom: number })
+  | (TakeoffSyncBase & { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] })
+  | (TakeoffSyncBase & { type: "takeoff-links-mutated" })
+  | (TakeoffSyncBase & { type: "workspace-mutated" })
+  | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null });
+
+type TakeoffSyncPayload =
+  | { type: "view-change"; docId: string; page: number; zoom: number }
+  | { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] }
+  | { type: "takeoff-links-mutated" }
+  | { type: "workspace-mutated" }
+  | { type: "calibration-change"; calibration: Calibration | null };
+
+function takeoffChannelName(projectId: string): string {
+  return `bw-takeoff-${projectId}`;
+}
+
+function sameCalibration(a: Calibration | null, b: Calibration | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.unit === b.unit && a.pixelsPerUnit === b.pixelsPerUnit;
+}
+
 function buildPdfUrl(doc: TakeoffDocument): string {
   if (doc.source === "knowledge" && doc.bookId) {
     return getBookFileUrl(doc.bookId);
@@ -280,8 +318,16 @@ function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Ca
 
 /* ─── Component ─── */
 
-export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectWorkspaceData; onOpenAgentChat?: (prefill?: string) => void }) {
+export function TakeoffTab({
+  workspace,
+  onOpenAgentChat,
+  onWorkspaceMutated,
+  initialDocumentId,
+  initialPage = 1,
+  detached = false,
+}: TakeoffTabProps) {
   const projectId = workspace.project.id;
+  const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
 
   /* Project source documents that are PDFs or CAD files */
   const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
@@ -324,14 +370,14 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   const drawings = [...projectPdfs, ...knowledgePdfs];
 
   /* Core state */
-  const [selectedDocId, setSelectedDocId] = useState(projectPdfs[0]?.id ?? "");
+  const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
 
   useEffect(() => {
     if (!selectedDocId && drawings.length > 0) {
       setSelectedDocId(drawings[0].id);
     }
   }, [drawings.length, selectedDocId]);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(safeInitialPage);
   const [zoom, setZoom] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
@@ -413,9 +459,56 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   /** True on first render of a new document so we auto-fit to page */
   const fitOnLoadRef = useRef(true);
   const broadcastRef = useRef<BroadcastChannel | null>(null);
+  const syncOriginRef = useRef(`takeoff-${Math.random().toString(36).slice(2)}`);
+  const selectedDocIdRef = useRef(selectedDocId);
+  const pageRef = useRef(page);
+  const zoomRef = useRef(zoom);
+  const loadAnnotationsRef = useRef<() => Promise<void>>(async () => {});
+  const loadTakeoffLinksRef = useRef<() => Promise<void>>(async () => {});
+  const onWorkspaceMutatedRef = useRef(onWorkspaceMutated);
+  const calibrationRef = useRef(calibration);
+  const initialDocumentAppliedRef = useRef(!initialDocumentId);
 
   const selectedDoc = drawings.find((d) => d.id === selectedDocId);
   const isCadDocument = selectedDoc ? isCadFile(selectedDoc.fileName) : false;
+
+  useEffect(() => {
+    selectedDocIdRef.current = selectedDocId;
+  }, [selectedDocId]);
+
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    onWorkspaceMutatedRef.current = onWorkspaceMutated;
+  }, [onWorkspaceMutated]);
+
+  useEffect(() => {
+    calibrationRef.current = calibration;
+  }, [calibration]);
+
+  useEffect(() => {
+    if (!initialDocumentId || initialDocumentAppliedRef.current) return;
+    if (!drawings.some((d) => d.id === initialDocumentId)) return;
+    initialDocumentAppliedRef.current = true;
+    setSelectedDocId(initialDocumentId);
+    setPage(safeInitialPage);
+    fitOnLoadRef.current = true;
+  }, [drawings, initialDocumentId, safeInitialPage]);
+
+  const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
+    if (!broadcastRef.current || !projectId) return;
+    broadcastRef.current.postMessage({
+      ...payload,
+      originId: syncOriginRef.current,
+      projectId,
+    });
+  }, [projectId]);
 
   /* ─── Load annotations from API ─── */
 
@@ -445,6 +538,10 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   }, [projectId, selectedDocId, page]);
 
   useEffect(() => {
+    loadAnnotationsRef.current = loadAnnotations;
+  }, [loadAnnotations]);
+
+  useEffect(() => {
     loadAnnotations();
   }, [loadAnnotations]);
 
@@ -460,8 +557,72 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   }, [projectId]);
 
   useEffect(() => {
+    loadTakeoffLinksRef.current = loadTakeoffLinks;
+  }, [loadTakeoffLinks]);
+
+  useEffect(() => {
     loadTakeoffLinks();
   }, [loadTakeoffLinks]);
+
+  useEffect(() => {
+    if (!projectId || typeof BroadcastChannel === "undefined") return;
+
+    const channel = new BroadcastChannel(takeoffChannelName(projectId));
+    broadcastRef.current = channel;
+
+    channel.onmessage = (event: MessageEvent<TakeoffSyncMessage>) => {
+      const msg = event.data;
+      if (!msg || msg.projectId !== projectId || msg.originId === syncOriginRef.current) return;
+
+      if (msg.type === "view-change") {
+        if (msg.docId && msg.docId !== selectedDocIdRef.current) {
+          setSelectedDocId(msg.docId);
+          setAnnotations([]);
+          fitOnLoadRef.current = true;
+        }
+        if (Number.isFinite(msg.page) && msg.page !== pageRef.current) {
+          setPage(Math.max(1, Math.floor(msg.page)));
+        }
+        if (Number.isFinite(msg.zoom) && msg.zoom > 0 && msg.zoom !== zoomRef.current) {
+          setZoom(Math.max(0.25, Math.min(msg.zoom, 5)));
+        }
+        return;
+      }
+
+      if (msg.type === "annotations-mutated") {
+        if (msg.docId !== selectedDocIdRef.current || msg.page !== pageRef.current) return;
+        if (msg.annotations) {
+          setAnnotations(msg.annotations);
+        } else {
+          void loadAnnotationsRef.current();
+        }
+        return;
+      }
+
+      if (msg.type === "takeoff-links-mutated") {
+        void loadTakeoffLinksRef.current();
+        return;
+      }
+
+      if (msg.type === "workspace-mutated") {
+        onWorkspaceMutatedRef.current?.();
+        return;
+      }
+
+      if (msg.type === "calibration-change") {
+        if (!sameCalibration(msg.calibration, calibrationRef.current)) {
+          setCalibration(msg.calibration);
+        }
+      }
+    };
+
+    return () => {
+      if (broadcastRef.current === channel) {
+        broadcastRef.current = null;
+      }
+      channel.close();
+    };
+  }, [projectId]);
 
   /* ─── PDF page count callback ─── */
 
@@ -517,31 +678,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
   /* BroadcastChannel sync — broadcast annotation/page changes to detached window */
   useEffect(() => {
-    if (!broadcastRef.current || !selectedDocId) return;
-    broadcastRef.current.postMessage({
-      type: "annotation-update",
-      projectId,
-      docId: selectedDocId,
-      annotations,
-    });
-  }, [annotations, selectedDocId, projectId]);
+    if (!selectedDocId) return;
+    postTakeoffMessage({ type: "view-change", docId: selectedDocId, page, zoom });
+  }, [page, postTakeoffMessage, selectedDocId, zoom]);
 
   useEffect(() => {
-    if (!broadcastRef.current || !selectedDocId) return;
-    broadcastRef.current.postMessage({
-      type: "page-change",
-      projectId,
-      docId: selectedDocId,
-      page,
-    });
-  }, [page, selectedDocId, projectId]);
-
-  /* BroadcastChannel cleanup */
-  useEffect(() => {
-    return () => {
-      broadcastRef.current?.close();
-    };
-  }, []);
+    postTakeoffMessage({ type: "calibration-change", calibration });
+  }, [calibration, postTakeoffMessage]);
 
   /* Escape key: cancel drawing and return to Select */
   useEffect(() => {
@@ -670,12 +813,27 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   function handleDetach() {
     if (!selectedDocId || !projectId) return;
     const src = selectedDoc?.source ?? "project";
-    const url = `/takeoff-viewer?projectId=${projectId}&docId=${selectedDocId}&source=${src}&page=${page}`;
+    const url = `/takeoff-viewer?projectId=${encodeURIComponent(projectId)}&docId=${encodeURIComponent(selectedDocId)}&source=${encodeURIComponent(src)}&page=${page}`;
     window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");
-    /* Set up broadcast channel for annotation sync */
-    if (!broadcastRef.current) {
-      broadcastRef.current = new BroadcastChannel("bw-takeoff");
-    }
+  }
+
+  function notifyAnnotationsMutated(nextAnnotations?: TakeoffAnnotation[]) {
+    if (!selectedDocId) return;
+    postTakeoffMessage({
+      type: "annotations-mutated",
+      docId: selectedDocId,
+      page,
+      annotations: nextAnnotations,
+    });
+  }
+
+  function notifyTakeoffLinksMutated() {
+    postTakeoffMessage({ type: "takeoff-links-mutated" });
+  }
+
+  function notifyWorkspaceMutated() {
+    onWorkspaceMutated?.();
+    postTakeoffMessage({ type: "workspace-mutated" });
   }
 
   function handleToolSelect(tool: ToolId) {
@@ -772,6 +930,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
           prev.map((a) => (a.id === newAnnotation.id ? { ...a, id: saved.id } : a))
         );
       }
+      notifyAnnotationsMutated();
     } catch {
       /* Keep local annotation even if API fails */
     }
@@ -981,6 +1140,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         }
       } catch { /* local is fine */ }
     }
+    notifyAnnotationsMutated();
   }
 
   function handleRejectAutoCount() {
@@ -1097,18 +1257,20 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
 
   /* Annotation CRUD */
   function handleToggleVisibility(id: string) {
-    setAnnotations((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a))
-    );
+    const nextAnnotations = annotations.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a));
+    setAnnotations(nextAnnotations);
+    notifyAnnotationsMutated(nextAnnotations);
   }
 
   async function handleDeleteAnnotation(id: string) {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    const nextAnnotations = annotations.filter((a) => a.id !== id);
+    setAnnotations(nextAnnotations);
     try {
       await deleteTakeoffAnnotation(projectId, id);
     } catch {
       /* Ignore */
     }
+    notifyAnnotationsMutated();
   }
 
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
@@ -1119,19 +1281,19 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   }
 
   function handleSaveAnnotationEdit(id: string, updates: { label?: string; color?: string; groupName?: string }) {
-    setAnnotations((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, ...updates } : a))
-    );
-    updateTakeoffAnnotation(projectId, id, updates).catch(() => {});
+    const nextAnnotations = annotations.map((a) => (a.id === id ? { ...a, ...updates } : a));
+    setAnnotations(nextAnnotations);
+    updateTakeoffAnnotation(projectId, id, updates)
+      .then(() => notifyAnnotationsMutated())
+      .catch(() => notifyAnnotationsMutated(nextAnnotations));
     setEditingAnnotationId(null);
   }
 
   /* Clear all annotations */
   function handleClearAll() {
-    for (const ann of annotations) {
-      deleteTakeoffAnnotation(projectId, ann.id).catch(() => {});
-    }
+    const deletions = annotations.map((ann) => deleteTakeoffAnnotation(projectId, ann.id).catch(() => {}));
     setAnnotations([]);
+    Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
 
   /* ─── Takeoff Link handlers ─── */
@@ -1150,6 +1312,7 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         multiplier: data.multiplier,
       });
       await loadTakeoffLinks();
+      notifyTakeoffLinksMutated();
     } catch (err) {
       console.error("[takeoff-link] Failed to create link:", err);
     }
@@ -1199,7 +1362,9 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
           worksheetItemId: newItem.id,
         });
         await loadTakeoffLinks();
+        notifyTakeoffLinksMutated();
       }
+      notifyWorkspaceMutated();
     } catch (err) {
       console.error("[takeoff] Failed to send to estimate:", err);
     }
@@ -1218,7 +1383,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
   /* ─── Render ─── */
 
   return (
-    <div ref={cardRef} className="relative flex h-full flex-1 min-h-0 flex-col rounded-lg border border-line bg-panel overflow-hidden">
+    <div
+      ref={cardRef}
+      className={cn(
+        "relative flex h-full flex-1 min-h-0 flex-col bg-panel overflow-hidden",
+        detached ? "rounded-none border-0" : "rounded-lg border border-line"
+      )}
+    >
       {/* ─── Top Toolbar ─── */}
       <div className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2 shrink-0">
         {/* Document selector */}
@@ -1336,7 +1507,15 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
                 <Plus className="h-3.5 w-3.5" />
               </Button>
               <Button variant="ghost" size="xs" onClick={handleFitToWidth} title="Fit to width">
-                <Maximize2 className="h-3.5 w-3.5" />
+                <StretchHorizontal className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleFitToPage}
+                title="Fit to page"
+              >
+                <Scan className="h-3.5 w-3.5" />
               </Button>
             </div>
 
@@ -1423,21 +1602,13 @@ export function TakeoffTab({ workspace, onOpenAgentChat }: { workspace: ProjectW
         <Button
           variant="ghost"
           size="xs"
-          onClick={handleFitToPage}
-          title="Fit to page"
-        >
-          <Scan className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
           onClick={handleFullscreen}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
         >
           {isFullscreen ? (
-            <Minimize2 className="h-3.5 w-3.5" />
+            <Shrink className="h-3.5 w-3.5" />
           ) : (
-            <Maximize className="h-3.5 w-3.5" />
+            <Expand className="h-3.5 w-3.5" />
           )}
         </Button>
         <Button
