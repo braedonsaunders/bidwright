@@ -1,14 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import * as Popover from "@radix-ui/react-popover";
 import {
   ArrowLeft,
   Check,
   FileText,
   FolderPlus,
   Loader2,
-  MoreHorizontal,
   MoveRight,
   Plus,
   Search,
@@ -21,9 +19,9 @@ import {
   Card,
   CardBody,
   CardHeader,
+  CompactSelect,
   EmptyState,
   Input,
-  Select,
   Textarea,
 } from "@/components/ui";
 import { ConfirmModal } from "@/components/workspace/modals";
@@ -67,6 +65,13 @@ const PAGE_CATEGORIES = [
   "standards",
   "general",
 ] as const;
+
+type EditorMode = "edit" | "preview" | "source";
+
+const PAGE_CATEGORY_OPTIONS = PAGE_CATEGORIES.map((category) => ({
+  value: category,
+  label: categoryLabel(category),
+}));
 
 function compareByTitle<T extends { title: string }>(left: T, right: T) {
   return left.title.localeCompare(right.title, undefined, { sensitivity: "base" });
@@ -122,6 +127,8 @@ export function PagesTab({
   const [movingDocument, setMovingDocument] = useState<KnowledgeDocumentRecord | null>(null);
   const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
   const [savingMove, setSavingMove] = useState(false);
+  const [editorMode, setEditorMode] = useState<EditorMode>("edit");
+  const [reindexing, setReindexing] = useState(false);
   const [documentToDelete, setDocumentToDelete] = useState<KnowledgeDocumentRecord | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +162,10 @@ export function PagesTab({
   useEffect(() => {
     setSelectedDocumentId(null);
   }, [view]);
+
+  useEffect(() => {
+    setEditorMode("edit");
+  }, [selectedDocumentId]);
 
   useEffect(() => {
     if (!selectedDocumentId) return;
@@ -270,6 +281,20 @@ export function PagesTab({
     }
   };
 
+  const handleReindexSelected = async () => {
+    if (!selectedDocument || reindexing) return;
+    setReindexing(true);
+    setError(null);
+    try {
+      await reindexKnowledgeDocument(selectedDocument.id);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to index page");
+    } finally {
+      setReindexing(false);
+    }
+  };
+
   const handleConfirmDeleteDocument = async () => {
     if (!documentToDelete) return;
     setDeletingDocumentId(documentToDelete.id);
@@ -308,7 +333,16 @@ export function PagesTab({
                 <p className="mt-0.5 text-xs text-fg/40">{filteredDocuments.length} pages</p>
               </div>
               <div className="flex min-w-[260px] flex-1 items-center justify-end gap-2">
-                {!selectedDocument && (
+                {selectedDocument ? (
+                  <>
+                    <Button size="sm" variant="secondary" onClick={handleReindexSelected} disabled={reindexing}>
+                      {reindexing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                      Index
+                    </Button>
+                    <EditorModeSwitch mode={editorMode} onChange={setEditorMode} />
+                  </>
+                ) : (
+                  <>
                   <div className="relative max-w-sm flex-1">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
                     <Input
@@ -318,11 +352,12 @@ export function PagesTab({
                       onChange={(event) => setSearchQuery(event.target.value)}
                     />
                   </div>
+                    <Button size="sm" onClick={handleCreateDocument} disabled={creating}>
+                      {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                      New Page
+                    </Button>
+                  </>
                 )}
-                <Button size="sm" onClick={handleCreateDocument} disabled={creating}>
-                  {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                  New Page
-                </Button>
               </div>
             </div>
             {error && <p className="mt-2 text-xs text-danger">{error}</p>}
@@ -332,6 +367,8 @@ export function PagesTab({
             {selectedDocument ? (
               <KnowledgeDocumentDetail
                 document={selectedDocument}
+                mode={editorMode}
+                onModeChange={setEditorMode}
                 onBack={() => setSelectedDocumentId(null)}
                 onRefresh={onRefresh}
               />
@@ -377,6 +414,32 @@ export function PagesTab({
         onConfirm={handleConfirmDeleteDocument}
       />
     </>
+  );
+}
+
+function EditorModeSwitch({
+  mode,
+  onChange,
+}: {
+  mode: EditorMode;
+  onChange: (mode: EditorMode) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1 rounded-md border border-line bg-panel2/30 p-0.5">
+      {(["edit", "preview", "source"] as const).map((nextMode) => (
+        <button
+          key={nextMode}
+          type="button"
+          onClick={() => onChange(nextMode)}
+          className={cn(
+            "rounded px-2 py-1 text-[11px] font-medium capitalize",
+            mode === nextMode ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
+          )}
+        >
+          {nextMode}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -467,16 +530,19 @@ function PageDocumentList({
 
 function KnowledgeDocumentDetail({
   document,
+  mode,
+  onModeChange,
   onBack,
   onRefresh,
 }: {
   document: KnowledgeDocumentRecord;
+  mode: EditorMode;
+  onModeChange: (mode: EditorMode) => void;
   onBack: () => void;
   onRefresh: () => void | Promise<void>;
 }) {
   const [page, setPage] = useState<KnowledgeDocumentPageRecord | null>(null);
   const [loadingPage, setLoadingPage] = useState(true);
-  const [mode, setMode] = useState<"edit" | "preview" | "source">("edit");
   const [draftContent, setDraftContent] = useState<{
     contentJson: Record<string, unknown>;
     contentMarkdown: string;
@@ -488,7 +554,6 @@ function KnowledgeDocumentDetail({
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [categoryDraft, setCategoryDraft] = useState<KnowledgeDocumentRecord["category"]>("general");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [reindexing, setReindexing] = useState(false);
 
   const loadPage = useCallback(async () => {
     setLoadingPage(true);
@@ -527,6 +592,12 @@ function KnowledgeDocumentDetail({
   }, [loadPage]);
 
   useEffect(() => {
+    if (mode === "source") {
+      setSourceDraft(draftContent?.contentMarkdown ?? page?.contentMarkdown ?? "");
+    }
+  }, [draftContent?.contentMarkdown, mode, page?.contentMarkdown, page?.id]);
+
+  useEffect(() => {
     if (!page || !draftContent) return;
     setSaveState("saving");
     const timer = window.setTimeout(async () => {
@@ -544,15 +615,24 @@ function KnowledgeDocumentDetail({
     return () => window.clearTimeout(timer);
   }, [draftContent, document.id, onRefresh, page]);
 
-  const handleSaveDocument = async () => {
-    const title = titleDraft.trim() || "Untitled Page";
+  const handleSaveDocument = async (overrides?: {
+    category?: KnowledgeDocumentRecord["category"];
+    description?: string;
+    tags?: string;
+    title?: string;
+  }) => {
+    const nextTitleDraft = overrides?.title ?? titleDraft;
+    const nextDescription = overrides?.description ?? descriptionDraft;
+    const nextCategory = overrides?.category ?? categoryDraft;
+    const nextTagsDraft = overrides?.tags ?? tagsDraft;
+    const title = nextTitleDraft.trim() || "Untitled Page";
     setSaveState("saving");
     try {
       await updateKnowledgeDocument(document.id, {
         title,
-        description: descriptionDraft,
-        category: categoryDraft,
-        tags: tagsDraft.split(",").map((tag) => tag.trim()).filter(Boolean),
+        description: nextDescription,
+        category: nextCategory,
+        tags: nextTagsDraft.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
       if (page && page.title !== title) {
         const updatedPage = await updateKnowledgeDocumentPage(document.id, page.id, { title });
@@ -574,121 +654,54 @@ function KnowledgeDocumentDetail({
       plainText: tiptapJsonToPlainText(contentJson),
     };
     setDraftContent(payload);
-    setMode("edit");
-  };
-
-  const handleReindex = async () => {
-    setReindexing(true);
-    try {
-      await reindexKnowledgeDocument(document.id);
-      await onRefresh();
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-    } finally {
-      setReindexing(false);
-    }
-  };
-
-  const openSourceMode = () => {
-    setSourceDraft(draftContent?.contentMarkdown ?? page?.contentMarkdown ?? "");
-    setMode("source");
+    onModeChange("edit");
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-        <Button size="sm" variant="ghost" title="Back to pages" onClick={onBack} className="h-8 w-8 px-0">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <Input
-          value={titleDraft}
-          onChange={(event) => setTitleDraft(event.target.value)}
-          onBlur={handleSaveDocument}
-          className="h-9 min-w-[220px] flex-[2] border-transparent bg-transparent px-1 text-base font-semibold"
-        />
-        <Select
-          value={categoryDraft}
-          onChange={(event) => setCategoryDraft(event.target.value as KnowledgeDocumentRecord["category"])}
-          onBlur={handleSaveDocument}
-          className="h-8 w-36 text-xs"
-        >
-          {PAGE_CATEGORIES.map((category) => (
-            <option key={category} value={category}>{categoryLabel(category)}</option>
-          ))}
-        </Select>
-        <Input
-          value={tagsDraft}
-          onChange={(event) => setTagsDraft(event.target.value)}
-          onBlur={handleSaveDocument}
-          placeholder="tags"
-          className="h-8 min-w-[160px] flex-1 text-xs"
-        />
-        <Popover.Root>
-          <Popover.Trigger asChild>
-            <Button size="sm" variant="ghost" title="Details" className="h-8 w-8 px-0">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="end"
-              sideOffset={8}
-              className="z-50 w-80 rounded-lg border border-line bg-panel p-3 shadow-xl"
-            >
-              <Textarea
-                value={descriptionDraft}
-                onChange={(event) => setDescriptionDraft(event.target.value)}
-                onBlur={handleSaveDocument}
-                rows={4}
-                placeholder="Description"
-                className="resize-none text-xs"
-              />
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
-        <Button size="sm" variant="secondary" onClick={handleReindex} disabled={reindexing}>
-          {reindexing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          Index
-        </Button>
-        <div className="flex items-center gap-1 rounded-md border border-line bg-panel2/30 p-0.5">
-          <button
-            type="button"
-            onClick={() => setMode("edit")}
-            className={cn(
-              "rounded px-2 py-1 text-[11px] font-medium",
-              mode === "edit" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
-            )}
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("preview")}
-            className={cn(
-              "rounded px-2 py-1 text-[11px] font-medium",
-              mode === "preview" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
-            )}
-          >
-            Preview
-          </button>
-          <button
-            type="button"
-            onClick={openSourceMode}
-            className={cn(
-              "rounded px-2 py-1 text-[11px] font-medium",
-              mode === "source" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
-            )}
-          >
-            Source
-          </button>
+      <div className="border-b border-line px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Button size="xs" variant="ghost" title="Back to pages" onClick={onBack} className="h-7 w-7 px-0">
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </Button>
+          <Input
+            value={titleDraft}
+            onChange={(event) => setTitleDraft(event.target.value)}
+            onBlur={() => void handleSaveDocument()}
+            className="h-7 min-w-[180px] flex-[1.1] border-transparent bg-transparent px-1 text-sm font-semibold"
+          />
+          <CompactSelect
+            value={categoryDraft}
+            onValueChange={(value) => {
+              const nextCategory = value as KnowledgeDocumentRecord["category"];
+              setCategoryDraft(nextCategory);
+              void handleSaveDocument({ category: nextCategory });
+            }}
+            options={PAGE_CATEGORY_OPTIONS}
+            triggerClassName="h-7 w-32 text-[11px]"
+          />
+          <Input
+            value={tagsDraft}
+            onChange={(event) => setTagsDraft(event.target.value)}
+            onBlur={() => void handleSaveDocument()}
+            placeholder="tags"
+            className="h-7 min-w-[150px] flex-[0.8] text-xs"
+          />
+          <div className="ml-auto flex shrink-0 items-center gap-2 text-[11px] text-fg/40">
+            <Badge tone={statusTone(document.status)}>{document.status}</Badge>
+            {saveState === "saving" && "Saving"}
+            {saveState === "saved" && <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" /> Saved</span>}
+            {saveState === "error" && <span className="text-danger">Error</span>}
+          </div>
         </div>
-        <div className="ml-auto flex items-center gap-2 text-[11px] text-fg/40">
-          <Badge tone={statusTone(document.status)}>{document.status}</Badge>
-          {saveState === "saving" && "Saving"}
-          {saveState === "saved" && <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" /> Saved</span>}
-          {saveState === "error" && <span className="text-danger">Error</span>}
-        </div>
+        <Textarea
+          value={descriptionDraft}
+          onChange={(event) => setDescriptionDraft(event.target.value)}
+          onBlur={() => void handleSaveDocument()}
+          rows={1}
+          placeholder="Description"
+          className="mt-2 h-8 min-h-0 resize-none py-1.5 text-xs"
+        />
       </div>
 
       <div className="min-h-0 flex-1 p-3">

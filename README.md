@@ -142,7 +142,7 @@ You can also use the launch wrappers:
 - Windows: `.\scripts\launch\start-docker.bat`
 
 For an Ubuntu deployment and data migration checklist, see [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
-For the dedicated `10.0.0.74` move and GitHub deploy plan that avoids `ADMINAPP2` downtime, see [docs/deployment/server-10.0.0.74.md](./docs/deployment/server-10.0.0.74.md).
+For the GitHub Actions release/deploy flow, see [docs/deployment/github-actions-docker.md](./docs/deployment/github-actions-docker.md).
 
 ## Core Environment Variables
 

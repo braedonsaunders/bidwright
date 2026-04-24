@@ -22,7 +22,7 @@ interface SeedItem {
   unitCost?: number;
   unitPrice?: number;
   description?: string;
-  // AdminApp2-specific fields stored in metadata
+  // Source-system fields stored in metadata.
   netsuiteId?: number;
   type?: string;
   billableTimesheet?: boolean;
