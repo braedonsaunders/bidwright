@@ -625,6 +625,7 @@ export class Editor extends HTMLElement {
         );
         menu.append(header);
 
+        const body = div({ className: style.contextMenuBody });
         for (const section of this._contextMenuSections()) {
             const visibleItems = section.items.filter(Boolean);
             if (visibleItems.length === 0) continue;
@@ -635,8 +636,9 @@ export class Editor extends HTMLElement {
             for (const item of visibleItems) {
                 sectionEl.append(this._createContextMenuButton(item));
             }
-            menu.append(sectionEl);
+            body.append(sectionEl);
         }
+        menu.append(body);
 
         document.body.append(menu);
         this._contextMenuEl = menu;
