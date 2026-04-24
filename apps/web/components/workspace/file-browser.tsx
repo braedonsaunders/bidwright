@@ -100,9 +100,11 @@ const RtfViewer = dynamic(
 
 import type {
   FileNode,
+  ModelAsset,
   PackageRecord,
   ProjectWorkspaceData,
   SourceDocument,
+  WorkspaceWorksheet,
 } from "@/lib/api";
 import {
   createFileNode,
@@ -110,6 +112,8 @@ import {
   getFileDownloadUrl,
   getDocumentDownloadUrl,
   getFileTree,
+  listModelAssets,
+  syncModelAssets,
   updateFileNode,
   uploadFile,
 } from "@/lib/api";
@@ -150,6 +154,8 @@ interface TreeItem {
 export interface FileBrowserProps {
   workspace: ProjectWorkspaceData;
   packages?: PackageRecord[];
+  selectedWorksheet?: WorkspaceWorksheet | null;
+  modelEditorChannelName?: string;
 }
 
 /* ─── Constants ─── */
@@ -234,6 +240,16 @@ function getDownloadUrl(item: TreeItem, projectId: string, inline = false): stri
     return getDocumentDownloadUrl(projectId, item.sourceDocument.id, inline);
   }
   return null;
+}
+
+function findModelAssetForItem(assets: ModelAsset[], item?: TreeItem | null) {
+  if (!item || item.type !== "file") return undefined;
+  const fileName = item.name.toLowerCase();
+  return assets.find((asset) =>
+    (item.fileNode?.id && asset.fileNodeId === item.fileNode.id) ||
+    (item.sourceDocument?.id && asset.sourceDocumentId === item.sourceDocument.id) ||
+    asset.fileName.toLowerCase() === fileName
+  );
 }
 
 function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
@@ -1186,7 +1202,7 @@ function TreeNode({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1398,12 +1414,39 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   const filePreviewType = selectedItem ? getFilePreviewType(selectedItem) : "none";
   const isEmbeddedModelEditorPreview =
     selectedItem?.type === "file" && filePreviewType === "cad" && isBidwrightEditableModel(selectedItem.name);
+  const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
+  const selectedModelAsset = useMemo(
+    () => findModelAssetForItem(modelAssets, selectedItem),
+    [modelAssets, selectedItem],
+  );
   const hasExtracted = selectedItem ? hasExtractedContent(selectedItem) : false;
   // Show tabs when there is extracted content (so user can toggle between file view and text)
   const showPreviewTabs = selectedItem?.type === "file" && (hasExtracted && filePreviewType !== "none" || hasExtracted);
   const [previewTab, setPreviewTab] = useState<"file" | "extracted">("file");
   const [editorMode, setEditorMode] = useState<"none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist">("none");
   const [editorFileName, setEditorFileName] = useState("");
+
+  useEffect(() => {
+    if (!isEmbeddedModelEditorPreview) return;
+    let cancelled = false;
+    async function loadModelAssets() {
+      try {
+        const listed = await listModelAssets(projectId, true);
+        let assets = listed.assets ?? [];
+        if (!findModelAssetForItem(assets, selectedItem)) {
+          const synced = await syncModelAssets(projectId);
+          assets = synced.assets ?? assets;
+        }
+        if (!cancelled) setModelAssets(assets);
+      } catch {
+        if (!cancelled) setModelAssets([]);
+      }
+    }
+    void loadModelAssets();
+    return () => {
+      cancelled = true;
+    };
+  }, [isEmbeddedModelEditorPreview, projectId, selectedItem]);
 
   // ── Resizable divider ──────────────────────────────────────────────────
   const [leftPanelWidth, setLeftPanelWidth] = useState(30);
@@ -1459,7 +1502,17 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
 
   const handlePopOut = useCallback(() => {
     if (isEmbeddedModelEditorPreview && previewUrl) {
-      const editorUrl = buildModelEditorUrl(previewUrl, selectedItem?.name ?? "Model", 0);
+      const editorUrl = buildModelEditorUrl(previewUrl, selectedItem?.name ?? "Model", 0, {
+        projectId,
+        modelAssetId: selectedModelAsset?.id,
+        modelDocumentId: selectedItem?.sourceDocument?.id ?? selectedItem?.fileNode?.id ?? null,
+        syncChannelName: modelEditorChannelName,
+        estimateEnabled: Boolean(selectedWorksheet),
+        estimateTargetWorksheetId: selectedWorksheet?.id,
+        estimateTargetWorksheetName: selectedWorksheet?.name,
+        estimateDefaultMarkup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        estimateQuoteLabel: workspace.quote?.quoteNumber ?? workspace.project.name,
+      });
       window.open(editorUrl, "_blank", "width=1400,height=900,resizable=yes");
       return;
     }
@@ -1498,7 +1551,20 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       setIsDetached(false);
       setDetachedContainer(null);
     });
-  }, [isEmbeddedModelEditorPreview, previewUrl, selectedItem?.name]);
+  }, [
+    isEmbeddedModelEditorPreview,
+    modelEditorChannelName,
+    previewUrl,
+    projectId,
+    selectedItem?.fileNode?.id,
+    selectedItem?.name,
+    selectedItem?.sourceDocument?.id,
+    selectedModelAsset?.id,
+    selectedWorksheet,
+    workspace.currentRevision.defaultMarkup,
+    workspace.project.name,
+    workspace.quote?.quoteNumber,
+  ]);
 
   useEffect(() => {
     if (detachedWindowRef.current && !detachedWindowRef.current.closed && selectedItem) {
@@ -1591,7 +1657,20 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
             {filePreviewType === "cad" && previewUrl && (
               <div className="flex-1 min-h-[400px]">
                 {isBidwrightEditableModel(selectedItem.name) ? (
-                  <BidwrightModelEditor fileUrl={previewUrl} fileName={selectedItem.name} />
+                  <BidwrightModelEditor
+                    fileUrl={previewUrl}
+                    fileName={selectedItem.name}
+                    projectId={projectId}
+                    modelAssetId={selectedModelAsset?.id}
+                    modelDocumentId={selectedItem.sourceDocument?.id ?? selectedItem.fileNode?.id}
+                    syncChannelName={modelEditorChannelName}
+                    estimateEnabled={Boolean(selectedWorksheet)}
+                    isolateSyncChannel={false}
+                    estimateTargetWorksheetId={selectedWorksheet?.id}
+                    estimateTargetWorksheetName={selectedWorksheet?.name}
+                    estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
+                    estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
+                  />
                 ) : (
                   <CadViewer fileUrl={previewUrl} fileName={selectedItem.name} />
                 )}

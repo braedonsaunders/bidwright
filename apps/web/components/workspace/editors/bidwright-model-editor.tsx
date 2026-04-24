@@ -29,6 +29,7 @@ export interface BidwrightModelSelectionMessage {
   modelId?: string;
   modelDocumentId?: string;
   fileName?: string;
+  quantityBasis?: "count" | "area" | "volume";
   documentId?: string;
   documentName?: string;
   selectedCount: number;
@@ -166,6 +167,8 @@ interface BidwrightModelEditorProps {
   estimateTargetWorksheetName?: string | null;
   estimateDefaultMarkup?: number | null;
   estimateQuoteLabel?: string | null;
+  estimateEnabled?: boolean;
+  isolateSyncChannel?: boolean;
   className?: string;
   title?: string;
   showHeader?: boolean;
@@ -314,6 +317,8 @@ export function BidwrightModelEditor({
   estimateTargetWorksheetName,
   estimateDefaultMarkup,
   estimateQuoteLabel,
+  estimateEnabled: estimateEnabledProp,
+  isolateSyncChannel = true,
   className,
   title = "Model Editor",
   showHeader = false,
@@ -334,10 +339,16 @@ export function BidwrightModelEditor({
   const channelRef = useRef<BroadcastChannel | null>(null);
   const linkedLineItemsRef = useRef(linkedLineItems);
   const channelInstanceIdRef = useRef(makeModelEditorChannelId());
-  const estimateEnabled = Boolean(onSendSelectionToEstimate);
+  const estimateEnabled = estimateEnabledProp ?? Boolean(onSendSelectionToEstimate);
+  const hasLocalLineItemBridge = Boolean(
+    onSendSelectionToEstimate ||
+      onUpdateLinkedLineItem ||
+      onDeleteLinkedLineItem ||
+      linkedLineItems.length > 0
+  );
   const effectiveSyncChannelName = useMemo(
-    () => (syncChannelName ? `${syncChannelName}-${channelInstanceIdRef.current}` : null),
-    [syncChannelName]
+    () => (syncChannelName ? (isolateSyncChannel ? `${syncChannelName}-${channelInstanceIdRef.current}` : syncChannelName) : null),
+    [isolateSyncChannel, syncChannelName]
   );
   const editorUrl = useMemo(
     () =>
@@ -374,6 +385,7 @@ export function BidwrightModelEditor({
   }, [linkedLineItems]);
 
   const postLinkedLineItemsState = useCallback((targetWindow?: Window | null) => {
+    if (!hasLocalLineItemBridge) return;
     const parentMessage = {
       type: "bidwright:model-line-items-state",
       source: "bidwright-host",
@@ -395,7 +407,7 @@ export function BidwrightModelEditor({
 
     targetWindow?.postMessage(parentMessage, window.location.origin);
     channelRef.current?.postMessage(channelMessage);
-  }, [modelAssetId, modelDocumentId, projectId]);
+  }, [hasLocalLineItemBridge, modelAssetId, modelDocumentId, projectId]);
 
   const handleIncomingSelection = useCallback(
     (nextSelection: BidwrightModelSelectionMessage) => {

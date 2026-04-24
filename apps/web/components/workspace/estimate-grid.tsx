@@ -88,6 +88,8 @@ export interface EstimateGridProps {
   onError: (msg: string) => void;
   onRefresh: () => void;
   highlightItemId?: string;
+  activeWorksheetId?: WorksheetTabId;
+  onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
 }
 
 type EditingCell = {
@@ -512,16 +514,33 @@ function catalogKindToCategory(kind: string): string {
 
 /* ─── Component ─── */
 
-export function EstimateGrid({ workspace, onApply, onError, onRefresh, highlightItemId }: EstimateGridProps) {
+export function EstimateGrid({
+  workspace,
+  onApply,
+  onError,
+  onRefresh,
+  highlightItemId,
+  activeWorksheetId,
+  onActiveWorksheetChange,
+}: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
 
   // Entity categories loaded from API
   const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<WorksheetTabId>(
-    workspace.worksheets[0]?.id ?? "all"
+  const [activeTab, setActiveTabState] = useState<WorksheetTabId>(
+    activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
   );
+  const setActiveTab = useCallback((nextTab: WorksheetTabId) => {
+    setActiveTabState(nextTab);
+    onActiveWorksheetChange?.(nextTab);
+  }, [onActiveWorksheetChange]);
+
+  useEffect(() => {
+    if (!activeWorksheetId || activeWorksheetId === activeTab) return;
+    setActiveTabState(activeWorksheetId);
+  }, [activeTab, activeWorksheetId]);
 
   // Editing state
   const [editingCell, setEditingCell] = useState<EditingCell>(null);
