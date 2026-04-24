@@ -194,7 +194,7 @@ export function isBidwrightEditableModel(fileName?: string | null): boolean {
   return MODEL_EDITOR_EDITABLE_EXTENSIONS.has(getModelFileExtension(fileName));
 }
 
-function buildModelEditorUrl(
+export function buildModelEditorUrl(
   fileUrl?: string | null,
   fileName?: string | null,
   cacheKey = 0,
