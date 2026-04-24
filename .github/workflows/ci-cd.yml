@@ -63,8 +63,7 @@ jobs:
   deploy:
     needs:
       - verify
-    # The production host lives on a private LAN IP, so deploys must run from a runner
-    # that already has network reachability into that environment.
+    # Deploys run from a self-hosted runner that can reach the configured target host.
     runs-on: [self-hosted, linux, x64, bidwright-prod]
     timeout-minutes: 40
     environment: production

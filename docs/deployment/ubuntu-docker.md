@@ -79,4 +79,4 @@ docker compose -f docker-compose.prod.yml up -d --build api web worker
 - Because migrations are not fully baselined yet, test the restore on a throwaway Ubuntu VM first if this move matters operationally.
 - Once the server move is stable, the next infrastructure improvement should be creating a real Prisma migration baseline and switching production deploys away from `db push`.
 
-For the specific zero-downtime move onto `10.0.0.74`, including the existing `ADMINAPP2` port isolation plan and GitHub Actions deploy wiring, see [server-10.0.0.74.md](./server-10.0.0.74.md).
+For the GitHub Actions release/deploy flow, see [github-actions-docker.md](./github-actions-docker.md).
