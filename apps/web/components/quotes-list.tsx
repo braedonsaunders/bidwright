@@ -2,19 +2,23 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   ArrowUpDown,
+  Bot,
   ChevronDown,
   FileText,
+  Loader2,
+  PencilLine,
   Plus,
   Search,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent, formatDate } from "@/lib/format";
-import type { ProjectListItem, OrgUser, OrgDepartment } from "@/lib/api";
+import { createProject, type ProjectListItem, type OrgUser, type OrgDepartment } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
   Badge,
@@ -22,6 +26,8 @@ import {
   Card,
   FadeIn,
   Input,
+  ModalBackdrop,
+  Textarea,
 } from "@/components/ui";
 import { getClientDisplayName } from "@/lib/client-display";
 
@@ -163,6 +169,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   users?: OrgUser[];
   departments?: OrgDepartment[];
 }) {
+  const router = useRouter();
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
@@ -175,6 +182,14 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [newQuoteMenuOpen, setNewQuoteMenuOpen] = useState(false);
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualClient, setManualClient] = useState("");
+  const [manualLocation, setManualLocation] = useState("");
+  const [manualScope, setManualScope] = useState("");
+  const [manualError, setManualError] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
 
   // Only include projects that have a quote
   const projectsWithQuotes = useMemo(
@@ -216,6 +231,49 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     setUserFilter([]);
     setDepartmentFilter([]);
     setSearch("");
+  }
+
+  function openManualQuoteModal() {
+    setNewQuoteMenuOpen(false);
+    setManualError("");
+    setManualModalOpen(true);
+  }
+
+  function closeManualQuoteModal() {
+    if (manualSaving) return;
+    setManualModalOpen(false);
+    setManualError("");
+  }
+
+  async function handleManualQuoteSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = manualTitle.trim();
+    if (!title) {
+      setManualError("Quote title is required.");
+      return;
+    }
+
+    setManualSaving(true);
+    setManualError("");
+    try {
+      const clientName = manualClient.trim() || "Unassigned Client";
+      const location = manualLocation.trim() || "TBD";
+      const scope = manualScope.trim();
+      const result = await createProject({
+        name: title,
+        clientName,
+        location,
+        scope: scope || undefined,
+        creationMode: "manual",
+        packageName: `${title} Manual Quote`,
+        summary: scope || "Manual quote created from scratch.",
+      });
+
+      router.push(`/projects/${result.project.id}?tab=estimate`);
+    } catch (error) {
+      setManualSaving(false);
+      setManualError(error instanceof Error ? error.message : "Could not create quote.");
+    }
   }
 
   const handleSort = (key: SortKey) => {
@@ -320,13 +378,123 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             <h1 className="text-lg font-semibold text-fg">Quotes</h1>
             <p className="text-xs text-fg/50">Manage and track all your quotes</p>
           </div>
-          <Link href="/intake">
-            <Button variant="accent" size="sm">
-              <Plus className="h-3.5 w-3.5" /> New Quote
-            </Button>
-          </Link>
+          <Popover.Root open={newQuoteMenuOpen} onOpenChange={setNewQuoteMenuOpen}>
+            <Popover.Trigger asChild>
+              <Button variant="accent" size="sm">
+                <Plus className="h-3.5 w-3.5" />
+                New Quote
+                <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", newQuoteMenuOpen && "rotate-180")} />
+              </Button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                className="z-50 w-52 rounded-lg border border-line bg-panel p-1 shadow-xl"
+                sideOffset={6}
+                align="end"
+              >
+                <Link
+                  href="/intake"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                  onClick={() => setNewQuoteMenuOpen(false)}
+                >
+                  <Bot className="h-3.5 w-3.5 text-accent" />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-medium">AI Intake</span>
+                    <span className="text-[11px] text-fg/40">Upload a bid package</span>
+                  </span>
+                </Link>
+                <button
+                  type="button"
+                  onClick={openManualQuoteModal}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                >
+                  <PencilLine className="h-3.5 w-3.5 text-accent" />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-medium">Manual</span>
+                    <span className="text-[11px] text-fg/40">Start from a blank quote</span>
+                  </span>
+                </button>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
         </div>
       </FadeIn>
+
+      <ModalBackdrop open={manualModalOpen} onClose={closeManualQuoteModal} size="md">
+        <form onSubmit={handleManualQuoteSubmit} className="rounded-xl border border-line bg-panel shadow-2xl">
+          <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+            <div>
+              <h2 className="text-sm font-semibold text-fg">Manual quote</h2>
+              <p className="mt-0.5 text-xs text-fg/50">Create a blank estimate workspace without running AI intake.</p>
+            </div>
+            <button
+              type="button"
+              onClick={closeManualQuoteModal}
+              className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+              aria-label="Close manual quote dialog"
+              disabled={manualSaving}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="space-y-3 px-5 py-4">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-fg/65">Quote title</span>
+              <Input
+                autoFocus
+                value={manualTitle}
+                onChange={(event) => setManualTitle(event.target.value)}
+                placeholder="e.g. Cogen pipe rack insulation"
+                disabled={manualSaving}
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-fg/65">Client</span>
+                <Input
+                  value={manualClient}
+                  onChange={(event) => setManualClient(event.target.value)}
+                  placeholder="Unassigned Client"
+                  disabled={manualSaving}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-fg/65">Location</span>
+                <Input
+                  value={manualLocation}
+                  onChange={(event) => setManualLocation(event.target.value)}
+                  placeholder="TBD"
+                  disabled={manualSaving}
+                />
+              </label>
+            </div>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-fg/65">Scope notes</span>
+              <Textarea
+                value={manualScope}
+                onChange={(event) => setManualScope(event.target.value)}
+                placeholder="Optional starting scope, assumptions, or bid notes..."
+                disabled={manualSaving}
+                className="min-h-24"
+              />
+            </label>
+            {manualError && (
+              <div className="rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
+                {manualError}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
+            <Button type="button" variant="ghost" size="sm" onClick={closeManualQuoteModal} disabled={manualSaving}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="accent" size="sm" disabled={manualSaving}>
+              {manualSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Create Quote
+            </Button>
+          </div>
+        </form>
+      </ModalBackdrop>
 
       {/* Summary stats */}
       <FadeIn delay={0.05}>

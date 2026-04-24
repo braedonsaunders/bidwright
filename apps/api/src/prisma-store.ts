@@ -376,6 +376,7 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
+  creationMode?: "manual" | "intake";
   summary?: string;
 }
 
@@ -4809,6 +4810,7 @@ export class PrismaApiStore {
     const now = new Date();
     const nowISO = now.toISOString();
     const projectId = createId("project");
+    const isManualProject = input.creationMode === "manual";
     const packageName = input.packageName ?? input.name;
 
     // Fetch org settings to inherit defaultMarkup
@@ -4833,9 +4835,9 @@ export class PrismaApiStore {
           location: input.location,
           packageName,
           packageUploadedAt: nowISO,
-          ingestionStatus: "queued",
+          ingestionStatus: isManualProject ? "review" : "queued",
           scope: input.scope ?? "",
-          summary: input.summary ?? defaultProjectSummary(packageName, customerSelection.clientName),
+          summary: input.summary ?? (isManualProject ? "Manual quote created from scratch." : defaultProjectSummary(packageName, customerSelection.clientName)),
           createdAt: now,
           updatedAt: now,
         },
@@ -4882,7 +4884,7 @@ export class PrismaApiStore {
       // No default worksheet — the agent or user creates worksheets as needed
 
       const wsState = {
-        activeTab: "overview",
+        activeTab: isManualProject ? "estimate" : "overview",
         selectedQuoteId: quoteId,
         selectedRevisionId: revisionId,
         selectedWorksheetId: null,

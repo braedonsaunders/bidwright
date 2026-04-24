@@ -99,6 +99,8 @@ const createProjectSchema = z.object({
   customerId: z.string().nullable().optional(),
   location: z.string().min(1),
   packageName: z.string().min(1).optional(),
+  scope: z.string().optional(),
+  creationMode: z.enum(["manual", "intake"]).optional(),
   summary: z.string().optional()
 });
 
