@@ -48,6 +48,7 @@ import {
 import { ConfirmModal } from "@/components/workspace/modals";
 import {
   CabinetDirectorySidebar,
+  cabinetDescendantIds,
   cabinetPathLabel,
   MoveToCabinetModal,
   type LibraryDirectoryView,
@@ -166,10 +167,14 @@ function compareByName<T extends { name: string }>(left: T, right: T) {
   return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
 }
 
-function matchesLibraryView(cabinetId: string | null, view: LibraryDirectoryView) {
+function matchesLibraryView(
+  cabinetId: string | null,
+  view: LibraryDirectoryView,
+  visibleCabinetIds?: Set<string> | null,
+) {
   if (view.kind === "all") return true;
   if (view.kind === "unassigned") return !cabinetId;
-  return cabinetId === view.cabinetId;
+  return cabinetId ? visibleCabinetIds?.has(cabinetId) ?? cabinetId === view.cabinetId : false;
 }
 
 function escapeRegExp(value: string) {
@@ -356,7 +361,6 @@ export function KnowledgePage({
       {tab === "pages" && (
         <PagesTab
           documents={documents}
-          books={books}
           cabinets={cabinets}
           onRefresh={refreshDocuments}
           onCabinetsRefresh={refreshCabinets}
@@ -415,6 +419,11 @@ function BooksTab({
     [bookCabinets],
   );
 
+  const visibleCabinetIds = useMemo(
+    () => (view.kind === "cabinet" ? cabinetDescendantIds(bookCabinets, view.cabinetId) : null),
+    [bookCabinets, view],
+  );
+
   useEffect(() => {
     if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
       setView({ kind: "all" });
@@ -428,7 +437,7 @@ function BooksTab({
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return books
-      .filter((book) => matchesLibraryView(book.cabinetId, view))
+      .filter((book) => matchesLibraryView(book.cabinetId, view, visibleCabinetIds))
       .filter((book) => {
         if (!query) return true;
         return (
@@ -437,7 +446,7 @@ function BooksTab({
           book.sourceFileName.toLowerCase().includes(query)
         );
       });
-  }, [books, searchQuery, view]);
+  }, [books, searchQuery, view, visibleCabinetIds]);
 
   const selectedBook = books.find((b) => b.id === selectedBookId) ?? null;
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
@@ -2235,6 +2244,11 @@ function DatasetsTab({
     [datasetCabinets],
   );
 
+  const visibleCabinetIds = useMemo(
+    () => (view.kind === "cabinet" ? cabinetDescendantIds(datasetCabinets, view.cabinetId) : null),
+    [datasetCabinets, view],
+  );
+
   useEffect(() => {
     if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
       setView({ kind: "all" });
@@ -2248,7 +2262,7 @@ function DatasetsTab({
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return datasets
-      .filter((dataset) => matchesLibraryView(dataset.cabinetId, view))
+      .filter((dataset) => matchesLibraryView(dataset.cabinetId, view, visibleCabinetIds))
       .filter((dataset) => {
         if (!query) return true;
         return (
@@ -2256,7 +2270,7 @@ function DatasetsTab({
           dataset.description.toLowerCase().includes(query)
         );
       });
-  }, [datasets, searchQuery, view]);
+  }, [datasets, searchQuery, view, visibleCabinetIds]);
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;

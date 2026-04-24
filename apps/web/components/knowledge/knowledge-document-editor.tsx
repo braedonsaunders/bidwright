@@ -62,7 +62,7 @@ export function KnowledgeDocumentEditor({
     content: (contentJson as TiptapNode | undefined) ?? EMPTY_DOCUMENT_CONTENT,
     editorProps: {
       attributes: {
-        class: "knowledge-doc-editor ProseMirror min-h-[520px] outline-none px-5 py-4 text-sm leading-relaxed",
+        class: "knowledge-doc-editor ProseMirror min-h-[620px] outline-none px-6 py-5 text-sm leading-relaxed",
       },
     },
     onUpdate: ({ editor }) => {
@@ -108,7 +108,7 @@ export function KnowledgeDocumentEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
-      <div className="flex flex-wrap items-center gap-0.5 border-b border-line bg-panel2/20 px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1 border-b border-line bg-panel2/20 px-2.5 py-2">
         {toolItems.map((item, index) => {
           if ("separator" in item) {
             return <div key={`sep-${index}`} className="mx-1 h-5 w-px bg-line" />;
@@ -121,9 +121,9 @@ export function KnowledgeDocumentEditor({
               variant="ghost"
               title={item.label}
               onClick={item.action}
-              className={cn("h-7 w-7 px-0", item.active && "bg-accent/15 text-accent")}
+              className={cn("h-9 w-9 px-0", item.active && "bg-accent/15 text-accent")}
             >
-              <Icon className="h-3.5 w-3.5" />
+              <Icon className="h-[18px] w-[18px]" />
             </Button>
           );
         })}
@@ -132,9 +132,9 @@ export function KnowledgeDocumentEditor({
           variant="ghost"
           title="Add table row"
           onClick={() => editor.chain().focus().addRowAfter().run()}
-          className="ml-auto h-7 w-7 px-0"
+          className="ml-auto h-9 w-9 px-0"
         >
-          <Plus className="h-3.5 w-3.5" />
+          <Plus className="h-[18px] w-[18px]" />
         </Button>
       </div>
 
@@ -151,7 +151,7 @@ export function KnowledgeDocumentEditor({
           .knowledge-doc-editor code { border-radius: 4px; background: hsl(var(--panel-2) / 0.7); padding: 0.1rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
           .knowledge-doc-editor pre { border-radius: 8px; background: hsl(var(--panel-2) / 0.7); padding: 0.8rem; overflow-x: auto; }
           .knowledge-doc-editor table { border-collapse: collapse; margin: 0.85rem 0; table-layout: fixed; width: 100%; overflow: hidden; }
-          .knowledge-doc-editor th, .knowledge-doc-editor td { border: 1px solid hsl(var(--line)); min-width: 80px; padding: 0.45rem 0.55rem; vertical-align: top; }
+          .knowledge-doc-editor th, .knowledge-doc-editor td { border: 1px solid hsl(var(--line)); min-width: 80px; padding: 0.45rem 0.55rem; position: relative; vertical-align: top; }
           .knowledge-doc-editor th { background: hsl(var(--panel-2) / 0.55); font-weight: 650; }
           .knowledge-doc-editor .selectedCell:after { background: hsl(var(--accent) / 0.12); content: ""; inset: 0; pointer-events: none; position: absolute; z-index: 2; }
           .knowledge-doc-editor .column-resize-handle { background: hsl(var(--accent)); bottom: -2px; pointer-events: none; position: absolute; right: -2px; top: 0; width: 3px; }

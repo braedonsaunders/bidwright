@@ -32,6 +32,27 @@ export function cabinetPathLabel(
   return parts.length > 0 ? parts.join(" / ") : null;
 }
 
+export function cabinetDescendantIds(cabinets: KnowledgeLibraryCabinetRecord[], cabinetId: string) {
+  const children = new Map<string | null, KnowledgeLibraryCabinetRecord[]>();
+  for (const cabinet of cabinets) {
+    const key = cabinet.parentId ?? null;
+    const list = children.get(key) ?? [];
+    list.push(cabinet);
+    children.set(key, list);
+  }
+
+  const ids = new Set<string>();
+  const visit = (id: string) => {
+    ids.add(id);
+    for (const child of children.get(id) ?? []) {
+      if (!ids.has(child.id)) visit(child.id);
+    }
+  };
+
+  visit(cabinetId);
+  return ids;
+}
+
 function compareByName<T extends { name: string }>(left: T, right: T) {
   return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
 }
@@ -185,7 +206,7 @@ export function MoveToCabinetModal({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-fg">
-              Move {activeType === "book" ? "Book" : activeType === "dataset" ? "Dataset" : "Page Library"}
+              Move {activeType === "book" ? "Book" : activeType === "dataset" ? "Dataset" : "Page"}
             </h2>
             <p className="mt-1 text-xs text-fg/45">{itemName}</p>
           </div>
