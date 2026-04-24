@@ -949,6 +949,37 @@ function modelAssetPayload(source: ModelSource, generated: GeneratedManifest & {
   };
 }
 
+function modelAssetShellPayload(source: ModelSource) {
+  const ext = getExt(source.fileName);
+  const sourceChecksum = source.checksum || `${source.source}:${source.id}:${source.storagePath ?? ""}:${source.size ?? ""}`;
+  return {
+    projectId: source.projectId,
+    sourceDocumentId: source.source === "source_document" ? source.id : null,
+    fileNodeId: source.source === "file_node" ? source.id : null,
+    fileName: source.fileName,
+    fileType: source.fileType ?? ext,
+    format: ext,
+    status: "pending",
+    units: "",
+    checksum: sourceChecksum,
+    storagePath: source.storagePath ?? "",
+    manifest: {
+      parser: "pending",
+      source: source.source,
+      sourceId: source.id,
+      size: source.size ?? null,
+      extension: ext,
+      editableInBidWrightModelEditor: MODEL_EDITOR_EDITABLE_EXTENSIONS.has(ext),
+      discoveredAt: new Date().toISOString(),
+    },
+    bom: [],
+    elementStats: {},
+    metadata: {
+      sourceMetadata: source.metadata ?? null,
+    },
+  };
+}
+
 async function collectProjectModelSources(projectId: string): Promise<ModelSource[]> {
   const [docs, nodes] = await Promise.all([
     prisma.sourceDocument.findMany({ where: { projectId } }),
@@ -1048,6 +1079,61 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
   }
 }
 
+async function discoverProjectModelAssets(projectId: string) {
+  const sources = await collectProjectModelSources(projectId);
+  const discoveredIds: string[] = [];
+
+  for (const source of sources) {
+    const where = source.source === "source_document"
+      ? { projectId, sourceDocumentId: source.id }
+      : { projectId, fileNodeId: source.id };
+    const existing = await prisma.modelAsset.findFirst({ where });
+
+    if (!existing) {
+      const created = await prisma.modelAsset.create({ data: modelAssetShellPayload(source) as any });
+      discoveredIds.push(created.id);
+      continue;
+    }
+
+    const ext = getExt(source.fileName);
+    const fileType = source.fileType ?? ext;
+    const storagePath = source.storagePath ?? "";
+    if (
+      existing.fileName !== source.fileName ||
+      existing.fileType !== fileType ||
+      existing.format !== ext ||
+      existing.storagePath !== storagePath
+    ) {
+      const updated = await prisma.modelAsset.update({
+        where: { id: existing.id },
+        data: {
+          fileName: source.fileName,
+          fileType,
+          format: ext,
+          storagePath,
+          manifest: {
+            ...((existing.manifest ?? {}) as Record<string, unknown>),
+            source: source.source,
+            sourceId: source.id,
+            extension: ext,
+            editableInBidWrightModelEditor: MODEL_EDITOR_EDITABLE_EXTENSIONS.has(ext),
+          } as any,
+          metadata: {
+            ...((existing.metadata ?? {}) as Record<string, unknown>),
+            sourceMetadata: source.metadata ?? null,
+          } as any,
+        },
+      });
+      discoveredIds.push(updated.id);
+    }
+  }
+
+  return {
+    discoveredIds,
+    sourceCount: sources.length,
+  };
+}
+
 export async function syncProjectModelAssets(projectId: string) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new Error(`Project ${projectId} not found`);
@@ -1073,13 +1159,16 @@ export async function syncProjectModelAssets(projectId: string) {
   }
 
   return {
-    assets: await listProjectModelAssets(projectId),
+    assets: await listProjectModelAssets(projectId, { discover: false }),
     syncedIds,
     sourceCount: sources.length,
   };
 }
 
-export async function listProjectModelAssets(projectId: string) {
+export async function listProjectModelAssets(projectId: string, options: { discover?: boolean } = {}) {
+  if (options.discover !== false) {
+    await discoverProjectModelAssets(projectId);
+  }
   return prisma.modelAsset.findMany({
     where: { projectId },
     orderBy: [{ updatedAt: "desc" }, { fileName: "asc" }],

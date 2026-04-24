@@ -113,7 +113,6 @@ import {
   getDocumentDownloadUrl,
   getFileTree,
   listModelAssets,
-  syncModelAssets,
   updateFileNode,
   uploadFile,
 } from "@/lib/api";
@@ -1431,12 +1430,8 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     let cancelled = false;
     async function loadModelAssets() {
       try {
-        const listed = await listModelAssets(projectId, true);
-        let assets = listed.assets ?? [];
-        if (!findModelAssetForItem(assets, selectedItem)) {
-          const synced = await syncModelAssets(projectId);
-          assets = synced.assets ?? assets;
-        }
+        const listed = await listModelAssets(projectId);
+        const assets = listed.assets ?? [];
         if (!cancelled) setModelAssets(assets);
       } catch {
         if (!cancelled) setModelAssets([]);

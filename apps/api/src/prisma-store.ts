@@ -1011,16 +1011,6 @@ export class PrismaApiStore {
     const conditionLibrary = await this.db.conditionLibraryEntry.findMany({ where: { organizationId: this.organizationId } });
     const plugins = await this.db.plugin.findMany({ where: { organizationId: this.organizationId } });
     const users = await this.db.user.findMany({ where: { organizationId: this.organizationId } });
-    const knowledgeBooks = await this.db.knowledgeBook.findMany({ where: { organizationId: this.organizationId } });
-    const knowledgeBookIds = knowledgeBooks.map((b) => b.id);
-    const knowledgeChunks = await this.db.knowledgeChunk.findMany({ where: { bookId: { in: knowledgeBookIds } } });
-    const knowledgeDocuments = await this.db.knowledgeDocument.findMany({ where: { organizationId: this.organizationId } });
-    const knowledgeDocumentIds = knowledgeDocuments.map((d) => d.id);
-    const knowledgeDocumentPages = await this.db.knowledgeDocumentPage.findMany({ where: { documentId: { in: knowledgeDocumentIds } } });
-    const knowledgeDocumentChunks = await this.db.knowledgeDocumentChunk.findMany({ where: { documentId: { in: knowledgeDocumentIds } } });
-    const datasets = await this.db.dataset.findMany({ where: { organizationId: this.organizationId } });
-    const datasetIds = datasets.map((d) => d.id);
-    const datasetRows = await this.db.datasetRow.findMany({ where: { datasetId: { in: datasetIds } } });
     const entityCategories = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
     // Rate schedules: both revision-scoped and org-level
@@ -1064,13 +1054,13 @@ export class PrismaApiStore {
       pluginExecutions: pluginExecutions.map(mapPluginExecution),
       users: users.map(mapUser),
       authSessions: [],
-      knowledgeBooks: knowledgeBooks.map(mapKnowledgeBook),
-      knowledgeChunks: knowledgeChunks.map(mapKnowledgeChunk),
-      knowledgeDocuments: knowledgeDocuments.map(mapKnowledgeDocument),
-      knowledgeDocumentPages: knowledgeDocumentPages.map(mapKnowledgeDocumentPage),
-      knowledgeDocumentChunks: knowledgeDocumentChunks.map(mapKnowledgeDocumentChunk),
-      datasets: datasets.map(mapDataset),
-      datasetRows: datasetRows.map(mapDatasetRow),
+      knowledgeBooks: [],
+      knowledgeChunks: [],
+      knowledgeDocuments: [],
+      knowledgeDocumentPages: [],
+      knowledgeDocumentChunks: [],
+      datasets: [],
+      datasetRows: [],
       entityCategories: entityCategories.map(mapEntityCategory) as any,
       scheduleTasks: scheduleTasks.map(mapScheduleTask),
       scheduleDependencies: scheduleDependencies.map(mapScheduleDependency),
