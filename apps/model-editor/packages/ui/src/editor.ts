@@ -3,6 +3,7 @@
 
 import {
     type AsyncController,
+    type CommandKeys,
     type IApplication,
     type IDocument,
     type IFace,
@@ -10,12 +11,15 @@ import {
     type IShape,
     type ISolid,
     type Material,
+    NodeUtils,
     PubSub,
     type Ribbon,
     ShapeNode,
     ShapeTypes,
+    Transaction,
+    VisualNode,
 } from "@chili3d/core";
-import { div } from "@chili3d/element";
+import { div, svg } from "@chili3d/element";
 import style from "./editor.module.css";
 import { OKCancel } from "./okCancel";
 import { ProjectView } from "./project";
@@ -150,6 +154,21 @@ type BidWrightBroadcastType =
     | "model-line-items-request"
     | "model-line-item-update"
     | "model-line-item-delete";
+
+interface ContextMenuAction {
+    label: string;
+    icon?: string;
+    shortcut?: string;
+    disabled?: boolean;
+    checked?: boolean;
+    danger?: boolean;
+    action: () => void | Promise<void>;
+}
+
+interface ContextMenuSection {
+    title?: string;
+    items: ContextMenuAction[];
+}
 
 function isBidWrightEmbedded() {
     const params = new URLSearchParams(window.location.search);
@@ -330,6 +349,7 @@ export class Editor extends HTMLElement {
     private _sidebarPanels = new Map<string, HTMLElement>();
     private _sidebarButtons = new Map<string, HTMLButtonElement>();
     private _activeSidebarTab = "items";
+    private _contextMenuEl?: HTMLDivElement;
 
     constructor(
         readonly app: IApplication,
@@ -445,6 +465,10 @@ export class Editor extends HTMLElement {
         PubSub.default.sub("clearSelectionControl", this.clearSelectionControl);
         PubSub.default.sub("selectionChanged", this._handleBidWrightSelectionChanged);
         window.addEventListener("message", this._handleBidWrightHostMessage);
+        this.addEventListener("contextmenu", this._handleContextMenu);
+        window.addEventListener("pointerdown", this._handleContextMenuOutsidePointerDown, true);
+        window.addEventListener("keydown", this._handleContextMenuKeyDown);
+        window.addEventListener("resize", this._closeContextMenu);
         this._requestBidWrightEstimateContext();
         this._requestBidWrightLinkedLineItems();
         void this._loadBidWrightLinkedLineItemsFromApi();
@@ -456,9 +480,460 @@ export class Editor extends HTMLElement {
         PubSub.default.remove("clearSelectionControl", this.clearSelectionControl);
         PubSub.default.remove("selectionChanged", this._handleBidWrightSelectionChanged);
         window.removeEventListener("message", this._handleBidWrightHostMessage);
+        this.removeEventListener("contextmenu", this._handleContextMenu);
+        window.removeEventListener("pointerdown", this._handleContextMenuOutsidePointerDown, true);
+        window.removeEventListener("keydown", this._handleContextMenuKeyDown);
+        window.removeEventListener("resize", this._closeContextMenu);
+        this._closeContextMenu();
         this._bidwrightChannel?.close();
         this._bidwrightChannel = undefined;
     }
+
+    private readonly _handleContextMenu = (event: MouseEvent) => {
+        if (this._shouldUseNativeContextMenu(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this._selectContextTreeItem(event);
+        this._showContextMenu(event.clientX, event.clientY);
+    };
+
+    private _shouldUseNativeContextMenu(event: MouseEvent) {
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        return Boolean(target?.closest("input, textarea, select, [contenteditable='true']"));
+    }
+
+    private _selectContextTreeItem(event: MouseEvent) {
+        const document = this.app.activeView?.document;
+        const target = event.target instanceof HTMLElement ? event.target : null;
+        const treeItem = target?.closest("tree-model, tree-group") as (HTMLElement & { node?: INode }) | null;
+        if (!document || !treeItem?.node) return;
+        const selected = document.selection.getSelectedNodes();
+        if (!selected.includes(treeItem.node)) {
+            document.selection.setSelection([treeItem.node], event.ctrlKey || event.metaKey);
+        }
+    }
+
+    private _showContextMenu(clientX: number, clientY: number) {
+        this._closeContextMenu();
+
+        const menu = document.createElement("div");
+        menu.className = style.contextMenu;
+        menu.setAttribute("role", "menu");
+        menu.style.visibility = "hidden";
+
+        const activeDocument = this.app.activeView?.document;
+        const selectedCount = activeDocument?.selection.getSelectedNodes().length ?? 0;
+        const title = selectedCount > 0
+            ? `${selectedCount} selected`
+            : activeDocument?.name ?? "Model";
+        const subtitle = this._lastBidWrightSelection?.selectedCount
+            ? `${formatModelNumber(this._lastBidWrightSelection.selectedCount)} model element${this._lastBidWrightSelection.selectedCount === 1 ? "" : "s"}`
+            : "Right-click command menu";
+        const header = div(
+            { className: style.contextMenuHeader },
+            div({ className: style.contextMenuTitle, textContent: title }),
+            div({ className: style.contextMenuSubtitle, textContent: subtitle }),
+        );
+        menu.append(header);
+
+        for (const section of this._contextMenuSections()) {
+            const visibleItems = section.items.filter(Boolean);
+            if (visibleItems.length === 0) continue;
+            const sectionEl = div({ className: style.contextMenuSection });
+            if (section.title) {
+                sectionEl.append(div({ className: style.contextMenuSectionTitle, textContent: section.title }));
+            }
+            for (const item of visibleItems) {
+                sectionEl.append(this._createContextMenuButton(item));
+            }
+            menu.append(sectionEl);
+        }
+
+        document.body.append(menu);
+        this._contextMenuEl = menu;
+
+        requestAnimationFrame(() => {
+            const margin = 8;
+            const rect = menu.getBoundingClientRect();
+            const left = Math.min(Math.max(margin, clientX), Math.max(margin, window.innerWidth - rect.width - margin));
+            const top = Math.min(Math.max(margin, clientY), Math.max(margin, window.innerHeight - rect.height - margin));
+            menu.style.left = `${left}px`;
+            menu.style.top = `${top}px`;
+            menu.style.visibility = "visible";
+            menu.focus();
+        });
+    }
+
+    private _createContextMenuButton(item: ContextMenuAction) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = style.contextMenuItem;
+        button.disabled = item.disabled === true;
+        button.setAttribute("role", "menuitem");
+        if (item.checked) button.classList.add(style.contextMenuItemChecked);
+        if (item.danger) button.classList.add(style.contextMenuItemDanger);
+
+        const icon = item.checked ? "icon-check" : item.icon;
+        const iconSlot = document.createElement("span");
+        iconSlot.className = style.contextMenuIcon;
+        if (icon) {
+            iconSlot.append(svg({ className: style.contextMenuSvg, icon }));
+        }
+
+        const label = document.createElement("span");
+        label.className = style.contextMenuLabel;
+        label.textContent = item.label;
+
+        const shortcut = document.createElement("span");
+        shortcut.className = style.contextMenuShortcut;
+        shortcut.textContent = item.shortcut ?? "";
+
+        button.append(iconSlot, label, shortcut);
+        button.onclick = () => {
+            if (item.disabled) return;
+            this._closeContextMenu();
+            void Promise.resolve(item.action()).catch((error) => {
+                console.error("[model-editor] Context menu action failed:", error);
+                PubSub.default.pub("displayError", String(error));
+            });
+        };
+        return button;
+    }
+
+    private _contextMenuSections(): ContextMenuSection[] {
+        const activeView = this.app.activeView;
+        const activeDocument = activeView?.document;
+        const selectedNodes = activeDocument?.selection.getSelectedNodes() ?? [];
+        const visualNodes = activeDocument?.modelManager.findNodes((node) => node instanceof VisualNode) ?? [];
+        const hasDocument = Boolean(activeDocument);
+        const hasSelection = selectedNodes.length > 0;
+        const canSendToEstimate = Boolean(
+            this._bidwrightContext.enabled &&
+                this._bidwrightContext.estimateEnabled &&
+                this._bidwrightContext.estimateTargetWorksheetId &&
+                this._lastBidWrightSelection?.selectedCount,
+        );
+
+        return [
+            {
+                title: "Estimate",
+                items: [
+                    {
+                        label: "Create Line Item",
+                        icon: "icon-tag",
+                        shortcut: "BidWright",
+                        disabled: !canSendToEstimate,
+                        action: this._handleBidWrightEstimateSend,
+                    },
+                    {
+                        label: "Open Estimate Panel",
+                        icon: "icon-layer-group",
+                        disabled: !this._sidebarPanels.has("estimate"),
+                        action: () => this._setActiveSidebarTab("estimate"),
+                    },
+                    {
+                        label: "Copy Quantity Summary",
+                        icon: "icon-copy",
+                        disabled: !this._lastBidWrightSelection,
+                        action: () => this._copyBidWrightQuantitySummary(),
+                    },
+                    ...this._bidWrightQuantityBasisMenuItems(),
+                ],
+            },
+            {
+                title: "Selection",
+                items: [
+                    {
+                        label: "Select All Geometry",
+                        icon: "icon-all",
+                        shortcut: "Ctrl+A",
+                        disabled: visualNodes.length === 0,
+                        action: () => this._selectAllGeometry(),
+                    },
+                    {
+                        label: "Clear Selection",
+                        icon: "icon-ban",
+                        shortcut: "Esc",
+                        disabled: !hasSelection,
+                        action: () => this._clearModelSelection(),
+                    },
+                    {
+                        label: "Hide Selected",
+                        icon: "icon-eye-slash",
+                        disabled: !hasSelection,
+                        action: () => this._setSelectedVisibility(false),
+                    },
+                    {
+                        label: "Isolate Selected",
+                        icon: "icon-filter",
+                        disabled: !hasSelection,
+                        action: () => this._isolateSelection(),
+                    },
+                    {
+                        label: "Show All",
+                        icon: "icon-eye",
+                        disabled: visualNodes.length === 0,
+                        action: () => this._showAllGeometry(),
+                    },
+                    {
+                        label: "Duplicate Selected",
+                        icon: "icon-copy",
+                        disabled: !hasSelection,
+                        action: () => this._duplicateSelection(),
+                    },
+                    {
+                        label: "Delete Selected",
+                        icon: "icon-delete",
+                        shortcut: "Del",
+                        disabled: !hasSelection,
+                        danger: true,
+                        action: () => this._executeCommand("modify.deleteNode"),
+                    },
+                ],
+            },
+            {
+                title: "View",
+                items: [
+                    {
+                        label: "Fit Model",
+                        icon: "icon-fitcontent",
+                        shortcut: "F",
+                        disabled: !activeView,
+                        action: () => this._fitActiveView(),
+                    },
+                    {
+                        label: "Zoom In",
+                        icon: "icon-zoomin",
+                        disabled: !activeView,
+                        action: () => this._zoomActiveView(-5),
+                    },
+                    {
+                        label: "Zoom Out",
+                        icon: "icon-zoomout",
+                        disabled: !activeView,
+                        action: () => this._zoomActiveView(5),
+                    },
+                    {
+                        label: "Orthographic",
+                        icon: "icon-orthographic",
+                        checked: (activeView?.cameraController as { cameraType?: string } | undefined)?.cameraType === "orthographic",
+                        disabled: !activeView,
+                        action: () => this._setCameraType("orthographic"),
+                    },
+                    {
+                        label: "Perspective",
+                        icon: "icon-perspective",
+                        checked: (activeView?.cameraController as { cameraType?: string } | undefined)?.cameraType === "perspective",
+                        disabled: !activeView,
+                        action: () => this._setCameraType("perspective"),
+                    },
+                ],
+            },
+            {
+                title: "Edit",
+                items: [
+                    { label: "Undo", icon: "icon-undo", shortcut: "Ctrl+Z", disabled: !hasDocument, action: () => this._executeCommand("edit.undo") },
+                    { label: "Redo", icon: "icon-redo", shortcut: "Ctrl+Y", disabled: !hasDocument, action: () => this._executeCommand("edit.redo") },
+                    { label: "Properties", icon: "icon-cog", disabled: !hasDocument, action: () => this._setActiveSidebarTab("properties") },
+                    { label: "New Folder", icon: "icon-folder-plus", disabled: !hasDocument, action: () => this._executeCommand("create.folder") },
+                    { label: "Import Model", icon: "icon-import", disabled: !hasDocument, action: () => this._executeCommand("file.import") },
+                    { label: "Export Model", icon: "icon-export", disabled: !hasDocument, action: () => this._executeCommand("file.export") },
+                ],
+            },
+            {
+                title: "Modify",
+                items: [
+                    { label: "Move", icon: "icon-move", disabled: !hasSelection, action: () => this._executeCommand("modify.move") },
+                    { label: "Rotate", icon: "icon-rotate", disabled: !hasSelection, action: () => this._executeCommand("modify.rotate") },
+                    { label: "Mirror", icon: "icon-mirror", disabled: !hasSelection, action: () => this._executeCommand("modify.mirror") },
+                    { label: "Explode", icon: "icon-explode", disabled: !hasSelection, action: () => this._executeCommand("modify.explode") },
+                    { label: "Fillet", icon: "icon-fillet", disabled: !hasSelection, action: () => this._executeCommand("modify.fillet") },
+                    { label: "Chamfer", icon: "icon-chamfer", disabled: !hasSelection, action: () => this._executeCommand("modify.chamfer") },
+                    { label: "Simplify Shape", icon: "icon-simplify", disabled: !hasSelection, action: () => this._executeCommand("modify.simplifyShape") },
+                ],
+            },
+            {
+                title: "Create / Measure",
+                items: [
+                    { label: "Box", icon: "icon-box", disabled: !hasDocument, action: () => this._executeCommand("create.box") },
+                    { label: "Cylinder", icon: "icon-cylinder", disabled: !hasDocument, action: () => this._executeCommand("create.cylinder") },
+                    { label: "Sphere", icon: "icon-sphere", disabled: !hasDocument, action: () => this._executeCommand("create.sphere") },
+                    { label: "Line", icon: "icon-line", disabled: !hasDocument, action: () => this._executeCommand("create.line") },
+                    { label: "Rectangle", icon: "icon-rect", disabled: !hasDocument, action: () => this._executeCommand("create.rect") },
+                    { label: "Circle", icon: "icon-circle", disabled: !hasDocument, action: () => this._executeCommand("create.circle") },
+                    { label: "Measure Length", icon: "icon-measureLength", disabled: !hasDocument, action: () => this._executeCommand("measure.length") },
+                    { label: "Measure Angle", icon: "icon-measureAngle", disabled: !hasDocument, action: () => this._executeCommand("measure.angle") },
+                ],
+            },
+        ];
+    }
+
+    private _bidWrightQuantityBasisMenuItems(): ContextMenuAction[] {
+        if (!this._bidwrightContext.enabled) return [];
+        return [
+            { label: "Quantity Basis: Count", checked: this._bidwrightQuantityBasis === "count", action: () => this._setBidWrightQuantityBasis("count") },
+            { label: "Quantity Basis: Area", checked: this._bidwrightQuantityBasis === "area", action: () => this._setBidWrightQuantityBasis("area") },
+            { label: "Quantity Basis: Volume", checked: this._bidwrightQuantityBasis === "volume", action: () => this._setBidWrightQuantityBasis("volume") },
+        ];
+    }
+
+    private _setBidWrightQuantityBasis(basis: BidWrightQuantityBasis) {
+        this._bidwrightQuantityBasis = basis;
+        if (this._lastBidWrightSelection) {
+            this._lastBidWrightSelection = { ...this._lastBidWrightSelection, quantityBasis: basis };
+        }
+        this._updateBidWrightEstimatePanel();
+    }
+
+    private async _copyBidWrightQuantitySummary() {
+        const selection = this._lastBidWrightSelection;
+        if (!selection) return;
+        const primary = primaryBidWrightSelectionQuantity(selection, this._bidwrightQuantityBasis);
+        const lines = [
+            `Model: ${selection.documentName ?? selection.fileName ?? this._bidwrightContext.fileName ?? "Model"}`,
+            `Worksheet: ${this._bidwrightContext.estimateTargetWorksheetName ?? "No worksheet selected"}`,
+            `Quantity: ${formatModelQuantity(primary.quantity, primary.uom)}`,
+            `Basis: ${primary.label}`,
+            `Area: ${formatModelQuantity(selection.totals.surfaceArea, "model^2")}`,
+            `Volume: ${formatModelQuantity(selection.totals.volume, "model^3")}`,
+            `Faces: ${formatModelNumber(selection.totals.faceCount)}`,
+            `Solids: ${formatModelNumber(selection.totals.solidCount)}`,
+        ];
+        await navigator.clipboard?.writeText(lines.join("\n"));
+    }
+
+    private _executeCommand(command: CommandKeys) {
+        PubSub.default.pub("executeCommand", command);
+    }
+
+    private _selectAllGeometry() {
+        const document = this.app.activeView?.document;
+        if (!document) return;
+        const nodes = document.modelManager.findNodes((node) => node instanceof VisualNode);
+        document.selection.setSelection(nodes, false);
+    }
+
+    private _clearModelSelection() {
+        const document = this.app.activeView?.document;
+        document?.selection.clearSelection();
+        document?.visual.highlighter.clear();
+        document?.visual.update();
+    }
+
+    private _setSelectedVisibility(visible: boolean) {
+        const document = this.app.activeView?.document;
+        const selected = document?.selection.getSelectedNodes() ?? [];
+        if (!document || selected.length === 0) return;
+        Transaction.execute(document, visible ? "show selected" : "hide selected", () => {
+            selected.forEach((node) => {
+                node.visible = visible;
+            });
+        });
+        document.visual.update();
+    }
+
+    private _isolateSelection() {
+        const document = this.app.activeView?.document;
+        const selected = document?.selection.getSelectedNodes() ?? [];
+        if (!document || selected.length === 0) return;
+        const selectedSet = new Set(selected);
+        const visualNodes = document.modelManager.findNodes((node) => node instanceof VisualNode);
+        Transaction.execute(document, "isolate selected", () => {
+            visualNodes.forEach((node) => {
+                node.visible = this._nodeIsWithinSelection(node, selectedSet);
+            });
+        });
+        document.visual.update();
+    }
+
+    private _nodeIsWithinSelection(node: INode, selectedSet: Set<INode>) {
+        let cursor: INode | undefined = node;
+        while (cursor) {
+            if (selectedSet.has(cursor)) return true;
+            cursor = cursor.parent;
+        }
+        return false;
+    }
+
+    private _showAllGeometry() {
+        const document = this.app.activeView?.document;
+        if (!document) return;
+        const nodes = document.modelManager.findNodes();
+        Transaction.execute(document, "show all", () => {
+            nodes.forEach((node) => {
+                node.visible = true;
+            });
+        });
+        document.visual.update();
+    }
+
+    private _duplicateSelection() {
+        const document = this.app.activeView?.document;
+        const selected = document?.selection.getSelectedNodes() ?? [];
+        if (!document || selected.length === 0) return;
+        const topLevelNodes = NodeUtils.findTopLevelNodes(new Set(selected));
+        const clones: INode[] = [];
+        Transaction.execute(document, "duplicate selected", () => {
+            topLevelNodes.forEach((node) => {
+                const clone = node.clone();
+                node.parent?.insertAfter(node, clone);
+                clones.push(clone);
+            });
+        });
+        if (clones.length > 0) {
+            document.selection.setSelection(clones, false);
+        }
+        document.visual.update();
+    }
+
+    private _fitActiveView() {
+        this.app.activeView?.cameraController.fitContent();
+        this.app.activeView?.update();
+    }
+
+    private _zoomActiveView(delta: number) {
+        const view = this.app.activeView;
+        if (!view) return;
+        view.cameraController.zoom(view.width / 2, view.height / 2, delta);
+        view.update();
+    }
+
+    private _setCameraType(cameraType: "orthographic" | "perspective") {
+        const view = this.app.activeView;
+        if (!view) return;
+        view.cameraController.cameraType = cameraType;
+        view.update();
+    }
+
+    private readonly _handleContextMenuOutsidePointerDown = (event: PointerEvent) => {
+        if (this._contextMenuEl?.contains(event.target as Node)) return;
+        this._closeContextMenu();
+    };
+
+    private readonly _handleContextMenuKeyDown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+            this._closeContextMenu();
+            return;
+        }
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+        if (!(event.target instanceof Node) || !this.contains(event.target)) return;
+        if (this._shouldUseNativeContextMenu(event as unknown as MouseEvent)) return;
+        event.preventDefault();
+        event.stopPropagation();
+
+        const activeElement = document.activeElement instanceof HTMLElement && this.contains(document.activeElement)
+            ? document.activeElement
+            : this;
+        const rect = activeElement.getBoundingClientRect();
+        const x = rect.left + Math.min(Math.max(24, rect.width / 2), Math.max(24, rect.width - 24));
+        const y = rect.top + Math.min(Math.max(24, rect.height / 2), Math.max(24, rect.height - 24));
+        this._showContextMenu(x, y);
+    };
+
+    private readonly _closeContextMenu = () => {
+        this._contextMenuEl?.remove();
+        this._contextMenuEl = undefined;
+    };
 
     private _setupBidWrightEstimateBridge() {
         if (!this._bidwrightContext.enabled) return;
