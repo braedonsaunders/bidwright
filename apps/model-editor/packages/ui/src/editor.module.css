@@ -484,10 +484,10 @@
     position: fixed;
     z-index: 10000;
     display: flex;
-    width: min(330px, calc(100vw - 16px));
+    width: min(620px, calc(100vw - 16px));
     max-height: calc(100vh - 16px);
     flex-direction: column;
-    overflow: auto;
+    overflow: hidden;
     border: 1px solid rgba(148, 163, 184, 0.32);
     border-radius: 8px;
     background: var(--background-color);
@@ -504,6 +504,16 @@
     gap: 2px;
     border-bottom: 1px solid rgba(148, 163, 184, 0.22);
     padding: 7px 8px 8px;
+}
+
+.contextMenuBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    column-count: 2;
+    column-gap: 6px;
+    padding-top: 5px;
 }
 
 .contextMenuTitle {
@@ -526,23 +536,27 @@
 }
 
 .contextMenuSection {
-    display: flex;
+    display: inline-flex;
     min-width: 0;
+    width: 100%;
+    break-inside: avoid;
     flex-direction: column;
     gap: 1px;
-    padding: 5px 0;
+    margin: 0 0 5px;
+    padding: 0;
+    vertical-align: top;
 }
 
 .contextMenuSection + .contextMenuSection {
-    border-top: 1px solid rgba(148, 163, 184, 0.18);
+    border-top: 0;
 }
 
 .contextMenuSectionTitle {
     color: var(--foreground-secondary-color);
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 750;
     line-height: 1.1;
-    padding: 4px 8px 3px;
+    padding: 4px 6px 2px;
     text-transform: uppercase;
 }
 
@@ -550,18 +564,19 @@
     display: grid;
     min-width: 0;
     width: 100%;
-    grid-template-columns: 20px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     border: 0;
-    border-radius: 6px;
+    border-radius: 5px;
     background: transparent;
     color: var(--foreground-color);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: 11px;
     line-height: 1.2;
-    padding: 7px 8px;
+    min-height: 24px;
+    padding: 4px 6px;
     text-align: left;
 }
 
@@ -586,15 +601,15 @@
 
 .contextMenuIcon {
     display: inline-flex;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     align-items: center;
     justify-content: center;
 }
 
 .contextMenuSvg {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     color: currentColor;
     fill: currentColor;
 }
@@ -608,10 +623,20 @@
 
 .contextMenuShortcut {
     color: var(--foreground-secondary-color);
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 650;
     line-height: 1;
     white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .contextMenu {
+        width: min(340px, calc(100vw - 16px));
+    }
+
+    .contextMenuBody {
+        column-count: 1;
+    }
 }
 
 @media (max-width: 680px) {
