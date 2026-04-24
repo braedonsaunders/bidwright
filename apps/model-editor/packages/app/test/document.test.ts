@@ -61,7 +61,6 @@ const createMockApplication = (): IApplication => {
                     update: () => {},
                     eventHandler: {} as any,
                     resetEventHandler: () => {},
-                    isExcutingHandler: () => false,
                     createView: () => ({}) as IView,
                     dispose: () => {},
                 }) as unknown as IVisual,

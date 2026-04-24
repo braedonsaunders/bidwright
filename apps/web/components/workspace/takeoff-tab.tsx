@@ -2025,6 +2025,9 @@ export function TakeoffTab({
                 <BidwrightModelEditor
                   fileUrl={documentUrl}
                   fileName={selectedDoc?.fileName}
+                  projectId={projectId}
+                  modelDocumentId={selectedDoc?.id}
+                  syncChannelName={takeoffChannelName(projectId)}
                   title="3D Takeoff Model"
                   variant="takeoff"
                   onModelSelection={setModelSelection}

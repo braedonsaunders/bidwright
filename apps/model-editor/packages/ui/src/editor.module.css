@@ -40,6 +40,63 @@
             height: 100%;
             position: relative;
         }
+
+        .bidwrightEstimatePanel {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            z-index: 100100;
+            display: flex;
+            align-items: center;
+            max-width: min(520px, calc(100% - 24px));
+            min-height: 34px;
+            gap: 8px;
+            padding: 5px 6px 5px 10px;
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            border-radius: 8px;
+            background: rgba(17, 24, 39, 0.9);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+            color: #f8fafc;
+            font-size: 12px;
+            line-height: 1.2;
+            backdrop-filter: blur(10px);
+        }
+
+        .bidwrightEstimateLabel {
+            flex: 0 0 auto;
+            font-weight: 700;
+            color: #38bdf8;
+        }
+
+        .bidwrightEstimateStatus {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            color: rgba(248, 250, 252, 0.76);
+        }
+
+        .bidwrightEstimateButton {
+            flex: 0 0 auto;
+            height: 24px;
+            border: 1px solid rgba(56, 189, 248, 0.44);
+            border-radius: 6px;
+            background: #f8fafc;
+            color: #0f172a;
+            padding: 0 9px;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .bidwrightEstimateButton:hover:not(:disabled) {
+            background: #e0f2fe;
+        }
+
+        .bidwrightEstimateButton:disabled {
+            cursor: not-allowed;
+            opacity: 0.42;
+        }
     }
 }
 
@@ -72,6 +129,13 @@
         & .viewportContainer {
             height: 100px;
             width: 100%;
+
+            .bidwrightEstimatePanel {
+                left: 8px;
+                right: 8px;
+                top: 8px;
+                max-width: none;
+            }
         }
 
         & .sidebar {

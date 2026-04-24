@@ -28,7 +28,7 @@ export class OpenDocument implements ICommand {
                     document?.application.activeView?.cameraController.fitContent();
                 }
             },
-            "toast.excuting{0}",
+            "toast.executing{0}",
             I18n.translate("command.doc.open"),
         );
     }

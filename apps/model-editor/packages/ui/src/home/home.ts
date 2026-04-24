@@ -209,7 +209,7 @@ export class Home extends HTMLElement {
                     const document = await this.app.openDocument(item.id);
                     document?.application.activeView?.cameraController.fitContent();
                 },
-                "toast.excuting{0}",
+                "toast.executing{0}",
                 I18n.translate("command.doc.open"),
             );
         }
