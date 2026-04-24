@@ -40,9 +40,56 @@ interface BidWrightSelectionNode {
     };
 }
 
+interface BidWrightContext {
+    enabled: boolean;
+    projectId?: string;
+    modelDocumentId?: string;
+    fileName?: string;
+    channelName?: string;
+    estimateEnabled: boolean;
+}
+
+interface BidWrightModelSelectionMessage {
+    type: "bidwright:model-selection";
+    source: "bidwright-model-editor";
+    version: 1;
+    eventId?: string;
+    projectId?: string;
+    modelDocumentId?: string;
+    fileName?: string;
+    documentId?: string;
+    documentName?: string;
+    selectedCount: number;
+    nodes: BidWrightSelectionNode[];
+    totals: {
+        surfaceArea: number;
+        volume: number;
+        faceCount: number;
+        solidCount: number;
+    };
+}
+
+type BidWrightBroadcastType = "model-selection" | "model-send-to-estimate";
+
 function isBidWrightEmbedded() {
     const params = new URLSearchParams(window.location.search);
     return params.get("bidwright") === "1" || params.get("embedded") === "1";
+}
+
+function readBidWrightContext(): BidWrightContext {
+    const params = new URLSearchParams(window.location.search);
+    return {
+        enabled: params.get("bidwright") === "1" || params.get("embedded") === "1",
+        projectId: params.get("projectId") ?? undefined,
+        modelDocumentId: params.get("modelDocumentId") ?? undefined,
+        fileName: params.get("fileName") ?? undefined,
+        channelName: params.get("channel") ?? undefined,
+        estimateEnabled: params.get("estimate") === "1",
+    };
+}
+
+function makeBidWrightEventId(prefix: string) {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function bboxPayload(shape: IShape) {
@@ -56,6 +103,17 @@ function bboxPayload(shape: IShape) {
             z: bbox.max.z - bbox.min.z,
         },
     };
+}
+
+function formatModelNumber(value: number) {
+    return Intl.NumberFormat(undefined, {
+        maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2,
+    }).format(value);
+}
+
+function formatModelQuantity(value: number, unit: string) {
+    if (!Number.isFinite(value) || Math.abs(value) < 0.000001) return `0 ${unit}`;
+    return `${formatModelNumber(value)} ${unit}`;
 }
 
 function summarizeShapeNode(node: ShapeNode): BidWrightSelectionNode {
@@ -100,6 +158,12 @@ function summarizeSelectionNode(node: INode): BidWrightSelectionNode {
 export class Editor extends HTMLElement {
     private readonly _selectionController: OKCancel;
     private readonly _viewportContainer: HTMLDivElement;
+    private readonly _bidwrightContext = readBidWrightContext();
+    private readonly _bidwrightOriginId = makeBidWrightEventId("model-editor");
+    private _bidwrightChannel?: BroadcastChannel;
+    private _bidwrightEstimateStatus?: HTMLSpanElement;
+    private _bidwrightEstimateButton?: HTMLButtonElement;
+    private _lastBidWrightSelection?: BidWrightModelSelectionMessage;
     private _sidebarWidth: number = 360;
     private _isResizingSidebar: boolean = false;
     private _sidebarEl: HTMLDivElement | null = null;
@@ -117,6 +181,7 @@ export class Editor extends HTMLElement {
             this._selectionController,
             viewport,
         );
+        this._setupBidWrightEstimateBridge();
         this.clearSelectionControl();
         this.render();
     }
@@ -182,7 +247,122 @@ export class Editor extends HTMLElement {
         PubSub.default.remove("editMaterial", this._handleMaterialEdit);
         PubSub.default.remove("clearSelectionControl", this.clearSelectionControl);
         PubSub.default.remove("selectionChanged", this._handleBidWrightSelectionChanged);
+        this._bidwrightChannel?.close();
+        this._bidwrightChannel = undefined;
     }
+
+    private _setupBidWrightEstimateBridge() {
+        if (!this._bidwrightContext.enabled) return;
+
+        if (this._bidwrightContext.channelName && "BroadcastChannel" in window) {
+            this._bidwrightChannel = new BroadcastChannel(this._bidwrightContext.channelName);
+        }
+
+        const panel = document.createElement("div");
+        panel.className = style.bidwrightEstimatePanel;
+
+        const label = document.createElement("span");
+        label.className = style.bidwrightEstimateLabel;
+        label.textContent = "Estimate";
+
+        const status = document.createElement("span");
+        status.className = style.bidwrightEstimateStatus;
+        status.textContent = "No selection";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = style.bidwrightEstimateButton;
+        button.setAttribute("data-bidwright-send-estimate", "1");
+        button.textContent = "Send";
+        button.onclick = this._handleBidWrightEstimateSend;
+
+        panel.append(label, status, button);
+        this._bidwrightEstimateStatus = status;
+        this._bidwrightEstimateButton = button;
+        this._viewportContainer.append(panel);
+        this._updateBidWrightEstimatePanel();
+    }
+
+    private _updateBidWrightEstimatePanel(selection = this._lastBidWrightSelection) {
+        if (!this._bidwrightEstimateStatus || !this._bidwrightEstimateButton) return;
+
+        const canReachHost = Boolean(this._bidwrightChannel || window.parent !== window);
+        const canSend = Boolean(
+            this._bidwrightContext.estimateEnabled && canReachHost && selection && selection.selectedCount > 0,
+        );
+
+        if (!selection || selection.selectedCount === 0) {
+            this._bidwrightEstimateStatus.textContent = "No selection";
+        } else {
+            const parts = [
+                `${selection.selectedCount} selected`,
+                formatModelQuantity(selection.totals.surfaceArea, "model^2"),
+            ];
+            if (selection.totals.volume > 0) {
+                parts.push(formatModelQuantity(selection.totals.volume, "model^3"));
+            }
+            this._bidwrightEstimateStatus.textContent = parts.join(" | ");
+        }
+
+        this._bidwrightEstimateButton.disabled = !canSend;
+        if (!this._bidwrightContext.estimateEnabled) {
+            this._bidwrightEstimateButton.title = "Estimate link unavailable for this model tab";
+        } else if (!canReachHost) {
+            this._bidwrightEstimateButton.title = "Open from 3D takeoff to send quantities";
+        } else if (!selection || selection.selectedCount === 0) {
+            this._bidwrightEstimateButton.title = "Select model geometry to send";
+        } else {
+            this._bidwrightEstimateButton.title = "Send selected model quantity to the estimate";
+        }
+    }
+
+    private _postBidWrightSelection(selection: BidWrightModelSelectionMessage) {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage(selection, window.location.origin);
+        }
+        this._postBidWrightBroadcast("model-selection", selection);
+    }
+
+    private _postBidWrightBroadcast(
+        type: BidWrightBroadcastType,
+        selection: BidWrightModelSelectionMessage,
+        eventId?: string,
+    ) {
+        this._bidwrightChannel?.postMessage({
+            type,
+            source: "bidwright-model-editor",
+            version: 1,
+            eventId,
+            originId: this._bidwrightOriginId,
+            projectId: this._bidwrightContext.projectId,
+            modelDocumentId: this._bidwrightContext.modelDocumentId,
+            selection,
+        });
+    }
+
+    private readonly _handleBidWrightEstimateSend = () => {
+        const selection = this._lastBidWrightSelection;
+        if (!selection || selection.selectedCount === 0) return;
+
+        const eventId = makeBidWrightEventId("model-estimate");
+        const message = {
+            type: "bidwright:model-send-to-estimate",
+            source: "bidwright-model-editor",
+            version: 1,
+            eventId,
+            projectId: this._bidwrightContext.projectId,
+            modelDocumentId: this._bidwrightContext.modelDocumentId,
+            selection,
+        };
+
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage(message, window.location.origin);
+        }
+        this._postBidWrightBroadcast("model-send-to-estimate", selection, eventId);
+        if (this._bidwrightEstimateStatus) {
+            this._bidwrightEstimateStatus.textContent = "Sent to estimate";
+        }
+    };
 
     private readonly showSelectionControl = (controller: AsyncController) => {
         this._selectionController.setControl(controller);
@@ -208,24 +388,28 @@ export class Editor extends HTMLElement {
         if (!isBidWrightEmbedded()) return;
 
         const nodes = selected.map((node) => summarizeSelectionNode(node));
-        window.parent?.postMessage(
-            {
-                type: "bidwright:model-selection",
-                source: "bidwright-model-editor",
-                version: 1,
-                documentId: document.id,
-                documentName: document.name,
-                selectedCount: selected.length,
-                nodes,
-                totals: {
-                    surfaceArea: nodes.reduce((total, node) => total + (node.surfaceArea ?? 0), 0),
-                    volume: nodes.reduce((total, node) => total + (node.volume ?? 0), 0),
-                    faceCount: nodes.reduce((total, node) => total + (node.faceCount ?? 0), 0),
-                    solidCount: nodes.reduce((total, node) => total + (node.solidCount ?? 0), 0),
-                },
+        const selection: BidWrightModelSelectionMessage = {
+            type: "bidwright:model-selection",
+            source: "bidwright-model-editor",
+            version: 1,
+            eventId: makeBidWrightEventId("model-selection"),
+            projectId: this._bidwrightContext.projectId,
+            modelDocumentId: this._bidwrightContext.modelDocumentId,
+            fileName: this._bidwrightContext.fileName,
+            documentId: document.id,
+            documentName: document.name,
+            selectedCount: selected.length,
+            nodes,
+            totals: {
+                surfaceArea: nodes.reduce((total, node) => total + (node.surfaceArea ?? 0), 0),
+                volume: nodes.reduce((total, node) => total + (node.volume ?? 0), 0),
+                faceCount: nodes.reduce((total, node) => total + (node.faceCount ?? 0), 0),
+                solidCount: nodes.reduce((total, node) => total + (node.solidCount ?? 0), 0),
             },
-            window.location.origin,
-        );
+        };
+        this._lastBidWrightSelection = selection;
+        this._updateBidWrightEstimatePanel(selection);
+        this._postBidWrightSelection(selection);
     };
 }
 

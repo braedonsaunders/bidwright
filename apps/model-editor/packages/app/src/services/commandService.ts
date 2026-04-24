@@ -93,7 +93,7 @@ export class CommandService implements IService {
             return true;
         }
         if (CommandStore.getComandData(this.app.executingCommand)?.key === commandName) {
-            PubSub.default.pub("showToast", "toast.command.{0}excuting", commandName);
+            PubSub.default.pub("showToast", "toast.command.{0}executing", commandName);
             return false;
         }
         if (isCancelableCommand(this.app.executingCommand)) {

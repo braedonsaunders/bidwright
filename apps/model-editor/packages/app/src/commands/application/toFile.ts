@@ -28,7 +28,7 @@ export class SaveDocumentToFile implements ICommand {
                 PubSub.default.pub("showToast", "toast.downloading");
                 download([JSON.stringify(s)], `${app.activeView?.document.name}${DOCUMENT_FILE_EXTENSION}`);
             },
-            "toast.excuting{0}",
+            "toast.executing{0}",
             I18n.translate("command.doc.saveToFile"),
         );
     }

@@ -79,7 +79,7 @@ export class Export extends CancelableCommand {
                 PubSub.default.pub("showToast", "toast.downloading");
                 download(data, `${nodes[0].name}${suffix}`);
             },
-            "toast.excuting{0}",
+            "toast.executing{0}",
             I18n.translate("command.file.export"),
         );
     }

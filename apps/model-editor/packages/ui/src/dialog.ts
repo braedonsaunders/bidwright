@@ -22,7 +22,7 @@ export function showDialog(title: I18nKeys, content: HTMLElement, buttons?: Dial
     dialog.appendChild(
         div(
             { className: style.root },
-            div({ className: style.title }, I18n.translate(title) ?? "chili3d"),
+            div({ className: style.title }, I18n.translate(title) ?? "BidWright Model Editor"),
             div({ className: style.content }, content),
             div(
                 { className: style.buttons },
