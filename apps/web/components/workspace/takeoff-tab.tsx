@@ -785,7 +785,7 @@ export function TakeoffTab({
     setModelSyncing(true);
     setModelError(null);
     try {
-      const result = forceSync ? await syncModelAssets(projectId) : await listModelAssets(projectId, true);
+      const result = forceSync ? await syncModelAssets(projectId) : await listModelAssets(projectId);
       setModelAssets(result.assets ?? []);
     } catch (error) {
       setModelError(error instanceof Error ? error.message : "Model indexing failed.");
