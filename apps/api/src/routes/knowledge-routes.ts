@@ -151,6 +151,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         q?: string;
         projectId?: string;
         bookId?: string;
+        documentId?: string;
         scope?: string;
         limit?: string;
         includeProjectDocs?: string;
@@ -164,6 +165,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         organizationId: request.user?.organizationId ?? undefined,
         projectId: query.projectId,
         bookId: query.bookId,
+        documentId: query.documentId,
         scope: (query.scope as "global" | "project" | "all") || undefined,
         limit: query.limit ? parseInt(query.limit, 10) : undefined,
         includeProjectDocs: query.includeProjectDocs === "true",
@@ -231,8 +233,11 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       // Get source documents
       const docs = await request.store!.listDocuments(projectId);
 
-      // Get knowledge books scoped to this project
-      const books = await request.store!.listKnowledgeBooks(projectId);
+      // Get knowledge library items scoped to this project
+      const [books, knowledgeDocuments] = await Promise.all([
+        request.store!.listKnowledgeBooks(projectId),
+        request.store!.listKnowledgeDocuments(projectId),
+      ]);
 
       // Build enhanced list
       const enhanced = docs.map((doc: any) => {
@@ -259,7 +264,23 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         };
       });
 
-      return { documents: enhanced, projectId };
+      const manualPages = knowledgeDocuments.map((doc: any) => ({
+        id: doc.id,
+        fileName: doc.title,
+        fileType: "markdown",
+        documentType: "knowledge_page",
+        pageCount: doc.pageCount,
+        hasExtractedText: doc.chunkCount > 0,
+        hasStructuredData: false,
+        createdAt: doc.createdAt,
+        knowledgeDocumentId: doc.id,
+        indexingStatus: doc.status,
+        chunkCount: doc.chunkCount,
+        category: doc.category,
+        sourceType: "knowledge_document",
+      }));
+
+      return { documents: [...enhanced, ...manualPages], projectId };
     } catch (err) {
       request.log.error(err, "List documents failed");
       return reply.code(500).send({
@@ -332,6 +353,45 @@ export async function knowledgeRoutes(app: FastifyInstance) {
             pageNumber: c.pageNumber,
             text: c.text,
             tokenCount: c.tokenCount,
+          })),
+        };
+      }
+
+      const knowledgeDocument = await request.store!.getKnowledgeDocument(documentId);
+      if (knowledgeDocument) {
+        let pagesToRead = await request.store!.listKnowledgeDocumentPages(documentId);
+        if (pages) {
+          const [startStr, endStr] = pages.split("-");
+          const start = Math.max(1, parseInt(startStr, 10) || 1);
+          const end = endStr ? parseInt(endStr, 10) : start;
+          pagesToRead = pagesToRead.filter((page: any) => page.order + 1 >= start && page.order + 1 <= end);
+        }
+
+        const chunks = await request.store!.listKnowledgeDocumentChunks(documentId);
+        const pageIds = new Set(pagesToRead.map((page: any) => page.id));
+        const filteredChunks = chunks.filter((chunk: any) => !chunk.pageId || pageIds.has(chunk.pageId));
+
+        return {
+          id: knowledgeDocument.id,
+          fileName: knowledgeDocument.title,
+          documentTitle: knowledgeDocument.title,
+          category: knowledgeDocument.category,
+          pageCount: knowledgeDocument.pageCount,
+          chunkCount: knowledgeDocument.chunkCount,
+          sourceType: "knowledge_document",
+          content: pagesToRead.map((page: any) => `# ${page.title}\n\n${page.contentMarkdown || page.plainText}`).join("\n\n---\n\n"),
+          pages: pagesToRead.map((page: any) => ({
+            id: page.id,
+            title: page.title,
+            order: page.order,
+            contentMarkdown: page.contentMarkdown,
+          })),
+          chunks: filteredChunks.map((chunk: any) => ({
+            id: chunk.id,
+            pageId: chunk.pageId,
+            sectionTitle: chunk.sectionTitle,
+            text: chunk.text,
+            tokenCount: chunk.tokenCount,
           })),
         };
       }

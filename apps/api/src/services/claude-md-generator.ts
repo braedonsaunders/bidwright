@@ -26,6 +26,7 @@ export interface ClaudeMdParams {
     storagePath?: string; // relative to dataRoot
   }>;
   knowledgeBookFiles?: string[]; // filenames in knowledge/ directory (already symlinked)
+  knowledgeDocumentFiles?: string[]; // markdown snapshots in knowledge-pages/
   estimateDefaults?: {
     benchmarkingEnabled?: boolean;
   };
@@ -34,6 +35,7 @@ export interface ClaudeMdParams {
     trade: string;
     systemPrompt: string;
     knowledgeBookNames: string[];
+    knowledgeDocumentNames: string[];
     datasetTags: string[];
     packageBuckets: string[];
     defaultAssumptions: Record<string, unknown>;
@@ -214,8 +216,9 @@ Trade: ${params.persona.trade}
 
 ${params.persona.systemPrompt}
 
-**Priority Knowledge Sources:** Search these first, but you can and should search ALL available books and datasets.
-${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- "${n}"`).join("\n") : "- (No specific books assigned â€” search all available)"}
+**Priority Knowledge Sources:** Search these first, but you can and should search ALL available books, manual pages, and datasets.
+${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- Book: "${n}"`).join("\n") : "- (No specific books assigned - search all available)"}
+${params.persona.knowledgeDocumentNames.length > 0 ? params.persona.knowledgeDocumentNames.map(n => `- Page library: "${n}"`).join("\n") : ""}
 ${params.persona.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${params.persona.datasetTags.join(", ")}` : ""}
 ${params.persona.packageBuckets.length > 0 ? `- Preferred package buckets: ${params.persona.packageBuckets.join(", ")}` : ""}
 ${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.persona.reviewFocusAreas.join(", ")}` : ""}
@@ -303,6 +306,16 @@ ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 - The MCP search tools (\`searchBooks\`, \`queryKnowledge\`) still work for quick lookups, but for deep research, read the actual handbook text through \`readDocumentText\`.
 - When citing in sourceNotes, reference the book name, chapter, table number, and page.`
   : `No knowledge books are available in the project directory. Use the MCP tools (searchBooks, queryKnowledge, queryDataset) to search the knowledge base.`}
+
+## Knowledge Pages (Manual Notes)
+
+${params.knowledgeDocumentFiles && params.knowledgeDocumentFiles.length > 0
+  ? `Manual knowledge pages are available as markdown snapshots:
+
+${params.knowledgeDocumentFiles.map(f => `- \`knowledge-pages/${f}\``).join("\n")}
+
+Use \`queryKnowledge\` for targeted search. Use \`listKnowledgeDocuments\` and \`readDocumentText\` when you need the full authored markdown page library, including pasted tables and estimator notes.`
+  : `No manual knowledge pages are available as files yet. Still use \`queryKnowledge\` because manually-authored pages may be available through MCP.`}
 
 ## MCP Tools (Bidwright)
 
@@ -916,6 +929,16 @@ ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 Use \`listKnowledgeBooks\` to get the relevant IDs, then \`readDocumentText\` to read the TABLE OF CONTENTS first and the specific productivity rate tables needed for benchmarking.`
   : `No knowledge books available. Use MCP tools (searchBooks, queryKnowledge, queryDataset) for benchmarking.`}
 
+## Knowledge Pages (Manual Notes)
+
+${params.knowledgeDocumentFiles && params.knowledgeDocumentFiles.length > 0
+  ? `Manual knowledge pages are available as markdown snapshots:
+
+${params.knowledgeDocumentFiles.map(f => `- \`knowledge-pages/${f}\``).join("\n")}
+
+Use \`queryKnowledge\` for targeted search. Use \`listKnowledgeDocuments\` and \`readDocumentText\` when you need the full authored markdown page library, including pasted tables and estimator notes.`
+  : `No manual knowledge pages are available yet. Still use \`queryKnowledge\` because manually-authored pages may be available through MCP.`}
+
 ## MCP Tools
 
 You have access to Bidwright tools via MCP. For this review, use:
@@ -927,6 +950,7 @@ You have access to Bidwright tools via MCP. For this review, use:
 - **queryKnowledge** â€” Search knowledge base for productivity rates and standards
 - **queryGlobalLibrary** â€” Search global knowledge books
 - **searchBooks** â€” Search knowledge books by keyword
+- **listKnowledgeDocuments / readDocumentText** â€” Read manually-authored knowledge pages and pasted markdown tables
 - **queryDataset / searchDataset / listDatasets** â€” Search structured datasets for benchmarks
 - **getDocumentStructured** â€” Get structured document data
 - **readSpreadsheet** â€” Read Excel/CSV files
@@ -1081,4 +1105,46 @@ export async function symlinkKnowledgeBooks(
     }
   }
   return linked;
+}
+
+/**
+ * Write manually-authored knowledge pages into the project directory
+ * as markdown snapshots so CLI runtimes can read them as normal files.
+ */
+export async function writeKnowledgeDocumentSnapshots(
+  projectDir: string,
+  documents: Array<{
+    id: string;
+    title: string;
+    description?: string;
+    category?: string;
+    tags?: string[];
+    pages: Array<{ title: string; contentMarkdown: string; order: number }>;
+  }>,
+): Promise<string[]> {
+  const targetDir = join(projectDir, "knowledge-pages");
+  await mkdir(targetDir, { recursive: true });
+  const written: string[] = [];
+
+  for (const document of documents) {
+    const safeFileName = `${document.title || document.id}.md`.replace(/[^a-zA-Z0-9._-]/g, "-");
+    const targetPath = join(targetDir, safeFileName);
+    const frontMatter = [
+      `# ${document.title}`,
+      "",
+      `- Document ID: ${document.id}`,
+      document.description ? `- Description: ${document.description}` : null,
+      document.category ? `- Category: ${document.category}` : null,
+      document.tags && document.tags.length > 0 ? `- Tags: ${document.tags.join(", ")}` : null,
+    ].filter(Boolean).join("\n");
+    const body = document.pages
+      .slice()
+      .sort((left, right) => left.order - right.order)
+      .map((page) => `\n\n## ${page.title}\n\n${page.contentMarkdown || ""}`)
+      .join("");
+    await writeFile(targetPath, `${frontMatter}${body}\n`, "utf-8");
+    written.push(safeFileName);
+  }
+
+  return written;
 }

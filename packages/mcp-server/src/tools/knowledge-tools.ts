@@ -21,7 +21,12 @@ export function registerKnowledgeTools(server: McpServer) {
       const hits = results.map((h: any) => ({
         text: h.text?.substring(0, 600),
         source: h.source || h.bookName,
+        sourceType: h.sourceType,
         bookName: h.bookName,
+        documentTitle: h.documentTitle,
+        pageTitle: h.pageTitle,
+        documentId: h.documentId,
+        pageId: h.pageId,
         sectionTitle: h.sectionTitle,
         pageNumber: h.pageNumber,
         score: h.score,
@@ -47,7 +52,12 @@ export function registerKnowledgeTools(server: McpServer) {
       const hits = results.map((h: any) => ({
         text: h.text?.substring(0, 600),
         source: h.source || h.bookName,
+        sourceType: h.sourceType,
         bookName: h.bookName,
+        documentTitle: h.documentTitle,
+        pageTitle: h.pageTitle,
+        documentId: h.documentId,
+        pageId: h.pageId,
         sectionTitle: h.sectionTitle,
         pageNumber: h.pageNumber,
         score: h.score,
@@ -212,10 +222,32 @@ export function registerKnowledgeTools(server: McpServer) {
   );
 
   server.tool(
+    "listKnowledgeDocuments",
+    "List manually-authored knowledge page libraries in the organization. Use these IDs with readDocumentText when you need full markdown content from a knowledge page search result.",
+    {},
+    async () => {
+      const params = new URLSearchParams({ projectId: getProjectId() });
+      const data = await apiGet(`/knowledge/documents?${params}`);
+      const documents = (Array.isArray(data) ? data : []).map((document: any) => ({
+        id: document.id,
+        title: document.title,
+        description: document.description,
+        category: document.category,
+        tags: document.tags,
+        pageCount: document.pageCount,
+        chunkCount: document.chunkCount,
+        scope: document.scope,
+        status: document.status,
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify(documents, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "readDocumentText",
-    "Read extracted text for a project document or knowledge book by ID. Use this for PDFs, DOCX, TXT, CSV, and OCR-backed document text. Pass the document ID from the project manifest or listKnowledgeBooks. For spreadsheets, use readSpreadsheet instead. For table-heavy PDFs, pair this with getDocumentStructured.",
+    "Read extracted text for a project document, knowledge book, or manually-authored knowledge page library by ID. Use IDs from the project manifest, listKnowledgeBooks, or listKnowledgeDocuments. For spreadsheets, use readSpreadsheet instead. For table-heavy PDFs, pair this with getDocumentStructured.",
     {
-      documentId: z.string().describe("SourceDocument ID or KnowledgeBook ID"),
+      documentId: z.string().describe("SourceDocument ID, KnowledgeBook ID, or KnowledgeDocument ID"),
       pages: z.string().optional().describe("Optional page range like '1-5' or single page like '12'"),
     },
     async ({ documentId, pages }) => {
@@ -226,7 +258,8 @@ export function registerKnowledgeTools(server: McpServer) {
         ? [...new Set(doc.chunks.map((chunk: any) => chunk.sectionTitle).filter(Boolean))]
         : [];
       const header = [
-        `File: ${doc.fileName || doc.bookName || documentId}`,
+        `File: ${doc.fileName || doc.bookName || doc.documentTitle || documentId}`,
+        doc.sourceType ? `Source type: ${doc.sourceType}` : null,
         doc.documentType ? `Type: ${doc.documentType}` : null,
         doc.category ? `Category: ${doc.category}` : null,
         doc.pageCount ? `Pages: ${doc.pageCount}` : null,

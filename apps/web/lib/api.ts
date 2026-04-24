@@ -2851,11 +2851,53 @@ export interface KnowledgeChunkRecord {
   metadata: Record<string, unknown>;
 }
 
+export interface KnowledgeDocumentRecord {
+  id: string;
+  cabinetId: string | null;
+  title: string;
+  description: string;
+  category: KnowledgeBookRecord["category"];
+  scope: "global" | "project";
+  projectId: string | null;
+  tags: string[];
+  pageCount: number;
+  chunkCount: number;
+  status: "draft" | "indexing" | "indexed" | "failed";
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeDocumentPageRecord {
+  id: string;
+  documentId: string;
+  title: string;
+  slug: string;
+  order: number;
+  contentJson: Record<string, unknown>;
+  contentMarkdown: string;
+  plainText: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeDocumentChunkRecord {
+  id: string;
+  documentId: string;
+  pageId: string | null;
+  sectionTitle: string;
+  text: string;
+  tokenCount: number;
+  order: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface KnowledgeLibraryCabinetRecord {
   id: string;
   organizationId: string;
   parentId: string | null;
-  itemType: "book" | "dataset";
+  itemType: "book" | "dataset" | "document";
   name: string;
   createdAt: string;
   updatedAt: string;
@@ -2864,6 +2906,11 @@ export interface KnowledgeLibraryCabinetRecord {
 export async function listKnowledgeBooks(projectId?: string) {
   const params = projectId ? `?projectId=${projectId}` : "";
   return apiRequest<KnowledgeBookRecord[]>(`/knowledge/books${params}`);
+}
+
+export async function listKnowledgeDocuments(projectId?: string) {
+  const params = projectId ? `?projectId=${projectId}` : "";
+  return apiRequest<KnowledgeDocumentRecord[]>(`/knowledge/documents${params}`);
 }
 
 export async function listKnowledgeLibraryCabinets(itemType?: KnowledgeLibraryCabinetRecord["itemType"]) {
@@ -3003,11 +3050,105 @@ export async function createKnowledgeChunksBatch(bookId: string, chunks: Array<{
   });
 }
 
-export async function searchKnowledge(query: string, bookId?: string, limit?: number) {
+export async function getKnowledgeDocument(documentId: string) {
+  return apiRequest<KnowledgeDocumentRecord & { pages: KnowledgeDocumentPageRecord[] }>(`/knowledge/documents/${documentId}`);
+}
+
+export async function createKnowledgeDocument(input: {
+  title: string;
+  description?: string;
+  category?: KnowledgeDocumentRecord["category"];
+  scope?: KnowledgeDocumentRecord["scope"];
+  projectId?: string | null;
+  cabinetId?: string | null;
+  tags?: string[];
+  pageTitle?: string;
+  contentJson?: Record<string, unknown>;
+  contentMarkdown?: string;
+  plainText?: string;
+}) {
+  return apiRequest<KnowledgeDocumentRecord>("/knowledge/documents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateKnowledgeDocument(documentId: string, patch: Partial<KnowledgeDocumentRecord>) {
+  return apiRequest<KnowledgeDocumentRecord>(`/knowledge/documents/${documentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteKnowledgeDocument(documentId: string) {
+  return apiRequest<KnowledgeDocumentRecord>(`/knowledge/documents/${documentId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listKnowledgeDocumentPages(documentId: string) {
+  return apiRequest<KnowledgeDocumentPageRecord[]>(`/knowledge/documents/${documentId}/pages`);
+}
+
+export async function createKnowledgeDocumentPage(documentId: string, input: {
+  title: string;
+  contentJson?: Record<string, unknown>;
+  contentMarkdown?: string;
+  plainText?: string;
+  metadata?: Record<string, unknown>;
+  order?: number;
+}) {
+  return apiRequest<KnowledgeDocumentPageRecord>(`/knowledge/documents/${documentId}/pages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateKnowledgeDocumentPage(
+  documentId: string,
+  pageId: string,
+  patch: Partial<KnowledgeDocumentPageRecord>,
+) {
+  return apiRequest<KnowledgeDocumentPageRecord>(`/knowledge/documents/${documentId}/pages/${pageId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteKnowledgeDocumentPage(documentId: string, pageId: string) {
+  return apiRequest<KnowledgeDocumentPageRecord>(`/knowledge/documents/${documentId}/pages/${pageId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function reindexKnowledgeDocument(documentId: string) {
+  return apiRequest<{ documentId: string; chunkCount: number; embeddingsGenerated: boolean; errors: string[] }>(
+    `/knowledge/documents/${documentId}/reindex`,
+    { method: "POST" },
+  );
+}
+
+export async function listKnowledgeDocumentChunks(documentId: string, pageId?: string) {
+  const params = pageId ? `?pageId=${encodeURIComponent(pageId)}` : "";
+  return apiRequest<KnowledgeDocumentChunkRecord[]>(`/knowledge/documents/${documentId}/chunks${params}`);
+}
+
+export async function searchKnowledge(query: string, bookId?: string, limit?: number, documentId?: string) {
   const params = new URLSearchParams({ q: query });
   if (bookId) params.set("bookId", bookId);
+  if (documentId) params.set("documentId", documentId);
   if (limit) params.set("limit", String(limit));
-  return apiRequest<KnowledgeChunkRecord[]>(`/knowledge/search?${params.toString()}`);
+  return apiRequest<Array<(KnowledgeChunkRecord | KnowledgeDocumentChunkRecord) & {
+    source?: string;
+    sourceType?: "book" | "document_page";
+    bookName?: string;
+    documentTitle?: string;
+    pageTitle?: string;
+  }>>(`/knowledge/search?${params.toString()}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3515,6 +3656,7 @@ export interface EstimatorPersona {
   description: string;
   systemPrompt: string;
   knowledgeBookIds: string[];
+  knowledgeDocumentIds: string[];
   datasetTags: string[];
   packageBuckets: string[];
   defaultAssumptions: Record<string, unknown>;

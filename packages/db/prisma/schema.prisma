@@ -26,6 +26,7 @@ model Organization {
   entityCategories EntityCategory[]
   conditionLibrary ConditionLibraryEntry[]
   knowledgeBooks   KnowledgeBook[]
+  knowledgeDocuments KnowledgeDocument[]
   knowledgeLibraryCabinets KnowledgeLibraryCabinet[]
   datasets         Dataset[]
   rateSchedules    RateSchedule[]
@@ -65,6 +66,7 @@ model EstimatorPersona {
   description      String       @default("")
   systemPrompt     String       @default("")
   knowledgeBookIds Json         @default("[]")
+  knowledgeDocumentIds Json     @default("[]")
   datasetTags      Json         @default("[]")
   packageBuckets   String[]     @default([])
   defaultAssumptions Json       @default("{}")
@@ -1320,6 +1322,70 @@ model KnowledgeChunk {
   @@index([bookId])
 }
 
+model KnowledgeDocument {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cabinetId      String?
+  cabinet        KnowledgeLibraryCabinet? @relation("KnowledgeDocumentCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
+  title          String
+  description    String       @default("")
+  category       String       @default("general")
+  scope          String       @default("global")
+  projectId      String?
+  tags           String[]     @default([])
+  pageCount      Int          @default(0)
+  chunkCount     Int          @default(0)
+  status         String       @default("draft")
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  pages  KnowledgeDocumentPage[]
+  chunks KnowledgeDocumentChunk[]
+
+  @@index([organizationId])
+  @@index([cabinetId])
+  @@index([scope])
+  @@index([projectId])
+}
+
+model KnowledgeDocumentPage {
+  id              String            @id @default(cuid())
+  documentId      String
+  document        KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  title           String
+  slug            String            @default("")
+  order           Int               @default(0)
+  contentJson     Json              @default("{}")
+  contentMarkdown String            @default("")
+  plainText       String            @default("")
+  metadata        Json              @default("{}")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  chunks KnowledgeDocumentChunk[]
+
+  @@index([documentId])
+  @@index([documentId, order])
+}
+
+model KnowledgeDocumentChunk {
+  id           String                 @id @default(cuid())
+  documentId   String
+  document     KnowledgeDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  pageId       String?
+  page         KnowledgeDocumentPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  sectionTitle String                 @default("")
+  text         String                 @default("")
+  tokenCount   Int                    @default(0)
+  order        Int                    @default(0)
+  metadata     Json                   @default("{}")
+
+  @@index([documentId])
+  @@index([pageId])
+}
+
 model KnowledgeLibraryCabinet {
   id             String                   @id @default(cuid())
   organizationId String
@@ -1332,8 +1398,9 @@ model KnowledgeLibraryCabinet {
   createdAt      DateTime                 @default(now())
   updatedAt      DateTime                 @updatedAt
 
-  books    KnowledgeBook[] @relation("KnowledgeBookCabinet")
-  datasets Dataset[]       @relation("DatasetCabinet")
+  books     KnowledgeBook[]     @relation("KnowledgeBookCabinet")
+  documents KnowledgeDocument[] @relation("KnowledgeDocumentCabinet")
+  datasets  Dataset[]           @relation("DatasetCabinet")
 
   @@index([organizationId])
   @@index([parentId])

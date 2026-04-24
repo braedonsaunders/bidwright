@@ -6,7 +6,7 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
-import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
+import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
@@ -944,6 +944,25 @@ export function registerCliRoutes(app: FastifyInstance) {
       );
     }
 
+    const knowledgeDocuments = await store.listKnowledgeDocuments(projectId) || [];
+    const documentSnapshots = [];
+    for (const document of knowledgeDocuments as any[]) {
+      const pages = await store.listKnowledgeDocumentPages(document.id).catch(() => []);
+      if (pages.length > 0) {
+        documentSnapshots.push({
+          id: document.id,
+          title: document.title,
+          description: document.description,
+          category: document.category,
+          tags: document.tags ?? [],
+          pages,
+        });
+      }
+    }
+    const linkedKnowledgePageNames = documentSnapshots.length > 0
+      ? await writeKnowledgeDocumentSnapshots(projectDir, documentSnapshots)
+      : [];
+
     // Fetch settings early so we can pass integrations into CLAUDE.md params
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
@@ -963,22 +982,32 @@ export function registerCliRoutes(app: FastifyInstance) {
       dataRoot: apiDataRoot,
       documents,
       knowledgeBookFiles: linkedBookNames,
+      knowledgeDocumentFiles: linkedKnowledgePageNames,
       estimateDefaults,
       maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
       persona: persona ? await (async () => {
         const bookIds: string[] = Array.isArray(persona.knowledgeBookIds) ? persona.knowledgeBookIds : JSON.parse(persona.knowledgeBookIds as string || "[]");
+        const knowledgeDocumentIds: string[] = Array.isArray((persona as any).knowledgeDocumentIds)
+          ? (persona as any).knowledgeDocumentIds
+          : JSON.parse((persona as any).knowledgeDocumentIds as string || "[]");
         const datasetTags: string[] = Array.isArray(persona.datasetTags) ? persona.datasetTags : JSON.parse(persona.datasetTags as string || "[]");
         // Resolve book IDs to human-readable names for the agent prompt
         let bookNames: string[] = [];
+        let knowledgeDocumentNames: string[] = [];
         if (bookIds.length > 0) {
           const books = await prisma.knowledgeBook.findMany({ where: { id: { in: bookIds } }, select: { name: true } });
           bookNames = books.map((b: any) => b.name);
+        }
+        if (knowledgeDocumentIds.length > 0) {
+          const documents = await prisma.knowledgeDocument.findMany({ where: { id: { in: knowledgeDocumentIds } }, select: { title: true } });
+          knowledgeDocumentNames = documents.map((document: any) => document.title);
         }
         return {
           name: persona.name,
           trade: persona.trade,
           systemPrompt: persona.systemPrompt,
           knowledgeBookNames: bookNames,
+          knowledgeDocumentNames,
           datasetTags,
           packageBuckets: Array.isArray((persona as any).packageBuckets) ? (persona as any).packageBuckets : [],
           defaultAssumptions: ((persona as any).defaultAssumptions as Record<string, unknown>) ?? {},

@@ -1308,6 +1308,48 @@ export interface KnowledgeChunk {
 
 // ── Datasets (structured tabular data) ──
 
+export interface KnowledgeDocument {
+  id: string;
+  cabinetId: string | null;
+  title: string;
+  description: string;
+  category: KnowledgeBook["category"];
+  scope: "global" | "project";
+  projectId: string | null;
+  tags: string[];
+  pageCount: number;
+  chunkCount: number;
+  status: "draft" | "indexing" | "indexed" | "failed";
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeDocumentPage {
+  id: string;
+  documentId: string;
+  title: string;
+  slug: string;
+  order: number;
+  contentJson: Record<string, unknown>;
+  contentMarkdown: string;
+  plainText: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeDocumentChunk {
+  id: string;
+  documentId: string;
+  pageId: string | null;
+  sectionTitle: string;
+  text: string;
+  tokenCount: number;
+  order: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface Dataset {
   id: string;
   cabinetId: string | null;
@@ -1349,7 +1391,7 @@ export interface KnowledgeLibraryCabinet {
   id: string;
   organizationId: string;
   parentId: string | null;
-  itemType: "book" | "dataset";
+  itemType: "book" | "dataset" | "document";
   name: string;
   createdAt: string;
   updatedAt: string;
@@ -1414,6 +1456,9 @@ export interface BidwrightStore {
   authSessions: AuthSession[];
   knowledgeBooks: KnowledgeBook[];
   knowledgeChunks: KnowledgeChunk[];
+  knowledgeDocuments: KnowledgeDocument[];
+  knowledgeDocumentPages: KnowledgeDocumentPage[];
+  knowledgeDocumentChunks: KnowledgeDocumentChunk[];
   datasets: Dataset[];
   datasetRows: DatasetRow[];
   entityCategories: EntityCategory[];

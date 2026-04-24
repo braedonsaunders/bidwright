@@ -92,6 +92,7 @@ import {
   aiSuggestEquipment
 } from "./services/ai-service.js";
 import { executePluginSearchDataSource } from "./services/plugin-search-data-source.js";
+import { knowledgeService } from "./services/knowledge-service.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
@@ -4607,13 +4608,164 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     return results;
   });
 
+  // ── Knowledge Documents / Pages ────────────────────────────────────────
+
+  const scheduleKnowledgeDocumentIndex = (request: FastifyRequest, documentId: string) => {
+    void knowledgeService.indexKnowledgeDocument(documentId, request.store!, request.user?.organizationId ?? undefined).catch((err) => {
+      request.log.error(err, "Knowledge document indexing failed");
+    });
+  };
+
+  app.get("/knowledge/documents", async (request) => {
+    const { projectId } = (request.query ?? {}) as { projectId?: string };
+    return request.store!.listKnowledgeDocuments(projectId);
+  });
+
+  app.post("/knowledge/documents", async (request, reply) => {
+    const body = request.body as {
+      title: string;
+      description?: string;
+      category?: string;
+      scope?: string;
+      projectId?: string | null;
+      cabinetId?: string | null;
+      tags?: string[];
+      pageTitle?: string;
+      contentJson?: Record<string, unknown>;
+      contentMarkdown?: string;
+      plainText?: string;
+    };
+    try {
+      const document = await request.store!.createKnowledgeDocument(body as Parameters<PrismaApiStore["createKnowledgeDocument"]>[0]);
+      await request.store!.createKnowledgeDocumentPage(document.id, {
+        title: body.pageTitle || body.title || "Page 1",
+        contentJson: body.contentJson ?? {},
+        contentMarkdown: body.contentMarkdown ?? "",
+        plainText: body.plainText ?? "",
+      });
+      scheduleKnowledgeDocumentIndex(request, document.id);
+      reply.code(201);
+      return (await request.store!.getKnowledgeDocument(document.id)) ?? document;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create knowledge document";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.get("/knowledge/documents/:documentId/pages", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    try {
+      return await request.store!.listKnowledgeDocumentPages(documentId);
+    } catch {
+      return reply.code(404).send({ message: "Knowledge document not found" });
+    }
+  });
+
+  app.post("/knowledge/documents/:documentId/pages", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    const body = request.body as {
+      title: string;
+      contentJson?: Record<string, unknown>;
+      contentMarkdown?: string;
+      plainText?: string;
+      metadata?: Record<string, unknown>;
+      order?: number;
+    };
+    try {
+      const page = await request.store!.createKnowledgeDocumentPage(documentId, body);
+      scheduleKnowledgeDocumentIndex(request, documentId);
+      reply.code(201);
+      return page;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create page";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.patch("/knowledge/documents/:documentId/pages/:pageId", async (request, reply) => {
+    const { documentId, pageId } = request.params as { documentId: string; pageId: string };
+    const patch = request.body as Parameters<PrismaApiStore["updateKnowledgeDocumentPage"]>[1];
+    try {
+      const page = await request.store!.updateKnowledgeDocumentPage(pageId, patch);
+      scheduleKnowledgeDocumentIndex(request, documentId);
+      return page;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update page";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.delete("/knowledge/documents/:documentId/pages/:pageId", async (request, reply) => {
+    const { documentId, pageId } = request.params as { documentId: string; pageId: string };
+    try {
+      const page = await request.store!.deleteKnowledgeDocumentPage(pageId);
+      scheduleKnowledgeDocumentIndex(request, documentId);
+      return page;
+    } catch {
+      return reply.code(404).send({ message: "Knowledge document page not found" });
+    }
+  });
+
+  app.get("/knowledge/documents/:documentId/chunks", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    const { pageId } = (request.query ?? {}) as { pageId?: string };
+    try {
+      return await request.store!.listKnowledgeDocumentChunks(documentId, pageId);
+    } catch {
+      return reply.code(404).send({ message: "Knowledge document not found" });
+    }
+  });
+
+  app.post("/knowledge/documents/:documentId/reindex", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    try {
+      return await knowledgeService.indexKnowledgeDocument(documentId, request.store!, request.user?.organizationId ?? undefined);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to reindex knowledge document";
+      return reply.code(message.includes("not found") ? 404 : 500).send({ message });
+    }
+  });
+
+  app.get("/knowledge/documents/:documentId", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    const document = await request.store!.getKnowledgeDocument(documentId);
+    if (!document) return reply.code(404).send({ message: "Knowledge document not found" });
+    const pages = await request.store!.listKnowledgeDocumentPages(documentId);
+    return { ...document, pages };
+  });
+
+  app.patch("/knowledge/documents/:documentId", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    const patch = request.body as Parameters<PrismaApiStore["updateKnowledgeDocument"]>[1];
+    try {
+      return await request.store!.updateKnowledgeDocument(documentId, patch);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to update knowledge document";
+      return reply.code(message.includes("not found") ? 404 : 400).send({ message });
+    }
+  });
+
+  app.delete("/knowledge/documents/:documentId", async (request, reply) => {
+    const { documentId } = request.params as { documentId: string };
+    try {
+      await knowledgeService.deleteKnowledgeDocumentIndex(documentId, request.user?.organizationId ?? undefined).catch(() => 0);
+      return await request.store!.deleteKnowledgeDocument(documentId);
+    } catch {
+      return reply.code(404).send({ message: "Knowledge document not found" });
+    }
+  });
+
   app.get("/knowledge/search", async (request) => {
-    const { q, bookId, limit, scope } = (request.query ?? {}) as { q?: string; bookId?: string; limit?: string; scope?: string };
-    const chunks = await request.store!.searchKnowledgeChunks(q ?? "", bookId, limit ? parseInt(limit, 10) * 3 : 60);
+    const { q, bookId, documentId, limit, scope } = (request.query ?? {}) as { q?: string; bookId?: string; documentId?: string; limit?: string; scope?: string };
+    const fetchLimit = limit ? parseInt(limit, 10) * 3 : 60;
+    const [chunks, documentChunks] = await Promise.all([
+      documentId ? Promise.resolve([]) : request.store!.searchKnowledgeChunks(q ?? "", bookId, fetchLimit),
+      bookId ? Promise.resolve([]) : request.store!.searchKnowledgeDocumentChunks(q ?? "", documentId, fetchLimit),
+    ]);
 
     // Enrich with book metadata and apply scope filtering
     const bookCache = new Map<string, any>();
-    const enriched = [];
+    const enriched: any[] = [];
     for (const chunk of chunks) {
       let book = bookCache.get(chunk.bookId);
       if (!book) {
@@ -4630,6 +4782,33 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
         ...chunk,
         bookName: book.name,
         source: book.sourceFileName || book.name,
+        sourceType: "book",
+      });
+    }
+
+    const documentCache = new Map<string, any>();
+    const pageCache = new Map<string, any>();
+    for (const chunk of documentChunks) {
+      let doc = documentCache.get(chunk.documentId);
+      if (!doc) {
+        doc = await request.store!.getKnowledgeDocument(chunk.documentId);
+        if (doc) {
+          documentCache.set(chunk.documentId, doc);
+          const pages = await request.store!.listKnowledgeDocumentPages(chunk.documentId);
+          for (const page of pages) pageCache.set(page.id, page);
+        }
+      }
+      if (!doc) continue;
+      if (scope === "global" && doc.scope !== "global") continue;
+      if (scope === "project" && doc.scope !== "project") continue;
+      const page = chunk.pageId ? pageCache.get(chunk.pageId) : null;
+
+      enriched.push({
+        ...chunk,
+        sourceType: "document_page",
+        documentTitle: doc.title,
+        pageTitle: page?.title ?? "",
+        source: doc.title,
       });
     }
 

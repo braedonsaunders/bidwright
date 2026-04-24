@@ -1525,6 +1525,9 @@ export const mockStore: BidwrightStore = {
   pluginExecutions: [],
   knowledgeBooks: [],
   knowledgeChunks: [],
+  knowledgeDocuments: [],
+  knowledgeDocumentPages: [],
+  knowledgeDocumentChunks: [],
   datasets: [
     {
       id: "ds-neca-labour",

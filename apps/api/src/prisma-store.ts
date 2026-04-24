@@ -46,6 +46,9 @@ import type {
   KnowledgeBook,
   KnowledgeLibraryCabinet,
   KnowledgeChunk,
+  KnowledgeDocument,
+  KnowledgeDocumentChunk,
+  KnowledgeDocumentPage,
   Modifier,
   RateSchedule,
   RateScheduleItem,
@@ -142,6 +145,9 @@ import {
   mapKnowledgeBook,
   mapKnowledgeLibraryCabinet,
   mapKnowledgeChunk,
+  mapKnowledgeDocument,
+  mapKnowledgeDocumentChunk,
+  mapKnowledgeDocumentPage,
   mapLabourCostEntry,
   mapLabourCostTable,
   mapLabourCostTableWithEntries,
@@ -1008,6 +1014,10 @@ export class PrismaApiStore {
     const knowledgeBooks = await this.db.knowledgeBook.findMany({ where: { organizationId: this.organizationId } });
     const knowledgeBookIds = knowledgeBooks.map((b) => b.id);
     const knowledgeChunks = await this.db.knowledgeChunk.findMany({ where: { bookId: { in: knowledgeBookIds } } });
+    const knowledgeDocuments = await this.db.knowledgeDocument.findMany({ where: { organizationId: this.organizationId } });
+    const knowledgeDocumentIds = knowledgeDocuments.map((d) => d.id);
+    const knowledgeDocumentPages = await this.db.knowledgeDocumentPage.findMany({ where: { documentId: { in: knowledgeDocumentIds } } });
+    const knowledgeDocumentChunks = await this.db.knowledgeDocumentChunk.findMany({ where: { documentId: { in: knowledgeDocumentIds } } });
     const datasets = await this.db.dataset.findMany({ where: { organizationId: this.organizationId } });
     const datasetIds = datasets.map((d) => d.id);
     const datasetRows = await this.db.datasetRow.findMany({ where: { datasetId: { in: datasetIds } } });
@@ -1056,6 +1066,9 @@ export class PrismaApiStore {
       authSessions: [],
       knowledgeBooks: knowledgeBooks.map(mapKnowledgeBook),
       knowledgeChunks: knowledgeChunks.map(mapKnowledgeChunk),
+      knowledgeDocuments: knowledgeDocuments.map(mapKnowledgeDocument),
+      knowledgeDocumentPages: knowledgeDocumentPages.map(mapKnowledgeDocumentPage),
+      knowledgeDocumentChunks: knowledgeDocumentChunks.map(mapKnowledgeDocumentChunk),
       datasets: datasets.map(mapDataset),
       datasetRows: datasetRows.map(mapDatasetRow),
       entityCategories: entityCategories.map(mapEntityCategory) as any,
@@ -2773,9 +2786,10 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
 
     // Gather file references before cascade-deleting DB records
-    const [packages, knowledgeBooks] = await Promise.all([
+    const [packages, knowledgeBooks, knowledgeDocuments] = await Promise.all([
       this.db.storedPackage.findMany({ where: { projectId }, select: { id: true } }),
       this.db.knowledgeBook.findMany({ where: { projectId }, select: { id: true } }),
+      this.db.knowledgeDocument.findMany({ where: { projectId }, select: { id: true } }),
     ]);
 
     // Explicitly delete project-scoped knowledge books + chunks (no FK cascade to Project)
@@ -2783,6 +2797,12 @@ export class PrismaApiStore {
       const bookIds = knowledgeBooks.map((b) => b.id);
       await this.db.knowledgeChunk.deleteMany({ where: { bookId: { in: bookIds } } });
       await this.db.knowledgeBook.deleteMany({ where: { id: { in: bookIds } } });
+    }
+    if (knowledgeDocuments.length > 0) {
+      const documentIds = knowledgeDocuments.map((document) => document.id);
+      await this.db.knowledgeDocumentChunk.deleteMany({ where: { documentId: { in: documentIds } } });
+      await this.db.knowledgeDocumentPage.deleteMany({ where: { documentId: { in: documentIds } } });
+      await this.db.knowledgeDocument.deleteMany({ where: { id: { in: documentIds } } });
     }
 
     // Prisma cascade deletes handle other child entities
@@ -9470,6 +9490,294 @@ export class PrismaApiStore {
 
   // ── Datasets ───────────────────────────────────────────────────────────
 
+  // ── Knowledge Documents / Pages ────────────────────────────────────────
+
+  private slugifyKnowledgePageTitle(value: string) {
+    const slug = value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || "page";
+  }
+
+  private async requireKnowledgeDocument(documentId: string) {
+    const document = await this.db.knowledgeDocument.findFirst({
+      where: { id: documentId, organizationId: this.organizationId },
+    });
+    if (!document) {
+      throw new Error(`Knowledge document ${documentId} not found`);
+    }
+    return document;
+  }
+
+  private async requireKnowledgeDocumentPage(pageId: string) {
+    const page = await this.db.knowledgeDocumentPage.findFirst({
+      where: {
+        id: pageId,
+        document: { organizationId: this.organizationId },
+      },
+    });
+    if (!page) {
+      throw new Error(`Knowledge document page ${pageId} not found`);
+    }
+    return page;
+  }
+
+  async listKnowledgeDocuments(projectId?: string): Promise<KnowledgeDocument[]> {
+    const where: any = { organizationId: this.organizationId };
+    if (projectId) {
+      where.OR = [{ projectId }, { scope: "global" }];
+    } else {
+      where.scope = "global";
+    }
+    const documents = await this.db.knowledgeDocument.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }, { title: "asc" }],
+    });
+    return documents.map(mapKnowledgeDocument);
+  }
+
+  async getKnowledgeDocument(documentId: string): Promise<KnowledgeDocument | null> {
+    const document = await this.db.knowledgeDocument.findFirst({
+      where: { id: documentId, organizationId: this.organizationId },
+    });
+    return document ? mapKnowledgeDocument(document) : null;
+  }
+
+  async createKnowledgeDocument(input: {
+    title: string;
+    description?: string;
+    category?: KnowledgeDocument["category"];
+    scope?: KnowledgeDocument["scope"];
+    projectId?: string | null;
+    cabinetId?: string | null;
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }): Promise<KnowledgeDocument> {
+    const title = input.title.trim();
+    if (!title) throw new Error("Document title is required");
+    await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "document");
+
+    const document = await this.db.knowledgeDocument.create({
+      data: {
+        id: createId("kdoc"),
+        organizationId: this.organizationId,
+        cabinetId: input.cabinetId ?? null,
+        title,
+        description: input.description ?? "",
+        category: input.category ?? "general",
+        scope: input.scope ?? "global",
+        projectId: input.projectId ?? null,
+        tags: input.tags ?? [],
+        status: "draft",
+        metadata: (input.metadata ?? {}) as any,
+      },
+    });
+    return mapKnowledgeDocument(document);
+  }
+
+  async updateKnowledgeDocument(
+    documentId: string,
+    patch: Partial<Pick<KnowledgeDocument, "title" | "description" | "category" | "scope" | "projectId" | "cabinetId" | "tags" | "status" | "pageCount" | "chunkCount" | "metadata">>,
+  ): Promise<KnowledgeDocument> {
+    const document = await this.requireKnowledgeDocument(documentId);
+    const data: any = { updatedAt: new Date() };
+
+    if (patch.title !== undefined) {
+      const title = patch.title.trim();
+      if (!title) throw new Error("Document title is required");
+      data.title = title;
+    }
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.scope !== undefined) data.scope = patch.scope;
+    if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.cabinetId !== undefined) {
+      await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "document");
+      data.cabinetId = patch.cabinetId ?? null;
+    }
+    if (patch.tags !== undefined) data.tags = patch.tags;
+    if (patch.status !== undefined) data.status = patch.status;
+    if (patch.pageCount !== undefined) data.pageCount = patch.pageCount;
+    if (patch.chunkCount !== undefined) data.chunkCount = patch.chunkCount;
+    if (patch.metadata !== undefined) {
+      data.metadata = { ...((document.metadata as Record<string, unknown>) ?? {}), ...patch.metadata };
+    }
+
+    const updated = await this.db.knowledgeDocument.update({ where: { id: documentId }, data });
+    return mapKnowledgeDocument(updated);
+  }
+
+  async deleteKnowledgeDocument(documentId: string): Promise<KnowledgeDocument> {
+    const document = await this.requireKnowledgeDocument(documentId);
+    await this.db.knowledgeDocument.delete({ where: { id: documentId } });
+    return mapKnowledgeDocument(document);
+  }
+
+  async listKnowledgeDocumentPages(documentId: string): Promise<KnowledgeDocumentPage[]> {
+    await this.requireKnowledgeDocument(documentId);
+    const pages = await this.db.knowledgeDocumentPage.findMany({
+      where: { documentId },
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+    });
+    return pages.map(mapKnowledgeDocumentPage);
+  }
+
+  async getKnowledgeDocumentPage(pageId: string): Promise<KnowledgeDocumentPage | null> {
+    const page = await this.db.knowledgeDocumentPage.findFirst({
+      where: { id: pageId, document: { organizationId: this.organizationId } },
+    });
+    return page ? mapKnowledgeDocumentPage(page) : null;
+  }
+
+  async createKnowledgeDocumentPage(documentId: string, input: {
+    title: string;
+    contentJson?: Record<string, unknown>;
+    contentMarkdown?: string;
+    plainText?: string;
+    metadata?: Record<string, unknown>;
+    order?: number;
+  }): Promise<KnowledgeDocumentPage> {
+    await this.requireKnowledgeDocument(documentId);
+    const title = input.title.trim();
+    if (!title) throw new Error("Page title is required");
+    const existingCount = await this.db.knowledgeDocumentPage.count({ where: { documentId } });
+    const page = await this.db.knowledgeDocumentPage.create({
+      data: {
+        id: createId("kpage"),
+        documentId,
+        title,
+        slug: this.slugifyKnowledgePageTitle(title),
+        order: input.order ?? existingCount,
+        contentJson: (input.contentJson ?? {}) as any,
+        contentMarkdown: input.contentMarkdown ?? "",
+        plainText: input.plainText ?? "",
+        metadata: (input.metadata ?? {}) as any,
+      },
+    });
+    await this.db.knowledgeDocument.update({
+      where: { id: documentId },
+      data: { pageCount: existingCount + 1, status: "indexing", updatedAt: new Date() },
+    });
+    return mapKnowledgeDocumentPage(page);
+  }
+
+  async updateKnowledgeDocumentPage(
+    pageId: string,
+    patch: Partial<Pick<KnowledgeDocumentPage, "title" | "slug" | "order" | "contentJson" | "contentMarkdown" | "plainText" | "metadata">>,
+  ): Promise<KnowledgeDocumentPage> {
+    const page = await this.requireKnowledgeDocumentPage(pageId);
+    const data: any = { updatedAt: new Date() };
+    if (patch.title !== undefined) {
+      const title = patch.title.trim();
+      if (!title) throw new Error("Page title is required");
+      data.title = title;
+      data.slug = patch.slug ?? this.slugifyKnowledgePageTitle(title);
+    }
+    if (patch.slug !== undefined && patch.title === undefined) data.slug = this.slugifyKnowledgePageTitle(patch.slug);
+    if (patch.order !== undefined) data.order = patch.order;
+    if (patch.contentJson !== undefined) data.contentJson = patch.contentJson as any;
+    if (patch.contentMarkdown !== undefined) data.contentMarkdown = patch.contentMarkdown;
+    if (patch.plainText !== undefined) data.plainText = patch.plainText;
+    if (patch.metadata !== undefined) data.metadata = { ...((page.metadata as Record<string, unknown>) ?? {}), ...patch.metadata };
+
+    const updated = await this.db.knowledgeDocumentPage.update({ where: { id: pageId }, data });
+    await this.db.knowledgeDocument.update({
+      where: { id: page.documentId },
+      data: { status: "indexing", updatedAt: new Date() },
+    });
+    return mapKnowledgeDocumentPage(updated);
+  }
+
+  async deleteKnowledgeDocumentPage(pageId: string): Promise<KnowledgeDocumentPage> {
+    const page = await this.requireKnowledgeDocumentPage(pageId);
+    await this.db.knowledgeDocumentPage.delete({ where: { id: pageId } });
+    const [pageCount, chunkCount] = await Promise.all([
+      this.db.knowledgeDocumentPage.count({ where: { documentId: page.documentId } }),
+      this.db.knowledgeDocumentChunk.count({ where: { documentId: page.documentId } }),
+    ]);
+    await this.db.knowledgeDocument.update({
+      where: { id: page.documentId },
+      data: { pageCount, chunkCount, status: pageCount > 0 ? "indexing" : "draft", updatedAt: new Date() },
+    });
+    return mapKnowledgeDocumentPage(page);
+  }
+
+  async listKnowledgeDocumentChunks(documentId: string, pageId?: string): Promise<KnowledgeDocumentChunk[]> {
+    await this.requireKnowledgeDocument(documentId);
+    const chunks = await this.db.knowledgeDocumentChunk.findMany({
+      where: { documentId, ...(pageId ? { pageId } : {}) },
+      orderBy: { order: "asc" },
+    });
+    return chunks.map(mapKnowledgeDocumentChunk);
+  }
+
+  async replaceKnowledgeDocumentChunks(documentId: string, chunks: Array<{
+    pageId?: string | null;
+    sectionTitle?: string;
+    text: string;
+    tokenCount?: number;
+    order?: number;
+    metadata?: Record<string, unknown>;
+  }>): Promise<KnowledgeDocumentChunk[]> {
+    await this.requireKnowledgeDocument(documentId);
+    await this.db.knowledgeDocumentChunk.deleteMany({ where: { documentId } });
+    if (chunks.length > 0) {
+      await this.db.knowledgeDocumentChunk.createMany({
+        data: chunks.map((chunk, index) => ({
+          id: createId("kdchunk"),
+          documentId,
+          pageId: chunk.pageId ?? null,
+          sectionTitle: chunk.sectionTitle ?? "",
+          text: chunk.text,
+          tokenCount: chunk.tokenCount ?? Math.ceil(chunk.text.length / 4),
+          order: chunk.order ?? index,
+          metadata: (chunk.metadata ?? {}) as any,
+        })),
+      });
+    }
+    await this.db.knowledgeDocument.update({
+      where: { id: documentId },
+      data: { chunkCount: chunks.length, status: "indexed", updatedAt: new Date() },
+    });
+    const saved = await this.db.knowledgeDocumentChunk.findMany({
+      where: { documentId },
+      orderBy: { order: "asc" },
+    });
+    return saved.map(mapKnowledgeDocumentChunk);
+  }
+
+  async searchKnowledgeDocumentChunks(query: string, documentId?: string, limit = 20): Promise<KnowledgeDocumentChunk[]> {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return [];
+
+    const where: any = {};
+    if (documentId) {
+      const document = await this.requireKnowledgeDocument(documentId);
+      where.documentId = document.id;
+    } else {
+      const documentIds = (await this.db.knowledgeDocument.findMany({
+        where: { organizationId: this.organizationId },
+        select: { id: true },
+      })).map((document) => document.id);
+      where.documentId = { in: documentIds };
+    }
+
+    const chunks = await this.db.knowledgeDocumentChunk.findMany({ where });
+    const scored = chunks
+      .map((chunk) => {
+        const lower = `${chunk.text} ${chunk.sectionTitle}`.toLowerCase();
+        const matchCount = terms.filter((term) => lower.includes(term)).length;
+        return { chunk, matchCount };
+      })
+      .filter((entry) => entry.matchCount > 0)
+      .sort((a, b) => b.matchCount - a.matchCount)
+      .slice(0, limit);
+
+    return scored.map((entry) => mapKnowledgeDocumentChunk(entry.chunk));
+  }
+
   private _normalizeDatasetReference(value: string) {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
   }
@@ -10136,6 +10444,7 @@ export class PrismaApiStore {
     description?: string;
     systemPrompt?: string;
     knowledgeBookIds?: string[];
+    knowledgeDocumentIds?: string[];
     datasetTags?: string[];
     packageBuckets?: string[];
     defaultAssumptions?: Record<string, unknown>;
@@ -10154,6 +10463,7 @@ export class PrismaApiStore {
         description: input.description ?? "",
         systemPrompt: input.systemPrompt ?? "",
         knowledgeBookIds: input.knowledgeBookIds ?? [],
+        knowledgeDocumentIds: input.knowledgeDocumentIds ?? [],
         datasetTags: input.datasetTags ?? [],
         packageBuckets: input.packageBuckets ?? [],
         defaultAssumptions: toPrismaJson(input.defaultAssumptions),
@@ -10174,6 +10484,7 @@ export class PrismaApiStore {
     description?: string;
     systemPrompt?: string;
     knowledgeBookIds?: string[];
+    knowledgeDocumentIds?: string[];
     datasetTags?: string[];
     packageBuckets?: string[];
     defaultAssumptions?: Record<string, unknown>;

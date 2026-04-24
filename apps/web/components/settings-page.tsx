@@ -134,7 +134,9 @@ import {
   updatePersona as apiUpdatePersona,
   deletePersona as apiDeletePersona,
   listKnowledgeBooks as apiListKnowledgeBooks,
+  listKnowledgeDocuments as apiListKnowledgeDocuments,
   type KnowledgeBookRecord,
+  type KnowledgeDocumentRecord,
   type AuthUser,
 } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
@@ -227,6 +229,7 @@ export function SettingsPage({
   const [personaEdits, setPersonaEdits] = useState<Record<string, Partial<EstimatorPersona>>>({});
   const [personaDeleteConfirm, setPersonaDeleteConfirm] = useState<string | null>(null);
   const [knowledgeBooks, setKnowledgeBooks] = useState<KnowledgeBookRecord[]>([]);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocumentRecord[]>([]);
 
   // Conditions library
   const [conditionLibrary, setConditionLibrary] = useState<ConditionLibraryEntry[]>([]);
@@ -446,6 +449,7 @@ export function SettingsPage({
     if (activeGroup === "organization" && orgSubTab === "personas") {
       apiListPersonas().then(setPersonas).catch(() => {});
       apiListKnowledgeBooks().then(setKnowledgeBooks).catch(() => {});
+      apiListKnowledgeDocuments().then(setKnowledgeDocuments).catch(() => {});
     }
   }, [activeGroup, orgSubTab]);
 
@@ -718,7 +722,7 @@ export function SettingsPage({
     const tempId = `new-${Date.now()}`;
     const newPersona: EstimatorPersona = {
       id: tempId, organizationId: "", name: "", trade: "general", description: "",
-      systemPrompt: "", knowledgeBookIds: [], datasetTags: [], packageBuckets: [],
+      systemPrompt: "", knowledgeBookIds: [], knowledgeDocumentIds: [], datasetTags: [], packageBuckets: [],
       defaultAssumptions: {}, productivityGuidance: {}, commercialGuidance: {}, reviewFocusAreas: [], isDefault: false,
       enabled: true, order: personas.length, createdAt: "", updatedAt: "",
     };
@@ -2438,6 +2442,24 @@ export function SettingsPage({
                                 placeholder="Select knowledge books..."
                               />
                             </div>
+                            <div>
+                              <Label>Priority Knowledge Pages</Label>
+                              <p className="text-[10px] text-fg/30 mb-1.5">Manual notes and pasted table pages to prioritize</p>
+                              <MultiSelect
+                                options={knowledgeDocuments
+                                  .filter((d) => d.status === "indexed" || d.status === "draft")
+                                  .map((d) => ({
+                                    value: d.id,
+                                    label: d.title,
+                                    description: `${d.category} · ${d.pageCount} pages · ${(d.tags || []).join(", ")}`,
+                                  }))}
+                                selected={edited.knowledgeDocumentIds || []}
+                                onChange={(ids) => updatePersonaEdit(persona.id, { knowledgeDocumentIds: ids })}
+                                placeholder="Select knowledge pages..."
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Dataset Tags</Label>
                               <Input
