@@ -238,6 +238,7 @@ interface TakeoffTabProps {
   initialPage?: number;
   detached?: boolean;
   workspaceSyncOriginId?: string;
+  selectedWorksheetId?: string | null;
 }
 
 interface TakeoffSyncBase {
@@ -273,13 +274,13 @@ function formatModelSelectionQuantity(value: number, unit: string): string {
 }
 
 function primaryModelSelectionQuantity(selection: BidwrightModelSelectionMessage) {
-  if (selection.totals.surfaceArea > 0) {
+  if (selection.quantityBasis === "area" && selection.totals.surfaceArea > 0) {
     return { quantity: selection.totals.surfaceArea, uom: "model^2", label: "3D surface area" };
   }
-  if (selection.totals.volume > 0) {
+  if (selection.quantityBasis === "volume" && selection.totals.volume > 0) {
     return { quantity: selection.totals.volume, uom: "model^3", label: "3D volume" };
   }
-  return { quantity: selection.selectedCount, uom: "EA", label: "3D selected elements" };
+  return { quantity: Math.max(1, selection.selectedCount), uom: "EA", label: "3D selected elements" };
 }
 
 function buildModelSelectionLineItem(
@@ -454,8 +455,13 @@ export function TakeoffTab({
   initialPage = 1,
   detached = false,
   workspaceSyncOriginId,
+  selectedWorksheetId,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
+  const selectedWorksheet =
+    (selectedWorksheetId ? workspace.worksheets.find((worksheet) => worksheet.id === selectedWorksheetId) : null) ??
+    workspace.worksheets[0] ??
+    null;
   const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
 
   /* Project source documents that are PDFs or CAD files */
@@ -1519,7 +1525,7 @@ export function TakeoffTab({
     const ann = annotations.find((a) => a.id === annotationId);
     if (!ann?.measurement) return;
 
-    const targetWs = workspace.worksheets[0];
+    const targetWs = selectedWorksheet;
     if (!targetWs) return;
 
     try {
@@ -1586,7 +1592,7 @@ export function TakeoffTab({
     const targetWs =
       (lineItemDraft?.worksheetId
         ? workspace.worksheets.find((worksheet) => worksheet.id === lineItemDraft.worksheetId)
-        : null) ?? workspace.worksheets[0];
+        : null) ?? selectedWorksheet;
     if (!targetWs) {
       setToastType("error");
       setToastMessage("Create a worksheet before sending model quantities.");
@@ -2222,8 +2228,8 @@ export function TakeoffTab({
                   modelAssetId={selectedModelAsset?.id}
                   modelDocumentId={selectedDoc?.id}
                   syncChannelName={takeoffChannelName(projectId)}
-                  estimateTargetWorksheetId={workspace.worksheets[0]?.id}
-                  estimateTargetWorksheetName={workspace.worksheets[0]?.name}
+                  estimateTargetWorksheetId={selectedWorksheet?.id}
+                  estimateTargetWorksheetName={selectedWorksheet?.name}
                   estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
                   estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
                   title="3D Takeoff Model"

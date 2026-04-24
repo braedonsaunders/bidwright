@@ -11,6 +11,10 @@ export function workspaceChannelName(projectId: string): string {
   return `bw-workspace-${projectId}`;
 }
 
+export function modelEditorChannelName(projectId: string): string {
+  return `bw-model-editor-${projectId}`;
+}
+
 export function postWorkspaceMutation(
   projectId: string,
   options: { originId?: string; reason?: string } = {},

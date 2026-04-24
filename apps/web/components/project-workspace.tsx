@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
+  ModelTakeoffLinkRecord,
   PackageRecord,
   ProjectWorkspaceData,
   RevisionPatchInput,
@@ -55,11 +56,19 @@ import {
   updateRevision,
   updateWorksheet,
   getProjectWorkspace,
+  createModelTakeoffLink,
+  deleteModelTakeoffLink,
+  listModelTakeoffLinks,
   updateWorksheetItem,
 } from "@/lib/api";
 import { getClientDisplayName } from "@/lib/client-display";
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
-import { workspaceChannelName, type WorkspaceSyncMessage } from "@/lib/workspace-sync";
+import {
+  modelEditorChannelName,
+  postWorkspaceMutation,
+  workspaceChannelName,
+  type WorkspaceSyncMessage,
+} from "@/lib/workspace-sync";
 import { AgentChat } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { SetupTab } from "@/components/workspace/setup-tab";
@@ -85,6 +94,11 @@ import {
 import { PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import { WorkspaceSearch, type SearchNavigationTarget } from "@/components/workspace/workspace-search";
+import type {
+  BidwrightModelLineItemDraft,
+  BidwrightModelLinkedLineItem,
+  BidwrightModelSelectionMessage,
+} from "@/components/workspace/editors/bidwright-model-editor";
 import {
   Badge,
   Button,
@@ -288,6 +302,127 @@ function findWs(workspace: ProjectWorkspaceData, id: string) {
   return (workspace.worksheets ?? []).find((w) => w.id === id) ?? (workspace.worksheets ?? [])[0] ?? null;
 }
 
+type ModelEditorQuantityBasis = "count" | "area" | "volume";
+
+type ModelEditorChannelMessage = {
+  type:
+    | "model-estimate-context-request"
+    | "model-line-items-request"
+    | "model-send-to-estimate"
+    | "model-line-item-update"
+    | "model-line-item-delete";
+  source?: string;
+  eventId?: string;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+  selection?: BidwrightModelSelectionMessage;
+  lineItemDraft?: BidwrightModelLineItemDraft;
+  linkId?: string;
+  worksheetItemId?: string;
+  patch?: {
+    entityName?: string;
+    description?: string;
+    quantity?: number;
+    uom?: string;
+  };
+};
+
+function formatModelEditorQuantity(value: number, unit: string) {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.000001) return `0 ${unit}`;
+  return `${Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value)} ${unit}`;
+}
+
+function primaryModelEditorQuantity(selection: BidwrightModelSelectionMessage, basis: ModelEditorQuantityBasis = "count") {
+  if (basis === "area" && selection.totals.surfaceArea > 0) {
+    return { quantity: selection.totals.surfaceArea, uom: "model^2", label: "3D surface area" };
+  }
+  if (basis === "volume" && selection.totals.volume > 0) {
+    return { quantity: selection.totals.volume, uom: "model^3", label: "3D volume" };
+  }
+  return { quantity: Math.max(1, selection.selectedCount), uom: "EA", label: "3D selected elements" };
+}
+
+function buildModelEditorLineItemFallback(
+  selection: BidwrightModelSelectionMessage,
+  options: { fileName?: string; markup: number },
+): CreateWorksheetItemInput {
+  const sourceFile = selection.documentName ?? selection.fileName ?? options.fileName ?? "selected model";
+  const basis =
+    typeof selection === "object" && selection && "quantityBasis" in selection
+      ? ((selection as { quantityBasis?: ModelEditorQuantityBasis }).quantityBasis ?? "count")
+      : "count";
+  const primary = primaryModelEditorQuantity(selection, basis);
+  const selectedNames = selection.nodes.map((node) => node.name).filter(Boolean).slice(0, 12);
+
+  return {
+    category: "Model Takeoff",
+    entityType: "Model Quantity",
+    entityName: selectedNames[0] || `${selection.selectedCount} model element${selection.selectedCount === 1 ? "" : "s"}`,
+    description: sourceFile,
+    quantity: primary.quantity,
+    uom: primary.uom,
+    cost: 0,
+    markup: options.markup,
+    price: 0,
+    unit1: 0,
+    unit2: 0,
+    unit3: 0,
+    sourceNotes: [
+      `From BidWright model editor: ${sourceFile}`,
+      `${primary.label}: ${formatModelEditorQuantity(primary.quantity, primary.uom)}`,
+      `Surface area: ${formatModelEditorQuantity(selection.totals.surfaceArea, "model^2")}`,
+      `Volume: ${formatModelEditorQuantity(selection.totals.volume, "model^3")}`,
+      `Faces: ${Intl.NumberFormat().format(selection.totals.faceCount)}`,
+      `Solids: ${Intl.NumberFormat().format(selection.totals.solidCount)}`,
+      selectedNames.length > 0 ? `Selected: ${selectedNames.join(", ")}` : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+function normalizeModelEditorLineItemDraft(
+  draft: BidwrightModelLineItemDraft | undefined,
+  fallback: CreateWorksheetItemInput,
+): CreateWorksheetItemInput {
+  if (!draft) return fallback;
+  return {
+    category: draft.category || fallback.category,
+    entityType: draft.entityType || fallback.entityType,
+    entityName: draft.entityName || fallback.entityName,
+    description: draft.description ?? fallback.description,
+    quantity: Number.isFinite(Number(draft.quantity)) ? Number(draft.quantity) : fallback.quantity,
+    uom: draft.uom || fallback.uom,
+    cost: Number.isFinite(Number(draft.cost)) ? Number(draft.cost) : fallback.cost,
+    markup: Number.isFinite(Number(draft.markup)) ? Number(draft.markup) : fallback.markup,
+    price: Number.isFinite(Number(draft.price)) ? Number(draft.price) : fallback.price,
+    unit1: Number.isFinite(Number(draft.unit1)) ? Number(draft.unit1) : fallback.unit1,
+    unit2: Number.isFinite(Number(draft.unit2)) ? Number(draft.unit2) : fallback.unit2,
+    unit3: Number.isFinite(Number(draft.unit3)) ? Number(draft.unit3) : fallback.unit3,
+    sourceNotes: draft.sourceNotes || fallback.sourceNotes,
+  };
+}
+
+function toModelEditorLinkedItem(link: ModelTakeoffLinkRecord): BidwrightModelLinkedLineItem | null {
+  const item = link.worksheetItem;
+  if (!item) return null;
+  return {
+    linkId: link.id,
+    worksheetItemId: link.worksheetItemId,
+    worksheetId: item.worksheet?.id ?? item.worksheetId,
+    worksheetName: item.worksheet?.name ?? null,
+    entityName: item.entityName,
+    description: item.description ?? "",
+    quantity: item.quantity,
+    uom: item.uom,
+    cost: item.cost,
+    markup: item.markup,
+    price: item.price,
+    sourceNotes: item.sourceNotes ?? "",
+    derivedQuantity: link.derivedQuantity,
+    selection: link.selection,
+  };
+}
+
 /* ─── Main Component ─── */
 
 export function ProjectWorkspace({ initialData }: { initialData: WorkspaceResponse }) {
@@ -373,6 +508,24 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   const workspace = data.workspace;
   const selectedWs = selectedWsId === "all" ? null : findWs(workspace, selectedWsId);
+  const selectedModelWorksheet = selectedWsId === "all"
+    ? (workspace.worksheets ?? [])[0] ?? null
+    : findWs(workspace, selectedWsId);
+  const modelEditorSyncChannelName = useMemo(
+    () => modelEditorChannelName(workspace.project.id),
+    [workspace.project.id],
+  );
+  const workspaceRef = useRef(workspace);
+  const selectedModelWorksheetRef = useRef(selectedModelWorksheet);
+  const modelEditorChannelRef = useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  useEffect(() => {
+    selectedModelWorksheetRef.current = selectedModelWorksheet;
+  }, [selectedModelWorksheet]);
 
   // Sync revDraft from workspace when server-side text content changes.
   useEffect(() => {
@@ -466,6 +619,206 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
     return () => channel.close();
   }, [refreshWorkspace, workspace.project.id]);
+
+  const postModelEditorEstimateContext = useCallback((channel = modelEditorChannelRef.current) => {
+    if (!channel) return;
+    const currentWorkspace = workspaceRef.current;
+    const worksheet = selectedModelWorksheetRef.current;
+    channel.postMessage({
+      type: "model-estimate-context",
+      source: "bidwright-host",
+      version: 1,
+      projectId: currentWorkspace.project.id,
+      estimateEnabled: Boolean(worksheet),
+      estimateTargetWorksheetId: worksheet?.id,
+      estimateTargetWorksheetName: worksheet?.name,
+      estimateDefaultMarkup: currentWorkspace.currentRevision.defaultMarkup ?? 0.2,
+      estimateQuoteLabel: currentWorkspace.quote?.quoteNumber ?? currentWorkspace.project.name,
+    });
+  }, []);
+
+  const postModelEditorLineItemsState = useCallback(async (message: Pick<ModelEditorChannelMessage, "modelId" | "modelDocumentId">) => {
+    const channel = modelEditorChannelRef.current;
+    if (!channel) return;
+    const currentWorkspace = workspaceRef.current;
+    let items: BidwrightModelLinkedLineItem[] = [];
+
+    if (message.modelId) {
+      try {
+        const result = await listModelTakeoffLinks(currentWorkspace.project.id, message.modelId);
+        items = (result.links ?? [])
+          .map(toModelEditorLinkedItem)
+          .filter((item): item is BidwrightModelLinkedLineItem => Boolean(item));
+      } catch {
+        items = [];
+      }
+    }
+
+    channel.postMessage({
+      type: "model-line-items-state",
+      source: "bidwright-host",
+      version: 1,
+      projectId: currentWorkspace.project.id,
+      modelId: message.modelId,
+      modelDocumentId: message.modelDocumentId,
+      items,
+    });
+  }, []);
+
+  const handleModelEditorCreateLineItem = useCallback(async (message: ModelEditorChannelMessage) => {
+    if (!message.selection) return;
+    const currentWorkspace = workspaceRef.current;
+    const targetWs =
+      (message.lineItemDraft?.worksheetId
+        ? currentWorkspace.worksheets.find((worksheet) => worksheet.id === message.lineItemDraft?.worksheetId)
+        : null) ??
+      selectedModelWorksheetRef.current ??
+      currentWorkspace.worksheets[0];
+
+    if (!targetWs) {
+      setError("Create a worksheet before sending model quantities.");
+      return;
+    }
+
+    const fallbackPayload = buildModelEditorLineItemFallback(message.selection, {
+      fileName: message.selection.fileName,
+      markup: currentWorkspace.currentRevision.defaultMarkup ?? 0.2,
+    });
+    const payload = normalizeModelEditorLineItemDraft(message.lineItemDraft, fallbackPayload);
+
+    try {
+      const previousItemIds = new Set(currentWorkspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      const result = await createWorksheetItem(currentWorkspace.project.id, targetWs.id, payload);
+      apply(result);
+
+      const createdItem = result.workspace.worksheets
+        .flatMap((worksheet) => worksheet.items)
+        .find((item) => !previousItemIds.has(item.id));
+
+      if (message.modelId && createdItem) {
+        await createModelTakeoffLink(currentWorkspace.project.id, message.modelId, {
+          worksheetItemId: createdItem.id,
+          quantityField: "quantity",
+          multiplier: 1,
+          derivedQuantity: payload.quantity,
+          selection: {
+            fileName: message.selection.fileName ?? null,
+            documentId: message.selection.documentId ?? null,
+            documentName: message.selection.documentName ?? null,
+            selectedCount: message.selection.selectedCount,
+            nodes: message.selection.nodes,
+            totals: message.selection.totals,
+            lineItemDraft: payload,
+          },
+        });
+      }
+
+      postWorkspaceMutation(currentWorkspace.project.id, {
+        originId: workspaceSyncOriginRef.current,
+        reason: "model-editor",
+      });
+      postModelEditorEstimateContext();
+      await postModelEditorLineItemsState(message);
+    } catch (error) {
+      console.error("[model-editor] Failed to create worksheet line item:", error);
+      setError("Could not create a worksheet line item from the model selection.");
+    }
+  }, [apply, postModelEditorEstimateContext, postModelEditorLineItemsState]);
+
+  const handleModelEditorUpdateLineItem = useCallback(async (message: ModelEditorChannelMessage) => {
+    if (!message.worksheetItemId || !message.patch) return;
+    const currentWorkspace = workspaceRef.current;
+    const patch = {
+      ...(typeof message.patch.entityName === "string" ? { entityName: message.patch.entityName } : {}),
+      ...(typeof message.patch.description === "string" ? { description: message.patch.description } : {}),
+      ...(typeof message.patch.quantity === "number" && Number.isFinite(message.patch.quantity)
+        ? { quantity: message.patch.quantity }
+        : {}),
+      ...(typeof message.patch.uom === "string" ? { uom: message.patch.uom } : {}),
+    };
+
+    try {
+      const result = await updateWorksheetItem(currentWorkspace.project.id, message.worksheetItemId, patch);
+      apply(result);
+      postWorkspaceMutation(currentWorkspace.project.id, {
+        originId: workspaceSyncOriginRef.current,
+        reason: "model-editor",
+      });
+      await postModelEditorLineItemsState(message);
+    } catch (error) {
+      console.error("[model-editor] Failed to update linked line item:", error);
+      setError("Could not update the linked worksheet line item.");
+    }
+  }, [apply, postModelEditorLineItemsState]);
+
+  const handleModelEditorDeleteLineItem = useCallback(async (message: ModelEditorChannelMessage) => {
+    if (!message.worksheetItemId) return;
+    const currentWorkspace = workspaceRef.current;
+    try {
+      if (message.modelId && message.linkId) {
+        await deleteModelTakeoffLink(currentWorkspace.project.id, message.modelId, message.linkId).catch(() => null);
+      }
+      const result = await deleteWorksheetItem(currentWorkspace.project.id, message.worksheetItemId);
+      apply(result);
+      postWorkspaceMutation(currentWorkspace.project.id, {
+        originId: workspaceSyncOriginRef.current,
+        reason: "model-editor",
+      });
+      await postModelEditorLineItemsState(message);
+    } catch (error) {
+      console.error("[model-editor] Failed to delete linked line item:", error);
+      setError("Could not delete the linked worksheet line item.");
+    }
+  }, [apply, postModelEditorLineItemsState]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("BroadcastChannel" in window)) return;
+
+    const channel = new BroadcastChannel(modelEditorSyncChannelName);
+    modelEditorChannelRef.current = channel;
+    channel.onmessage = (event: MessageEvent<ModelEditorChannelMessage>) => {
+      const msg = event.data;
+      if (!msg || msg.source !== "bidwright-model-editor") return;
+      if (msg.projectId && msg.projectId !== workspaceRef.current.project.id) return;
+
+      if (msg.type === "model-estimate-context-request") {
+        postModelEditorEstimateContext(channel);
+      } else if (msg.type === "model-line-items-request") {
+        void postModelEditorLineItemsState(msg);
+      } else if (msg.type === "model-send-to-estimate") {
+        void handleModelEditorCreateLineItem(msg);
+      } else if (msg.type === "model-line-item-update") {
+        void handleModelEditorUpdateLineItem(msg);
+      } else if (msg.type === "model-line-item-delete") {
+        void handleModelEditorDeleteLineItem(msg);
+      }
+    };
+
+    postModelEditorEstimateContext(channel);
+
+    return () => {
+      if (modelEditorChannelRef.current === channel) modelEditorChannelRef.current = null;
+      channel.close();
+    };
+  }, [
+    handleModelEditorCreateLineItem,
+    handleModelEditorDeleteLineItem,
+    handleModelEditorUpdateLineItem,
+    modelEditorSyncChannelName,
+    postModelEditorEstimateContext,
+    postModelEditorLineItemsState,
+  ]);
+
+  useEffect(() => {
+    postModelEditorEstimateContext();
+  }, [
+    postModelEditorEstimateContext,
+    selectedModelWorksheet?.id,
+    selectedModelWorksheet?.name,
+    workspace.currentRevision.defaultMarkup,
+    workspace.project.name,
+    workspace.quote?.quoteNumber,
+  ]);
 
   function closeModal() { setModal(null); setAiResult(null); setAiPhaseResult(null); setAiEquipResult(null); }
 
@@ -744,6 +1097,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                       onError={setError}
                       onRefresh={refreshWorkspace}
                       highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
+                      activeWorksheetId={selectedWsId}
+                      onActiveWorksheetChange={setSelectedWsId}
                     />
                   </motion.div>
                 )}
@@ -761,6 +1116,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                       onOpenAgentChat={() => setChatOpen(true)}
                       onWorkspaceMutated={refreshWorkspace}
                       workspaceSyncOriginId={workspaceSyncOriginRef.current}
+                      selectedWorksheetId={selectedModelWorksheet?.id}
                     />
                   </motion.div>
                 )}
@@ -784,7 +1140,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           )}
           {tab === "documents" && (
             <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <DocumentationTab workspace={workspace} apply={apply} packages={data.packages} highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined} />
+              <DocumentationTab
+                workspace={workspace}
+                apply={apply}
+                packages={data.packages}
+                highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}
+                selectedWorksheet={selectedModelWorksheet}
+                modelEditorChannelName={modelEditorSyncChannelName}
+              />
             </motion.div>
           )}
           {tab === "review" && (

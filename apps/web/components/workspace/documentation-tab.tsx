@@ -49,6 +49,8 @@ interface DocumentationTabProps {
   apply: (next: WorkspaceResponse) => void;
   packages?: FileBrowserProps["packages"];
   highlightDocumentId?: string;
+  selectedWorksheet?: FileBrowserProps["selectedWorksheet"];
+  modelEditorChannelName?: string;
 }
 
 /* ─── Sub-tab config ─── */
@@ -62,7 +64,14 @@ const subTabs: { id: SubTab; label: string }[] = [
 
 /* ─── Main Component ─── */
 
-export function DocumentationTab({ workspace, apply, packages, highlightDocumentId }: DocumentationTabProps) {
+export function DocumentationTab({
+  workspace,
+  apply,
+  packages,
+  highlightDocumentId,
+  selectedWorksheet,
+  modelEditorChannelName,
+}: DocumentationTabProps) {
   const [activeTab, setActiveTab] = useState<SubTab>("knowledge");
   const [error, setError] = useState<string | null>(null);
 
@@ -108,7 +117,12 @@ export function DocumentationTab({ workspace, apply, packages, highlightDocument
 
       <div className="flex-1 min-h-0 flex flex-col">
         {activeTab === "knowledge" && (
-          <FileBrowser workspace={workspace} packages={packages} />
+          <FileBrowser
+            workspace={workspace}
+            packages={packages}
+            selectedWorksheet={selectedWorksheet}
+            modelEditorChannelName={modelEditorChannelName}
+          />
         )}
         {activeTab === "report" && (
           <ReportTab workspace={workspace} apply={apply} setError={setError} />
