@@ -211,24 +211,76 @@ export class Application extends Observable implements IApplication {
         return document;
     }
 
-    async loadFileFromUrl(url: string): Promise<void> {
+    async loadFileFromUrl(url: string, fileName?: string): Promise<void> {
         return Promise.try(async () => {
-            const filename = url.substring(url.lastIndexOf("/") + 1);
-            if (!filename || !filename.includes(".")) {
-                throw new Error(`No file name in url: ${url}`);
-            }
-
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`Failed to fetch model: ${url}, statusText: ${response.statusText}`);
             }
 
+            const filename = this.resolveImportFileName(url, fileName, response.headers.get("content-disposition"));
+            if (!filename || !filename.includes(".")) {
+                throw new Error(`No file name in url: ${url}`);
+            }
+
             const blob = await response.blob();
             const file = new File([blob], filename, { type: blob.type });
             await this.importFiles([file]);
+            this.activeView?.cameraController.fitContent();
         }).catch((err) => {
             Logger.error(err);
         });
+    }
+
+    private resolveImportFileName(url: string, preferredFileName?: string, contentDisposition?: string | null) {
+        const preferred = this.cleanImportFileName(preferredFileName);
+        if (preferred) return preferred;
+
+        const dispositionName = this.fileNameFromContentDisposition(contentDisposition);
+        if (dispositionName) return dispositionName;
+
+        try {
+            const parsedUrl = new URL(url, window.location.href);
+            const queryName = this.cleanImportFileName(
+                parsedUrl.searchParams.get("fileName") ?? parsedUrl.searchParams.get("name"),
+            );
+            if (queryName) return queryName;
+
+            const pathName = this.cleanImportFileName(
+                parsedUrl.pathname.substring(parsedUrl.pathname.lastIndexOf("/") + 1),
+            );
+            if (pathName) return pathName;
+        } catch {
+            return this.cleanImportFileName(url.substring(url.lastIndexOf("/") + 1));
+        }
+
+        return undefined;
+    }
+
+    private fileNameFromContentDisposition(contentDisposition?: string | null) {
+        if (!contentDisposition) return undefined;
+        const encoded = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition)?.[1];
+        if (encoded) {
+            return this.cleanImportFileName(decodeURIComponent(encoded));
+        }
+
+        const quoted = /filename="([^"]+)"/i.exec(contentDisposition)?.[1];
+        if (quoted) return this.cleanImportFileName(quoted);
+
+        const bare = /filename=([^;]+)/i.exec(contentDisposition)?.[1];
+        return this.cleanImportFileName(bare);
+    }
+
+    private cleanImportFileName(fileName?: string | null) {
+        const cleaned = fileName
+            ?.trim()
+            .replaceAll("\\", "/")
+            .split("/")
+            .pop()
+            ?.split("?")[0]
+            ?.split("#")[0]
+            ?.trim();
+        return cleaned || undefined;
     }
 
     protected async createActiveView(document: IDocument | undefined) {

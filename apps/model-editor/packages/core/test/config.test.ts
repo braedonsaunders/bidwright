@@ -181,7 +181,7 @@ describe("Config", () => {
                 language: "en-US",
                 navigation3D: "TestNav",
             };
-            localStorageMock["chili3d.app.testRead"] = JSON.stringify(testData);
+            localStorageMock["bidwright.model-editor.testRead"] = JSON.stringify(testData);
 
             Config.instance.readFromStorage();
             expect(Config.instance.language).toBe("en-US");
@@ -191,7 +191,7 @@ describe("Config", () => {
 
         test("should handle empty storage", () => {
             Config.instance.init("config");
-            localStorageMock["chili3d.app.config"] = "{}";
+            localStorageMock["bidwright.model-editor.config"] = "{}";
 
             Config.instance.readFromStorage();
             expect(Config.instance.language).toBeDefined();
@@ -205,7 +205,7 @@ describe("Config", () => {
 
             Config.instance.saveToStorage();
 
-            const stored = localStorageMock["chili3d.app.testSave"];
+            const stored = localStorageMock["bidwright.model-editor.testSave"];
             expect(stored).toBeDefined();
             const parsed = JSON.parse(stored);
             expect(parsed.language).toBe("fr-FR");

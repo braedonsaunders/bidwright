@@ -27,7 +27,7 @@ async function handleApplicaionBuilt(app: IApplication) {
     }
     if (modelUrl) {
         Logger.info(`loading file from: ${modelUrl}`);
-        await app.loadFileFromUrl(modelUrl);
+        await app.loadFileFromUrl(modelUrl, documentName);
     }
 }
 
