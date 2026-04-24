@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   Check,
   ChevronDown,
@@ -42,6 +42,7 @@ import {
   MoveRight,
   Highlighter,
   StretchHorizontal,
+  Trash2,
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
@@ -50,6 +51,8 @@ import type {
   VisionBoundingBox,
   TakeoffLinkRecord,
   ModelAsset,
+  ModelElement,
+  ModelQuantity,
   ModelTakeoffLinkRecord,
 } from "@/lib/api";
 import {
@@ -58,6 +61,7 @@ import {
   updateTakeoffAnnotation,
   deleteTakeoffAnnotation,
   getDocumentDownloadUrl,
+  getFileDownloadUrl,
   getBookFileUrl,
   listKnowledgeBooks,
   runVisionCountSymbols,
@@ -68,9 +72,11 @@ import {
   listTakeoffLinks,
   createTakeoffLink,
   createModelTakeoffLink,
+  deleteModelTakeoffLink,
   deleteWorksheetItem,
   createWorksheetItem,
   listModelTakeoffLinks,
+  queryModelElements,
   listModelAssets,
   syncModelAssets,
   updateWorksheetItem,
@@ -226,6 +232,8 @@ interface TakeoffDocument {
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
+  fileNodeId?: string;
+  modelAssetId?: string;
   /** For knowledge books – use getBookFileUrl */
   bookId?: string;
 }
@@ -316,6 +324,65 @@ function buildModelSelectionLineItem(
   };
 }
 
+function finiteSelectionMetric(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function selectionFromDraft(
+  selection: BidwrightModelSelectionMessage,
+  draft?: BidwrightModelLineItemDraft,
+): BidwrightModelSelectionMessage {
+  const ids = new Set(draft?.source?.selectedNodeIds ?? []);
+  if (ids.size === 0) return selection;
+  const nodes = selection.nodes.filter((node) => ids.has(node.id));
+  if (nodes.length === 0) return selection;
+  return {
+    ...selection,
+    selectedCount: nodes.length,
+    nodes,
+    totals: {
+      surfaceArea: nodes.reduce((total, node) => total + finiteSelectionMetric(node.surfaceArea), 0),
+      volume: nodes.reduce((total, node) => total + finiteSelectionMetric(node.volume), 0),
+      faceCount: nodes.reduce((total, node) => total + finiteSelectionMetric(node.faceCount), 0),
+      solidCount: nodes.reduce((total, node) => total + finiteSelectionMetric(node.solidCount), 0),
+    },
+  };
+}
+
+function buildModelSelectionObjectDrafts(
+  selection: BidwrightModelSelectionMessage,
+  options: { fileName?: string; markup: number },
+): BidwrightModelLineItemDraft[] {
+  const basis = selection.quantityBasis ?? "count";
+  const sourceFile = selection.documentName ?? selection.fileName ?? options.fileName ?? "selected model";
+  return selection.nodes.slice(0, 250).map((node) => {
+    const nodeSelection = selectionFromDraft(selection, {
+      source: { kind: "model-selection", selectedNodeIds: [node.id] },
+    } as BidwrightModelLineItemDraft);
+    const payload = buildModelSelectionLineItem(nodeSelection, options);
+    return {
+      ...payload,
+      entityType: node.kind || payload.entityType,
+      entityName: node.name || payload.entityName,
+      sourceNotes: payload.sourceNotes ?? "",
+      worksheetId: undefined,
+      worksheetName: undefined,
+      source: {
+        kind: "model-selection",
+        projectId: selection.projectId,
+        modelId: selection.modelId,
+        modelElementId: node.modelElementId,
+        modelDocumentId: selection.modelDocumentId,
+        fileName: selection.fileName,
+        documentId: selection.documentId,
+        quantityBasis: basis,
+        quantityType: payload.uom === "model^2" ? "surface_area" : payload.uom === "model^3" ? "volume" : "count",
+        selectedNodeIds: [node.id],
+      },
+    };
+  });
+}
+
 function normalizeModelLineItemDraft(
   draft: BidwrightModelLineItemDraft | undefined,
   fallback: CreateWorksheetItemInput,
@@ -362,6 +429,63 @@ function toLinkedModelLineItem(link: ModelTakeoffLinkRecord): BidwrightModelLink
   };
 }
 
+type ModelQuantityBasis = "count" | "area" | "volume";
+type ModelElementWithQuantities = ModelElement & { quantities?: ModelQuantity[] };
+
+function findModelElementQuantity(element: ModelElementWithQuantities, types: string[]) {
+  return (element.quantities ?? []).find((quantity) => types.includes(quantity.quantityType) && quantity.value > 0);
+}
+
+function getModelElementTakeoffQuantity(element: ModelElementWithQuantities, basis: ModelQuantityBasis) {
+  if (basis === "area") {
+    const area = findModelElementQuantity(element, ["surface_area", "area"]);
+    if (area) return { quantity: area.value, uom: area.unit || "model^2", label: "Surface area", quantityType: area.quantityType, quantityId: area.id };
+  }
+  if (basis === "volume") {
+    const volume = findModelElementQuantity(element, ["volume"]);
+    if (volume) return { quantity: volume.value, uom: volume.unit || "model^3", label: "Volume", quantityType: volume.quantityType, quantityId: volume.id };
+  }
+  return { quantity: 1, uom: "EA", label: "Count", quantityType: "count", quantityId: null as string | null };
+}
+
+function formatElementQuantity(element: ModelElementWithQuantities, basis: ModelQuantityBasis) {
+  const primary = getModelElementTakeoffQuantity(element, basis);
+  return formatModelSelectionQuantity(primary.quantity, primary.uom);
+}
+
+function buildModelElementLineItem(
+  element: ModelElementWithQuantities,
+  primary: ReturnType<typeof getModelElementTakeoffQuantity>,
+  options: { fileName?: string; markup: number },
+): CreateWorksheetItemInput {
+  const allQuantities = (element.quantities ?? [])
+    .map((quantity) => `${quantity.quantityType}: ${formatModelSelectionQuantity(quantity.value, quantity.unit || "")}`)
+    .join("\n");
+  return {
+    category: "Model Takeoff",
+    entityType: element.elementClass || "Model Element",
+    entityName: element.name || element.externalId || element.id,
+    description: options.fileName ?? "",
+    quantity: primary.quantity,
+    uom: primary.uom,
+    cost: 0,
+    markup: options.markup,
+    price: 0,
+    unit1: 0,
+    unit2: 0,
+    unit3: 0,
+    sourceNotes: [
+      `From 3D model element: ${options.fileName ?? "selected model"}`,
+      `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
+      `Element class: ${element.elementClass || "Model Element"}`,
+      element.material ? `Material: ${element.material}` : "",
+      element.level ? `Level: ${element.level}` : "",
+      `External id: ${element.externalId || element.id}`,
+      allQuantities ? `Available quantities:\n${allQuantities}` : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
 function sameCalibration(a: Calibration | null, b: Calibration | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -373,6 +497,9 @@ function buildPdfUrl(doc: TakeoffDocument): string {
     return getBookFileUrl(doc.bookId);
   }
   if (doc.source === "project" && doc.projectId) {
+    if (doc.fileNodeId) {
+      return getFileDownloadUrl(doc.projectId, doc.fileNodeId, true);
+    }
     return getDocumentDownloadUrl(doc.projectId, doc.id, true);
   }
   return "";
@@ -606,18 +733,45 @@ export function TakeoffTab({
   const calibrationRef = useRef(calibration);
   const initialDocumentAppliedRef = useRef(!initialDocumentId);
 
-  const selectedDoc = drawings.find((d) => d.id === selectedDocId);
-  const pdfDocuments = drawings.filter((d) => d.kind === "pdf");
-  const modelDocuments = drawings.filter((d) => d.kind === "model");
-  const isCadDocument = selectedDoc?.kind === "model";
-  const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
   const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
   const [modelTakeoffLinks, setModelTakeoffLinks] = useState<ModelTakeoffLinkRecord[]>([]);
+  const [modelElements, setModelElements] = useState<ModelElementWithQuantities[]>([]);
+  const [modelElementSearch, setModelElementSearch] = useState("");
+  const [modelElementsLoading, setModelElementsLoading] = useState(false);
+  const [modelLedgerBasis, setModelLedgerBasis] = useState<ModelQuantityBasis>("count");
+  const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
+    () =>
+      modelAssets
+        .filter((asset) => asset.fileNodeId && !projectPdfs.some((doc) => doc.id === asset.sourceDocumentId))
+        .map((asset) => ({
+          id: `model-asset-${asset.id}`,
+          label: asset.fileName,
+          fileName: asset.fileName,
+          kind: "model" as const,
+          source: "project" as const,
+          projectId,
+          fileNodeId: asset.fileNodeId ?? undefined,
+          modelAssetId: asset.id,
+        })),
+    [modelAssets, projectId, projectPdfs],
+  );
+  const takeoffDocuments = useMemo(
+    () => [...drawings, ...fileManagerModelDocuments],
+    [drawings, fileManagerModelDocuments],
+  );
+  const selectedDoc = takeoffDocuments.find((d) => d.id === selectedDocId);
+  const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
+  const modelDocuments = takeoffDocuments.filter((d) => d.kind === "model");
+  const isCadDocument = selectedDoc?.kind === "model";
+  const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const selectedModelAsset = isCadDocument
     ? modelAssets.find((asset) =>
+        (selectedDoc?.modelAssetId && asset.id === selectedDoc.modelAssetId) ||
+        (selectedDoc?.fileNodeId && asset.fileNodeId === selectedDoc.fileNodeId) ||
         (selectedDoc?.source === "project" && asset.sourceDocumentId === selectedDoc.id) ||
         asset.fileName.toLowerCase() === (selectedDoc?.fileName ?? "").toLowerCase()
       )
@@ -641,9 +795,14 @@ export function TakeoffTab({
   }, [projectId]);
 
   useEffect(() => {
-    if (modelDocuments.length === 0) return;
     void refreshModelAssets(false);
-  }, [modelDocuments.length, refreshModelAssets]);
+  }, [refreshModelAssets]);
+
+  useEffect(() => {
+    if (!selectedDocId && takeoffDocuments.length > 0) {
+      setSelectedDocId(takeoffDocuments[0].id);
+    }
+  }, [selectedDocId, takeoffDocuments]);
 
   const refreshModelTakeoffLinks = useCallback(async (modelId = selectedModelAsset?.id) => {
     if (!projectId || !modelId) {
@@ -663,10 +822,53 @@ export function TakeoffTab({
     void refreshModelTakeoffLinks();
   }, [refreshModelTakeoffLinks]);
 
+  const refreshModelElements = useCallback(async () => {
+    if (!projectId || !selectedModelAsset?.id) {
+      setModelElements([]);
+      return;
+    }
+    setModelElementsLoading(true);
+    try {
+      const result = await queryModelElements(projectId, selectedModelAsset.id, {
+        text: modelElementSearch.trim() || undefined,
+        limit: 400,
+      });
+      setModelElements(result.elements ?? []);
+    } catch (error) {
+      console.error("[takeoff] Failed to load model elements:", error);
+      setModelElements([]);
+    } finally {
+      setModelElementsLoading(false);
+    }
+  }, [modelElementSearch, projectId, selectedModelAsset?.id]);
+
+  useEffect(() => {
+    if (!selectedModelAsset?.id) {
+      setModelElements([]);
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void refreshModelElements();
+    }, 180);
+    return () => window.clearTimeout(timeout);
+  }, [refreshModelElements, selectedModelAsset?.id]);
+
   useEffect(() => {
     setModelSelection(null);
     setModelTakeoffLinks([]);
+    setModelElements([]);
+    setSelectedModelElementIds(new Set());
   }, [selectedDocId]);
+
+  const linkedModelElementIds = useMemo(
+    () => new Set(modelTakeoffLinks.map((link) => link.modelElementId).filter((id): id is string => Boolean(id))),
+    [modelTakeoffLinks],
+  );
+
+  const selectedModelElements = useMemo(
+    () => modelElements.filter((element) => selectedModelElementIds.has(element.id)),
+    [modelElements, selectedModelElementIds],
+  );
 
   useEffect(() => {
     selectedDocIdRef.current = selectedDocId;
@@ -690,12 +892,12 @@ export function TakeoffTab({
 
   useEffect(() => {
     if (!initialDocumentId || initialDocumentAppliedRef.current) return;
-    if (!drawings.some((d) => d.id === initialDocumentId)) return;
+    if (!takeoffDocuments.some((d) => d.id === initialDocumentId)) return;
     initialDocumentAppliedRef.current = true;
     setSelectedDocId(initialDocumentId);
     setPage(safeInitialPage);
     fitOnLoadRef.current = true;
-  }, [drawings, initialDocumentId, safeInitialPage]);
+  }, [takeoffDocuments, initialDocumentId, safeInitialPage]);
 
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
     if (!broadcastRef.current || !projectId) return;
@@ -1580,6 +1782,8 @@ export function TakeoffTab({
     const assets = result.assets ?? [];
     setModelAssets(assets);
     return assets.find((asset) =>
+      (selectedDoc.modelAssetId && asset.id === selectedDoc.modelAssetId) ||
+      (selectedDoc.fileNodeId && asset.fileNodeId === selectedDoc.fileNodeId) ||
       (selectedDoc.source === "project" && asset.sourceDocumentId === selectedDoc.id) ||
       asset.fileName.toLowerCase() === selectedDoc.fileName.toLowerCase()
     );
@@ -1588,57 +1792,179 @@ export function TakeoffTab({
   async function handleSendModelSelectionToEstimate(
     selection: BidwrightModelSelectionMessage,
     lineItemDraft?: BidwrightModelLineItemDraft,
+    lineItemDrafts?: BidwrightModelLineItemDraft[],
   ) {
-    const targetWs =
-      (lineItemDraft?.worksheetId
-        ? workspace.worksheets.find((worksheet) => worksheet.id === lineItemDraft.worksheetId)
-        : null) ?? selectedWorksheet;
-    if (!targetWs) {
-      setToastType("error");
-      setToastMessage("Create a worksheet before sending model quantities.");
-      return;
-    }
-
-    const fallbackPayload = buildModelSelectionLineItem(selection, {
-      fileName: selectedDoc?.fileName,
-      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-    });
-    const payload = normalizeModelLineItemDraft(lineItemDraft, fallbackPayload);
-
     try {
+      const draftList = (lineItemDrafts?.length
+        ? lineItemDrafts
+        : lineItemDraft
+          ? [lineItemDraft]
+          : buildModelSelectionObjectDrafts(selection, {
+              fileName: selectedDoc?.fileName,
+              markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+            })
+      ).slice(0, 250);
       const modelAsset = await resolveSelectedModelAsset();
-      const result = await createWorksheetItem(projectId, targetWs.id, payload);
-      const previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
-      const createdItem = result.workspace.worksheets
-        .flatMap((worksheet) => worksheet.items)
-        .find((item) => !previousItemIds.has(item.id));
+      let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      let createdCount = 0;
+      let targetWorksheetName = selectedWorksheet?.name ?? "worksheet";
 
-      if (modelAsset && createdItem) {
-        await createModelTakeoffLink(projectId, modelAsset.id, {
-          worksheetItemId: createdItem.id,
-          quantityField: "quantity",
-          multiplier: 1,
-          derivedQuantity: payload.quantity,
-          selection: {
-            fileName: selectedDoc?.fileName ?? selection.fileName ?? null,
-            documentId: selection.documentId ?? null,
-            documentName: selection.documentName ?? null,
-            selectedCount: selection.selectedCount,
-            nodes: selection.nodes,
-            totals: selection.totals,
-            lineItemDraft: payload,
-          },
+      for (const draft of draftList) {
+        const targetWs =
+          (draft?.worksheetId
+            ? workspace.worksheets.find((worksheet) => worksheet.id === draft.worksheetId)
+            : null) ?? selectedWorksheet;
+        if (!targetWs) {
+          setToastType("error");
+          setToastMessage("Create a worksheet before sending model quantities.");
+          return;
+        }
+        targetWorksheetName = targetWs.name;
+
+        const draftSelection = selectionFromDraft(selection, draft);
+        const fallbackPayload = buildModelSelectionLineItem(draftSelection, {
+          fileName: selectedDoc?.fileName,
+          markup: workspace.currentRevision.defaultMarkup ?? 0.2,
         });
+        const payload = normalizeModelLineItemDraft(draft, fallbackPayload);
+        const result = await createWorksheetItem(projectId, targetWs.id, payload);
+        const createdItem = result.workspace.worksheets
+          .flatMap((worksheet) => worksheet.items)
+          .find((item) => !previousItemIds.has(item.id));
+
+        if (modelAsset && createdItem) {
+          await createModelTakeoffLink(projectId, modelAsset.id, {
+            worksheetItemId: createdItem.id,
+            modelElementId: draft.source?.modelElementId ?? null,
+            modelQuantityId: draft.source?.modelQuantityId ?? null,
+            quantityField: "quantity",
+            multiplier: 1,
+            derivedQuantity: payload.quantity,
+            selection: {
+              fileName: selectedDoc?.fileName ?? selection.fileName ?? null,
+              documentId: draftSelection.documentId ?? null,
+              documentName: draftSelection.documentName ?? null,
+              selectedCount: draftSelection.selectedCount,
+              nodes: draftSelection.nodes,
+              totals: draftSelection.totals,
+              quantityBasis: draft.source?.quantityBasis ?? selection.quantityBasis ?? "count",
+              quantityType: draft.source?.quantityType ?? null,
+              source: draft.source ?? null,
+              lineItemDraft: payload,
+            },
+          });
+          createdCount += 1;
+        }
+
+        previousItemIds = new Set(result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      }
+
+      if (modelAsset) {
         await refreshModelTakeoffLinks(modelAsset.id);
       }
 
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage(`Created worksheet line item in ${targetWs.name}.`);
+      setToastMessage(`Created ${createdCount || draftList.length} model line item${(createdCount || draftList.length) === 1 ? "" : "s"} in ${targetWorksheetName}.`);
     } catch (err) {
       console.error("[takeoff] Failed to send model selection to estimate:", err);
       setToastType("error");
       setToastMessage("Could not send model quantity to the estimate.");
+    }
+  }
+
+  async function createLineItemFromModelElement(
+    element: ModelElementWithQuantities,
+    previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id)),
+  ) {
+    if (!selectedWorksheet) {
+      setToastType("error");
+      setToastMessage("Create a worksheet before sending model quantities.");
+      return null;
+    }
+    const modelAsset = await resolveSelectedModelAsset();
+    if (!modelAsset) {
+      setToastType("error");
+      setToastMessage("Sync the model index before creating model line items.");
+      return null;
+    }
+
+    const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+    const payload = buildModelElementLineItem(element, primary, {
+      fileName: selectedDoc?.fileName,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+    });
+    const result = await createWorksheetItem(projectId, selectedWorksheet.id, payload);
+    const createdItem = result.workspace.worksheets
+      .flatMap((worksheet) => worksheet.items)
+      .find((item) => !previousItemIds.has(item.id));
+    if (!createdItem) return null;
+
+    await createModelTakeoffLink(projectId, modelAsset.id, {
+      worksheetItemId: createdItem.id,
+      modelElementId: element.id,
+      modelQuantityId: primary.quantityId,
+      quantityField: "quantity",
+      multiplier: 1,
+      derivedQuantity: payload.quantity,
+      selection: {
+        mode: "model-element",
+        fileName: selectedDoc?.fileName ?? modelAsset.fileName,
+        modelElementId: element.id,
+        externalId: element.externalId,
+        elementName: element.name,
+        elementClass: element.elementClass,
+        material: element.material,
+        quantityBasis: modelLedgerBasis,
+        quantityType: primary.quantityType,
+        quantities: element.quantities ?? [],
+        lineItemDraft: payload,
+      },
+    });
+    return { createdItem, result };
+  }
+
+  async function handleCreateModelElementLineItem(element: ModelElementWithQuantities) {
+    try {
+      await createLineItemFromModelElement(element);
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Created model line item.");
+    } catch (error) {
+      console.error("[takeoff] Failed to create model element line item:", error);
+      setToastType("error");
+      setToastMessage("Could not create a line item from that model element.");
+    }
+  }
+
+  async function handleCreateSelectedModelElements() {
+    const candidates = selectedModelElements.filter((element) => !linkedModelElementIds.has(element.id));
+    if (candidates.length === 0) {
+      setToastType("error");
+      setToastMessage("Select unlinked model elements first.");
+      return;
+    }
+
+    try {
+      let created = 0;
+      let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      for (const element of candidates.slice(0, 250)) {
+        const createdResult = await createLineItemFromModelElement(element, previousItemIds);
+        if (createdResult?.createdItem) created += 1;
+        if (createdResult?.result) {
+          previousItemIds = new Set(createdResult.result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+        }
+      }
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setSelectedModelElementIds(new Set());
+      setToastType("success");
+      setToastMessage(`Created ${created} model line item${created === 1 ? "" : "s"}.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to create selected model line items:", error);
+      setToastType("error");
+      setToastMessage("Could not create model line items.");
     }
   }
 
@@ -1671,6 +1997,9 @@ export function TakeoffTab({
 
   async function handleDeleteModelLinkedLineItem(payload: { linkId: string; worksheetItemId: string }) {
     try {
+      if (selectedModelAsset?.id) {
+        await deleteModelTakeoffLink(projectId, selectedModelAsset.id, payload.linkId).catch(() => null);
+      }
       await deleteWorksheetItem(projectId, payload.worksheetItemId);
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
@@ -1777,7 +2106,7 @@ export function TakeoffTab({
                 sideOffset={4}
               >
                 <RadixSelect.Viewport className="p-1 max-h-64">
-                  {drawings.length === 0 && (
+                  {takeoffDocuments.length === 0 && (
                     <div className="px-2 py-1.5 text-xs text-fg/40">No drawings available</div>
                   )}
                   {projectPdfs.length > 0 && (
@@ -1786,6 +2115,25 @@ export function TakeoffTab({
                         Project Documents
                       </RadixSelect.Label>
                       {projectPdfs.map((d) => (
+                        <RadixSelect.Item
+                          key={d.id}
+                          value={d.id}
+                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
+                        >
+                          <RadixSelect.ItemIndicator className="shrink-0">
+                            <Check className="h-3 w-3 text-accent" />
+                          </RadixSelect.ItemIndicator>
+                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
+                        </RadixSelect.Item>
+                      ))}
+                    </RadixSelect.Group>
+                  )}
+                  {fileManagerModelDocuments.length > 0 && (
+                    <RadixSelect.Group>
+                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
+                        Project Files
+                      </RadixSelect.Label>
+                      {fileManagerModelDocuments.map((d) => (
                         <RadixSelect.Item
                           key={d.id}
                           value={d.id}
@@ -2226,7 +2574,7 @@ export function TakeoffTab({
                   fileName={selectedDoc?.fileName}
                   projectId={projectId}
                   modelAssetId={selectedModelAsset?.id}
-                  modelDocumentId={selectedDoc?.id}
+                  modelDocumentId={selectedDoc?.fileNodeId ?? selectedDoc?.id}
                   syncChannelName={takeoffChannelName(projectId)}
                   estimateTargetWorksheetId={selectedWorksheet?.id}
                   estimateTargetWorksheetName={selectedWorksheet?.name}
@@ -2323,24 +2671,32 @@ export function TakeoffTab({
             />
           </div>
         ) : (
-          <div className="flex w-72 shrink-0 flex-col border-l border-line bg-panel overflow-hidden">
-            <div className="border-b border-line px-4 py-3">
-              <p className="text-xs font-semibold text-fg">Model Takeoff</p>
-              <p className="mt-1 truncate text-[11px] text-fg/45">{selectedDoc?.fileName}</p>
+          <div className="flex w-96 shrink-0 flex-col border-l border-line bg-panel overflow-hidden">
+            <div className="border-b border-line px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="min-w-0 truncate text-xs font-semibold text-fg">{selectedDoc?.fileName}</p>
+                <Badge tone={selectedModelIsEditable ? "success" : "warning"} className="text-[10px]">
+                  {selectedModelIsEditable ? "Editable" : "Preview"}
+                </Badge>
+              </div>
+              <div className="mt-2 grid grid-cols-4 gap-1.5 text-center">
+                {[
+                  ["Objects", selectedModelAsset?._count?.elements ?? 0],
+                  ["Qty", selectedModelAsset?._count?.quantities ?? 0],
+                  ["Links", linkedModelLineItems.length],
+                  ["Issues", selectedModelAsset?._count?.issues ?? 0],
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-line bg-bg/50 px-2 py-1.5">
+                    <p className="text-[10px] text-fg/40">{label}</p>
+                    <p className="text-xs font-semibold text-fg/80">{value}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="space-y-3 p-4 text-xs text-fg/60">
+
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 text-xs text-fg/60">
               <div className="rounded-md border border-line bg-bg/50 p-3">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Editor</span>
-                  <Badge tone={selectedModelIsEditable ? "success" : "warning"} className="text-[10px]">
-                    {selectedModelIsEditable ? "BidWright 3D" : "Preview"}
-                  </Badge>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Source</span>
-                  <span className="truncate text-fg/70">{selectedDoc?.source === "knowledge" ? "Knowledge" : "Project"}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-fg/45">Index</span>
                   <Badge
                     tone={selectedModelAsset?.status === "indexed" ? "success" : selectedModelAsset ? "warning" : "info"}
@@ -2349,48 +2705,27 @@ export function TakeoffTab({
                     {modelSyncing ? "Syncing" : selectedModelAsset?.status ?? "Pending"}
                   </Badge>
                 </div>
-              </div>
-
-              <div className="rounded-md border border-line bg-bg/50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Elements</span>
-                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.elements ?? 0}</span>
-                </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Quantities</span>
-                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.quantities ?? 0}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">BOM Rows</span>
-                  <span className="font-medium text-fg/80">{selectedModelAsset?.bom?.length ?? 0}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Linked Items</span>
-                  <span className="font-medium text-fg/80">{linkedModelLineItems.length}</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Issues</span>
-                  <span className="font-medium text-fg/80">{selectedModelAsset?._count?.issues ?? 0}</span>
+                  <span className="text-fg/45">Parser</span>
+                  <span className="truncate text-fg/70">{String(selectedModelAsset?.manifest?.parser ?? selectedModelAsset?.format ?? "Not indexed")}</span>
                 </div>
               </div>
 
               {modelSelection && modelSelection.selectedCount > 0 && (
                 <div className="rounded-md border border-accent/30 bg-accent/5 p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-fg/45">Selected</span>
+                    <span className="text-fg/45">Selected in view</span>
                     <span className="font-medium text-fg/80">{modelSelection.selectedCount}</span>
                   </div>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <span className="text-fg/45">Area</span>
-                    <span className="font-medium text-fg/80">
-                      {formatModelSelectionQuantity(modelSelection.totals.surfaceArea, "model^2")}
-                    </span>
-                  </div>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <span className="text-fg/45">Volume</span>
-                    <span className="font-medium text-fg/80">
-                      {formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}
-                    </span>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
+                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
+                      <p className="text-[10px] text-fg/40">Area</p>
+                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.surfaceArea, "model^2")}</p>
+                    </div>
+                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
+                      <p className="text-[10px] text-fg/40">Volume</p>
+                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}</p>
+                    </div>
                   </div>
                   <Button
                     variant="secondary"
@@ -2399,23 +2734,130 @@ export function TakeoffTab({
                     onClick={() => void handleSendModelSelectionToEstimate(modelSelection)}
                   >
                     <ArrowDownToLine className="h-3.5 w-3.5" />
-                    Send Selection
+                    Create Object Rows
                   </Button>
+                </div>
+              )}
+
+              <div className="rounded-md border border-line bg-bg/50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Model Objects</p>
+                  {modelElementsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />}
+                </div>
+                <Input
+                  className="mt-2 h-8 text-xs"
+                  value={modelElementSearch}
+                  onChange={(event) => setModelElementSearch(event.target.value)}
+                  placeholder="Search objects, classes, materials..."
+                />
+                <div className="mt-2 flex items-center gap-1 rounded-md border border-line bg-panel p-0.5">
+                  {(["count", "area", "volume"] as ModelQuantityBasis[]).map((basis) => (
+                    <button
+                      key={basis}
+                      type="button"
+                      onClick={() => setModelLedgerBasis(basis)}
+                      className={cn(
+                        "flex-1 rounded px-2 py-1 text-[11px] font-medium capitalize transition-colors",
+                        modelLedgerBasis === basis ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
+                      )}
+                    >
+                      {basis}
+                    </button>
+                  ))}
+                </div>
+                {selectedModelElementIds.size > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-2 w-full justify-center"
+                    onClick={() => void handleCreateSelectedModelElements()}
+                  >
+                    <ArrowDownToLine className="h-3.5 w-3.5" />
+                    Create {selectedModelElementIds.size} Selected
+                  </Button>
+                )}
+                <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
+                  {modelElements.length === 0 && (
+                    <p className="rounded-md border border-line bg-panel/60 px-3 py-4 text-center text-[11px] text-fg/40">
+                      {selectedModelAsset ? "No model objects match this search." : "Sync the model index to list model objects."}
+                    </p>
+                  )}
+                  {modelElements.map((element) => {
+                    const linked = linkedModelElementIds.has(element.id);
+                    const selected = selectedModelElementIds.has(element.id);
+                    return (
+                      <div
+                        key={element.id}
+                        className={cn(
+                          "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2",
+                          linked ? "border-success/25 bg-success/5" : selected ? "border-accent/35 bg-accent/5" : "border-line bg-panel/60",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={linked}
+                          onChange={(event) => {
+                            const next = new Set(selectedModelElementIds);
+                            if (event.target.checked) next.add(element.id);
+                            else next.delete(element.id);
+                            setSelectedModelElementIds(next);
+                          }}
+                          className="h-3.5 w-3.5 rounded border-line accent-sky-500 disabled:opacity-30"
+                          aria-label={`Select ${element.name || element.externalId}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="truncate text-[11px] font-semibold text-fg/80">{element.name || element.externalId}</p>
+                          <p className="mt-0.5 truncate text-[10px] text-fg/40">
+                            {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
+                          </p>
+                          <p className="mt-1 text-[10px] font-medium text-fg/60">{formatElementQuantity(element, modelLedgerBasis)}</p>
+                        </div>
+                        {linked ? (
+                          <Badge tone="success" className="text-[10px]">Linked</Badge>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            title="Create line item"
+                            onClick={() => void handleCreateModelElementLineItem(element)}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {linkedModelLineItems.length > 0 && (
+                <div className="rounded-md border border-line bg-bg/50 p-3">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Linked Line Items</p>
+                  <div className="mt-2 space-y-1.5">
+                    {linkedModelLineItems.slice(0, 8).map((item) => (
+                      <div key={item.linkId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-line bg-panel/60 px-2 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-[11px] font-semibold text-fg/80">{item.entityName}</p>
+                          <p className="text-[10px] text-fg/45">{formatModelSelectionQuantity(item.quantity, item.uom)}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          title="Delete linked line item"
+                          onClick={() => void handleDeleteModelLinkedLineItem({ linkId: item.linkId, worksheetItemId: item.worksheetItemId })}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
               {modelError && (
                 <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-[11px] text-danger">
                   {modelError}
-                </div>
-              )}
-
-              {selectedModelAsset && (
-                <div className="rounded-md border border-line bg-bg/50 p-3">
-                  <p className="text-[10px] uppercase tracking-wide text-fg/35">Manifest</p>
-                  <p className="mt-1 truncate text-[11px] text-fg/70">
-                    {String(selectedModelAsset.manifest?.parser ?? selectedModelAsset.format)}
-                  </p>
                 </div>
               )}
 
@@ -2435,7 +2877,7 @@ export function TakeoffTab({
                 size="sm"
                 className="w-full justify-center"
                 onClick={() => onOpenAgentChat?.(
-                  `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Use listModels, getModelManifest, queryModelElements, and extractModelBom, then prepare model takeoff quantities for this estimate.`
+                  `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`
                 )}
               >
                 <BrainCircuit className="h-3.5 w-3.5" />
@@ -2679,7 +3121,7 @@ export function TakeoffTab({
         <p className="text-[11px] text-fg/40">
           {isCadDocument
             ? selectedModelIsEditable
-              ? "BidWright model editor active."
+              ? "Model editor active."
               : "3D model preview active."
             : TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>

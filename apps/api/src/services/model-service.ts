@@ -1131,7 +1131,16 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   }
 
   const limit = Math.max(1, Math.min(1000, Number(filters.limit) || 100));
-  return prisma.modelElement.findMany({ where, take: limit, orderBy: [{ elementClass: "asc" }, { name: "asc" }] });
+  return prisma.modelElement.findMany({
+    where,
+    take: limit,
+    orderBy: [{ elementClass: "asc" }, { name: "asc" }],
+    include: {
+      quantities: {
+        orderBy: [{ quantityType: "asc" }, { createdAt: "asc" }],
+      },
+    },
+  });
 }
 
 export async function getModelBom(projectId: string, modelId: string) {

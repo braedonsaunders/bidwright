@@ -257,6 +257,84 @@
             white-space: nowrap;
         }
 
+        & .bidwrightSelectedObjects {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        & .bidwrightSelectedObjectsHeader {
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+
+        & .bidwrightSelectedObjectsEmpty {
+            color: var(--foreground-secondary-color);
+            font-size: 11px;
+            line-height: 1.25;
+        }
+
+        & .bidwrightSelectedObjectsList {
+            display: flex;
+            min-width: 0;
+            max-height: 190px;
+            flex-direction: column;
+            gap: 6px;
+            overflow: auto;
+        }
+
+        & .bidwrightSelectedObject {
+            display: grid;
+            min-width: 0;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 6px;
+            padding: 6px 7px;
+            background: rgba(148, 163, 184, 0.06);
+        }
+
+        & .bidwrightSelectedObjectMeta {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        & .bidwrightSelectedObjectName {
+            overflow: hidden;
+            color: var(--foreground-color);
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.15;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightSelectedObjectKind,
+        & .bidwrightSelectedObjectsMore {
+            overflow: hidden;
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.15;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightSelectedObjectQuantity {
+            color: var(--foreground-color);
+            font-size: 11px;
+            font-weight: 750;
+            line-height: 1;
+            white-space: nowrap;
+        }
+
         & .bidwrightLinkedItems {
             display: flex;
             min-width: 0;

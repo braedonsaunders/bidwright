@@ -33,6 +33,9 @@ interface BidWrightSelectionNode {
     id: string;
     name: string;
     kind: string;
+    path?: string[];
+    externalId?: string;
+    modelElementId?: string;
     surfaceArea?: number;
     volume?: number;
     faceCount?: number;
@@ -102,9 +105,13 @@ interface BidWrightLineItemDraft {
         kind: "model-selection";
         projectId?: string;
         modelId?: string;
+        modelElementId?: string;
+        modelQuantityId?: string;
         modelDocumentId?: string;
         fileName?: string;
         documentId?: string;
+        quantityBasis?: BidWrightQuantityBasis;
+        quantityType?: string;
         selectedNodeIds: string[];
     };
 }
@@ -234,6 +241,39 @@ function primaryBidWrightSelectionQuantity(
     return { quantity: Math.max(1, selection.selectedCount), uom: "EA", label: "3D selected elements" };
 }
 
+function finiteMetric(value: number | undefined) {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function primaryBidWrightNodeQuantity(node: BidWrightSelectionNode, basis: BidWrightQuantityBasis = "count") {
+    if (basis === "area" && finiteMetric(node.surfaceArea) > 0) {
+        return { quantity: finiteMetric(node.surfaceArea), uom: "model^2", label: "3D surface area", quantityType: "surface_area" };
+    }
+    if (basis === "volume" && finiteMetric(node.volume) > 0) {
+        return { quantity: finiteMetric(node.volume), uom: "model^3", label: "3D volume", quantityType: "volume" };
+    }
+    return { quantity: 1, uom: "EA", label: "3D model object", quantityType: "count" };
+}
+
+function selectionFromBidWrightNode(
+    selection: BidWrightModelSelectionMessage,
+    node: BidWrightSelectionNode,
+    basis: BidWrightQuantityBasis,
+): BidWrightModelSelectionMessage {
+    return {
+        ...selection,
+        quantityBasis: basis,
+        selectedCount: 1,
+        nodes: [node],
+        totals: {
+            surfaceArea: finiteMetric(node.surfaceArea),
+            volume: finiteMetric(node.volume),
+            faceCount: finiteMetric(node.faceCount),
+            solidCount: finiteMetric(node.solidCount),
+        },
+    };
+}
+
 function buildBidWrightLineItemDraft(
     context: BidWrightContext,
     selection: BidWrightModelSelectionMessage,
@@ -277,14 +317,57 @@ function buildBidWrightLineItemDraft(
             modelDocumentId: context.modelDocumentId,
             fileName: context.fileName,
             documentId: selection.documentId,
+            quantityBasis: basis,
+            quantityType: primary.uom === "model^2" ? "surface_area" : primary.uom === "model^3" ? "volume" : "count",
             selectedNodeIds: selection.nodes.map((node) => node.id),
         },
     };
 }
 
+function buildBidWrightObjectLineItemDrafts(
+    context: BidWrightContext,
+    selection: BidWrightModelSelectionMessage,
+    basis: BidWrightQuantityBasis = "count",
+): BidWrightLineItemDraft[] {
+    return selection.nodes.map((node) => {
+        const nodeSelection = selectionFromBidWrightNode(selection, node, basis);
+        const draft = buildBidWrightLineItemDraft(context, nodeSelection, basis);
+        const primary = primaryBidWrightNodeQuantity(node, basis);
+        return {
+            ...draft,
+            entityName: node.name || draft.entityName,
+            entityType: node.kind || draft.entityType,
+            quantity: primary.quantity,
+            uom: primary.uom,
+            sourceNotes: [
+                draft.sourceNotes,
+                node.externalId ? `Model object id: ${node.externalId}` : `Editor object id: ${node.id}`,
+                node.path?.length ? `Path: ${node.path.join(" / ")}` : "",
+            ].filter(Boolean).join("\n"),
+            source: {
+                ...draft.source,
+                modelElementId: node.modelElementId,
+                quantityBasis: basis,
+                quantityType: primary.quantityType,
+                selectedNodeIds: [node.id],
+            },
+        };
+    });
+}
+
+function nodePath(node: INode) {
+    const path: string[] = [];
+    let cursor: INode | undefined = node;
+    while (cursor) {
+        if (cursor.name) path.unshift(cursor.name);
+        cursor = cursor.parent;
+    }
+    return path.slice(-10);
+}
+
 function summarizeShapeNode(node: ShapeNode): BidWrightSelectionNode {
     if (!node.shape.isOk) {
-        return { id: node.id, name: node.name, kind: node.constructor.name };
+        return { id: node.id, name: node.name, kind: node.constructor.name, path: nodePath(node), externalId: node.id };
     }
 
     const sourceShape = node.shape.value;
@@ -299,6 +382,8 @@ function summarizeShapeNode(node: ShapeNode): BidWrightSelectionNode {
             id: node.id,
             name: node.name,
             kind: node.constructor.name,
+            path: nodePath(node),
+            externalId: node.id,
             surfaceArea,
             volume,
             faceCount: faces.length,
@@ -318,6 +403,8 @@ function summarizeSelectionNode(node: INode): BidWrightSelectionNode {
         id: node.id,
         name: node.name,
         kind: node.constructor.name,
+        path: nodePath(node),
+        externalId: node.id,
     };
 }
 
@@ -338,6 +425,8 @@ export class Editor extends HTMLElement {
     private _bidwrightEstimateVolume?: HTMLSpanElement;
     private _bidwrightEstimateFaces?: HTMLSpanElement;
     private _bidwrightEstimateSolids?: HTMLSpanElement;
+    private _bidwrightSelectedObjectsList?: HTMLDivElement;
+    private _bidwrightSelectedObjectsEmpty?: HTMLSpanElement;
     private _bidwrightLinkedItemsList?: HTMLDivElement;
     private _bidwrightLinkedItemsEmpty?: HTMLSpanElement;
     private _lastBidWrightSelection?: BidWrightModelSelectionMessage;
@@ -619,7 +708,7 @@ export class Editor extends HTMLElement {
                 title: "Estimate",
                 items: [
                     {
-                        label: "Create Line Item",
+                        label: (this._lastBidWrightSelection?.selectedCount ?? 0) > 1 ? "Create Line Items" : "Create Line Item",
                         icon: "icon-tag",
                         shortcut: "BidWright",
                         disabled: !canSendToEstimate,
@@ -1011,6 +1100,18 @@ export class Editor extends HTMLElement {
             solidsMetric.item,
         );
 
+        const selectedObjects = document.createElement("div");
+        selectedObjects.className = style.bidwrightSelectedObjects;
+        const selectedObjectsHeader = document.createElement("div");
+        selectedObjectsHeader.className = style.bidwrightSelectedObjectsHeader;
+        selectedObjectsHeader.textContent = "Selected objects";
+        const selectedObjectsEmpty = document.createElement("span");
+        selectedObjectsEmpty.className = style.bidwrightSelectedObjectsEmpty;
+        selectedObjectsEmpty.textContent = "Select model geometry to build object-level takeoff rows";
+        const selectedObjectsList = document.createElement("div");
+        selectedObjectsList.className = style.bidwrightSelectedObjectsList;
+        selectedObjects.append(selectedObjectsHeader, selectedObjectsEmpty, selectedObjectsList);
+
         const linkedItems = document.createElement("div");
         linkedItems.className = style.bidwrightLinkedItems;
         const linkedHeader = document.createElement("div");
@@ -1023,7 +1124,7 @@ export class Editor extends HTMLElement {
         linkedList.className = style.bidwrightLinkedItemsList;
         linkedItems.append(linkedHeader, linkedEmpty, linkedList);
 
-        body.append(summary, details, metrics, linkedItems);
+        body.append(summary, details, metrics, selectedObjects, linkedItems);
         view.append(header, body);
         this._bidwrightEstimateStatus = status;
         this._bidwrightEstimateButton = button;
@@ -1036,6 +1137,8 @@ export class Editor extends HTMLElement {
         this._bidwrightEstimateVolume = volumeMetric.value;
         this._bidwrightEstimateFaces = facesMetric.value;
         this._bidwrightEstimateSolids = solidsMetric.value;
+        this._bidwrightSelectedObjectsEmpty = selectedObjectsEmpty;
+        this._bidwrightSelectedObjectsList = selectedObjectsList;
         this._bidwrightLinkedItemsEmpty = linkedEmpty;
         this._bidwrightLinkedItemsList = linkedList;
         this._updateBidWrightEstimatePanel();
@@ -1411,6 +1514,44 @@ export class Editor extends HTMLElement {
         }
     }
 
+    private _renderBidWrightSelectedObjects(selection = this._lastBidWrightSelection) {
+        if (!this._bidwrightSelectedObjectsList || !this._bidwrightSelectedObjectsEmpty) return;
+
+        this._bidwrightSelectedObjectsList.replaceChildren();
+        const nodes = selection?.nodes ?? [];
+        this._bidwrightSelectedObjectsEmpty.style.display = nodes.length > 0 ? "none" : "";
+
+        for (const node of nodes.slice(0, 120)) {
+            const primary = primaryBidWrightNodeQuantity(node, this._bidwrightQuantityBasis);
+            const row = document.createElement("div");
+            row.className = style.bidwrightSelectedObject;
+
+            const meta = document.createElement("div");
+            meta.className = style.bidwrightSelectedObjectMeta;
+            const name = document.createElement("span");
+            name.className = style.bidwrightSelectedObjectName;
+            name.textContent = node.name || node.id;
+            const kind = document.createElement("span");
+            kind.className = style.bidwrightSelectedObjectKind;
+            kind.textContent = node.kind || "Model object";
+            meta.append(name, kind);
+
+            const quantity = document.createElement("span");
+            quantity.className = style.bidwrightSelectedObjectQuantity;
+            quantity.textContent = formatModelQuantity(primary.quantity, primary.uom);
+
+            row.append(meta, quantity);
+            this._bidwrightSelectedObjectsList.append(row);
+        }
+
+        if (nodes.length > 120) {
+            const more = document.createElement("div");
+            more.className = style.bidwrightSelectedObjectsMore;
+            more.textContent = `${formatModelNumber(nodes.length - 120)} more selected objects`;
+            this._bidwrightSelectedObjectsList.append(more);
+        }
+    }
+
     private _updateBidWrightEstimatePanel(selection = this._lastBidWrightSelection) {
         if (!this._bidwrightEstimateStatus || !this._bidwrightEstimateButton) return;
 
@@ -1425,6 +1566,7 @@ export class Editor extends HTMLElement {
         const worksheetLabel = this._bidwrightContext.estimateTargetWorksheetName ?? "No worksheet selected";
 
         if (!selection || selection.selectedCount === 0) {
+            this._bidwrightEstimateButton.textContent = "Create Line Item";
             this._bidwrightEstimateStatus.textContent = "Select model geometry";
             this._bidwrightEstimateModel!.textContent = this._bidwrightContext.fileName ?? "Model quantity";
             this._bidwrightEstimateWorksheet!.textContent = worksheetLabel;
@@ -1435,15 +1577,22 @@ export class Editor extends HTMLElement {
             this._bidwrightEstimateFaces!.textContent = "-";
             this._bidwrightEstimateSolids!.textContent = "-";
         } else {
-            const lineItemDraft = buildBidWrightLineItemDraft(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
+            const lineItemDrafts = buildBidWrightObjectLineItemDrafts(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
+            const lineItemDraft = lineItemDrafts[0] ?? buildBidWrightLineItemDraft(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
             const firstNode = selection.nodes[0]?.name ?? "Model quantity";
+            this._bidwrightEstimateButton.textContent =
+                selection.selectedCount > 1 ? `Create ${formatModelNumber(selection.selectedCount)} Items` : "Create Line Item";
             this._bidwrightEstimateStatus.textContent =
-                selection.selectedCount === 1 ? firstNode : `${selection.selectedCount} model elements`;
+                selection.selectedCount === 1 ? firstNode : `${selection.selectedCount} selected objects`;
             this._bidwrightEstimateModel!.textContent =
                 selection.documentName ?? selection.fileName ?? this._bidwrightContext.fileName ?? "";
             this._bidwrightEstimateWorksheet!.textContent = worksheetLabel;
-            this._bidwrightEstimateLineItem!.textContent = lineItemDraft.entityName;
-            this._bidwrightEstimateQuantity!.textContent = formatModelQuantity(lineItemDraft.quantity, lineItemDraft.uom);
+            this._bidwrightEstimateLineItem!.textContent =
+                selection.selectedCount === 1 ? lineItemDraft.entityName : `${selection.selectedCount} worksheet rows`;
+            this._bidwrightEstimateQuantity!.textContent =
+                selection.selectedCount === 1
+                    ? formatModelQuantity(lineItemDraft.quantity, lineItemDraft.uom)
+                    : `${formatModelNumber(selection.selectedCount)} object rows`;
             this._bidwrightEstimateArea!.textContent = formatModelQuantity(selection.totals.surfaceArea, "model^2");
             this._bidwrightEstimateVolume!.textContent = formatModelQuantity(selection.totals.volume, "model^3");
             this._bidwrightEstimateFaces!.textContent = formatModelNumber(selection.totals.faceCount);
@@ -1464,8 +1613,9 @@ export class Editor extends HTMLElement {
         } else if (!selection || selection.selectedCount === 0) {
             this._bidwrightEstimateButton.title = "Select model geometry to send";
         } else {
-            this._bidwrightEstimateButton.title = "Create a worksheet line item from the selected geometry";
+            this._bidwrightEstimateButton.title = "Create worksheet line items from the selected model objects";
         }
+        this._renderBidWrightSelectedObjects(selection);
     }
 
     private _postBidWrightSelection(selection: BidWrightModelSelectionMessage) {
@@ -1480,6 +1630,7 @@ export class Editor extends HTMLElement {
         selection: BidWrightModelSelectionMessage,
         eventId?: string,
         lineItemDraft?: BidWrightLineItemDraft,
+        lineItemDrafts?: BidWrightLineItemDraft[],
     ) {
         this._bidwrightChannel?.postMessage({
             type,
@@ -1492,6 +1643,7 @@ export class Editor extends HTMLElement {
             modelDocumentId: this._bidwrightContext.modelDocumentId,
             selection,
             lineItemDraft,
+            lineItemDrafts,
         });
     }
 
@@ -1501,7 +1653,8 @@ export class Editor extends HTMLElement {
         if (!this._bidwrightContext.estimateTargetWorksheetId) return;
 
         const eventId = makeBidWrightEventId("model-estimate");
-        const lineItemDraft = buildBidWrightLineItemDraft(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
+        const lineItemDrafts = buildBidWrightObjectLineItemDrafts(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
+        const lineItemDraft = lineItemDrafts[0] ?? buildBidWrightLineItemDraft(this._bidwrightContext, selection, this._bidwrightQuantityBasis);
         const message = {
             type: "bidwright:model-send-to-estimate",
             source: "bidwright-model-editor",
@@ -1512,14 +1665,15 @@ export class Editor extends HTMLElement {
             modelDocumentId: this._bidwrightContext.modelDocumentId,
             selection,
             lineItemDraft,
+            lineItemDrafts,
         };
 
         if (window.parent && window.parent !== window) {
             window.parent.postMessage(message, window.location.origin);
         }
-        this._postBidWrightBroadcast("model-send-to-estimate", selection, eventId, lineItemDraft);
+        this._postBidWrightBroadcast("model-send-to-estimate", selection, eventId, lineItemDraft, lineItemDrafts);
         if (this._bidwrightEstimateStatus) {
-            this._bidwrightEstimateStatus.textContent = "Line item sent";
+            this._bidwrightEstimateStatus.textContent = selection.selectedCount > 1 ? "Line items sent" : "Line item sent";
         }
     };
 

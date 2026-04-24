@@ -4182,6 +4182,7 @@ export interface ModelElement {
   bbox: Record<string, unknown>;
   geometryRef: string;
   properties: Record<string, unknown>;
+  quantities?: ModelQuantity[];
   createdAt: string;
   updatedAt: string;
 }
@@ -4260,6 +4261,27 @@ export async function getModelAsset(projectId: string, modelId: string) {
 export async function getModelBom(projectId: string, modelId: string) {
   return apiRequest<{ model: ModelAsset; rows: Array<Record<string, unknown>>; rowCount: number }>(
     `/api/models/${projectId}/assets/${modelId}/bom`,
+  );
+}
+
+export async function queryModelElements(projectId: string, modelId: string, filters: {
+  text?: string;
+  elementClass?: string;
+  elementType?: string;
+  system?: string;
+  level?: string;
+  material?: string;
+  name?: string;
+  limit?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    params.set(key, String(value));
+  });
+  const qs = params.toString();
+  return apiRequest<{ elements: ModelElement[]; count: number }>(
+    `/api/models/${projectId}/assets/${modelId}/elements${qs ? `?${qs}` : ""}`,
   );
 }
 
