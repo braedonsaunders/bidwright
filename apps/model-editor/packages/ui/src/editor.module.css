@@ -402,6 +402,140 @@
     flex-direction: column;
 }
 
+.contextMenu {
+    position: fixed;
+    z-index: 10000;
+    display: flex;
+    width: min(330px, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    flex-direction: column;
+    overflow: auto;
+    border: 1px solid rgba(148, 163, 184, 0.32);
+    border-radius: 8px;
+    background: var(--background-color);
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.34), 0 4px 16px rgba(15, 23, 42, 0.22);
+    color: var(--foreground-color);
+    outline: none;
+    padding: 6px;
+}
+
+.contextMenuHeader {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+    padding: 7px 8px 8px;
+}
+
+.contextMenuTitle {
+    overflow: hidden;
+    font-size: 12px;
+    font-weight: 750;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.contextMenuSubtitle {
+    overflow: hidden;
+    color: var(--foreground-secondary-color);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.contextMenuSection {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 0;
+}
+
+.contextMenuSection + .contextMenuSection {
+    border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.contextMenuSectionTitle {
+    color: var(--foreground-secondary-color);
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.1;
+    padding: 4px 8px 3px;
+    text-transform: uppercase;
+}
+
+.contextMenuItem {
+    display: grid;
+    min-width: 0;
+    width: 100%;
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--foreground-color);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.2;
+    padding: 7px 8px;
+    text-align: left;
+}
+
+.contextMenuItem:hover:not(:disabled),
+.contextMenuItem:focus-visible:not(:disabled) {
+    background: rgba(56, 189, 248, 0.14);
+}
+
+.contextMenuItem:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+.contextMenuItemChecked {
+    color: #0284c7;
+    font-weight: 750;
+}
+
+.contextMenuItemDanger {
+    color: #dc2626;
+}
+
+.contextMenuIcon {
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
+    align-items: center;
+    justify-content: center;
+}
+
+.contextMenuSvg {
+    width: 16px;
+    height: 16px;
+    color: currentColor;
+    fill: currentColor;
+}
+
+.contextMenuLabel {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.contextMenuShortcut {
+    color: var(--foreground-secondary-color);
+    font-size: 10px;
+    font-weight: 650;
+    line-height: 1;
+    white-space: nowrap;
+}
+
 @media (max-width: 680px) {
     .content {
         flex-direction: column-reverse;
