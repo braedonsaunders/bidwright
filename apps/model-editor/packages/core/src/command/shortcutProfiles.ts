@@ -5,8 +5,6 @@ type ShortcutMap = Partial<Record<CommandKeys, string | string[]>>;
 
 export const BidWrightShortcuts: ShortcutMap = {
     // System
-    "doc.save": "ctrl+s",
-    "doc.open": "ctrl+o",
     "edit.undo": "ctrl+z",
     "edit.redo": ["ctrl+y", "ctrl+shift+z"],
     "modify.deleteNode": ["Delete", "Backspace"],

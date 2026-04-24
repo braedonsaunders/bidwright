@@ -6,7 +6,6 @@ import {
     type CommandKeys,
     CommandStore,
     Config,
-    I18n,
     type IApplication,
     type ICommand,
     type IConverter,
@@ -137,12 +136,6 @@ export class RibbonUI extends HTMLElement {
                 className: style.views,
                 sources: this.app.views,
                 template: (view) => this.createViewItem(view),
-            }),
-            svg({
-                className: style.new,
-                icon: "icon-plus",
-                title: I18n.translate("command.doc.new"),
-                onclick: () => PubSub.default.pub("executeCommand", "doc.new"),
             }),
         );
     }

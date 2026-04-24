@@ -19,7 +19,7 @@ import { showFloatPanel } from "./floatPanel";
 import { Permanent } from "./permanent";
 import { Toast } from "./toast";
 
-const quickCommands: CommandKeys[] = ["doc.save", "doc.saveToFile", "edit.undo", "edit.redo"];
+const quickCommands: CommandKeys[] = ["edit.undo", "edit.redo"];
 
 export class MainWindow extends HTMLElement implements IWindow {
     readonly ribbon: Ribbon;
