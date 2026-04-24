@@ -943,6 +943,32 @@ export interface ProjectsResponse {
   departments: OrgDepartment[];
 }
 
+export interface CreateProjectInput {
+  name: string;
+  clientName: string;
+  customerId?: string | null;
+  location: string;
+  packageName?: string;
+  scope?: string;
+  creationMode?: "manual" | "intake";
+  summary?: string;
+}
+
+export interface CreateProjectResult {
+  project: ProjectListItem;
+  quote: ProjectListItem["quote"];
+  revision: QuoteRevision | null;
+  workspaceState: WorkspaceStateRecord | null;
+}
+
+export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
+  return apiRequest<CreateProjectResult>("/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getProjects(): Promise<ProjectListItem[]> {
   const res = await apiRequest<ProjectListItem[] | ProjectsResponse>("/projects");
   // Handle both old (array) and new (object with users/departments) response shapes
