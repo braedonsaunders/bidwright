@@ -5,7 +5,6 @@ import {
     type Act,
     Constants,
     History,
-    I18n,
     type IApplication,
     type IDocument,
     Id,
@@ -94,10 +93,6 @@ export class Document extends Observable implements IDocument {
     }
 
     async close() {
-        if (window.confirm(I18n.translate("prompt.saveDocument{0}", this.name))) {
-            await this.save();
-        }
-
         const views = this.application.views.filter((x) => x.document === this);
         this.application.views.remove(...views);
         this.application.activeView = this.application.views.at(0);
