@@ -1146,6 +1146,64 @@ export async function getModelBom(projectId: string, modelId: string) {
   };
 }
 
+function mapModelTakeoffLink(link: any) {
+  return {
+    id: link.id,
+    projectId: link.projectId,
+    modelId: link.modelId,
+    modelElementId: link.modelElementId ?? null,
+    modelQuantityId: link.modelQuantityId ?? null,
+    worksheetItemId: link.worksheetItemId,
+    quantityField: link.quantityField,
+    multiplier: link.multiplier,
+    derivedQuantity: link.derivedQuantity,
+    selection: link.selection ?? {},
+    createdAt: link.createdAt instanceof Date ? link.createdAt.toISOString() : link.createdAt,
+    updatedAt: link.updatedAt instanceof Date ? link.updatedAt.toISOString() : link.updatedAt,
+    modelElement: link.modelElement ?? null,
+    modelQuantity: link.modelQuantity ?? null,
+    worksheetItem: link.worksheetItem
+      ? {
+          ...link.worksheetItem,
+          worksheet: link.worksheetItem.worksheet
+            ? {
+                id: link.worksheetItem.worksheet.id,
+                name: link.worksheetItem.worksheet.name,
+                order: link.worksheetItem.worksheet.order,
+              }
+            : null,
+        }
+      : null,
+  };
+}
+
+export async function listModelTakeoffLinks(projectId: string, modelId: string) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId } });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+
+  const links = await prisma.modelTakeoffLink.findMany({
+    where: { projectId, modelId },
+    orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    include: {
+      modelElement: true,
+      modelQuantity: true,
+      worksheetItem: {
+        include: {
+          worksheet: {
+            select: {
+              id: true,
+              name: true,
+              order: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return links.map(mapModelTakeoffLink);
+}
+
 export async function createModelTakeoffLink(projectId: string, input: {
   modelId: string;
   modelElementId?: string | null;
@@ -1153,11 +1211,19 @@ export async function createModelTakeoffLink(projectId: string, input: {
   worksheetItemId: string;
   quantityField?: string;
   multiplier?: number;
+  derivedQuantity?: number;
+  selection?: unknown;
 }) {
   const model = await prisma.modelAsset.findFirst({ where: { id: input.modelId, projectId } });
   if (!model) throw new Error(`Model ${input.modelId} not found`);
-  const item = await prisma.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+  const item = await prisma.worksheetItem.findFirst({
+    where: { id: input.worksheetItemId },
+    include: { worksheet: { include: { revision: { include: { quote: true } } } } },
+  });
   if (!item) throw new Error(`Worksheet item ${input.worksheetItemId} not found`);
+  if (item.worksheet.revision.quote.projectId !== projectId) {
+    throw new Error(`Worksheet item ${input.worksheetItemId} not found for project ${projectId}`);
+  }
 
   const quantity = input.modelQuantityId
     ? await prisma.modelQuantity.findFirst({ where: { id: input.modelQuantityId, modelId: input.modelId } })
@@ -1175,7 +1241,17 @@ export async function createModelTakeoffLink(projectId: string, input: {
       worksheetItemId: input.worksheetItemId,
       quantityField: input.quantityField ?? "quantity",
       multiplier,
-      derivedQuantity: (quantity?.value ?? 0) * multiplier,
+      derivedQuantity: typeof input.derivedQuantity === "number" && Number.isFinite(input.derivedQuantity)
+        ? input.derivedQuantity
+        : (quantity?.value ?? item.quantity ?? 0) * multiplier,
+      selection: (input.selection ?? {}) as any,
     },
   });
+}
+
+export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
+  const link = await prisma.modelTakeoffLink.findFirst({ where: { id: linkId, projectId, modelId } });
+  if (!link) throw new Error(`Model takeoff link ${linkId} not found`);
+  await prisma.modelTakeoffLink.delete({ where: { id: linkId } });
+  return { deleted: true };
 }

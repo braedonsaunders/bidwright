@@ -28,6 +28,271 @@
             flex: 1 1 auto;
             height: 0;
         }
+
+        & .bidwrightEstimateView {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: column;
+            margin-top: 10px;
+            min-height: 0;
+        }
+
+        & .bidwrightEstimateHeader {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 0 12px;
+        }
+
+        & .bidwrightEstimateTitle {
+            flex: 1;
+            min-width: 0;
+            margin: 2px 6px;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+
+        & .bidwrightEstimateButton {
+            flex: 0 0 auto;
+            min-width: 0;
+            border: 1px solid rgba(56, 189, 248, 0.5);
+            border-radius: 6px;
+            background: #e0f2fe;
+            color: #0f172a;
+            padding: 4px 8px;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.2;
+            cursor: pointer;
+        }
+
+        & .bidwrightEstimateButton:hover:not(:disabled) {
+            background: #bae6fd;
+        }
+
+        & .bidwrightEstimateButton:disabled {
+            cursor: not-allowed;
+            opacity: 0.42;
+        }
+
+        & .bidwrightEstimateBody {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 12px 12px;
+            border-top: 2px solid transparent;
+            border-bottom: 2px solid transparent;
+            background-color: var(--panel-background-color);
+        }
+
+        & .bidwrightEstimateSummary {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        & .bidwrightEstimateStatus {
+            overflow: hidden;
+            color: var(--foreground-color);
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.25;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightEstimateModel {
+            overflow: hidden;
+            color: var(--foreground-secondary-color);
+            font-size: 11px;
+            line-height: 1.2;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightEstimateDetails {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 5px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 6px;
+            padding: 7px;
+            background: rgba(15, 23, 42, 0.05);
+        }
+
+        & .bidwrightEstimateDetail {
+            display: grid;
+            min-width: 0;
+            grid-template-columns: 72px minmax(0, 1fr);
+            gap: 8px;
+            align-items: center;
+        }
+
+        & .bidwrightEstimateDetailLabel {
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+
+        & .bidwrightEstimateDetailValue {
+            overflow: hidden;
+            color: var(--foreground-color);
+            font-size: 11px;
+            font-weight: 650;
+            line-height: 1.2;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightEstimateMetrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+
+        & .bidwrightEstimateMetric {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 2px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 6px;
+            padding: 6px 7px;
+            background: rgba(148, 163, 184, 0.08);
+        }
+
+        & .bidwrightEstimateMetricLabel {
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+
+        & .bidwrightEstimateMetricValue {
+            overflow: hidden;
+            color: var(--foreground-color);
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.2;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        & .bidwrightLinkedItems {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        & .bidwrightLinkedItemsHeader {
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.1;
+            text-transform: uppercase;
+        }
+
+        & .bidwrightLinkedItemsEmpty {
+            color: var(--foreground-secondary-color);
+            font-size: 11px;
+            line-height: 1.25;
+        }
+
+        & .bidwrightLinkedItemsList {
+            display: flex;
+            min-width: 0;
+            max-height: 260px;
+            flex-direction: column;
+            gap: 7px;
+            overflow: auto;
+        }
+
+        & .bidwrightLinkedItem {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 6px;
+            border: 1px solid rgba(56, 189, 248, 0.24);
+            border-radius: 6px;
+            padding: 7px;
+            background: rgba(56, 189, 248, 0.06);
+        }
+
+        & .bidwrightLinkedItemMeta,
+        & .bidwrightLinkedItemActions,
+        & .bidwrightLinkedItemQuantityRow {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            gap: 6px;
+        }
+
+        & .bidwrightLinkedItemMeta {
+            justify-content: space-between;
+            color: var(--foreground-secondary-color);
+            font-size: 10px;
+            line-height: 1.1;
+        }
+
+        & .bidwrightLinkedItemName,
+        & .bidwrightLinkedItemQuantity,
+        & .bidwrightLinkedItemUom {
+            min-width: 0;
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            border-radius: 5px;
+            background: var(--background-color);
+            color: var(--foreground-color);
+            font: inherit;
+            font-size: 11px;
+            line-height: 1.2;
+            padding: 5px 6px;
+        }
+
+        & .bidwrightLinkedItemName {
+            width: 100%;
+        }
+
+        & .bidwrightLinkedItemQuantity {
+            flex: 1 1 auto;
+            width: 0;
+        }
+
+        & .bidwrightLinkedItemUom {
+            flex: 0 0 62px;
+            width: 62px;
+            text-transform: uppercase;
+        }
+
+        & .bidwrightLinkedItemActions button {
+            flex: 1;
+            min-width: 0;
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            border-radius: 5px;
+            background: var(--background-color);
+            color: var(--foreground-color);
+            cursor: pointer;
+            font: inherit;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.2;
+            padding: 5px 6px;
+        }
+
+        & .bidwrightLinkedItemActions button:hover {
+            background: rgba(148, 163, 184, 0.12);
+        }
+
+        & .bidwrightLinkedItemActions .bidwrightLinkedItemDeleteButton {
+            border-color: rgba(248, 113, 113, 0.36);
+            color: #dc2626;
+        }
     }
 
     & .viewportContainer {
@@ -39,63 +304,6 @@
         .viewport {
             height: 100%;
             position: relative;
-        }
-
-        .bidwrightEstimatePanel {
-            position: absolute;
-            top: 12px;
-            right: 12px;
-            z-index: 100100;
-            display: flex;
-            align-items: center;
-            max-width: min(520px, calc(100% - 24px));
-            min-height: 34px;
-            gap: 8px;
-            padding: 5px 6px 5px 10px;
-            border: 1px solid rgba(148, 163, 184, 0.26);
-            border-radius: 8px;
-            background: rgba(17, 24, 39, 0.9);
-            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
-            color: #f8fafc;
-            font-size: 12px;
-            line-height: 1.2;
-            backdrop-filter: blur(10px);
-        }
-
-        .bidwrightEstimateLabel {
-            flex: 0 0 auto;
-            font-weight: 700;
-            color: #38bdf8;
-        }
-
-        .bidwrightEstimateStatus {
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            color: rgba(248, 250, 252, 0.76);
-        }
-
-        .bidwrightEstimateButton {
-            flex: 0 0 auto;
-            height: 24px;
-            border: 1px solid rgba(56, 189, 248, 0.44);
-            border-radius: 6px;
-            background: #f8fafc;
-            color: #0f172a;
-            padding: 0 9px;
-            font: inherit;
-            font-weight: 700;
-            cursor: pointer;
-        }
-
-        .bidwrightEstimateButton:hover:not(:disabled) {
-            background: #e0f2fe;
-        }
-
-        .bidwrightEstimateButton:disabled {
-            cursor: not-allowed;
-            opacity: 0.42;
         }
     }
 }
@@ -129,13 +337,6 @@
         & .viewportContainer {
             height: 100px;
             width: 100%;
-
-            .bidwrightEstimatePanel {
-                left: 8px;
-                right: 8px;
-                top: 8px;
-                max-width: none;
-            }
         }
 
         & .sidebar {

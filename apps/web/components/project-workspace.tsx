@@ -59,6 +59,7 @@ import {
 } from "@/lib/api";
 import { getClientDisplayName } from "@/lib/client-display";
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
+import { workspaceChannelName, type WorkspaceSyncMessage } from "@/lib/workspace-sync";
 import { AgentChat } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { SetupTab } from "@/components/workspace/setup-tab";
@@ -321,6 +322,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [autoIntake, setAutoIntake] = useState(false);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
   const intakeInitRef = useRef(false);
+  const workspaceSyncOriginRef = useRef(`workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
   const [isPending, startTransition] = useTransition();
   const urlTab = searchParams.get("tab");
   const urlSubTab = searchParams.get("subtab");
@@ -449,6 +451,21 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       } catch { /* silent - user can still manually refresh */ }
     });
   }, [workspace.project.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("BroadcastChannel" in window)) return;
+
+    const channel = new BroadcastChannel(workspaceChannelName(workspace.project.id));
+    channel.onmessage = (event: MessageEvent<WorkspaceSyncMessage>) => {
+      const msg = event.data;
+      if (!msg || msg.type !== "workspace-mutated") return;
+      if (msg.projectId !== workspace.project.id) return;
+      if (msg.originId && msg.originId === workspaceSyncOriginRef.current) return;
+      refreshWorkspace();
+    };
+
+    return () => channel.close();
+  }, [refreshWorkspace, workspace.project.id]);
 
   function closeModal() { setModal(null); setAiResult(null); setAiPhaseResult(null); setAiEquipResult(null); }
 
@@ -739,7 +756,12 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
                 {estimateSubTab === "takeoff" && (
                   <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <TakeoffTab workspace={workspace} onOpenAgentChat={() => setChatOpen(true)} onWorkspaceMutated={refreshWorkspace} />
+                    <TakeoffTab
+                      workspace={workspace}
+                      onOpenAgentChat={() => setChatOpen(true)}
+                      onWorkspaceMutated={refreshWorkspace}
+                      workspaceSyncOriginId={workspaceSyncOriginRef.current}
+                    />
                   </motion.div>
                 )}
 

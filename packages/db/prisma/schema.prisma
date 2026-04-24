@@ -989,6 +989,7 @@ model ModelTakeoffLink {
   quantityField   String         @default("quantity")
   multiplier      Float          @default(1.0)
   derivedQuantity Float          @default(0)
+  selection       Json           @default("{}")
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 

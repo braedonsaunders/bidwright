@@ -4058,6 +4058,30 @@ export interface ModelQuantity {
   updatedAt: string;
 }
 
+export interface ModelTakeoffLinkRecord {
+  id: string;
+  projectId: string;
+  modelId: string;
+  modelElementId?: string | null;
+  modelQuantityId?: string | null;
+  worksheetItemId: string;
+  quantityField: string;
+  multiplier: number;
+  derivedQuantity: number;
+  selection: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  worksheetItem?: (WorkspaceWorksheetItem & {
+    worksheet?: {
+      id: string;
+      name: string;
+      order: number;
+    } | null;
+  }) | null;
+  modelElement?: ModelElement | null;
+  modelQuantity?: ModelQuantity | null;
+}
+
 export interface ModelIssue {
   id: string;
   modelId: string;
@@ -4095,4 +4119,36 @@ export async function getModelBom(projectId: string, modelId: string) {
   return apiRequest<{ model: ModelAsset; rows: Array<Record<string, unknown>>; rowCount: number }>(
     `/api/models/${projectId}/assets/${modelId}/bom`,
   );
+}
+
+export async function listModelTakeoffLinks(projectId: string, modelId: string) {
+  return apiRequest<{ links: ModelTakeoffLinkRecord[] }>(
+    `/api/models/${projectId}/assets/${modelId}/takeoff-links`,
+  );
+}
+
+export async function createModelTakeoffLink(
+  projectId: string,
+  modelId: string,
+  input: {
+    worksheetItemId: string;
+    modelElementId?: string | null;
+    modelQuantityId?: string | null;
+    quantityField?: string;
+    multiplier?: number;
+    derivedQuantity?: number;
+    selection?: unknown;
+  },
+) {
+  return apiRequest<{ link: ModelTakeoffLinkRecord }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/${linkId}`, {
+    method: "DELETE",
+  });
 }
