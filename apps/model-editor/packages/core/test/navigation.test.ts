@@ -6,8 +6,8 @@ import { Navigation3D, Navigation3DTypes } from "../src/navigation";
 import { mockLocalStorage } from "./localStorageMock";
 
 describe("Navigation3DTypes", () => {
-    test("should contain Chili3d", () => {
-        expect(Navigation3DTypes).toContain("Chili3d");
+    test("should contain BidWright", () => {
+        expect(Navigation3DTypes).toContain("BidWright");
     });
 
     test("should contain Revit", () => {

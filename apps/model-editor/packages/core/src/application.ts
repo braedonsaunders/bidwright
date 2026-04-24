@@ -27,7 +27,7 @@ export interface IApplication extends IPropertyChanged {
     newDocument(name: string): Promise<IDocument>;
     openDocument(id: string): Promise<IDocument | undefined>;
     loadDocument(data: Serialized): Promise<IDocument | undefined>;
-    loadFileFromUrl(url: string): Promise<void>;
+    loadFileFromUrl(url: string, fileName?: string): Promise<void>;
 }
 
 let currentApplication: IApplication | undefined;
