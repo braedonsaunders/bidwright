@@ -1396,6 +1396,8 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   }, [selectedItem, projectId]);
 
   const filePreviewType = selectedItem ? getFilePreviewType(selectedItem) : "none";
+  const isEmbeddedModelEditorPreview =
+    selectedItem?.type === "file" && filePreviewType === "cad" && isBidwrightEditableModel(selectedItem.name);
   const hasExtracted = selectedItem ? hasExtractedContent(selectedItem) : false;
   // Show tabs when there is extracted content (so user can toggle between file view and text)
   const showPreviewTabs = selectedItem?.type === "file" && (hasExtracted && filePreviewType !== "none" || hasExtracted);
@@ -1583,7 +1585,7 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
             {filePreviewType === "cad" && previewUrl && (
               <div className="flex-1 min-h-[400px]">
                 {isBidwrightEditableModel(selectedItem.name) ? (
-                  <BidwrightModelEditor fileUrl={previewUrl} fileName={selectedItem.name} title="BidWright Model Editor" />
+                  <BidwrightModelEditor fileUrl={previewUrl} fileName={selectedItem.name} />
                 ) : (
                   <CadViewer fileUrl={previewUrl} fileName={selectedItem.name} />
                 )}
@@ -1908,10 +1910,17 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
           {editorMode === "none" && selectedItem && selectedItem.type === "file" && (
             <>
               <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line shrink-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-sm font-semibold text-fg truncate">{selectedItem.name}</span>
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 truncate text-sm font-semibold text-fg">{selectedItem.name}</span>
                   {selectedItem.documentType && (
                     <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}>{selectedItem.documentType}</Badge>
+                  )}
+                  {isEmbeddedModelEditorPreview && (
+                    <div className="hidden shrink-0 items-center gap-3 text-xs text-fg/45 md:flex">
+                      {selectedItem.fileType && <span className="uppercase font-medium">{selectedItem.fileType}</span>}
+                      {selectedItem.size != null && <span>{formatBytes(selectedItem.size)}</span>}
+                      {selectedItem.createdAt && <span>{formatDate(selectedItem.createdAt)}</span>}
+                    </div>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
@@ -1933,12 +1942,14 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
                 </div>
               </div>
               {/* Metadata bar */}
-              <div className="flex items-center gap-4 border-b border-line px-4 py-2 text-xs text-fg/50 shrink-0">
-                {selectedItem.fileType && <span className="uppercase font-medium">{selectedItem.fileType}</span>}
-                {selectedItem.pageCount != null && selectedItem.pageCount > 0 && <span>{selectedItem.pageCount} pages</span>}
-                {selectedItem.size != null && <span>{formatBytes(selectedItem.size)}</span>}
-                {selectedItem.createdAt && <span>{formatDate(selectedItem.createdAt)}</span>}
-              </div>
+              {!isEmbeddedModelEditorPreview && (
+                <div className="flex items-center gap-4 border-b border-line px-4 py-2 text-xs text-fg/50 shrink-0">
+                  {selectedItem.fileType && <span className="uppercase font-medium">{selectedItem.fileType}</span>}
+                  {selectedItem.pageCount != null && selectedItem.pageCount > 0 && <span>{selectedItem.pageCount} pages</span>}
+                  {selectedItem.size != null && <span>{formatBytes(selectedItem.size)}</span>}
+                  {selectedItem.createdAt && <span>{formatDate(selectedItem.createdAt)}</span>}
+                </div>
+              )}
               {/* Preview tabs */}
               {showPreviewTabs && (
                 <div className="flex items-center gap-1 px-4 border-b border-line shrink-0">

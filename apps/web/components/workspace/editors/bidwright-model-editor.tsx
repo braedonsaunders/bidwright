@@ -168,6 +168,7 @@ interface BidwrightModelEditorProps {
   estimateQuoteLabel?: string | null;
   className?: string;
   title?: string;
+  showHeader?: boolean;
   variant?: "editor" | "takeoff";
   linkedLineItems?: BidwrightModelLinkedLineItem[];
   onModelSelection?: (selection: BidwrightModelSelectionMessage) => void;
@@ -315,6 +316,7 @@ export function BidwrightModelEditor({
   estimateQuoteLabel,
   className,
   title = "Model Editor",
+  showHeader = false,
   variant = "editor",
   linkedLineItems = [],
   onModelSelection,
@@ -564,64 +566,66 @@ export function BidwrightModelEditor({
 
   return (
     <div className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", className)}>
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
-        <Box className="h-4 w-4 shrink-0 text-accent" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-semibold text-fg">{title}</p>
-          {fileName && <p className="truncate text-[10px] text-fg/40">{fileName}</p>}
-        </div>
-        {ext && (
-          <span className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase text-fg/50">
-            {ext}
-          </span>
-        )}
-        {selection && selection.selectedCount > 0 && (
-          <div className="hidden min-w-0 items-center gap-1.5 rounded-md border border-line bg-bg px-2 py-1 text-[10px] text-fg/55 md:flex">
-            <span className="font-medium text-fg/75">{selection.selectedCount} selected</span>
-            <span>{formatModelQuantity(selection.totals.surfaceArea, "model^2")}</span>
-            {selection.totals.volume > 0 && <span>{formatModelQuantity(selection.totals.volume, "model^3")}</span>}
+      {showHeader && (
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
+          <Box className="h-4 w-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold text-fg">{title}</p>
+            {fileName && <p className="truncate text-[10px] text-fg/40">{fileName}</p>}
           </div>
-        )}
-        {onSendSelectionToEstimate && (
+          {ext && (
+            <span className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-[10px] font-medium uppercase text-fg/50">
+              {ext}
+            </span>
+          )}
+          {selection && selection.selectedCount > 0 && (
+            <div className="hidden min-w-0 items-center gap-1.5 rounded-md border border-line bg-bg px-2 py-1 text-[10px] text-fg/55 md:flex">
+              <span className="font-medium text-fg/75">{selection.selectedCount} selected</span>
+              <span>{formatModelQuantity(selection.totals.surfaceArea, "model^2")}</span>
+              {selection.totals.volume > 0 && <span>{formatModelQuantity(selection.totals.volume, "model^3")}</span>}
+            </div>
+          )}
+          {onSendSelectionToEstimate && (
+            <Button
+              variant="secondary"
+              size="xs"
+              title={estimateTargetWorksheetId ? "Create worksheet line item from selected model quantity" : "Create a worksheet before sending model quantities"}
+              disabled={!canSendSelection || sendingSelection}
+              onClick={async () => {
+                if (!selection || !onSendSelectionToEstimate) return;
+                setSendingSelection(true);
+                try {
+                  await onSendSelectionToEstimate(selection);
+                } finally {
+                  setSendingSelection(false);
+                }
+              }}
+            >
+              {sendingSelection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            </Button>
+          )}
           <Button
-            variant="secondary"
+            variant="ghost"
             size="xs"
-            title={estimateTargetWorksheetId ? "Create worksheet line item from selected model quantity" : "Create a worksheet before sending model quantities"}
-            disabled={!canSendSelection || sendingSelection}
-            onClick={async () => {
-              if (!selection || !onSendSelectionToEstimate) return;
-              setSendingSelection(true);
-              try {
-                await onSendSelectionToEstimate(selection);
-              } finally {
-                setSendingSelection(false);
-              }
+            title="Reload"
+            onClick={() => {
+              setLoading(true);
+              setSelection(null);
+              setReloadKey((key) => key + 1);
             }}
           >
-            {sendingSelection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            <RefreshCw className="h-3.5 w-3.5" />
           </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="xs"
-          title="Reload model editor"
-          onClick={() => {
-            setLoading(true);
-            setSelection(null);
-            setReloadKey((key) => key + 1);
-          }}
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          title="Open model editor in a new window"
-          onClick={() => window.open(editorUrl, "_blank", "noopener,noreferrer")}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+          <Button
+            variant="ghost"
+            size="xs"
+            title="Open in new window"
+            onClick={() => window.open(editorUrl, "_blank", "noopener,noreferrer")}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      )}
 
       <div className="relative min-h-0 flex-1">
         <iframe
@@ -639,9 +643,11 @@ export function BidwrightModelEditor({
         {loading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#101014] text-fg/60">
             <Loader2 className="h-8 w-8 animate-spin text-accent" />
-            <p className="text-xs font-medium">
-              {variant === "takeoff" ? "Opening 3D takeoff model..." : "Opening BidWright model editor..."}
-            </p>
+            {showHeader && (
+              <p className="text-xs font-medium">
+                {variant === "takeoff" ? "Opening 3D model..." : "Opening model..."}
+              </p>
+            )}
           </div>
         )}
       </div>
