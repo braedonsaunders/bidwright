@@ -2,8 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   createModelTakeoffLink,
+  deleteModelTakeoffLink,
   getModelBom,
   getProjectModelAsset,
+  listModelTakeoffLinks,
   listProjectModelAssets,
   queryModelElements,
   syncProjectModelAssets,
@@ -28,6 +30,8 @@ const createModelTakeoffLinkSchema = z.object({
   modelQuantityId: z.string().min(1).nullable().optional(),
   quantityField: z.string().min(1).optional(),
   multiplier: z.coerce.number().finite().optional(),
+  derivedQuantity: z.coerce.number().finite().optional(),
+  selection: z.unknown().optional(),
 });
 
 function routeError(reply: any, error: unknown) {
@@ -99,6 +103,15 @@ export async function modelRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/models/:projectId/assets/:modelId/takeoff-links", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    try {
+      return { links: await listModelTakeoffLinks(projectId, modelId) };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
   app.post("/api/models/:projectId/assets/:modelId/takeoff-links", async (request, reply) => {
     const { projectId, modelId } = request.params as { projectId: string; modelId: string };
     const parsed = createModelTakeoffLinkSchema.safeParse(request.body ?? {});
@@ -109,6 +122,15 @@ export async function modelRoutes(app: FastifyInstance) {
       const link = await createModelTakeoffLink(projectId, { ...parsed.data, modelId });
       reply.code(201);
       return { link };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.delete("/api/models/:projectId/assets/:modelId/takeoff-links/:linkId", async (request, reply) => {
+    const { projectId, modelId, linkId } = request.params as { projectId: string; modelId: string; linkId: string };
+    try {
+      return await deleteModelTakeoffLink(projectId, modelId, linkId);
     } catch (error) {
       return routeError(reply, error);
     }

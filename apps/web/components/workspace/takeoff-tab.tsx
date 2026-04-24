@@ -43,7 +43,15 @@ import {
   Highlighter,
   StretchHorizontal,
 } from "lucide-react";
-import type { ProjectWorkspaceData, VisionMatch, VisionBoundingBox, TakeoffLinkRecord, ModelAsset } from "@/lib/api";
+import type {
+  CreateWorksheetItemInput,
+  ProjectWorkspaceData,
+  VisionMatch,
+  VisionBoundingBox,
+  TakeoffLinkRecord,
+  ModelAsset,
+  ModelTakeoffLinkRecord,
+} from "@/lib/api";
 import {
   listTakeoffAnnotations,
   createTakeoffAnnotation,
@@ -59,9 +67,13 @@ import {
   askAi,
   listTakeoffLinks,
   createTakeoffLink,
+  createModelTakeoffLink,
+  deleteWorksheetItem,
   createWorksheetItem,
+  listModelTakeoffLinks,
   listModelAssets,
   syncModelAssets,
+  updateWorksheetItem,
 } from "@/lib/api";
 import {
   Badge,
@@ -75,9 +87,14 @@ import {
 import * as RadixSelect from "@radix-ui/react-select";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
+import { postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
 import { isBidwrightEditableModel } from "./editors/bidwright-model-editor";
-import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
+import type {
+  BidwrightModelLineItemDraft,
+  BidwrightModelLinkedLineItem,
+  BidwrightModelSelectionMessage,
+} from "./editors/bidwright-model-editor";
 const PdfCanvasViewer = dynamic(
   () => import("./takeoff/pdf-canvas-viewer").then((m) => m.PdfCanvasViewer),
   { ssr: false }
@@ -220,6 +237,7 @@ interface TakeoffTabProps {
   initialDocumentId?: string | null;
   initialPage?: number;
   detached?: boolean;
+  workspaceSyncOriginId?: string;
 }
 
 interface TakeoffSyncBase {
@@ -262,6 +280,85 @@ function primaryModelSelectionQuantity(selection: BidwrightModelSelectionMessage
     return { quantity: selection.totals.volume, uom: "model^3", label: "3D volume" };
   }
   return { quantity: selection.selectedCount, uom: "EA", label: "3D selected elements" };
+}
+
+function buildModelSelectionLineItem(
+  selection: BidwrightModelSelectionMessage,
+  options: {
+    fileName?: string;
+    markup: number;
+  },
+): CreateWorksheetItemInput {
+  const primary = primaryModelSelectionQuantity(selection);
+  const selectedNames = selection.nodes.map((node) => node.name).filter(Boolean).slice(0, 8);
+
+  return {
+    category: "Model Takeoff",
+    entityType: "Model Quantity",
+    entityName: selectedNames[0] || `${selection.selectedCount} model elements`,
+    description: options.fileName ?? "",
+    quantity: primary.quantity,
+    uom: primary.uom,
+    cost: 0,
+    markup: options.markup,
+    price: 0,
+    unit1: 0,
+    unit2: 0,
+    unit3: 0,
+    sourceNotes: [
+      `From 3D model selection: ${options.fileName ?? "selected model"}`,
+      `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
+      `Surface area: ${formatModelSelectionQuantity(selection.totals.surfaceArea, "model^2")}`,
+      `Volume: ${formatModelSelectionQuantity(selection.totals.volume, "model^3")}`,
+      selectedNames.length > 0 ? `Selected: ${selectedNames.join(", ")}` : "",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+function normalizeModelLineItemDraft(
+  draft: BidwrightModelLineItemDraft | undefined,
+  fallback: CreateWorksheetItemInput,
+): CreateWorksheetItemInput {
+  if (!draft) return fallback;
+
+  return {
+    phaseId: null,
+    category: draft.category || fallback.category,
+    entityType: draft.entityType || fallback.entityType,
+    entityName: draft.entityName || fallback.entityName,
+    description: draft.description ?? fallback.description,
+    quantity: Number.isFinite(draft.quantity) && draft.quantity > 0 ? draft.quantity : fallback.quantity,
+    uom: draft.uom || fallback.uom,
+    cost: Number.isFinite(draft.cost) ? draft.cost : fallback.cost,
+    markup: Number.isFinite(draft.markup) ? draft.markup : fallback.markup,
+    price: Number.isFinite(draft.price) ? draft.price : fallback.price,
+    unit1: Number.isFinite(draft.unit1) ? draft.unit1 : fallback.unit1,
+    unit2: Number.isFinite(draft.unit2) ? draft.unit2 : fallback.unit2,
+    unit3: Number.isFinite(draft.unit3) ? draft.unit3 : fallback.unit3,
+    sourceNotes: draft.sourceNotes || fallback.sourceNotes,
+  };
+}
+
+function toLinkedModelLineItem(link: ModelTakeoffLinkRecord): BidwrightModelLinkedLineItem | null {
+  const item = link.worksheetItem;
+  if (!item) return null;
+
+  return {
+    linkId: link.id,
+    worksheetItemId: link.worksheetItemId,
+    worksheetId: item.worksheetId,
+    worksheetName: item.worksheet?.name ?? null,
+    entityName: item.entityName,
+    description: item.description,
+    quantity: item.quantity,
+    uom: item.uom,
+    cost: item.cost,
+    markup: item.markup,
+    price: item.price,
+    sourceNotes: item.sourceNotes,
+    derivedQuantity: link.derivedQuantity,
+    selection: link.selection,
+  };
 }
 
 function sameCalibration(a: Calibration | null, b: Calibration | null): boolean {
@@ -356,6 +453,7 @@ export function TakeoffTab({
   initialDocumentId,
   initialPage = 1,
   detached = false,
+  workspaceSyncOriginId,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
@@ -509,6 +607,7 @@ export function TakeoffTab({
   const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
   const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
+  const [modelTakeoffLinks, setModelTakeoffLinks] = useState<ModelTakeoffLinkRecord[]>([]);
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const selectedModelAsset = isCadDocument
@@ -517,6 +616,9 @@ export function TakeoffTab({
         asset.fileName.toLowerCase() === (selectedDoc?.fileName ?? "").toLowerCase()
       )
     : undefined;
+  const linkedModelLineItems = modelTakeoffLinks
+    .map(toLinkedModelLineItem)
+    .filter((item): item is BidwrightModelLinkedLineItem => Boolean(item));
 
   const refreshModelAssets = useCallback(async (forceSync = false) => {
     if (!projectId) return;
@@ -537,8 +639,27 @@ export function TakeoffTab({
     void refreshModelAssets(false);
   }, [modelDocuments.length, refreshModelAssets]);
 
+  const refreshModelTakeoffLinks = useCallback(async (modelId = selectedModelAsset?.id) => {
+    if (!projectId || !modelId) {
+      setModelTakeoffLinks([]);
+      return;
+    }
+    try {
+      const result = await listModelTakeoffLinks(projectId, modelId);
+      setModelTakeoffLinks(result.links ?? []);
+    } catch (error) {
+      console.error("[takeoff] Failed to load model takeoff links:", error);
+      setModelTakeoffLinks([]);
+    }
+  }, [projectId, selectedModelAsset?.id]);
+
+  useEffect(() => {
+    void refreshModelTakeoffLinks();
+  }, [refreshModelTakeoffLinks]);
+
   useEffect(() => {
     setModelSelection(null);
+    setModelTakeoffLinks([]);
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -903,6 +1024,10 @@ export function TakeoffTab({
   function notifyWorkspaceMutated() {
     onWorkspaceMutated?.();
     postTakeoffMessage({ type: "workspace-mutated" });
+    postWorkspaceMutation(projectId, {
+      originId: workspaceSyncOriginId,
+      reason: "takeoff",
+    });
   }
 
   function handleToolSelect(tool: ToolId) {
@@ -1441,46 +1566,114 @@ export function TakeoffTab({
     }
   }
 
-  async function handleSendModelSelectionToEstimate(selection: BidwrightModelSelectionMessage) {
-    const targetWs = workspace.worksheets[0];
+  async function resolveSelectedModelAsset() {
+    if (selectedModelAsset) return selectedModelAsset;
+    if (!isCadDocument || !selectedDoc) return undefined;
+
+    const result = await syncModelAssets(projectId);
+    const assets = result.assets ?? [];
+    setModelAssets(assets);
+    return assets.find((asset) =>
+      (selectedDoc.source === "project" && asset.sourceDocumentId === selectedDoc.id) ||
+      asset.fileName.toLowerCase() === selectedDoc.fileName.toLowerCase()
+    );
+  }
+
+  async function handleSendModelSelectionToEstimate(
+    selection: BidwrightModelSelectionMessage,
+    lineItemDraft?: BidwrightModelLineItemDraft,
+  ) {
+    const targetWs =
+      (lineItemDraft?.worksheetId
+        ? workspace.worksheets.find((worksheet) => worksheet.id === lineItemDraft.worksheetId)
+        : null) ?? workspace.worksheets[0];
     if (!targetWs) {
       setToastType("error");
       setToastMessage("Create a worksheet before sending model quantities.");
       return;
     }
 
-    const primary = primaryModelSelectionQuantity(selection);
-    const selectedNames = selection.nodes.map((node) => node.name).filter(Boolean).slice(0, 8);
+    const fallbackPayload = buildModelSelectionLineItem(selection, {
+      fileName: selectedDoc?.fileName,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+    });
+    const payload = normalizeModelLineItemDraft(lineItemDraft, fallbackPayload);
 
     try {
-      await createWorksheetItem(projectId, targetWs.id, {
-        category: "Model Takeoff",
-        entityType: "Model Quantity",
-        entityName: selectedNames[0] || `${selection.selectedCount} model elements`,
-        description: selectedDoc?.fileName ?? "",
-        quantity: primary.quantity,
-        uom: primary.uom,
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
-        sourceNotes: [
-          `From 3D model selection: ${selectedDoc?.fileName ?? "selected model"}`,
-          `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
-          `Surface area: ${formatModelSelectionQuantity(selection.totals.surfaceArea, "model^2")}`,
-          `Volume: ${formatModelSelectionQuantity(selection.totals.volume, "model^3")}`,
-          selectedNames.length > 0 ? `Selected: ${selectedNames.join(", ")}` : "",
-        ].filter(Boolean).join("\n"),
-      });
+      const modelAsset = await resolveSelectedModelAsset();
+      const result = await createWorksheetItem(projectId, targetWs.id, payload);
+      const previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      const createdItem = result.workspace.worksheets
+        .flatMap((worksheet) => worksheet.items)
+        .find((item) => !previousItemIds.has(item.id));
+
+      if (modelAsset && createdItem) {
+        await createModelTakeoffLink(projectId, modelAsset.id, {
+          worksheetItemId: createdItem.id,
+          quantityField: "quantity",
+          multiplier: 1,
+          derivedQuantity: payload.quantity,
+          selection: {
+            fileName: selectedDoc?.fileName ?? selection.fileName ?? null,
+            documentId: selection.documentId ?? null,
+            documentName: selection.documentName ?? null,
+            selectedCount: selection.selectedCount,
+            nodes: selection.nodes,
+            totals: selection.totals,
+            lineItemDraft: payload,
+          },
+        });
+        await refreshModelTakeoffLinks(modelAsset.id);
+      }
+
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage("Model quantity sent to the estimate.");
+      setToastMessage(`Created worksheet line item in ${targetWs.name}.`);
     } catch (err) {
       console.error("[takeoff] Failed to send model selection to estimate:", err);
       setToastType("error");
       setToastMessage("Could not send model quantity to the estimate.");
+    }
+  }
+
+  async function handleUpdateModelLinkedLineItem(payload: {
+    linkId: string;
+    worksheetItemId: string;
+    patch: { entityName?: string; description?: string; quantity?: number; uom?: string };
+  }) {
+    const patch = {
+      ...(typeof payload.patch.entityName === "string" ? { entityName: payload.patch.entityName } : {}),
+      ...(typeof payload.patch.description === "string" ? { description: payload.patch.description } : {}),
+      ...(typeof payload.patch.quantity === "number" && Number.isFinite(payload.patch.quantity)
+        ? { quantity: payload.patch.quantity }
+        : {}),
+      ...(typeof payload.patch.uom === "string" ? { uom: payload.patch.uom } : {}),
+    };
+
+    try {
+      await updateWorksheetItem(projectId, payload.worksheetItemId, patch);
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Updated linked worksheet line item.");
+    } catch (error) {
+      console.error("[takeoff] Failed to update linked model line item:", error);
+      setToastType("error");
+      setToastMessage("Could not update linked line item.");
+    }
+  }
+
+  async function handleDeleteModelLinkedLineItem(payload: { linkId: string; worksheetItemId: string }) {
+    try {
+      await deleteWorksheetItem(projectId, payload.worksheetItemId);
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Deleted linked worksheet line item.");
+    } catch (error) {
+      console.error("[takeoff] Failed to delete linked model line item:", error);
+      setToastType("error");
+      setToastMessage("Could not delete linked line item.");
     }
   }
 
@@ -2026,12 +2219,20 @@ export function TakeoffTab({
                   fileUrl={documentUrl}
                   fileName={selectedDoc?.fileName}
                   projectId={projectId}
+                  modelAssetId={selectedModelAsset?.id}
                   modelDocumentId={selectedDoc?.id}
                   syncChannelName={takeoffChannelName(projectId)}
+                  estimateTargetWorksheetId={workspace.worksheets[0]?.id}
+                  estimateTargetWorksheetName={workspace.worksheets[0]?.name}
+                  estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
+                  estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
                   title="3D Takeoff Model"
                   variant="takeoff"
+                  linkedLineItems={linkedModelLineItems}
                   onModelSelection={setModelSelection}
                   onSendSelectionToEstimate={handleSendModelSelectionToEstimate}
+                  onUpdateLinkedLineItem={handleUpdateModelLinkedLineItem}
+                  onDeleteLinkedLineItem={handleDeleteModelLinkedLineItem}
                 />
               ) : (
                 <CadViewer fileUrl={documentUrl} fileName={selectedDoc?.fileName} />
@@ -2156,6 +2357,10 @@ export function TakeoffTab({
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-fg/45">BOM Rows</span>
                   <span className="font-medium text-fg/80">{selectedModelAsset?.bom?.length ?? 0}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <span className="text-fg/45">Linked Items</span>
+                  <span className="font-medium text-fg/80">{linkedModelLineItems.length}</span>
                 </div>
                 <div className="mt-2 flex items-center justify-between gap-2">
                   <span className="text-fg/45">Issues</span>

@@ -26,6 +26,7 @@ export interface BidwrightModelSelectionMessage {
   version: number;
   eventId?: string;
   projectId?: string;
+  modelId?: string;
   modelDocumentId?: string;
   fileName?: string;
   documentId?: string;
@@ -40,6 +41,49 @@ export interface BidwrightModelSelectionMessage {
   };
 }
 
+export interface BidwrightModelLineItemDraft {
+  worksheetId?: string;
+  worksheetName?: string;
+  category: string;
+  entityType: string;
+  entityName: string;
+  description: string;
+  quantity: number;
+  uom: string;
+  cost: number;
+  markup: number;
+  price: number;
+  unit1: number;
+  unit2: number;
+  unit3: number;
+  sourceNotes: string;
+  source?: {
+    kind: "model-selection";
+    projectId?: string;
+    modelDocumentId?: string;
+    fileName?: string;
+    documentId?: string;
+    selectedNodeIds?: string[];
+  };
+}
+
+export interface BidwrightModelLinkedLineItem {
+  linkId: string;
+  worksheetItemId: string;
+  worksheetId?: string | null;
+  worksheetName?: string | null;
+  entityName: string;
+  description: string;
+  quantity: number;
+  uom: string;
+  cost: number;
+  markup: number;
+  price: number;
+  sourceNotes?: string;
+  derivedQuantity?: number;
+  selection?: Record<string, unknown>;
+}
+
 interface BidwrightModelSendToEstimateMessage {
   type: "bidwright:model-send-to-estimate";
   source: "bidwright-model-editor";
@@ -48,30 +92,95 @@ interface BidwrightModelSendToEstimateMessage {
   projectId?: string;
   modelDocumentId?: string;
   selection: BidwrightModelSelectionMessage;
+  lineItemDraft?: BidwrightModelLineItemDraft;
+}
+
+interface BidwrightModelLineItemsRequestMessage {
+  type: "bidwright:model-line-items-request";
+  source: "bidwright-model-editor";
+  version: number;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+}
+
+interface BidwrightModelLineItemUpdateMessage {
+  type: "bidwright:model-line-item-update";
+  source: "bidwright-model-editor";
+  version: number;
+  eventId?: string;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+  linkId: string;
+  worksheetItemId: string;
+  patch: {
+    entityName?: string;
+    description?: string;
+    quantity?: number;
+    uom?: string;
+  };
+}
+
+interface BidwrightModelLineItemDeleteMessage {
+  type: "bidwright:model-line-item-delete";
+  source: "bidwright-model-editor";
+  version: number;
+  eventId?: string;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+  linkId: string;
+  worksheetItemId: string;
 }
 
 interface BidwrightModelChannelMessage {
-  type: "model-selection" | "model-send-to-estimate";
+  type:
+    | "model-selection"
+    | "model-send-to-estimate"
+    | "model-line-items-request"
+    | "model-line-item-update"
+    | "model-line-item-delete";
   source: "bidwright-model-editor";
   version: number;
   eventId?: string;
   originId?: string;
   projectId?: string;
+  modelId?: string;
   modelDocumentId?: string;
-  selection: BidwrightModelSelectionMessage;
+  selection?: BidwrightModelSelectionMessage;
+  lineItemDraft?: BidwrightModelLineItemDraft;
+  linkId?: string;
+  worksheetItemId?: string;
+  patch?: BidwrightModelLineItemUpdateMessage["patch"];
 }
 
 interface BidwrightModelEditorProps {
   fileUrl?: string | null;
   fileName?: string | null;
   projectId?: string | null;
+  modelAssetId?: string | null;
   modelDocumentId?: string | null;
   syncChannelName?: string | null;
+  estimateTargetWorksheetId?: string | null;
+  estimateTargetWorksheetName?: string | null;
+  estimateDefaultMarkup?: number | null;
+  estimateQuoteLabel?: string | null;
   className?: string;
   title?: string;
   variant?: "editor" | "takeoff";
+  linkedLineItems?: BidwrightModelLinkedLineItem[];
   onModelSelection?: (selection: BidwrightModelSelectionMessage) => void;
-  onSendSelectionToEstimate?: (selection: BidwrightModelSelectionMessage) => void | Promise<void>;
+  onSendSelectionToEstimate?: (
+    selection: BidwrightModelSelectionMessage,
+    lineItemDraft?: BidwrightModelLineItemDraft,
+  ) => void | Promise<void>;
+  onUpdateLinkedLineItem?: (
+    payload: Pick<BidwrightModelLineItemUpdateMessage, "linkId" | "worksheetItemId" | "patch">,
+  ) => void | Promise<void>;
+  onDeleteLinkedLineItem?: (
+    payload: Pick<BidwrightModelLineItemDeleteMessage, "linkId" | "worksheetItemId">,
+  ) => void | Promise<void>;
 }
 
 export const MODEL_EDITOR_EDITABLE_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl"]);
@@ -90,9 +199,14 @@ function buildModelEditorUrl(
   cacheKey = 0,
   options: {
     projectId?: string | null;
+    modelAssetId?: string | null;
     modelDocumentId?: string | null;
     syncChannelName?: string | null;
     estimateEnabled?: boolean;
+    estimateTargetWorksheetId?: string | null;
+    estimateTargetWorksheetName?: string | null;
+    estimateDefaultMarkup?: number | null;
+    estimateQuoteLabel?: string | null;
   } = {}
 ) {
   const params = new URLSearchParams();
@@ -101,9 +215,16 @@ function buildModelEditorUrl(
   if (fileUrl) params.set("url", fileUrl);
   if (fileName) params.set("fileName", fileName);
   if (options.projectId) params.set("projectId", options.projectId);
+  if (options.modelAssetId) params.set("modelId", options.modelAssetId);
   if (options.modelDocumentId) params.set("modelDocumentId", options.modelDocumentId);
   if (options.syncChannelName) params.set("channel", options.syncChannelName);
   if (options.estimateEnabled) params.set("estimate", "1");
+  if (options.estimateTargetWorksheetId) params.set("estimateTargetWorksheetId", options.estimateTargetWorksheetId);
+  if (options.estimateTargetWorksheetName) params.set("estimateTargetWorksheetName", options.estimateTargetWorksheetName);
+  if (typeof options.estimateDefaultMarkup === "number" && Number.isFinite(options.estimateDefaultMarkup)) {
+    params.set("estimateDefaultMarkup", String(options.estimateDefaultMarkup));
+  }
+  if (options.estimateQuoteLabel) params.set("estimateQuoteLabel", options.estimateQuoteLabel);
   if (cacheKey > 0) params.set("reload", String(cacheKey));
   const qs = params.toString();
   return `/model-editor/index.html${qs ? `?${qs}` : ""}`;
@@ -127,14 +248,48 @@ function isModelSendToEstimateMessage(data: unknown): data is BidwrightModelSend
   );
 }
 
+function isLineItemsRequestMessage(data: unknown): data is BidwrightModelLineItemsRequestMessage {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { type?: unknown }).type === "bidwright:model-line-items-request" &&
+      (data as { source?: unknown }).source === "bidwright-model-editor"
+  );
+}
+
+function isLineItemUpdateMessage(data: unknown): data is BidwrightModelLineItemUpdateMessage {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { type?: unknown }).type === "bidwright:model-line-item-update" &&
+      (data as { source?: unknown }).source === "bidwright-model-editor" &&
+      typeof (data as { linkId?: unknown }).linkId === "string" &&
+      typeof (data as { worksheetItemId?: unknown }).worksheetItemId === "string" &&
+      typeof (data as { patch?: unknown }).patch === "object"
+  );
+}
+
+function isLineItemDeleteMessage(data: unknown): data is BidwrightModelLineItemDeleteMessage {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { type?: unknown }).type === "bidwright:model-line-item-delete" &&
+      (data as { source?: unknown }).source === "bidwright-model-editor" &&
+      typeof (data as { linkId?: unknown }).linkId === "string" &&
+      typeof (data as { worksheetItemId?: unknown }).worksheetItemId === "string"
+  );
+}
+
 function isModelChannelMessage(data: unknown): data is BidwrightModelChannelMessage {
   return Boolean(
     data &&
       typeof data === "object" &&
       ((data as { type?: unknown }).type === "model-selection" ||
-        (data as { type?: unknown }).type === "model-send-to-estimate") &&
-      (data as { source?: unknown }).source === "bidwright-model-editor" &&
-      isModelSelectionMessage((data as { selection?: unknown }).selection)
+        (data as { type?: unknown }).type === "model-send-to-estimate" ||
+        (data as { type?: unknown }).type === "model-line-items-request" ||
+        (data as { type?: unknown }).type === "model-line-item-update" ||
+        (data as { type?: unknown }).type === "model-line-item-delete") &&
+      (data as { source?: unknown }).source === "bidwright-model-editor"
   );
 }
 
@@ -151,13 +306,21 @@ export function BidwrightModelEditor({
   fileUrl,
   fileName,
   projectId,
+  modelAssetId,
   modelDocumentId,
   syncChannelName,
+  estimateTargetWorksheetId,
+  estimateTargetWorksheetName,
+  estimateDefaultMarkup,
+  estimateQuoteLabel,
   className,
   title = "Model Editor",
   variant = "editor",
+  linkedLineItems = [],
   onModelSelection,
   onSendSelectionToEstimate,
+  onUpdateLinkedLineItem,
+  onDeleteLinkedLineItem,
 }: BidwrightModelEditorProps) {
   const [loading, setLoading] = useState(true);
   const [sendingSelection, setSendingSelection] = useState(false);
@@ -165,6 +328,9 @@ export function BidwrightModelEditor({
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const handledSendEventsRef = useRef<Set<string>>(new Set());
+  const handledLineItemEventsRef = useRef<Set<string>>(new Set());
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const linkedLineItemsRef = useRef(linkedLineItems);
   const channelInstanceIdRef = useRef(makeModelEditorChannelId());
   const estimateEnabled = Boolean(onSendSelectionToEstimate);
   const effectiveSyncChannelName = useMemo(
@@ -175,13 +341,59 @@ export function BidwrightModelEditor({
     () =>
       buildModelEditorUrl(fileUrl, fileName, reloadKey, {
         projectId,
+        modelAssetId,
         modelDocumentId,
         syncChannelName: effectiveSyncChannelName,
         estimateEnabled,
+        estimateTargetWorksheetId,
+        estimateTargetWorksheetName,
+        estimateDefaultMarkup,
+        estimateQuoteLabel,
       }),
-    [effectiveSyncChannelName, estimateEnabled, fileName, fileUrl, modelDocumentId, projectId, reloadKey]
+    [
+      effectiveSyncChannelName,
+      estimateDefaultMarkup,
+      estimateEnabled,
+      estimateQuoteLabel,
+      estimateTargetWorksheetId,
+      estimateTargetWorksheetName,
+      fileName,
+      fileUrl,
+      modelAssetId,
+      modelDocumentId,
+      projectId,
+      reloadKey,
+    ]
   );
   const ext = getModelFileExtension(fileName);
+
+  useEffect(() => {
+    linkedLineItemsRef.current = linkedLineItems;
+  }, [linkedLineItems]);
+
+  const postLinkedLineItemsState = useCallback((targetWindow?: Window | null) => {
+    const parentMessage = {
+      type: "bidwright:model-line-items-state",
+      source: "bidwright-host",
+      version: 1,
+      projectId: projectId ?? undefined,
+      modelId: modelAssetId ?? undefined,
+      modelDocumentId: modelDocumentId ?? undefined,
+      items: linkedLineItemsRef.current,
+    };
+    const channelMessage = {
+      type: "model-line-items-state",
+      source: "bidwright-host",
+      version: 1,
+      projectId: projectId ?? undefined,
+      modelId: modelAssetId ?? undefined,
+      modelDocumentId: modelDocumentId ?? undefined,
+      items: linkedLineItemsRef.current,
+    };
+
+    targetWindow?.postMessage(parentMessage, window.location.origin);
+    channelRef.current?.postMessage(channelMessage);
+  }, [modelAssetId, modelDocumentId, projectId]);
 
   const handleIncomingSelection = useCallback(
     (nextSelection: BidwrightModelSelectionMessage) => {
@@ -192,7 +404,7 @@ export function BidwrightModelEditor({
   );
 
   const handleIncomingSendToEstimate = useCallback(
-    async (message: Pick<BidwrightModelSendToEstimateMessage, "eventId" | "selection">) => {
+    async (message: Pick<BidwrightModelSendToEstimateMessage, "eventId" | "selection" | "lineItemDraft">) => {
       handleIncomingSelection(message.selection);
       if (!onSendSelectionToEstimate) return;
 
@@ -203,12 +415,43 @@ export function BidwrightModelEditor({
 
       setSendingSelection(true);
       try {
-        await onSendSelectionToEstimate(message.selection);
+        await onSendSelectionToEstimate(message.selection, message.lineItemDraft);
       } finally {
         setSendingSelection(false);
       }
     },
     [handleIncomingSelection, onSendSelectionToEstimate]
+  );
+
+  const handleIncomingLineItemUpdate = useCallback(
+    async (message: Pick<BidwrightModelLineItemUpdateMessage, "eventId" | "linkId" | "worksheetItemId" | "patch">) => {
+      if (!onUpdateLinkedLineItem) return;
+      if (message.eventId) {
+        if (handledLineItemEventsRef.current.has(message.eventId)) return;
+        handledLineItemEventsRef.current.add(message.eventId);
+      }
+      await onUpdateLinkedLineItem({
+        linkId: message.linkId,
+        worksheetItemId: message.worksheetItemId,
+        patch: message.patch,
+      });
+    },
+    [onUpdateLinkedLineItem]
+  );
+
+  const handleIncomingLineItemDelete = useCallback(
+    async (message: Pick<BidwrightModelLineItemDeleteMessage, "eventId" | "linkId" | "worksheetItemId">) => {
+      if (!onDeleteLinkedLineItem) return;
+      if (message.eventId) {
+        if (handledLineItemEventsRef.current.has(message.eventId)) return;
+        handledLineItemEventsRef.current.add(message.eventId);
+      }
+      await onDeleteLinkedLineItem({
+        linkId: message.linkId,
+        worksheetItemId: message.worksheetItemId,
+      });
+    },
+    [onDeleteLinkedLineItem]
   );
 
   useEffect(() => {
@@ -220,40 +463,104 @@ export function BidwrightModelEditor({
       }
       if (isModelSendToEstimateMessage(event.data)) {
         void handleIncomingSendToEstimate(event.data);
+        return;
+      }
+      if (isLineItemsRequestMessage(event.data)) {
+        postLinkedLineItemsState(iframeRef.current?.contentWindow);
+        return;
+      }
+      if (isLineItemUpdateMessage(event.data)) {
+        void handleIncomingLineItemUpdate(event.data);
+        return;
+      }
+      if (isLineItemDeleteMessage(event.data)) {
+        void handleIncomingLineItemDelete(event.data);
       }
     }
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [handleIncomingSelection, handleIncomingSendToEstimate]);
+  }, [
+    handleIncomingLineItemDelete,
+    handleIncomingLineItemUpdate,
+    handleIncomingSelection,
+    handleIncomingSendToEstimate,
+    postLinkedLineItemsState,
+  ]);
 
   useEffect(() => {
     if (!effectiveSyncChannelName || typeof window === "undefined" || !("BroadcastChannel" in window)) return;
 
     const channel = new BroadcastChannel(effectiveSyncChannelName);
+    channelRef.current = channel;
     channel.onmessage = (event: MessageEvent) => {
       if (!isModelChannelMessage(event.data)) return;
       if (projectId && event.data.projectId && event.data.projectId !== projectId) return;
+      if (modelAssetId && event.data.modelId && event.data.modelId !== modelAssetId) return;
       if (modelDocumentId && event.data.modelDocumentId && event.data.modelDocumentId !== modelDocumentId) return;
 
       if (event.data.type === "model-selection") {
-        handleIncomingSelection(event.data.selection);
+        if (event.data.selection) handleIncomingSelection(event.data.selection);
         return;
       }
-      void handleIncomingSendToEstimate({
-        eventId: event.data.eventId,
-        selection: event.data.selection,
-      });
+      if (event.data.type === "model-send-to-estimate") {
+        if (!event.data.selection) return;
+        void handleIncomingSendToEstimate({
+          eventId: event.data.eventId,
+          selection: event.data.selection,
+          lineItemDraft: event.data.lineItemDraft,
+        });
+        return;
+      }
+      if (event.data.type === "model-line-items-request") {
+        postLinkedLineItemsState();
+        return;
+      }
+      if (event.data.type === "model-line-item-update" && event.data.linkId && event.data.worksheetItemId && event.data.patch) {
+        void handleIncomingLineItemUpdate({
+          eventId: event.data.eventId,
+          linkId: event.data.linkId,
+          worksheetItemId: event.data.worksheetItemId,
+          patch: event.data.patch,
+        });
+        return;
+      }
+      if (event.data.type === "model-line-item-delete" && event.data.linkId && event.data.worksheetItemId) {
+        void handleIncomingLineItemDelete({
+          eventId: event.data.eventId,
+          linkId: event.data.linkId,
+          worksheetItemId: event.data.worksheetItemId,
+        });
+      }
     };
 
-    return () => channel.close();
-  }, [effectiveSyncChannelName, handleIncomingSelection, handleIncomingSendToEstimate, modelDocumentId, projectId]);
+    return () => {
+      if (channelRef.current === channel) channelRef.current = null;
+      channel.close();
+    };
+  }, [
+    effectiveSyncChannelName,
+    handleIncomingLineItemDelete,
+    handleIncomingLineItemUpdate,
+    handleIncomingSelection,
+    handleIncomingSendToEstimate,
+    modelAssetId,
+    modelDocumentId,
+    postLinkedLineItemsState,
+    projectId,
+  ]);
+
+  useEffect(() => {
+    postLinkedLineItemsState(iframeRef.current?.contentWindow);
+  }, [linkedLineItems, postLinkedLineItemsState]);
 
   useEffect(() => {
     handledSendEventsRef.current.clear();
   }, [editorUrl]);
 
-  const canSendSelection = Boolean(onSendSelectionToEstimate && selection && selection.selectedCount > 0);
+  const canSendSelection = Boolean(
+    onSendSelectionToEstimate && estimateTargetWorksheetId && selection && selection.selectedCount > 0,
+  );
 
   return (
     <div className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", className)}>
@@ -279,7 +586,7 @@ export function BidwrightModelEditor({
           <Button
             variant="secondary"
             size="xs"
-            title="Send selected model quantity to the estimate"
+            title={estimateTargetWorksheetId ? "Create worksheet line item from selected model quantity" : "Create a worksheet before sending model quantities"}
             disabled={!canSendSelection || sendingSelection}
             onClick={async () => {
               if (!selection || !onSendSelectionToEstimate) return;
@@ -324,7 +631,10 @@ export function BidwrightModelEditor({
           title={fileName ? `${title}: ${fileName}` : title}
           className="h-full w-full border-0 bg-[#101014]"
           sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
-          onLoad={() => setLoading(false)}
+          onLoad={() => {
+            setLoading(false);
+            postLinkedLineItemsState(iframeRef.current?.contentWindow);
+          }}
         />
         {loading && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-[#101014] text-fg/60">
