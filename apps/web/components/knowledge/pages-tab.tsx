@@ -1,18 +1,19 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import * as Popover from "@radix-ui/react-popover";
 import {
+  ArrowLeft,
   Check,
   FileText,
   FolderPlus,
   Loader2,
+  MoreHorizontal,
   MoveRight,
-  NotebookText,
   Plus,
   Search,
   Sparkles,
   Trash2,
-  X,
 } from "lucide-react";
 import {
   Badge,
@@ -20,11 +21,8 @@ import {
   Card,
   CardBody,
   CardHeader,
-  CardTitle,
   EmptyState,
   Input,
-  Label,
-  ModalBackdrop,
   Select,
   Textarea,
 } from "@/components/ui";
@@ -32,6 +30,7 @@ import { ConfirmModal } from "@/components/workspace/modals";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
   CabinetDirectorySidebar,
+  cabinetDescendantIds,
   cabinetPathLabel,
   MoveToCabinetModal,
   type LibraryDirectoryView,
@@ -42,14 +41,12 @@ import {
   createKnowledgeDocumentPage,
   createKnowledgeLibraryCabinet,
   deleteKnowledgeDocument,
-  deleteKnowledgeDocumentPage,
   deleteKnowledgeLibraryCabinet,
   listKnowledgeDocumentPages,
   reindexKnowledgeDocument,
   updateKnowledgeDocument,
   updateKnowledgeDocumentPage,
   updateKnowledgeLibraryCabinet,
-  type KnowledgeBookRecord,
   type KnowledgeDocumentPageRecord,
   type KnowledgeDocumentRecord,
   type KnowledgeLibraryCabinetRecord,
@@ -57,7 +54,6 @@ import {
 import {
   EMPTY_DOCUMENT_CONTENT,
   markdownToTiptapJson,
-  tiptapJsonToMarkdown,
   tiptapJsonToPlainText,
 } from "@/lib/knowledge-document-content";
 import { cn } from "@/lib/utils";
@@ -90,10 +86,22 @@ function statusTone(status: string) {
   return "default" as const;
 }
 
-function matchesLibraryView(cabinetId: string | null, view: LibraryDirectoryView) {
+function matchesFolderView(
+  cabinetId: string | null,
+  view: LibraryDirectoryView,
+  visibleCabinetIds: Set<string> | null,
+) {
   if (view.kind === "all") return true;
   if (view.kind === "unassigned") return !cabinetId;
-  return cabinetId === view.cabinetId;
+  return cabinetId ? visibleCabinetIds?.has(cabinetId) ?? cabinetId === view.cabinetId : false;
+}
+
+function nextUntitledTitle(documents: KnowledgeDocumentRecord[]) {
+  const taken = new Set(documents.map((document) => document.title.toLowerCase()));
+  if (!taken.has("untitled page")) return "Untitled Page";
+  let index = 2;
+  while (taken.has(`untitled page ${index}`)) index += 1;
+  return `Untitled Page ${index}`;
 }
 
 export function PagesTab({
@@ -104,16 +112,13 @@ export function PagesTab({
 }: {
   cabinets: KnowledgeLibraryCabinetRecord[];
   documents: KnowledgeDocumentRecord[];
-  books: KnowledgeBookRecord[];
-  onCabinetsRefresh: () => void;
-  onRefresh: () => void;
+  onCabinetsRefresh: () => void | Promise<void>;
+  onRefresh: () => void | Promise<void>;
 }) {
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(documents[0]?.id ?? null);
-  const [pages, setPages] = useState<KnowledgeDocumentPageRecord[]>([]);
-  const [activePageId, setActivePageId] = useState<string | null>(null);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [movingDocument, setMovingDocument] = useState<KnowledgeDocumentRecord | null>(null);
   const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
   const [savingMove, setSavingMove] = useState(false);
@@ -131,30 +136,15 @@ export function PagesTab({
     [documentCabinets],
   );
 
-  const selectedDocument = useMemo(
-    () => documents.find((document) => document.id === selectedDocumentId) ?? documents[0] ?? null,
-    [documents, selectedDocumentId],
+  const visibleCabinetIds = useMemo(
+    () => (view.kind === "cabinet" ? cabinetDescendantIds(documentCabinets, view.cabinetId) : null),
+    [documentCabinets, view],
   );
 
-  const refreshPages = useCallback(async () => {
-    if (!selectedDocument) {
-      setPages([]);
-      setActivePageId(null);
-      return;
-    }
-    try {
-      const nextPages = await listKnowledgeDocumentPages(selectedDocument.id);
-      setPages(nextPages);
-      setActivePageId((current) => current && nextPages.some((page) => page.id === current) ? current : nextPages[0]?.id ?? null);
-    } catch {
-      setPages([]);
-      setActivePageId(null);
-    }
-  }, [selectedDocument]);
-
-  useEffect(() => {
-    refreshPages();
-  }, [refreshPages]);
+  const selectedDocument = useMemo(
+    () => documents.find((document) => document.id === selectedDocumentId) ?? null,
+    [documents, selectedDocumentId],
+  );
 
   useEffect(() => {
     if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
@@ -162,10 +152,21 @@ export function PagesTab({
     }
   }, [cabinetsById, view]);
 
+  useEffect(() => {
+    setSelectedDocumentId(null);
+  }, [view]);
+
+  useEffect(() => {
+    if (!selectedDocumentId) return;
+    if (!documents.some((document) => document.id === selectedDocumentId)) {
+      setSelectedDocumentId(null);
+    }
+  }, [documents, selectedDocumentId]);
+
   const filteredDocuments = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return documents
-      .filter((document) => matchesLibraryView(document.cabinetId, view))
+      .filter((document) => matchesFolderView(document.cabinetId, view, visibleCabinetIds))
       .filter((document) => {
         if (!query) return true;
         return [
@@ -177,15 +178,23 @@ export function PagesTab({
         ].some((value) => value.toLowerCase().includes(query));
       })
       .sort(compareByTitle);
-  }, [documents, searchQuery, view]);
+  }, [documents, searchQuery, view, visibleCabinetIds]);
 
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
+  const activeFolderLabel =
+    view.kind === "all"
+      ? "All Pages"
+      : view.kind === "unassigned"
+        ? "Unassigned"
+        : cabinetPathLabel(view.cabinetId, cabinetsById) ?? "Folder";
 
   const handleCreateCabinet = async (parentId: string | null) => {
-    const name = prompt("Folder name");
-    if (!name?.trim()) return;
     try {
-      const cabinet = await createKnowledgeLibraryCabinet({ name: name.trim(), itemType: "document", parentId });
+      const cabinet = await createKnowledgeLibraryCabinet({
+        name: "New Folder",
+        itemType: "document",
+        parentId,
+      });
       await onCabinetsRefresh();
       setView({ kind: "cabinet", cabinetId: cabinet.id });
       setError(null);
@@ -218,6 +227,32 @@ export function PagesTab({
     }
   };
 
+  const handleCreateDocument = async () => {
+    if (creating) return;
+    setCreating(true);
+    setError(null);
+    const title = nextUntitledTitle(documents);
+    try {
+      const document = await createKnowledgeDocument({
+        title,
+        description: "",
+        category: "general",
+        cabinetId: defaultCabinetId,
+        tags: [],
+        pageTitle: title,
+        contentJson: EMPTY_DOCUMENT_CONTENT,
+        contentMarkdown: "",
+        plainText: "",
+      });
+      await onRefresh();
+      setSelectedDocumentId(document.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create page");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const handleMoveSave = async () => {
     if (!movingDocument) return;
     setSavingMove(true);
@@ -229,7 +264,7 @@ export function PagesTab({
       setMovingDocument(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to move page library");
+      setError(err instanceof Error ? err.message : "Failed to move page");
     } finally {
       setSavingMove(false);
     }
@@ -245,7 +280,7 @@ export function PagesTab({
       setDocumentToDelete(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete page library");
+      setError(err instanceof Error ? err.message : "Failed to delete page");
     } finally {
       setDeletingDocumentId(null);
     }
@@ -253,10 +288,10 @@ export function PagesTab({
 
   return (
     <>
-      <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,390px)_minmax(0,1fr)]">
+      <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
         <CabinetDirectorySidebar
           cabinets={documentCabinets}
-          emptyLabel="Organize manual pages into folders."
+          emptyLabel="Create folders and subfolders for manual pages."
           itemLabelPlural="Pages"
           onCreateCabinet={handleCreateCabinet}
           onDeleteCabinet={handleDeleteCabinet}
@@ -266,131 +301,55 @@ export function PagesTab({
         />
 
         <Card className="flex min-h-0 flex-col overflow-hidden">
-          <CardHeader className="border-b border-line">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-sm">Page Libraries</CardTitle>
-                <p className="mt-1 text-xs text-fg/40">{filteredDocuments.length} libraries</p>
+          <CardHeader className="border-b border-line px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate text-sm font-semibold text-fg">{activeFolderLabel}</h2>
+                <p className="mt-0.5 text-xs text-fg/40">{filteredDocuments.length} pages</p>
               </div>
-              <Button size="xs" onClick={() => setShowCreateModal(true)}>
-                <Plus className="h-3.5 w-3.5" />
-                New
-              </Button>
-            </div>
-            <div className="relative mt-3">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
-              <Input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search pages..."
-                className="pl-8 text-xs"
-              />
+              <div className="flex min-w-[260px] flex-1 items-center justify-end gap-2">
+                {!selectedDocument && (
+                  <div className="relative max-w-sm flex-1">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+                    <Input
+                      className="h-8 pl-8 text-xs"
+                      placeholder="Search pages..."
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                    />
+                  </div>
+                )}
+                <Button size="sm" onClick={handleCreateDocument} disabled={creating}>
+                  {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+                  New Page
+                </Button>
+              </div>
             </div>
             {error && <p className="mt-2 text-xs text-danger">{error}</p>}
           </CardHeader>
 
-          <CardBody className="min-h-0 flex-1 overflow-y-auto p-3">
-            {filteredDocuments.length === 0 ? (
-              <EmptyState>
-                <NotebookText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                <p className="text-sm text-fg/50">No pages here yet.</p>
-              </EmptyState>
+          <CardBody className="min-h-0 flex-1 overflow-hidden p-0">
+            {selectedDocument ? (
+              <KnowledgeDocumentDetail
+                document={selectedDocument}
+                onBack={() => setSelectedDocumentId(null)}
+                onRefresh={onRefresh}
+              />
             ) : (
-              <div className="space-y-2">
-                {filteredDocuments.map((document) => {
-                  const folder = cabinetPathLabel(document.cabinetId, cabinetsById);
-                  const selected = selectedDocument?.id === document.id;
-                  return (
-                    <button
-                      key={document.id}
-                      type="button"
-                      onClick={() => setSelectedDocumentId(document.id)}
-                      className={cn(
-                        "w-full rounded-lg border p-3 text-left transition-colors",
-                        selected ? "border-accent/45 bg-accent/10" : "border-line bg-panel2/20 hover:bg-panel2/45",
-                      )}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-0.5 rounded-md border border-line bg-panel p-1.5 text-fg/55">
-                          <FileText className="h-4 w-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <p className="truncate text-sm font-semibold text-fg">{document.title}</p>
-                            <Badge tone={statusTone(document.status)}>{document.status}</Badge>
-                          </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-fg/45">{document.description || "Manual knowledge pages"}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                            <Badge tone="default">{categoryLabel(document.category)}</Badge>
-                            <Badge tone={scopeTone(document.scope)}>{document.scope}</Badge>
-                            <span className="text-[11px] text-fg/35">{document.pageCount} pages</span>
-                            {folder && <span className="truncate text-[11px] text-fg/35">{folder}</span>}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 flex-col gap-1">
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            title="Move"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setMovingDocument(document);
-                              setMoveTargetCabinetId(document.cabinetId ?? "__root__");
-                            }}
-                            className="h-7 w-7 px-0"
-                          >
-                            <MoveRight className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            title="Delete"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setDocumentToDelete(document);
-                            }}
-                            className="h-7 w-7 px-0 text-danger hover:text-danger"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+              <PageDocumentList
+                cabinetsById={cabinetsById}
+                documents={filteredDocuments}
+                onDelete={setDocumentToDelete}
+                onMove={(document) => {
+                  setMovingDocument(document);
+                  setMoveTargetCabinetId(document.cabinetId ?? "__root__");
+                }}
+                onSelect={(document) => setSelectedDocumentId(document.id)}
+              />
             )}
           </CardBody>
         </Card>
-
-        {selectedDocument ? (
-          <KnowledgeDocumentDetail
-            document={selectedDocument}
-            pages={pages}
-            activePageId={activePageId}
-            onActivePageChange={setActivePageId}
-            onPagesRefresh={refreshPages}
-            onRefresh={onRefresh}
-          />
-        ) : (
-          <EmptyState>
-            <FolderPlus className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-            <p className="text-sm text-fg/50">Create a page library to begin.</p>
-          </EmptyState>
-        )}
       </div>
-
-      {showCreateModal && (
-        <CreateKnowledgeDocumentModal
-          defaultCabinetId={defaultCabinetId}
-          onClose={() => setShowCreateModal(false)}
-          onCreated={(documentId) => {
-            setShowCreateModal(false);
-            setSelectedDocumentId(documentId);
-            onRefresh();
-          }}
-        />
-      )}
 
       {movingDocument && (
         <MoveToCabinetModal
@@ -410,8 +369,8 @@ export function PagesTab({
         onClose={() => {
           if (!deletingDocumentId) setDocumentToDelete(null);
         }}
-        title="Delete Page Library"
-        message={`Delete "${documentToDelete?.title ?? "this page library"}"? This removes all pages and indexed chunks.`}
+        title="Delete Page"
+        message={`Delete "${documentToDelete?.title ?? "this page"}"? This removes its content and indexed chunks.`}
         confirmLabel="Delete"
         confirmVariant="danger"
         isPending={deletingDocumentId !== null}
@@ -421,22 +380,102 @@ export function PagesTab({
   );
 }
 
-function KnowledgeDocumentDetail({
-  activePageId,
-  document,
-  onActivePageChange,
-  onPagesRefresh,
-  onRefresh,
-  pages,
+function PageDocumentList({
+  cabinetsById,
+  documents,
+  onDelete,
+  onMove,
+  onSelect,
 }: {
-  activePageId: string | null;
-  document: KnowledgeDocumentRecord;
-  pages: KnowledgeDocumentPageRecord[];
-  onActivePageChange: (pageId: string | null) => void;
-  onPagesRefresh: () => void;
-  onRefresh: () => void;
+  cabinetsById: Map<string, KnowledgeLibraryCabinetRecord>;
+  documents: KnowledgeDocumentRecord[];
+  onDelete: (document: KnowledgeDocumentRecord) => void;
+  onMove: (document: KnowledgeDocumentRecord) => void;
+  onSelect: (document: KnowledgeDocumentRecord) => void;
 }) {
-  const activePage = pages.find((page) => page.id === activePageId) ?? pages[0] ?? null;
+  if (documents.length === 0) {
+    return (
+      <EmptyState className="h-full">
+        <FolderPlus className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+        <p className="text-sm text-fg/50">No pages in this folder.</p>
+      </EmptyState>
+    );
+  }
+
+  return (
+    <div className="h-full overflow-y-auto p-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+        {documents.map((document) => {
+          const folder = cabinetPathLabel(document.cabinetId, cabinetsById);
+          return (
+            <button
+              key={document.id}
+              type="button"
+              onClick={() => onSelect(document)}
+              className="group min-h-[132px] rounded-lg border border-line bg-panel2/20 p-3 text-left transition-colors hover:border-accent/35 hover:bg-accent/5"
+            >
+              <div className="flex items-start gap-3">
+                <div className="rounded-md border border-line bg-panel p-2 text-fg/55">
+                  <FileText className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-fg">{document.title}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-fg/45">
+                    {document.description || "Manual knowledge page"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="Move"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onMove(document);
+                    }}
+                    className="h-7 w-7 px-0"
+                  >
+                    <MoveRight className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    title="Delete"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(document);
+                    }}
+                    className="h-7 w-7 px-0 text-danger hover:text-danger"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center gap-1.5">
+                <Badge tone="default">{categoryLabel(document.category)}</Badge>
+                <Badge tone={scopeTone(document.scope)}>{document.scope}</Badge>
+                <Badge tone={statusTone(document.status)}>{document.status}</Badge>
+                {folder && <span className="truncate text-[11px] text-fg/35">{folder}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeDocumentDetail({
+  document,
+  onBack,
+  onRefresh,
+}: {
+  document: KnowledgeDocumentRecord;
+  onBack: () => void;
+  onRefresh: () => void | Promise<void>;
+}) {
+  const [page, setPage] = useState<KnowledgeDocumentPageRecord | null>(null);
+  const [loadingPage, setLoadingPage] = useState(true);
   const [mode, setMode] = useState<"edit" | "preview" | "source">("edit");
   const [draftContent, setDraftContent] = useState<{
     contentJson: Record<string, unknown>;
@@ -444,14 +483,37 @@ function KnowledgeDocumentDetail({
     plainText: string;
   } | null>(null);
   const [sourceDraft, setSourceDraft] = useState("");
-  const [pageTitleDraft, setPageTitleDraft] = useState("");
   const [titleDraft, setTitleDraft] = useState("");
   const [tagsDraft, setTagsDraft] = useState("");
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [categoryDraft, setCategoryDraft] = useState<KnowledgeDocumentRecord["category"]>("general");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [reindexing, setReindexing] = useState(false);
-  const [pageToDelete, setPageToDelete] = useState<KnowledgeDocumentPageRecord | null>(null);
+
+  const loadPage = useCallback(async () => {
+    setLoadingPage(true);
+    try {
+      const pages = await listKnowledgeDocumentPages(document.id);
+      let nextPage = pages[0] ?? null;
+      if (!nextPage) {
+        nextPage = await createKnowledgeDocumentPage(document.id, {
+          title: document.title,
+          contentJson: EMPTY_DOCUMENT_CONTENT,
+          contentMarkdown: "",
+          plainText: "",
+        });
+      }
+      setPage(nextPage);
+      setDraftContent(null);
+      setSourceDraft(nextPage.contentMarkdown ?? "");
+      setSaveState("idle");
+    } catch {
+      setPage(null);
+      setSaveState("error");
+    } finally {
+      setLoadingPage(false);
+    }
+  }, [document.id, document.title]);
 
   useEffect(() => {
     setTitleDraft(document.title);
@@ -461,56 +523,41 @@ function KnowledgeDocumentDetail({
   }, [document]);
 
   useEffect(() => {
-    setDraftContent(null);
-    setSourceDraft(activePage?.contentMarkdown ?? "");
-    setPageTitleDraft(activePage?.title ?? "");
-    setSaveState("idle");
-  }, [activePage?.id, activePage?.contentMarkdown, activePage?.title]);
+    void loadPage();
+  }, [loadPage]);
 
   useEffect(() => {
-    if (!activePage || !draftContent) return;
+    if (!page || !draftContent) return;
     setSaveState("saving");
     const timer = window.setTimeout(async () => {
       try {
-        await updateKnowledgeDocumentPage(document.id, activePage.id, draftContent);
+        const updated = await updateKnowledgeDocumentPage(document.id, page.id, draftContent);
+        setPage(updated);
+        setSourceDraft(draftContent.contentMarkdown);
+        setDraftContent(null);
         setSaveState("saved");
-        onPagesRefresh();
-        onRefresh();
+        await onRefresh();
       } catch {
         setSaveState("error");
       }
-    }, 900);
+    }, 750);
     return () => window.clearTimeout(timer);
-  }, [activePage, document.id, draftContent, onPagesRefresh, onRefresh]);
-
-  const handleCreatePage = async () => {
-    const title = prompt("Page title");
-    if (!title?.trim()) return;
-    const contentJson = markdownToTiptapJson(`# ${title.trim()}`);
-    try {
-      const page = await createKnowledgeDocumentPage(document.id, {
-        title: title.trim(),
-        contentJson,
-        contentMarkdown: tiptapJsonToMarkdown(contentJson),
-        plainText: tiptapJsonToPlainText(contentJson),
-      });
-      await onPagesRefresh();
-      await onRefresh();
-      onActivePageChange(page.id);
-    } catch {
-      setSaveState("error");
-    }
-  };
+  }, [draftContent, document.id, onRefresh, page]);
 
   const handleSaveDocument = async () => {
+    const title = titleDraft.trim() || "Untitled Page";
     setSaveState("saving");
     try {
       await updateKnowledgeDocument(document.id, {
-        title: titleDraft,
+        title,
         description: descriptionDraft,
         category: categoryDraft,
         tags: tagsDraft.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
+      if (page && page.title !== title) {
+        const updatedPage = await updateKnowledgeDocumentPage(document.id, page.id, { title });
+        setPage(updatedPage);
+      }
       await onRefresh();
       setSaveState("saved");
     } catch {
@@ -519,7 +566,7 @@ function KnowledgeDocumentDetail({
   };
 
   const handleSaveSource = async () => {
-    if (!activePage) return;
+    if (!page) return;
     const contentJson = markdownToTiptapJson(sourceDraft);
     const payload = {
       contentJson,
@@ -543,296 +590,150 @@ function KnowledgeDocumentDetail({
     }
   };
 
-  const handleDeletePage = async () => {
-    if (!pageToDelete) return;
-    try {
-      await deleteKnowledgeDocumentPage(document.id, pageToDelete.id);
-      await onPagesRefresh();
-      await onRefresh();
-      setPageToDelete(null);
-    } catch {
-      setSaveState("error");
-    }
+  const openSourceMode = () => {
+    setSourceDraft(draftContent?.contentMarkdown ?? page?.contentMarkdown ?? "");
+    setMode("source");
   };
 
   return (
-    <>
-      <Card className="flex min-h-0 flex-col overflow-hidden">
-        <CardHeader className="border-b border-line">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <Input
-                value={titleDraft}
-                onChange={(event) => setTitleDraft(event.target.value)}
-                onBlur={handleSaveDocument}
-                className="h-9 border-transparent bg-transparent px-0 text-base font-semibold"
-              />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+        <Button size="sm" variant="ghost" title="Back to pages" onClick={onBack} className="h-8 w-8 px-0">
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <Input
+          value={titleDraft}
+          onChange={(event) => setTitleDraft(event.target.value)}
+          onBlur={handleSaveDocument}
+          className="h-9 min-w-[220px] flex-[2] border-transparent bg-transparent px-1 text-base font-semibold"
+        />
+        <Select
+          value={categoryDraft}
+          onChange={(event) => setCategoryDraft(event.target.value as KnowledgeDocumentRecord["category"])}
+          onBlur={handleSaveDocument}
+          className="h-8 w-36 text-xs"
+        >
+          {PAGE_CATEGORIES.map((category) => (
+            <option key={category} value={category}>{categoryLabel(category)}</option>
+          ))}
+        </Select>
+        <Input
+          value={tagsDraft}
+          onChange={(event) => setTagsDraft(event.target.value)}
+          onBlur={handleSaveDocument}
+          placeholder="tags"
+          className="h-8 min-w-[160px] flex-1 text-xs"
+        />
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <Button size="sm" variant="ghost" title="Details" className="h-8 w-8 px-0">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              align="end"
+              sideOffset={8}
+              className="z-50 w-80 rounded-lg border border-line bg-panel p-3 shadow-xl"
+            >
               <Textarea
                 value={descriptionDraft}
                 onChange={(event) => setDescriptionDraft(event.target.value)}
                 onBlur={handleSaveDocument}
-                rows={2}
+                rows={4}
                 placeholder="Description"
-                className="mt-1 min-h-0 resize-none border-transparent bg-transparent px-0 text-xs text-fg/50"
+                className="resize-none text-xs"
               />
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Select
-                  value={categoryDraft}
-                  onChange={(event) => setCategoryDraft(event.target.value as KnowledgeDocumentRecord["category"])}
-                  onBlur={handleSaveDocument}
-                  className="h-8 w-36 text-xs"
-                >
-                  {PAGE_CATEGORIES.map((category) => (
-                    <option key={category} value={category}>{categoryLabel(category)}</option>
-                  ))}
-                </Select>
-                <Input
-                  value={tagsDraft}
-                  onChange={(event) => setTagsDraft(event.target.value)}
-                  onBlur={handleSaveDocument}
-                  placeholder="tags, comma separated"
-                  className="h-8 min-w-[180px] flex-1 text-xs"
-                />
-                <Badge tone={statusTone(document.status)}>{document.status}</Badge>
-                <Badge tone={scopeTone(document.scope)}>{document.scope}</Badge>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="xs" variant="secondary" onClick={handleReindex} disabled={reindexing}>
-                {reindexing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                Index
-              </Button>
-              <div className="min-w-16 text-right text-[11px] text-fg/40">
-                {saveState === "saving" && "Saving"}
-                {saveState === "saved" && <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" /> Saved</span>}
-                {saveState === "error" && <span className="text-danger">Error</span>}
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-
-        <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)]">
-          <div className="min-h-0 border-r border-line bg-panel2/15">
-            <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
-              <span className="text-xs font-semibold text-fg/60">Pages</span>
-              <Button size="xs" variant="ghost" title="New page" onClick={handleCreatePage} className="h-7 w-7 px-0">
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <div className="min-h-0 space-y-1 overflow-y-auto p-2">
-              {pages.map((page) => (
-                <button
-                  key={page.id}
-                  type="button"
-                  onClick={() => onActivePageChange(page.id)}
-                  className={cn(
-                    "group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs",
-                    activePage?.id === page.id ? "bg-accent/10 text-accent" : "text-fg/65 hover:bg-panel2",
-                  )}
-                >
-                  <FileText className="h-3.5 w-3.5 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{page.title}</span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    title="Delete page"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setPageToDelete(page);
-                    }}
-                    className="rounded p-1 text-fg/25 opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex min-h-0 flex-col">
-            {activePage ? (
-              <>
-                <div className="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
-                  <Input
-                    value={pageTitleDraft}
-                    onChange={(event) => setPageTitleDraft(event.target.value)}
-                    onBlur={() => {
-                      if (!pageTitleDraft.trim() || pageTitleDraft.trim() === activePage.title) return;
-                      void updateKnowledgeDocumentPage(document.id, activePage.id, { title: pageTitleDraft.trim() }).then(() => {
-                        onPagesRefresh();
-                        onRefresh();
-                      });
-                    }}
-                    className="h-8 max-w-sm border-transparent bg-transparent px-0 text-sm font-semibold"
-                  />
-                  <div className="flex items-center gap-1 rounded-md border border-line bg-panel2/30 p-0.5">
-                    {(["edit", "preview", "source"] as const).map((nextMode) => (
-                      <button
-                        key={nextMode}
-                        type="button"
-                        onClick={() => setMode(nextMode)}
-                        className={cn(
-                          "rounded px-2 py-1 text-[11px] font-medium capitalize",
-                          mode === nextMode ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
-                        )}
-                      >
-                        {nextMode}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="min-h-0 flex-1 p-3">
-                  {mode === "edit" && (
-                    <KnowledgeDocumentEditor
-                      key={activePage.id}
-                      contentJson={(draftContent?.contentJson ?? activePage.contentJson ?? EMPTY_DOCUMENT_CONTENT) as Record<string, unknown>}
-                      onChange={setDraftContent}
-                    />
-                  )}
-                  {mode === "preview" && (
-                    <div className="h-full overflow-auto rounded-lg border border-line bg-bg p-5">
-                      <MarkdownRenderer content={draftContent?.contentMarkdown ?? activePage.contentMarkdown} />
-                    </div>
-                  )}
-                  {mode === "source" && (
-                    <div className="flex h-full min-h-0 flex-col gap-2">
-                      <Textarea
-                        value={sourceDraft}
-                        onChange={(event) => setSourceDraft(event.target.value)}
-                        className="min-h-0 flex-1 resize-none font-mono text-xs"
-                      />
-                      <div className="flex justify-end">
-                        <Button size="sm" onClick={handleSaveSource}>
-                          <Check className="h-3.5 w-3.5" />
-                          Apply
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <EmptyState>
-                <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                <p className="text-sm text-fg/50">Add a page to this library.</p>
-              </EmptyState>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+        <Button size="sm" variant="secondary" onClick={handleReindex} disabled={reindexing}>
+          {reindexing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          Index
+        </Button>
+        <div className="flex items-center gap-1 rounded-md border border-line bg-panel2/30 p-0.5">
+          <button
+            type="button"
+            onClick={() => setMode("edit")}
+            className={cn(
+              "rounded px-2 py-1 text-[11px] font-medium",
+              mode === "edit" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
             )}
-          </div>
-        </div>
-      </Card>
-
-      <ConfirmModal
-        open={pageToDelete !== null}
-        onClose={() => setPageToDelete(null)}
-        title="Delete Page"
-        message={`Delete "${pageToDelete?.title ?? "this page"}"?`}
-        confirmLabel="Delete"
-        confirmVariant="danger"
-        onConfirm={handleDeletePage}
-      />
-    </>
-  );
-}
-
-function CreateKnowledgeDocumentModal({
-  defaultCabinetId,
-  onClose,
-  onCreated,
-}: {
-  defaultCabinetId: string | null;
-  onClose: () => void;
-  onCreated: (documentId: string) => void;
-}) {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<KnowledgeDocumentRecord["category"]>("general");
-  const [tags, setTags] = useState("");
-  const [markdown, setMarkdown] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleCreate = async () => {
-    if (!title.trim()) return;
-    setSaving(true);
-    setError(null);
-    const contentJson = markdown.trim() ? markdownToTiptapJson(markdown) : markdownToTiptapJson(`# ${title.trim()}`);
-    try {
-      const document = await createKnowledgeDocument({
-        title: title.trim(),
-        description,
-        category,
-        cabinetId: defaultCabinetId,
-        tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-        pageTitle: title.trim(),
-        contentJson,
-        contentMarkdown: markdown.trim() || tiptapJsonToMarkdown(contentJson),
-        plainText: tiptapJsonToPlainText(contentJson),
-      });
-      onCreated(document.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create page library");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <ModalBackdrop open={true} onClose={onClose} size="lg">
-      <div className="w-full max-w-2xl rounded-xl border border-line bg-panel p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-fg">New Page Library</h2>
-            <p className="mt-1 text-xs text-fg/45">Create manual knowledge pages for estimator research.</p>
-          </div>
-          <button type="button" onClick={onClose} className="rounded p-1 text-fg/35 hover:bg-panel2 hover:text-fg/60">
-            <X className="h-4 w-4" />
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("preview")}
+            className={cn(
+              "rounded px-2 py-1 text-[11px] font-medium",
+              mode === "preview" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
+            )}
+          >
+            Preview
+          </button>
+          <button
+            type="button"
+            onClick={openSourceMode}
+            className={cn(
+              "rounded px-2 py-1 text-[11px] font-medium",
+              mode === "source" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
+            )}
+          >
+            Source
           </button>
         </div>
-
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label className="text-xs">Title</Label>
-            <Input value={title} onChange={(event) => setTitle(event.target.value)} autoFocus />
-          </div>
-          <div className="space-y-2">
-            <Label className="text-xs">Category</Label>
-            <Select value={category} onChange={(event) => setCategory(event.target.value as KnowledgeDocumentRecord["category"])}>
-              {PAGE_CATEGORIES.map((value) => (
-                <option key={value} value={value}>{categoryLabel(value)}</option>
-              ))}
-            </Select>
-          </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label className="text-xs">Description</Label>
-            <Textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} />
-          </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label className="text-xs">Tags</Label>
-            <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="pipe, labour, safety" />
-          </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label className="text-xs">Initial Markdown</Label>
-            <Textarea
-              value={markdown}
-              onChange={(event) => setMarkdown(event.target.value)}
-              rows={9}
-              placeholder="Paste markdown, notes, or tables..."
-              className="font-mono text-xs"
-            />
-          </div>
-        </div>
-
-        {error && <p className="mt-3 text-xs text-danger">{error}</p>}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button size="sm" onClick={handleCreate} disabled={saving || !title.trim()}>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            Create
-          </Button>
+        <div className="ml-auto flex items-center gap-2 text-[11px] text-fg/40">
+          <Badge tone={statusTone(document.status)}>{document.status}</Badge>
+          {saveState === "saving" && "Saving"}
+          {saveState === "saved" && <span className="inline-flex items-center gap-1"><Check className="h-3 w-3" /> Saved</span>}
+          {saveState === "error" && <span className="text-danger">Error</span>}
         </div>
       </div>
-    </ModalBackdrop>
+
+      <div className="min-h-0 flex-1 p-3">
+        {loadingPage ? (
+          <div className="flex h-full items-center justify-center text-xs text-fg/40">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Opening page
+          </div>
+        ) : page ? (
+          <>
+            {mode === "edit" && (
+              <KnowledgeDocumentEditor
+                key={page.id}
+                contentJson={(draftContent?.contentJson ?? page.contentJson ?? EMPTY_DOCUMENT_CONTENT) as Record<string, unknown>}
+                onChange={setDraftContent}
+              />
+            )}
+            {mode === "preview" && (
+              <div className="h-full overflow-auto rounded-lg border border-line bg-bg p-5">
+                <MarkdownRenderer content={draftContent?.contentMarkdown ?? page.contentMarkdown} />
+              </div>
+            )}
+            {mode === "source" && (
+              <div className="flex h-full min-h-0 flex-col gap-2">
+                <Textarea
+                  value={sourceDraft}
+                  onChange={(event) => setSourceDraft(event.target.value)}
+                  className="min-h-0 flex-1 resize-none font-mono text-xs"
+                />
+                <div className="flex justify-end">
+                  <Button size="sm" onClick={handleSaveSource}>
+                    <Check className="h-3.5 w-3.5" />
+                    Apply
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <EmptyState>
+            <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+            <p className="text-sm text-fg/50">This page could not be opened.</p>
+          </EmptyState>
+        )}
+      </div>
+    </div>
   );
 }
