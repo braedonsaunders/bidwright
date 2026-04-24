@@ -145,7 +145,7 @@ export function MoveToCabinetModal({
   saving,
   value,
 }: {
-  activeType: "book" | "dataset";
+  activeType: "book" | "dataset" | "document";
   cabinets: KnowledgeLibraryCabinetRecord[];
   itemName: string;
   onClose: () => void;
@@ -184,7 +184,9 @@ export function MoveToCabinetModal({
       >
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-fg">Move {activeType === "book" ? "Book" : "Dataset"}</h2>
+            <h2 className="text-sm font-semibold text-fg">
+              Move {activeType === "book" ? "Book" : activeType === "dataset" ? "Dataset" : "Page Library"}
+            </h2>
             <p className="mt-1 text-xs text-fg/45">{itemName}</p>
           </div>
           <button type="button" onClick={onClose} className="rounded p-1 text-fg/35 hover:bg-panel2 hover:text-fg/60">

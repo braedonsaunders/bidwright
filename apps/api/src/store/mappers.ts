@@ -22,6 +22,9 @@ import type {
   KnowledgeBook,
   KnowledgeLibraryCabinet,
   KnowledgeChunk,
+  KnowledgeDocument,
+  KnowledgeDocumentChunk,
+  KnowledgeDocumentPage,
   LabourCostEntry,
   LabourCostTable,
   LabourCostTableWithEntries,
@@ -715,6 +718,7 @@ export function mapPersona(row: any): any {
     description: row.description,
     systemPrompt: row.systemPrompt,
     knowledgeBookIds: Array.isArray(row.knowledgeBookIds) ? row.knowledgeBookIds : JSON.parse(row.knowledgeBookIds || "[]"),
+    knowledgeDocumentIds: Array.isArray(row.knowledgeDocumentIds) ? row.knowledgeDocumentIds : JSON.parse(row.knowledgeDocumentIds || "[]"),
     datasetTags: Array.isArray(row.datasetTags) ? row.datasetTags : JSON.parse(row.datasetTags || "[]"),
     packageBuckets: Array.isArray(row.packageBuckets) ? row.packageBuckets : (row.packageBuckets ?? []),
     defaultAssumptions: (row.defaultAssumptions as Record<string, unknown>) ?? {},
@@ -767,6 +771,54 @@ export function mapKnowledgeChunk(c: any): KnowledgeChunk {
     id: c.id,
     bookId: c.bookId,
     pageNumber: c.pageNumber ?? null,
+    sectionTitle: c.sectionTitle,
+    text: c.text,
+    tokenCount: c.tokenCount,
+    order: c.order,
+    metadata: (c.metadata as Record<string, unknown>) ?? {},
+  };
+}
+
+export function mapKnowledgeDocument(d: any): KnowledgeDocument {
+  return {
+    id: d.id,
+    cabinetId: d.cabinetId ?? null,
+    title: d.title,
+    description: d.description,
+    category: d.category as KnowledgeDocument["category"],
+    scope: d.scope as KnowledgeDocument["scope"],
+    projectId: d.projectId ?? null,
+    tags: d.tags ?? [],
+    pageCount: d.pageCount,
+    chunkCount: d.chunkCount,
+    status: d.status as KnowledgeDocument["status"],
+    metadata: (d.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(d.createdAt),
+    updatedAt: toISO(d.updatedAt),
+  };
+}
+
+export function mapKnowledgeDocumentPage(p: any): KnowledgeDocumentPage {
+  return {
+    id: p.id,
+    documentId: p.documentId,
+    title: p.title,
+    slug: p.slug,
+    order: p.order,
+    contentJson: (p.contentJson as Record<string, unknown>) ?? {},
+    contentMarkdown: p.contentMarkdown,
+    plainText: p.plainText,
+    metadata: (p.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(p.createdAt),
+    updatedAt: toISO(p.updatedAt),
+  };
+}
+
+export function mapKnowledgeDocumentChunk(c: any): KnowledgeDocumentChunk {
+  return {
+    id: c.id,
+    documentId: c.documentId,
+    pageId: c.pageId ?? null,
     sectionTitle: c.sectionTitle,
     text: c.text,
     tokenCount: c.tokenCount,

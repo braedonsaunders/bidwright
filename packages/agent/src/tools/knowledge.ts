@@ -511,6 +511,50 @@ export const getBookChunksTool = createKnowledgeTool({
 });
 
 // ──────────────────────────────────────────────────────────────
+// 17b. knowledge.listKnowledgeDocuments
+// ──────────────────────────────────────────────────────────────
+export const listKnowledgeDocumentsTool = createKnowledgeTool({
+  id: "knowledge.listKnowledgeDocuments",
+  name: "List Knowledge Pages",
+  description: "List manually-authored knowledge page libraries. Use these with readKnowledgeDocument to read markdown pages and pasted tables.",
+  inputSchema: z.object({
+    projectId: z.string().optional().describe("Optional project context; returns global pages plus project-scoped pages"),
+  }),
+  tags: ["knowledge", "pages", "documents", "read"],
+}, async (ctx, input) => {
+  const projectId = input.projectId ? String(input.projectId) : ctx.projectId;
+  const params = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+  try {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/documents${params}`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
+// 17c. knowledge.readKnowledgeDocument
+// ──────────────────────────────────────────────────────────────
+export const readKnowledgeDocumentTool = createKnowledgeTool({
+  id: "knowledge.readKnowledgeDocument",
+  name: "Read Knowledge Pages",
+  description: "Read a manually-authored knowledge page library, including its page markdown. Use this after queryKnowledge returns a documentId or pageId.",
+  inputSchema: z.object({
+    documentId: z.string().describe("KnowledgeDocument ID"),
+  }),
+  tags: ["knowledge", "pages", "documents", "read"],
+}, async (ctx, input) => {
+  try {
+    const res = await apiFetch(ctx, `${ctx.apiBaseUrl}/knowledge/documents/${input.documentId}`);
+    const data = await res.json();
+    return { success: true, data };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────
 // 18. knowledge.queryDataset
 // ──────────────────────────────────────────────────────────────
 export const queryDatasetTool = createKnowledgeTool({
@@ -920,6 +964,8 @@ export const knowledgeTools: Tool[] = [
   indexDocumentTool,
   searchBooksTool,
   getBookChunksTool,
+  listKnowledgeDocumentsTool,
+  readKnowledgeDocumentTool,
   queryDatasetTool,
   searchDatasetTool,
   listDatasetsTool,

@@ -3,7 +3,7 @@ import { createLLMAdapter } from "@bidwright/agent";
 import { createPdfParser } from "@bidwright/ingestion";
 import { createEmbedder, PgVectorStore, type VectorRecord } from "@bidwright/vector";
 import { prisma } from "@bidwright/db";
-import type { KnowledgeBook, KnowledgeChunk, SourceDocument } from "@bidwright/domain";
+import type { KnowledgeBook, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentPage, SourceDocument } from "@bidwright/domain";
 import { relativeKnowledgeBookPath, resolveApiPath } from "../paths.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -119,8 +119,13 @@ export interface SearchResult {
   text: string;
   score: number;
   source: string;
+  sourceType?: "book" | "document_page" | "project_document";
   bookId?: string;
   bookName?: string;
+  documentId?: string;
+  documentTitle?: string;
+  pageId?: string;
+  pageTitle?: string;
   sectionTitle?: string;
   pageNumber?: number;
   metadata?: Record<string, unknown>;
@@ -130,6 +135,7 @@ export interface SearchOptions {
   organizationId?: string;
   projectId?: string;
   bookId?: string;
+  documentId?: string;
   scope?: "global" | "project" | "all";
   limit?: number;
   includeProjectDocs?: boolean;
@@ -671,6 +677,157 @@ export class KnowledgeService {
     }
   }
 
+  async indexKnowledgeDocument(
+    documentId: string,
+    store: PrismaApiStore,
+    organizationId?: string,
+  ): Promise<{ documentId: string; chunkCount: number; embeddingsGenerated: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    const document = await store.getKnowledgeDocument(documentId);
+    if (!document) {
+      throw new Error(`Knowledge document ${documentId} not found`);
+    }
+
+    const pages = await store.listKnowledgeDocumentPages(documentId);
+    if (pages.length === 0) {
+      await store.replaceKnowledgeDocumentChunks(documentId, []);
+      await store.updateKnowledgeDocument(documentId, { status: "draft", pageCount: 0, chunkCount: 0 });
+      return { documentId, chunkCount: 0, embeddingsGenerated: false, errors };
+    }
+
+    await store.updateKnowledgeDocument(documentId, { status: "indexing", pageCount: pages.length });
+
+    const chunkInputs: Array<{
+      pageId: string;
+      sectionTitle: string;
+      text: string;
+      tokenCount: number;
+      order: number;
+      metadata: Record<string, unknown>;
+    }> = [];
+
+    for (const page of pages) {
+      const content = page.contentMarkdown || page.plainText || "";
+      const chunks = smartChunk(content, {
+        strategy: "section-aware",
+        chunkSize: 512,
+        overlap: 0,
+      });
+
+      if (chunks.length === 0 && content.trim()) {
+        chunks.push({ text: content.trim(), sectionTitle: page.title });
+      }
+
+      for (const chunk of chunks) {
+        chunkInputs.push({
+          pageId: page.id,
+          sectionTitle: chunk.sectionTitle ?? page.title,
+          text: chunk.text,
+          tokenCount: Math.ceil(chunk.text.length / 4),
+          order: chunkInputs.length,
+          metadata: {
+            sourceType: "document_page",
+            documentId: document.id,
+            documentTitle: document.title,
+            pageId: page.id,
+            pageTitle: page.title,
+            pageOrder: page.order,
+            category: document.category,
+            tags: document.tags,
+          },
+        });
+      }
+    }
+
+    const savedChunks = await store.replaceKnowledgeDocumentChunks(documentId, chunkInputs);
+
+    let embeddingsGenerated = false;
+    const vectorStore = getVectorStore(organizationId ?? "default");
+    try {
+      await vectorStore.delete({ documentId });
+    } catch (err) {
+      errors.push(`Vector cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    const embeddingCfg = getEmbeddingConfig();
+    if (embeddingCfg && savedChunks.length > 0) {
+      try {
+        const embedder = createEmbedder({
+          provider: embeddingCfg.provider,
+          apiKey: embeddingCfg.apiKey,
+          baseUrl: embeddingCfg.baseUrl,
+          model: embeddingCfg.model,
+          dimensions: embeddingCfg.dimensions,
+        });
+
+        const EMBED_BATCH_SIZE = 100;
+        const allVectors: number[][] = [];
+        for (let start = 0; start < savedChunks.length; start += EMBED_BATCH_SIZE) {
+          const batch = savedChunks.slice(start, start + EMBED_BATCH_SIZE);
+          try {
+            const vectors = await embedder.embed(batch.map((chunk) => chunk.text));
+            allVectors.push(...vectors);
+          } catch (err) {
+            errors.push(`Embedding batch ${start}-${start + batch.length} failed: ${err instanceof Error ? err.message : String(err)}`);
+            for (let i = 0; i < batch.length; i++) allVectors.push([]);
+          }
+        }
+
+        const pageMap = new Map(pages.map((page) => [page.id, page]));
+        const records: VectorRecord[] = savedChunks
+          .map((chunk, index) => {
+            const page = chunk.pageId ? pageMap.get(chunk.pageId) : undefined;
+            return {
+              id: `vec-${documentId}-${chunk.id}`,
+              chunkId: chunk.id,
+              documentId,
+              projectId: document.projectId ?? null,
+              scope: (document.scope === "project" ? "project" : "library") as "project" | "library",
+              embedding: allVectors[index] ?? [],
+              text: chunk.text,
+              metadata: {
+                sourceType: "document_page",
+                documentTitle: document.title,
+                documentId,
+                pageTitle: page?.title ?? "",
+                pageId: page?.id ?? "",
+                sectionTitle: chunk.sectionTitle,
+                category: document.category,
+                tags: document.tags.join(", "),
+              },
+            };
+          })
+          .filter((record) => record.embedding.length > 0);
+
+        const UPSERT_BATCH_SIZE = 200;
+        for (let start = 0; start < records.length; start += UPSERT_BATCH_SIZE) {
+          await vectorStore.upsert(records.slice(start, start + UPSERT_BATCH_SIZE));
+        }
+        embeddingsGenerated = records.length > 0;
+      } catch (err) {
+        errors.push(`Embedding generation failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    await store.updateKnowledgeDocument(documentId, {
+      status: errors.length > 0 && savedChunks.length === 0 ? "failed" : "indexed",
+      pageCount: pages.length,
+      chunkCount: savedChunks.length,
+      metadata: {
+        lastIndexedAt: new Date().toISOString(),
+        embeddingsGenerated,
+        indexingErrors: errors,
+      },
+    });
+
+    return { documentId, chunkCount: savedChunks.length, embeddingsGenerated, errors };
+  }
+
+  async deleteKnowledgeDocumentIndex(documentId: string, organizationId?: string): Promise<number> {
+    const vectorStore = getVectorStore(organizationId ?? "default");
+    return vectorStore.delete({ documentId });
+  }
+
   /**
    * Search across knowledge sources with hybrid search.
    *
@@ -719,17 +876,36 @@ export class KnowledgeService {
         });
 
         for (const hit of hits) {
-          vectorResults.push({
-            id: hit.record.id,
-            text: hit.record.text,
-            score: hit.score,
-            source: String(hit.record.metadata.bookName ?? "unknown"),
-            bookId: hit.record.documentId,
-            bookName: String(hit.record.metadata.bookName ?? ""),
-            sectionTitle: String(hit.record.metadata.sectionTitle ?? "") || undefined,
-            pageNumber: hit.record.metadata.pageNumber ? Number(hit.record.metadata.pageNumber) : undefined,
-            metadata: hit.record.metadata,
-          });
+          const metadata = hit.record.metadata;
+          const sourceType = String(metadata.sourceType ?? "book");
+          if (sourceType === "document_page") {
+            vectorResults.push({
+              id: hit.record.chunkId || hit.record.id,
+              text: hit.record.text,
+              score: hit.score,
+              source: String(metadata.documentTitle ?? "Knowledge Page"),
+              sourceType: "document_page",
+              documentId: String(metadata.documentId ?? hit.record.documentId),
+              documentTitle: String(metadata.documentTitle ?? ""),
+              pageId: metadata.pageId ? String(metadata.pageId) : undefined,
+              pageTitle: String(metadata.pageTitle ?? ""),
+              sectionTitle: String(metadata.sectionTitle ?? "") || undefined,
+              metadata,
+            });
+          } else {
+            vectorResults.push({
+              id: hit.record.id,
+              text: hit.record.text,
+              score: hit.score,
+              source: String(metadata.bookName ?? "unknown"),
+              sourceType: "book",
+              bookId: hit.record.documentId,
+              bookName: String(metadata.bookName ?? ""),
+              sectionTitle: String(metadata.sectionTitle ?? "") || undefined,
+              pageNumber: metadata.pageNumber ? Number(metadata.pageNumber) : undefined,
+              metadata,
+            });
+          }
         }
       } catch {
         // Vector search failed — keyword results will carry the load
@@ -738,9 +914,12 @@ export class KnowledgeService {
 
     // Keyword search (always runs in parallel with vector)
     const keywordPromise = (async () => {
-      const chunks = await store!.searchKnowledgeChunks(query, options.bookId, fetchLimit);
+      const [chunks, documentChunks] = await Promise.all([
+        options.documentId ? Promise.resolve([]) : store!.searchKnowledgeChunks(query, options.bookId, fetchLimit),
+        options.bookId ? Promise.resolve([]) : store!.searchKnowledgeDocumentChunks(query, options.documentId, fetchLimit),
+      ]);
 
-      const bookIds = [...new Set(chunks.map((c) => c.bookId))];
+      const bookIds = [...new Set(chunks.map((chunk) => chunk.bookId))];
       const bookMap = new Map<string, KnowledgeBook>();
       for (const bid of bookIds) {
         const book = await store!.getKnowledgeBook(bid);
@@ -772,10 +951,58 @@ export class KnowledgeService {
           text: chunk.text,
           score,
           source: book?.sourceFileName ?? "unknown",
+          sourceType: "book",
           bookId: chunk.bookId,
           bookName: book?.name,
           sectionTitle: chunk.sectionTitle || undefined,
           pageNumber: chunk.pageNumber ?? undefined,
+          metadata: chunk.metadata,
+        });
+      }
+
+      const documentIds = [...new Set(documentChunks.map((chunk) => chunk.documentId))];
+      const documentMap = new Map<string, KnowledgeDocument>();
+      const pageMap = new Map<string, KnowledgeDocumentPage>();
+      for (const did of documentIds) {
+        const document = await store!.getKnowledgeDocument(did);
+        if (document) {
+          documentMap.set(did, document);
+          const pages = await store!.listKnowledgeDocumentPages(did);
+          for (const page of pages) pageMap.set(page.id, page);
+        }
+      }
+
+      const filteredDocumentChunks = documentChunks.filter((chunk) => {
+        const document = documentMap.get(chunk.documentId);
+        if (!document) return false;
+        if (options.scope === "global") return document.scope === "global";
+        if (options.scope === "project" && options.projectId) return document.projectId === options.projectId;
+        if (options.projectId) return document.scope === "global" || document.projectId === options.projectId;
+        return true;
+      });
+
+      for (const chunk of filteredDocumentChunks) {
+        const document = documentMap.get(chunk.documentId);
+        const page = chunk.pageId ? pageMap.get(chunk.pageId) : undefined;
+        const lowerText = chunk.text.toLowerCase();
+        let score = 0;
+        for (const term of queryTerms) {
+          const occurrences = lowerText.split(term).length - 1;
+          score += occurrences;
+        }
+        score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
+
+        keywordResults.push({
+          id: chunk.id,
+          text: chunk.text,
+          score,
+          source: document?.title ?? "Knowledge Page",
+          sourceType: "document_page",
+          documentId: chunk.documentId,
+          documentTitle: document?.title,
+          pageId: chunk.pageId ?? undefined,
+          pageTitle: page?.title,
+          sectionTitle: chunk.sectionTitle || undefined,
           metadata: chunk.metadata,
         });
       }
@@ -825,6 +1052,7 @@ export class KnowledgeService {
             text: docText.slice(0, 500),
             score: 0.5,
             source: doc.fileName,
+            sourceType: "project_document",
             metadata: { documentType: doc.documentType, fileType: doc.fileType },
           });
         }

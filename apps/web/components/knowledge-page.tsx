@@ -52,8 +52,10 @@ import {
   MoveToCabinetModal,
   type LibraryDirectoryView,
 } from "@/components/knowledge/library-directory-sidebar";
+import { PagesTab } from "@/components/knowledge/pages-tab";
 import type {
   KnowledgeBookRecord,
+  KnowledgeDocumentRecord,
   KnowledgeLibraryCabinetRecord,
   KnowledgeChunkRecord,
   DatasetRecord,
@@ -62,6 +64,7 @@ import type {
 } from "@/lib/api";
 import {
   listKnowledgeBooks,
+  listKnowledgeDocuments,
   listKnowledgeLibraryCabinets,
   createKnowledgeLibraryCabinet,
   updateKnowledgeLibraryCabinet,
@@ -99,7 +102,7 @@ const PdfCanvasViewer = dynamic(
   { ssr: false },
 );
 
-type Tab = "books" | "datasets";
+type Tab = "books" | "pages" | "datasets";
 
 const BOOK_CATEGORIES = [
   "estimating",
@@ -240,15 +243,18 @@ function highlightSearchSnippet(text: string, query: string) {
 
 export function KnowledgePage({
   initialBooks,
+  initialDocuments,
   initialCabinets,
   initialDatasets,
 }: {
   initialBooks: KnowledgeBookRecord[];
+  initialDocuments: KnowledgeDocumentRecord[];
   initialCabinets: KnowledgeLibraryCabinetRecord[];
   initialDatasets: DatasetRecord[];
 }) {
   const [tab, setTab] = useState<Tab>("books");
   const [books, setBooks] = useState(initialBooks);
+  const [documents, setDocuments] = useState(initialDocuments);
   const [cabinets, setCabinets] = useState(initialCabinets);
   const [datasets, setDatasets] = useState(initialDatasets);
 
@@ -264,6 +270,12 @@ export function KnowledgePage({
     } catch { /* noop */ }
   }, []);
 
+  const refreshDocuments = useCallback(async () => {
+    try {
+      setDocuments(await listKnowledgeDocuments());
+    } catch { /* noop */ }
+  }, []);
+
   const refreshCabinets = useCallback(async () => {
     try {
       setCabinets(await listKnowledgeLibraryCabinets());
@@ -273,9 +285,10 @@ export function KnowledgePage({
   // Fetch on mount since initialBooks may be empty due to race condition
   useEffect(() => {
     refreshBooks();
+    refreshDocuments();
     refreshCabinets();
     refreshDatasets();
-  }, [refreshBooks, refreshCabinets, refreshDatasets]);
+  }, [refreshBooks, refreshDocuments, refreshCabinets, refreshDatasets]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-5">
@@ -284,7 +297,7 @@ export function KnowledgePage({
         <div>
           <h1 className="text-lg font-semibold text-fg">Knowledge & Datasets</h1>
           <p className="text-xs text-fg/50 mt-0.5">
-            Upload books, manage reference data, and build structured datasets for estimating.
+            Upload books, author manual pages, and manage structured datasets for estimating.
           </p>
         </div>
       </div>
@@ -296,6 +309,7 @@ export function KnowledgePage({
         {(
           [
             { key: "books", label: "Books", icon: BookOpen, count: books.length },
+            { key: "pages", label: "Pages", icon: FileText, count: documents.length },
             { key: "datasets", label: "Datasets", icon: Database, count: datasets.length },
           ] as const
         ).map((t) => (
@@ -336,6 +350,15 @@ export function KnowledgePage({
           books={books}
           cabinets={cabinets}
           onRefresh={refreshDatasets}
+          onCabinetsRefresh={refreshCabinets}
+        />
+      )}
+      {tab === "pages" && (
+        <PagesTab
+          documents={documents}
+          books={books}
+          cabinets={cabinets}
+          onRefresh={refreshDocuments}
           onCabinetsRefresh={refreshCabinets}
         />
       )}

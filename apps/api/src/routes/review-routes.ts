@@ -9,7 +9,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
-import { generateReviewClaudeMd, symlinkKnowledgeBooks } from "../services/claude-md-generator.js";
+import { generateReviewClaudeMd, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { resolveProjectDir, apiDataRoot } from "../paths.js";
 import { prisma } from "@bidwright/db";
 import { getSessionCookieToken } from "../services/session-cookie.js";
@@ -353,6 +353,25 @@ export function registerReviewRoutes(app: FastifyInstance) {
       );
     }
 
+    const knowledgeDocuments = await store.listKnowledgeDocuments(projectId) || [];
+    const documentSnapshots = [];
+    for (const document of knowledgeDocuments as any[]) {
+      const pages = await store.listKnowledgeDocumentPages(document.id).catch(() => []);
+      if (pages.length > 0) {
+        documentSnapshots.push({
+          id: document.id,
+          title: document.title,
+          description: document.description,
+          category: document.category,
+          tags: document.tags ?? [],
+          pages,
+        });
+      }
+    }
+    const linkedKnowledgePageNames = documentSnapshots.length > 0
+      ? await writeKnowledgeDocumentSnapshots(projectDir, documentSnapshots)
+      : [];
+
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
 
@@ -367,6 +386,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
       dataRoot: apiDataRoot,
       documents,
       knowledgeBookFiles: linkedBookNames,
+      knowledgeDocumentFiles: linkedKnowledgePageNames,
       maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
     });
 
