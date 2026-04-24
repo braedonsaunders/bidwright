@@ -126,7 +126,7 @@ import {
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
-import { isBidwrightEditableModel } from "./editors/bidwright-model-editor";
+import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 
 /* ─── Types ─── */
 
@@ -1458,6 +1458,12 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
   const detachedWindowRef = useRef<Window | null>(null);
 
   const handlePopOut = useCallback(() => {
+    if (isEmbeddedModelEditorPreview && previewUrl) {
+      const editorUrl = buildModelEditorUrl(previewUrl, selectedItem?.name ?? "Model", 0);
+      window.open(editorUrl, "_blank", "width=1400,height=900,resizable=yes");
+      return;
+    }
+
     if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
       detachedWindowRef.current.focus();
       return;
@@ -1492,7 +1498,7 @@ export function FileBrowser({ workspace, packages }: FileBrowserProps) {
       setIsDetached(false);
       setDetachedContainer(null);
     });
-  }, [selectedItem?.name]);
+  }, [isEmbeddedModelEditorPreview, previewUrl, selectedItem?.name]);
 
   useEffect(() => {
     if (detachedWindowRef.current && !detachedWindowRef.current.closed && selectedItem) {
