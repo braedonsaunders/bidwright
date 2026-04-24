@@ -9,6 +9,9 @@ export interface BidwrightModelSelectionNode {
   id: string;
   name: string;
   kind: string;
+  path?: string[];
+  externalId?: string;
+  modelElementId?: string;
   surfaceArea?: number;
   volume?: number;
   faceCount?: number;
@@ -61,9 +64,14 @@ export interface BidwrightModelLineItemDraft {
   source?: {
     kind: "model-selection";
     projectId?: string;
+    modelId?: string;
+    modelElementId?: string;
+    modelQuantityId?: string;
     modelDocumentId?: string;
     fileName?: string;
     documentId?: string;
+    quantityBasis?: "count" | "area" | "volume";
+    quantityType?: string;
     selectedNodeIds?: string[];
   };
 }
@@ -94,10 +102,20 @@ interface BidwrightModelSendToEstimateMessage {
   modelDocumentId?: string;
   selection: BidwrightModelSelectionMessage;
   lineItemDraft?: BidwrightModelLineItemDraft;
+  lineItemDrafts?: BidwrightModelLineItemDraft[];
 }
 
 interface BidwrightModelLineItemsRequestMessage {
   type: "bidwright:model-line-items-request";
+  source: "bidwright-model-editor";
+  version: number;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+}
+
+interface BidwrightModelEstimateContextRequestMessage {
+  type: "bidwright:model-estimate-context-request";
   source: "bidwright-model-editor";
   version: number;
   projectId?: string;
@@ -140,6 +158,7 @@ interface BidwrightModelChannelMessage {
     | "model-selection"
     | "model-send-to-estimate"
     | "model-line-items-request"
+    | "model-estimate-context-request"
     | "model-line-item-update"
     | "model-line-item-delete";
   source: "bidwright-model-editor";
@@ -151,6 +170,7 @@ interface BidwrightModelChannelMessage {
   modelDocumentId?: string;
   selection?: BidwrightModelSelectionMessage;
   lineItemDraft?: BidwrightModelLineItemDraft;
+  lineItemDrafts?: BidwrightModelLineItemDraft[];
   linkId?: string;
   worksheetItemId?: string;
   patch?: BidwrightModelLineItemUpdateMessage["patch"];
@@ -178,6 +198,7 @@ interface BidwrightModelEditorProps {
   onSendSelectionToEstimate?: (
     selection: BidwrightModelSelectionMessage,
     lineItemDraft?: BidwrightModelLineItemDraft,
+    lineItemDrafts?: BidwrightModelLineItemDraft[],
   ) => void | Promise<void>;
   onUpdateLinkedLineItem?: (
     payload: Pick<BidwrightModelLineItemUpdateMessage, "linkId" | "worksheetItemId" | "patch">,
@@ -261,6 +282,15 @@ function isLineItemsRequestMessage(data: unknown): data is BidwrightModelLineIte
   );
 }
 
+function isEstimateContextRequestMessage(data: unknown): data is BidwrightModelEstimateContextRequestMessage {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { type?: unknown }).type === "bidwright:model-estimate-context-request" &&
+      (data as { source?: unknown }).source === "bidwright-model-editor"
+  );
+}
+
 function isLineItemUpdateMessage(data: unknown): data is BidwrightModelLineItemUpdateMessage {
   return Boolean(
     data &&
@@ -291,6 +321,7 @@ function isModelChannelMessage(data: unknown): data is BidwrightModelChannelMess
       ((data as { type?: unknown }).type === "model-selection" ||
         (data as { type?: unknown }).type === "model-send-to-estimate" ||
         (data as { type?: unknown }).type === "model-line-items-request" ||
+        (data as { type?: unknown }).type === "model-estimate-context-request" ||
         (data as { type?: unknown }).type === "model-line-item-update" ||
         (data as { type?: unknown }).type === "model-line-item-delete") &&
       (data as { source?: unknown }).source === "bidwright-model-editor"
@@ -381,6 +412,19 @@ export function BidwrightModelEditor({
   const ext = getModelFileExtension(fileName);
 
   useEffect(() => {
+    if (!fileUrl) return;
+    const controller = new AbortController();
+    void fetch(fileUrl, {
+      credentials: "include",
+      cache: "force-cache",
+      signal: controller.signal,
+    }).catch(() => {
+      /* The iframe still owns the authoritative load; this just warms the browser cache. */
+    });
+    return () => controller.abort();
+  }, [fileUrl, reloadKey]);
+
+  useEffect(() => {
     linkedLineItemsRef.current = linkedLineItems;
   }, [linkedLineItems]);
 
@@ -409,6 +453,47 @@ export function BidwrightModelEditor({
     channelRef.current?.postMessage(channelMessage);
   }, [hasLocalLineItemBridge, modelAssetId, modelDocumentId, projectId]);
 
+  const postEstimateContext = useCallback((targetWindow?: Window | null) => {
+    const parentMessage = {
+      type: "bidwright:model-estimate-context",
+      source: "bidwright-host",
+      version: 1,
+      projectId: projectId ?? undefined,
+      modelId: modelAssetId ?? undefined,
+      modelDocumentId: modelDocumentId ?? undefined,
+      estimateEnabled,
+      estimateTargetWorksheetId: estimateTargetWorksheetId ?? null,
+      estimateTargetWorksheetName: estimateTargetWorksheetName ?? null,
+      estimateDefaultMarkup: estimateDefaultMarkup ?? null,
+      estimateQuoteLabel: estimateQuoteLabel ?? null,
+    };
+    const channelMessage = {
+      type: "model-estimate-context",
+      source: "bidwright-host",
+      version: 1,
+      projectId: projectId ?? undefined,
+      modelId: modelAssetId ?? undefined,
+      modelDocumentId: modelDocumentId ?? undefined,
+      estimateEnabled,
+      estimateTargetWorksheetId: estimateTargetWorksheetId ?? null,
+      estimateTargetWorksheetName: estimateTargetWorksheetName ?? null,
+      estimateDefaultMarkup: estimateDefaultMarkup ?? null,
+      estimateQuoteLabel: estimateQuoteLabel ?? null,
+    };
+
+    targetWindow?.postMessage(parentMessage, window.location.origin);
+    channelRef.current?.postMessage(channelMessage);
+  }, [
+    estimateDefaultMarkup,
+    estimateEnabled,
+    estimateQuoteLabel,
+    estimateTargetWorksheetId,
+    estimateTargetWorksheetName,
+    modelAssetId,
+    modelDocumentId,
+    projectId,
+  ]);
+
   const handleIncomingSelection = useCallback(
     (nextSelection: BidwrightModelSelectionMessage) => {
       setSelection(nextSelection);
@@ -418,7 +503,7 @@ export function BidwrightModelEditor({
   );
 
   const handleIncomingSendToEstimate = useCallback(
-    async (message: Pick<BidwrightModelSendToEstimateMessage, "eventId" | "selection" | "lineItemDraft">) => {
+    async (message: Pick<BidwrightModelSendToEstimateMessage, "eventId" | "selection" | "lineItemDraft" | "lineItemDrafts">) => {
       handleIncomingSelection(message.selection);
       if (!onSendSelectionToEstimate) return;
 
@@ -429,7 +514,7 @@ export function BidwrightModelEditor({
 
       setSendingSelection(true);
       try {
-        await onSendSelectionToEstimate(message.selection, message.lineItemDraft);
+        await onSendSelectionToEstimate(message.selection, message.lineItemDraft, message.lineItemDrafts);
       } finally {
         setSendingSelection(false);
       }
@@ -483,6 +568,10 @@ export function BidwrightModelEditor({
         postLinkedLineItemsState(iframeRef.current?.contentWindow);
         return;
       }
+      if (isEstimateContextRequestMessage(event.data)) {
+        postEstimateContext(iframeRef.current?.contentWindow);
+        return;
+      }
       if (isLineItemUpdateMessage(event.data)) {
         void handleIncomingLineItemUpdate(event.data);
         return;
@@ -499,6 +588,7 @@ export function BidwrightModelEditor({
     handleIncomingLineItemUpdate,
     handleIncomingSelection,
     handleIncomingSendToEstimate,
+    postEstimateContext,
     postLinkedLineItemsState,
   ]);
 
@@ -523,11 +613,16 @@ export function BidwrightModelEditor({
           eventId: event.data.eventId,
           selection: event.data.selection,
           lineItemDraft: event.data.lineItemDraft,
+          lineItemDrafts: event.data.lineItemDrafts,
         });
         return;
       }
       if (event.data.type === "model-line-items-request") {
         postLinkedLineItemsState();
+        return;
+      }
+      if (event.data.type === "model-estimate-context-request") {
+        postEstimateContext();
         return;
       }
       if (event.data.type === "model-line-item-update" && event.data.linkId && event.data.worksheetItemId && event.data.patch) {
@@ -560,6 +655,7 @@ export function BidwrightModelEditor({
     handleIncomingSendToEstimate,
     modelAssetId,
     modelDocumentId,
+    postEstimateContext,
     postLinkedLineItemsState,
     projectId,
   ]);
@@ -567,6 +663,10 @@ export function BidwrightModelEditor({
   useEffect(() => {
     postLinkedLineItemsState(iframeRef.current?.contentWindow);
   }, [linkedLineItems, postLinkedLineItemsState]);
+
+  useEffect(() => {
+    postEstimateContext(iframeRef.current?.contentWindow);
+  }, [postEstimateContext]);
 
   useEffect(() => {
     handledSendEventsRef.current.clear();
@@ -646,9 +746,11 @@ export function BidwrightModelEditor({
           src={editorUrl}
           title={fileName ? `${title}: ${fileName}` : title}
           className="h-full w-full border-0 bg-[#101014]"
+          loading="eager"
           sandbox="allow-downloads allow-forms allow-modals allow-popups allow-same-origin allow-scripts"
           onLoad={() => {
             setLoading(false);
+            postEstimateContext(iframeRef.current?.contentWindow);
             postLinkedLineItemsState(iframeRef.current?.contentWindow);
           }}
         />

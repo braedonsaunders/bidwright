@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { apiGet, getProjectId } from "../api-client.js";
+import { apiDelete, apiGet, apiPost, getProjectId } from "../api-client.js";
 
 function modelEditorPath(asset: any) {
   const sourcePath = asset.sourceDocumentId
@@ -174,6 +174,95 @@ The BOM is conservative: unsupported formats return a clear status and empty row
               null,
               2,
             ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "getModelTakeoffLinks",
+    `Return the live 5D links between a model asset and quote worksheet line items.
+
+Use this to understand which model elements/quantities already drive estimate rows before creating, editing, or deleting line items.`,
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+    },
+    async ({ modelId }) => {
+      const projectId = getProjectId();
+      const result = await apiGet<any>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`);
+      const links = result.links ?? [];
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                modelId,
+                count: links.length,
+                links,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "linkModelElementToWorksheetItem",
+    `Create a 5D takeoff link from a model element or model quantity to an existing worksheet line item.
+
+Call createWorksheetItem first when a new estimate row is needed, then call this tool with the returned worksheetItemId and the modelElementId/modelQuantityId from queryModelElements or getModelManifest.`,
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+      worksheetItemId: z.string().describe("Worksheet item id to connect to model geometry"),
+      modelElementId: z.string().optional().describe("Model element id, when the line item comes from a specific object/assembly"),
+      modelQuantityId: z.string().optional().describe("Persisted model quantity id, when the line item should track a specific extracted quantity"),
+      quantityField: z.string().default("quantity").describe("Worksheet item field driven by the model quantity"),
+      multiplier: z.number().default(1).describe("Multiplier applied to the model quantity before writing/recording derivedQuantity"),
+      derivedQuantity: z.number().optional().describe("Resolved quantity used for the worksheet item if already known"),
+      selection: z.record(z.unknown()).optional().describe("Optional UI/model selection payload for traceability"),
+    },
+    async ({ modelId, ...input }) => {
+      const projectId = getProjectId();
+      const result = await apiPost<any>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`, input);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                created: true,
+                modelId,
+                link: result.link ?? result,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "deleteModelTakeoffLink",
+    "Delete a 5D takeoff link between a model asset and a worksheet line item. This does not delete the worksheet item itself.",
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+      linkId: z.string().describe("Model takeoff link id returned by getModelTakeoffLinks"),
+    },
+    async ({ modelId, linkId }) => {
+      const projectId = getProjectId();
+      const result = await apiDelete<any>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/${linkId}`);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result ?? { deleted: true, linkId }, null, 2),
           },
         ],
       };

@@ -303,6 +303,7 @@ function findWs(workspace: ProjectWorkspaceData, id: string) {
 }
 
 type ModelEditorQuantityBasis = "count" | "area" | "volume";
+const MAX_MODEL_OBJECT_LINE_ITEMS = 250;
 
 type ModelEditorChannelMessage = {
   type:
@@ -318,6 +319,7 @@ type ModelEditorChannelMessage = {
   modelDocumentId?: string;
   selection?: BidwrightModelSelectionMessage;
   lineItemDraft?: BidwrightModelLineItemDraft;
+  lineItemDrafts?: BidwrightModelLineItemDraft[];
   linkId?: string;
   worksheetItemId?: string;
   patch?: {
@@ -378,6 +380,90 @@ function buildModelEditorLineItemFallback(
       selectedNames.length > 0 ? `Selected: ${selectedNames.join(", ")}` : "",
     ].filter(Boolean).join("\n"),
   };
+}
+
+function finiteModelMetric(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function selectionForModelEditorNode(
+  selection: BidwrightModelSelectionMessage,
+  selectedNodeIds: string[] | undefined,
+): BidwrightModelSelectionMessage {
+  const ids = new Set(selectedNodeIds ?? []);
+  const nodes = ids.size > 0 ? selection.nodes.filter((node) => ids.has(node.id)) : selection.nodes;
+  if (nodes.length === selection.nodes.length) return selection;
+  return {
+    ...selection,
+    selectedCount: nodes.length,
+    nodes,
+    totals: {
+      surfaceArea: nodes.reduce((total, node) => total + finiteModelMetric(node.surfaceArea), 0),
+      volume: nodes.reduce((total, node) => total + finiteModelMetric(node.volume), 0),
+      faceCount: nodes.reduce((total, node) => total + finiteModelMetric(node.faceCount), 0),
+      solidCount: nodes.reduce((total, node) => total + finiteModelMetric(node.solidCount), 0),
+    },
+  };
+}
+
+function modelNodePrimaryQuantity(
+  node: BidwrightModelSelectionMessage["nodes"][number],
+  basis: ModelEditorQuantityBasis,
+) {
+  if (basis === "area" && finiteModelMetric(node.surfaceArea) > 0) {
+    return { quantity: finiteModelMetric(node.surfaceArea), uom: "model^2", label: "3D surface area", quantityType: "surface_area" };
+  }
+  if (basis === "volume" && finiteModelMetric(node.volume) > 0) {
+    return { quantity: finiteModelMetric(node.volume), uom: "model^3", label: "3D volume", quantityType: "volume" };
+  }
+  return { quantity: 1, uom: "EA", label: "3D model object", quantityType: "count" };
+}
+
+function buildModelEditorObjectDrafts(
+  selection: BidwrightModelSelectionMessage,
+  options: { fileName?: string; markup: number },
+): BidwrightModelLineItemDraft[] {
+  const basis = selection.quantityBasis ?? "count";
+  const sourceFile = selection.documentName ?? selection.fileName ?? options.fileName ?? "selected model";
+  return selection.nodes.slice(0, MAX_MODEL_OBJECT_LINE_ITEMS).map((node) => {
+    const primary = modelNodePrimaryQuantity(node, basis);
+    return {
+      category: "Model Takeoff",
+      entityType: node.kind || "Model Element",
+      entityName: node.name || node.id,
+      description: sourceFile,
+      quantity: primary.quantity,
+      uom: primary.uom,
+      cost: 0,
+      markup: options.markup,
+      price: 0,
+      unit1: 0,
+      unit2: 0,
+      unit3: 0,
+      sourceNotes: [
+        `From BidWright model editor: ${sourceFile}`,
+        `${primary.label}: ${formatModelEditorQuantity(primary.quantity, primary.uom)}`,
+        `Surface area: ${formatModelEditorQuantity(finiteModelMetric(node.surfaceArea), "model^2")}`,
+        `Volume: ${formatModelEditorQuantity(finiteModelMetric(node.volume), "model^3")}`,
+        `Faces: ${Intl.NumberFormat().format(finiteModelMetric(node.faceCount))}`,
+        `Solids: ${Intl.NumberFormat().format(finiteModelMetric(node.solidCount))}`,
+        node.externalId ? `Model object id: ${node.externalId}` : `Editor object id: ${node.id}`,
+        node.path?.length ? `Path: ${node.path.join(" / ")}` : "",
+      ].filter(Boolean).join("\n"),
+      source: {
+        kind: "model-selection",
+        projectId: selection.projectId,
+        modelId: selection.modelId,
+        modelElementId: node.modelElementId,
+        modelDocumentId: selection.modelDocumentId,
+        fileName: selection.fileName,
+        documentId: selection.documentId,
+        quantityBasis: basis,
+        quantityType: primary.quantityType,
+        selectedNodeIds: [node.id],
+      },
+    };
+  });
 }
 
 function normalizeModelEditorLineItemDraft(
@@ -668,51 +754,74 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const handleModelEditorCreateLineItem = useCallback(async (message: ModelEditorChannelMessage) => {
     if (!message.selection) return;
     const currentWorkspace = workspaceRef.current;
-    const targetWs =
-      (message.lineItemDraft?.worksheetId
-        ? currentWorkspace.worksheets.find((worksheet) => worksheet.id === message.lineItemDraft?.worksheetId)
-        : null) ??
-      selectedModelWorksheetRef.current ??
-      currentWorkspace.worksheets[0];
-
-    if (!targetWs) {
-      setError("Create a worksheet before sending model quantities.");
-      return;
-    }
-
-    const fallbackPayload = buildModelEditorLineItemFallback(message.selection, {
+    const fallbackDrafts = buildModelEditorObjectDrafts(message.selection, {
       fileName: message.selection.fileName,
       markup: currentWorkspace.currentRevision.defaultMarkup ?? 0.2,
     });
-    const payload = normalizeModelEditorLineItemDraft(message.lineItemDraft, fallbackPayload);
+    const drafts = (message.lineItemDrafts?.length
+      ? message.lineItemDrafts
+      : message.lineItemDraft
+        ? [message.lineItemDraft]
+        : fallbackDrafts
+    ).slice(0, MAX_MODEL_OBJECT_LINE_ITEMS);
 
     try {
-      const previousItemIds = new Set(currentWorkspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
-      const result = await createWorksheetItem(currentWorkspace.project.id, targetWs.id, payload);
-      apply(result);
+      let previousItemIds = new Set(currentWorkspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+      let latestResult: WorkspaceResponse | null = null;
 
-      const createdItem = result.workspace.worksheets
-        .flatMap((worksheet) => worksheet.items)
-        .find((item) => !previousItemIds.has(item.id));
+      for (const draft of drafts) {
+        const targetWs =
+          (draft?.worksheetId
+            ? currentWorkspace.worksheets.find((worksheet) => worksheet.id === draft.worksheetId)
+            : null) ??
+          selectedModelWorksheetRef.current ??
+          currentWorkspace.worksheets[0];
 
-      if (message.modelId && createdItem) {
-        await createModelTakeoffLink(currentWorkspace.project.id, message.modelId, {
-          worksheetItemId: createdItem.id,
-          quantityField: "quantity",
-          multiplier: 1,
-          derivedQuantity: payload.quantity,
-          selection: {
-            fileName: message.selection.fileName ?? null,
-            documentId: message.selection.documentId ?? null,
-            documentName: message.selection.documentName ?? null,
-            selectedCount: message.selection.selectedCount,
-            nodes: message.selection.nodes,
-            totals: message.selection.totals,
-            lineItemDraft: payload,
-          },
+        if (!targetWs) {
+          setError("Create a worksheet before sending model quantities.");
+          return;
+        }
+
+        const draftSelection = selectionForModelEditorNode(message.selection, draft.source?.selectedNodeIds);
+        const fallbackPayload = buildModelEditorLineItemFallback(draftSelection, {
+          fileName: message.selection.fileName,
+          markup: currentWorkspace.currentRevision.defaultMarkup ?? 0.2,
         });
+        const payload = normalizeModelEditorLineItemDraft(draft, fallbackPayload);
+        const result = await createWorksheetItem(currentWorkspace.project.id, targetWs.id, payload);
+        latestResult = result;
+
+        const createdItem = result.workspace.worksheets
+          .flatMap((worksheet) => worksheet.items)
+          .find((item) => !previousItemIds.has(item.id));
+
+        if (message.modelId && createdItem) {
+          await createModelTakeoffLink(currentWorkspace.project.id, message.modelId, {
+            worksheetItemId: createdItem.id,
+            modelElementId: draft.source?.modelElementId ?? null,
+            modelQuantityId: draft.source?.modelQuantityId ?? null,
+            quantityField: "quantity",
+            multiplier: 1,
+            derivedQuantity: payload.quantity,
+            selection: {
+              fileName: message.selection.fileName ?? null,
+              documentId: draftSelection.documentId ?? null,
+              documentName: draftSelection.documentName ?? null,
+              selectedCount: draftSelection.selectedCount,
+              nodes: draftSelection.nodes,
+              totals: draftSelection.totals,
+              quantityBasis: draft.source?.quantityBasis ?? message.selection.quantityBasis ?? "count",
+              quantityType: draft.source?.quantityType ?? null,
+              source: draft.source ?? null,
+              lineItemDraft: payload,
+            },
+          });
+        }
+
+        previousItemIds = new Set(result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       }
 
+      if (latestResult) apply(latestResult);
       postWorkspaceMutation(currentWorkspace.project.id, {
         originId: workspaceSyncOriginRef.current,
         reason: "model-editor",
