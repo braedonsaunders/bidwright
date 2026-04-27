@@ -16,6 +16,7 @@ import {
   Columns,
   Copy,
   Download,
+  GitCompare,
   GripVertical,
   Layers,
   Maximize2,
@@ -83,6 +84,7 @@ import { ItemDetailDrawer } from "./item-detail-drawer";
 import { AssemblyInsertModal } from "./assembly-insert-modal";
 import { SaveSelectionAsAssemblyModal } from "./save-selection-as-assembly-modal";
 import { AssemblyInstancesModal } from "./assembly-instances-modal";
+import { RevisionDiffModal } from "./revision-diff-modal";
 
 /* ─── Types ─── */
 
@@ -628,6 +630,7 @@ export function EstimateGrid({
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
   const [showSaveAsAssembly, setShowSaveAsAssembly] = useState(false);
   const [showAssemblyInstances, setShowAssemblyInstances] = useState(false);
+  const [showRevisionDiff, setShowRevisionDiff] = useState(false);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -2502,6 +2505,15 @@ export function EstimateGrid({
             >
               Groups
             </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setShowRevisionDiff(true)}
+              disabled={isPending}
+              title="Compare two drawing revisions and re-takeoff affected items"
+            >
+              <GitCompare className="h-3 w-3" /> Revisions
+            </Button>
           </div>
         </div>
 
@@ -2942,6 +2954,14 @@ export function EstimateGrid({
         projectId={workspace.project.id}
         worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
         onWorkspaceUpdated={(workspace) => onApply(workspace)}
+      />
+
+      {/* ─── Revision Diff Modal ─── */}
+      <RevisionDiffModal
+        open={showRevisionDiff}
+        onClose={() => setShowRevisionDiff(false)}
+        projectId={workspace.project.id}
+        onApplied={() => onRefresh()}
       />
 
       {/* ─── Catalog Quick-Add Modal ─── */}

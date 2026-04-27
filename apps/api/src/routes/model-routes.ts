@@ -10,6 +10,12 @@ import {
   queryModelElements,
   syncProjectModelAssets,
 } from "../services/model-service.js";
+import {
+  applyRevisionRetakeoff,
+  computeRevisionDiff,
+  getRevisionImpactReport,
+  listProjectRevisionDiffs,
+} from "../services/revision-diff-service.js";
 
 const elementQuerySchema = z.object({
   text: z.string().optional(),
@@ -131,6 +137,69 @@ export async function modelRoutes(app: FastifyInstance) {
     const { projectId, modelId, linkId } = request.params as { projectId: string; modelId: string; linkId: string };
     try {
       return await deleteModelTakeoffLink(projectId, modelId, linkId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  // ── Drawing-revision diff + auto re-takeoff ───────────────────────────
+
+  app.get("/api/models/:projectId/diffs", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    try {
+      return await listProjectRevisionDiffs(projectId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/diffs", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = (request.body ?? {}) as { baseModelId?: string; headModelId?: string };
+    if (!body.baseModelId || !body.headModelId) {
+      return reply.code(400).send({ message: "baseModelId and headModelId are required" });
+    }
+    if (body.baseModelId === body.headModelId) {
+      return reply.code(400).send({ message: "baseModelId and headModelId must be different" });
+    }
+    try {
+      const created = await computeRevisionDiff(projectId, body.baseModelId, body.headModelId);
+      const report = await getRevisionImpactReport(projectId, created.diffId);
+      reply.code(201);
+      return report;
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.get("/api/models/:projectId/diffs/:diffId", async (request, reply) => {
+    const { projectId, diffId } = request.params as { projectId: string; diffId: string };
+    try {
+      return await getRevisionImpactReport(projectId, diffId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/diffs/:diffId/analyze", async (request, reply) => {
+    const { projectId, diffId } = request.params as { projectId: string; diffId: string };
+    const body = (request.body ?? {}) as { aiConfig?: { provider: string; apiKey: string; model: string } };
+    try {
+      return await getRevisionImpactReport(projectId, diffId, {
+        withAiNarrative: true,
+        aiConfig: body.aiConfig,
+      });
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/diffs/:diffId/apply", async (request, reply) => {
+    const { projectId, diffId } = request.params as { projectId: string; diffId: string };
+    const body = (request.body ?? {}) as { onlyLinkIds?: string[] };
+    try {
+      const result = await applyRevisionRetakeoff(projectId, diffId, { onlyLinkIds: body.onlyLinkIds });
+      return result;
     } catch (error) {
       return routeError(reply, error);
     }

@@ -4337,6 +4337,120 @@ export async function createModelTakeoffLink(
   });
 }
 
+// ─── Drawing-revision diff + auto re-takeoff ────────────────────────────
+
+export interface RevisionDiffSummary {
+  id: string;
+  projectId: string;
+  baseModelId: string;
+  baseModelName: string;
+  headModelId: string;
+  headModelName: string;
+  summary: {
+    elementsAdded?: number;
+    elementsRemoved?: number;
+    elementsModified?: number;
+    affectedItems?: number;
+    totalCostDelta?: number;
+    totalPriceDelta?: number;
+  };
+  createdAt: string;
+}
+
+export interface RevisionImpactedItem {
+  worksheetItemId: string;
+  worksheetId: string;
+  linkId: string;
+  entityName: string;
+  category: string;
+  uom: string;
+  multiplier: number;
+  oldQuantity: number;
+  newQuantity: number;
+  unitCost: number;
+  unitPrice: number;
+  costDelta: number;
+  priceDelta: number;
+  changeType: "added" | "removed" | "modified";
+}
+
+export interface RevisionDiffChange {
+  changeType: "added" | "removed" | "modified";
+  externalId: string;
+  baseElementId: string | null;
+  headElementId: string | null;
+  elementClass: string;
+  elementType: string;
+  name: string;
+  level: string;
+  beforeQuantities: Array<{ quantityType: string; value: number; unit: string }>;
+  afterQuantities: Array<{ quantityType: string; value: number; unit: string }>;
+  propertyChanges: Array<{ key: string; before: unknown; after: unknown }>;
+  impactedItems: RevisionImpactedItem[];
+}
+
+export interface RevisionImpactReport {
+  diffId: string;
+  baseModelId: string;
+  headModelId: string;
+  projectId: string;
+  summary: {
+    elementsAdded: number;
+    elementsRemoved: number;
+    elementsModified: number;
+    affectedItems: number;
+    totalCostDelta: number;
+    totalPriceDelta: number;
+  };
+  changes: RevisionDiffChange[];
+  warnings: string[];
+  aiNarrative: string | null;
+  createdAt: string;
+}
+
+export async function listRevisionDiffs(projectId: string): Promise<RevisionDiffSummary[]> {
+  return apiRequest<RevisionDiffSummary[]>(`/api/models/${projectId}/diffs`);
+}
+
+export async function createRevisionDiff(
+  projectId: string,
+  input: { baseModelId: string; headModelId: string },
+): Promise<RevisionImpactReport> {
+  return apiRequest<RevisionImpactReport>(`/api/models/${projectId}/diffs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getRevisionImpactReport(projectId: string, diffId: string): Promise<RevisionImpactReport> {
+  return apiRequest<RevisionImpactReport>(`/api/models/${projectId}/diffs/${diffId}`);
+}
+
+export async function analyzeRevisionDiff(
+  projectId: string,
+  diffId: string,
+  aiConfig?: { provider: string; apiKey: string; model: string },
+): Promise<RevisionImpactReport> {
+  return apiRequest<RevisionImpactReport>(`/api/models/${projectId}/diffs/${diffId}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ aiConfig }),
+  });
+}
+
+export async function applyRevisionRetakeoff(
+  projectId: string,
+  diffId: string,
+  input: { onlyLinkIds?: string[] } = {},
+): Promise<{ updated: number; skipped: number }> {
+  return apiRequest<{ updated: number; skipped: number }>(`/api/models/${projectId}/diffs/${diffId}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
   return apiRequest<{ deleted: boolean }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/${linkId}`, {
     method: "DELETE",
