@@ -4569,6 +4569,108 @@ export async function deleteAssemblyComponent(
   });
 }
 
+export interface AssemblyPreviewResult {
+  items: Array<{
+    componentPath: string[];
+    componentType: string;
+    catalogItemId?: string;
+    rateScheduleItemId?: string;
+    category: string;
+    entityName: string;
+    description: string;
+    quantity: number;
+    uom: string;
+    unitCost: number;
+    unitPrice: number;
+    markup: number;
+    lineCost: number;
+    linePrice: number;
+  }>;
+  totals: { cost: number; price: number; lineCount: number };
+  warnings: string[];
+}
+
+export async function previewAssemblyExpansion(input: {
+  assemblyId: string;
+  quantity: number;
+  parameterValues?: Record<string, number | string>;
+}): Promise<AssemblyPreviewResult> {
+  return apiRequest<AssemblyPreviewResult>("/api/assemblies/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function saveSelectionAsAssembly(
+  projectId: string,
+  worksheetId: string,
+  input: {
+    name: string;
+    code?: string;
+    description?: string;
+    category?: string;
+    unit?: string;
+    worksheetItemIds: string[];
+  },
+): Promise<{ assembly: AssemblyRecord; skippedFreeform: number }> {
+  return apiRequest<{ assembly: AssemblyRecord; skippedFreeform: number }>(
+    `/projects/${projectId}/worksheets/${worksheetId}/assemblies/save-selection`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export interface AssemblyInstanceSummary {
+  id: string;
+  worksheetId: string;
+  assemblyId: string | null;
+  assemblyName: string | null;
+  phaseId: string | null;
+  quantity: number;
+  parameterValues: Record<string, number | string>;
+  itemCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listAssemblyInstances(projectId: string, worksheetId: string): Promise<AssemblyInstanceSummary[]> {
+  return apiRequest<AssemblyInstanceSummary[]>(
+    `/projects/${projectId}/worksheets/${worksheetId}/assemblies/instances`,
+  );
+}
+
+export async function deleteAssemblyInstance(
+  projectId: string,
+  instanceId: string,
+): Promise<{ workspace: WorkspaceResponse; deleted: { deleted: true; itemCount: number } }> {
+  return apiRequest<{ workspace: WorkspaceResponse; deleted: { deleted: true; itemCount: number } }>(
+    `/projects/${projectId}/assemblies/instances/${instanceId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function resyncAssemblyInstance(
+  projectId: string,
+  instanceId: string,
+  input: { quantity?: number; parameterValues?: Record<string, number | string>; phaseId?: string | null },
+): Promise<{
+  workspace: WorkspaceResponse;
+  resync: { itemIds: string[]; instanceId: string; warnings: string[]; itemCount: number };
+}> {
+  return apiRequest<{
+    workspace: WorkspaceResponse;
+    resync: { itemIds: string[]; instanceId: string; warnings: string[]; itemCount: number };
+  }>(`/projects/${projectId}/assemblies/instances/${instanceId}/resync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function insertAssemblyIntoWorksheet(
   projectId: string,
   worksheetId: string,
