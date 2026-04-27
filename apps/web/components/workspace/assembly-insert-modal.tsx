@@ -14,7 +14,7 @@ import {
   insertAssemblyIntoWorksheet,
   listAssemblies,
 } from "@/lib/api";
-import { Button, Input, Label, ModalBackdrop } from "@/components/ui";
+import { Button, Input, Label, ModalBackdrop, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
 import {
   AssemblyHeaderEditor,
   ComponentsEditor,
@@ -258,38 +258,54 @@ export function AssemblyInsertModal({
                 </Button>
               </div>
             ) : paneMode === "author" ? (
-              <>
+              <Tabs defaultValue="components" className="flex flex-col flex-1 overflow-hidden">
                 <div className="px-4 py-2 border-b border-fg/10 flex items-center justify-between gap-2">
-                  <div className="text-xs text-fg/50">Edit components and parameters</div>
+                  <TabsList>
+                    <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="parameters">
+                      Parameters
+                      <span className="ml-1 text-fg/35">{detail.parameters.length}</span>
+                    </TabsTrigger>
+                    <TabsTrigger value="components">
+                      Components
+                      <span className="ml-1 text-fg/35">{detail.components.length}</span>
+                    </TabsTrigger>
+                  </TabsList>
                   <Button size="sm" variant="ghost" onClick={() => setPaneMode("insert")} className="text-xs" disabled={!canInsert}>
                     Done — go to insert
                   </Button>
                 </div>
-                <div className="p-4 overflow-y-auto flex-1 space-y-3">
-                  <AssemblyHeaderEditor
-                    assembly={detail}
-                    onChange={refreshDetailAndList}
-                    onDelete={handleDelete}
-                    onError={setError}
-                  />
-                  <ParametersEditor
-                    assemblyId={detail.id}
-                    parameters={detail.parameters}
-                    onChange={refreshDetailAndList}
-                    onError={setError}
-                  />
-                  <ComponentsEditor
-                    assemblyId={detail.id}
-                    components={detail.components}
-                    parameters={detail.parameters}
-                    catalogItems={catalogItems}
-                    rateItems={rateItems}
-                    otherAssemblyOptions={otherAssemblyOptions}
-                    onChange={refreshDetailAndList}
-                    onError={setError}
-                  />
+                <div className="flex-1 overflow-y-auto p-4">
+                  <TabsContent value="overview" className="space-y-3 m-0">
+                    <AssemblyHeaderEditor
+                      assembly={detail}
+                      onChange={refreshDetailAndList}
+                      onDelete={handleDelete}
+                      onError={setError}
+                    />
+                  </TabsContent>
+                  <TabsContent value="parameters" className="m-0">
+                    <ParametersEditor
+                      assemblyId={detail.id}
+                      parameters={detail.parameters}
+                      onChange={refreshDetailAndList}
+                      onError={setError}
+                    />
+                  </TabsContent>
+                  <TabsContent value="components" className="m-0">
+                    <ComponentsEditor
+                      assemblyId={detail.id}
+                      components={detail.components}
+                      parameters={detail.parameters}
+                      catalogItems={catalogItems}
+                      rateItems={rateItems}
+                      otherAssemblyOptions={otherAssemblyOptions}
+                      onChange={refreshDetailAndList}
+                      onError={setError}
+                    />
+                  </TabsContent>
                 </div>
-              </>
+              </Tabs>
             ) : (
               <>
                 <div className="px-4 py-2 border-b border-fg/10 flex items-center justify-between gap-2">
