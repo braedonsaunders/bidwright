@@ -208,7 +208,7 @@ export function CompactSelect({
         <SelectPrimitive.Content
           position="popper"
           sideOffset={6}
-          className="z-50 min-w-[180px] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
+          className="z-[300] min-w-[180px] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
         >
           <SelectPrimitive.Viewport className="p-1">
             {options.map((option) => (
