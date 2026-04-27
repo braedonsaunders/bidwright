@@ -1562,9 +1562,15 @@ export function buildServer() {
       app.log.warn(error);
     }
 
+    // Surface error.details when present so callers (especially the AI agent)
+    // can see the structured validation issues attached by store methods —
+    // e.g. finalizeEstimateStrategy throws with details.validationIssues.
+    const details = (error as { details?: unknown }).details;
+
     reply.status(statusCode).send({
       message,
-      code: multipartCode ?? undefined
+      code: multipartCode ?? undefined,
+      details: details ?? undefined,
     });
   });
 
