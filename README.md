@@ -5,73 +5,154 @@
 <h1 align="center">Bidwright</h1>
 
 <p align="center">
-  <strong>Construction estimating software that connects intake, knowledge, takeoff, pricing, scheduling, and quote delivery in one AI-native workspace.</strong>
+  <strong>The estimating platform that runs the whole bid — intake, knowledge, takeoff, pricing, scheduling, review, and quote delivery — on top of an AI agent that actually has hands.</strong>
 </p>
 
 <p align="center">
-  Upload the bid package. Search the spec. Mark up the drawing. Build the estimate. Generate the branded PDF. Send the quote.
+  Drop the bid package. Index the spec. Take off the drawings <em>and</em> the model. Parameterize the assemblies. Price it with real burdens. Let the agent review it. Send the branded quote.
 </p>
 
-> Bidwright is under active development. This README is intentionally written around capabilities already present in the repo today, while the most ambitious autonomous agent flows are still evolving.
+> Bidwright is under active development. This README is written around capabilities already present in the repo today. Where something is foundational rather than fully shipped, it's called out.
 
-## Why Bidwright
+## Why estimators care
 
-Estimating deserves better than PDF gymnastics, spreadsheet archaeology, and AI chats with no context.
+Estimating today is duct tape: a PDF viewer, a takeoff app, a spreadsheet from 2014, a pricing book in someone's drawer, a schedule in a separate tool, and a chatbot that doesn't know what project you're on.
 
-Bidwright brings the full workflow into one system so teams can move from raw bid package to client-ready quote without bouncing between disconnected tools. It combines document intake, searchable knowledge, drawing takeoff, pricing systems, scheduling, quote packaging, and tool-backed AI in a single platform.
+Bidwright collapses that stack. One workspace. One database. One AI agent with **150+ tools** wired into your live project — quotes, knowledge, drawings, models, pricing, schedules, plugins. No copy-paste. No "let me describe my project to the AI again."
 
-## What Bidwright Can Do Today
+## The headline features
 
-| Area | Live capabilities in this repo |
+### 1. An agent with 150+ real tools — not a chat box bolted on
+
+The agent layer ships with **150 typed tools across 13 modules** (`packages/agent/src/tools/`): quote construction, estimate strategy, knowledge retrieval, project files, datasets, pricing, rate schedules, scheduling, web research, plugin execution, and dynamic tool registration. It can read a worksheet, propose phases, edit line items, pull a chunk from a knowledge book, query a rate schedule, and write a note — in one session, with audit trail.
+
+Multi-provider out of the box: **Anthropic, OpenAI, OpenRouter, Gemini, LM Studio**. Local embeddings via **Ollama**. Hybrid retrieval over **pgvector**.
+
+### 2. Bring your own coding agent — Claude Code & Codex runtimes
+
+Bidwright can spawn a **Claude Code** or **Codex** session against an isolated workspace seeded with the project's documents, knowledge, and CLAUDE.md context. Stream responses, read/write memory, monitor sessions, stop them. The same machinery powers the in-app review feature — and it's exposed at `/api/cli/*` for your own automations.
+
+### 3. MCP server — Bidwright tools in your editor
+
+The `packages/mcp-server` package exposes Bidwright's estimate, knowledge, model, quote, review, system, and vision tools over **Model Context Protocol**. Point Claude Code, Cursor, or any MCP-aware client at it and your estimating data is one tool call away from your IDE.
+
+### 4. 2D takeoff *and* 3D model takeoff — linked to the worksheet
+
+- **2D drawings:** open PDFs, calibrate scale, count/linear/area annotations, symbol detection, multi-page counts, "Ask AI" on a selected region, export markups.
+- **3D models:** ingest BIM/CAD, parse element hierarchies (parent/child, material, system, discipline), extract per-element quantities with confidence/method tracking, generate filtered BOMs, and **diff revisions** (baseline vs. head).
+- **Both link back to worksheet line items** via `TakeoffLink` and `ModelTakeoffLink` — annotations and 3D elements stay tied to the dollars they drive, with quantity multipliers and override fields.
+
+A dedicated **Model Editor** app (`apps/model-editor/`) ships alongside the main web app for heads-down 3D work, with bidirectional sync to the quote workspace.
+
+### 5. Assemblies — reusable kits with parameters and nested sub-assemblies
+
+Define an assembly once, drop it in a hundred quotes. Each assembly supports:
+
+- **Typed parameters** with defaults and units (`AssemblyParameter`)
+- **Quantity expressions** that bind to those parameters (`quantityExpr`, `parameterBindings`)
+- **Nested sub-assemblies** (`AssemblyComponent.subAssemblyId`)
+- **Per-component overrides** for cost, markup, and UOM
+- **Snapshotting** so worksheet items remember the source assembly state at the time of insertion
+
+This is the layer most takeoff tools punt on. It's shipped here.
+
+### 6. Estimate strategy — a structured way to think before you price
+
+Bidwright's `EstimateStrategy` walks a quote through **Scope → Execution → Packaging → Benchmark → Reconcile → Complete**, with:
+
+- A **scope graph** of items, constraints, and alternates with confidence levels
+- An **execution plan** (self-perform vs. sub, crew strategy, procurement risk)
+- A **package plan** splitting work into detailed / allowance / historical / subcontract by phase
+- **Benchmark comparables** against prior projects
+- **Assumptions** with evidence and explicit user confirmation flags
+
+You're not just bidding — you're keeping receipts.
+
+### 7. Quote review — the agent reads your bid back to you
+
+Hit review and Bidwright spawns an isolated agent session that ingests the project documents and your estimate, then produces:
+
+- **Coverage** findings (YES / VERIFY / NO) tied to spec evidence
+- **Gaps**, **risks**, and **cost anomalies**
+- A **competitiveness** score
+- **Recommendations** with status tracking (resolve, dismiss, defer)
+- An **`EstimateCalibrationFeedback`** record that closes the loop on systematic over/under-pricing
+
+You see exactly which document chunk the finding came from. No hand-waving.
+
+### 8. A real pricing engine, not a unit cost column
+
+- **Rate schedules** with tiered multipliers (regular / overtime / double / custom tiers)
+- **Labour cost tables** by trade and role
+- **Burden periods** with date-ranged percentages
+- **Travel policies** with per diem, mileage, fuel surcharge, accommodation, and embed modes
+- **Catalogs** for equipment and material lookups
+- **Reusable conditions** library
+
+Built for the estimator who knows that "rate × hours" is the easy part.
+
+### 9. Knowledge that the AI actually uses
+
+Three tiers, all org- or project-scoped:
+
+- **Knowledge Books** — ingested PDFs (estimating books, specs, manuals) chunked, embedded, and searchable
+- **Knowledge Documents** — hand-authored pages with structure and metadata
+- **Datasets** — structured tables built manually or extracted from books
+
+Bind them to **Estimator Personas** — per-trade AI configurations with system prompts, default assumptions, productivity guidance, and review focus areas — so the agent answers like *your* senior estimator, not a generic LLM.
+
+### 10. Plugins and dynamic tools
+
+Drop in a plugin with a config schema and tool definitions, and it shows up in the agent's tool registry and the UI. Every execution is tracked (input, formstate, output, applied line items) so plugins are auditable, not magic.
+
+## What's in the box (verified, today)
+
+| Area | Live capabilities |
 | --- | --- |
-| Package intake | Upload bid packages, unzip archives, classify files, extract text from PDFs, spreadsheets, and text-based files, and preserve structured tables and key-value data for downstream use. |
-| Knowledge and datasets | Upload estimating books, manage global or project-scoped knowledge, chunk and index content, run hybrid search, browse book pages, and build structured datasets manually or from source books. |
-| Estimating workspace | Manage projects, quotes, revisions, worksheets, line items, phases, modifiers, conditions, summary rows, notes, lead letters, report sections, activity history, and cross-project performance views. |
-| Takeoff and drawing review | Open drawing PDFs, calibrate scale, create count, linear, and area annotations, export markups, run symbol detection, count across pages, and use "Ask AI" on selected regions. |
-| Scheduling | Build project schedules with tasks, milestones, dependencies, progress tracking, and Gantt-style views tied back to estimate phases and revisions. |
-| Pricing systems | Maintain catalogs, tiered rate schedules, labour cost tables, burden periods, travel policies, entity categories, customers, departments, and reusable condition libraries. |
-| Quote output | Compare revisions, preview quote packages, generate branded PDFs with configurable layouts and sections, and send quotes by email. |
-| AI and extensibility | Rewrite descriptions and notes, suggest phases and equipment, run tool-backed agent sessions, create plugins, manage dynamic tools, and expose estimating tools through an MCP server. |
-| Multi-tenant operations | Support organizations, users, super-admin setup, org switching, brand profiles and brand capture, estimator personas, data import/export, and admin-level management flows. |
+| Package intake | Upload bid packages, unzip archives, classify files, extract text from PDFs, spreadsheets, and text files, preserve tables and key-value structure. |
+| Knowledge | Books, documents, datasets, cabinets (org or project scoped), hybrid pgvector search, persona binding, page browsing. |
+| Estimating workspace | Projects, quotes, revisions, worksheets, line items, phases, modifiers, conditions, summary rows, notes, lead letters, report sections, activity history, cross-project performance views. |
+| Assemblies | Parameterized kits, nested sub-assemblies, quantity expressions, per-component overrides, worksheet snapshotting. |
+| 2D takeoff | PDF viewer, scale calibration, count/linear/area annotations, symbol detection, multi-page counts, region "Ask AI", markup export. |
+| 3D model takeoff | Element hierarchy ingestion, per-element quantities, BOM generation, revision diffing, worksheet links with multipliers. |
+| Scheduling | Tasks, milestones, SS/SF/FS/FF dependencies, calendars, resources, baselines, Gantt views tied to estimate phases. |
+| Pricing | Catalogs, tiered rate schedules, labour cost tables, burden periods, travel policies, entity categories, customers, departments, conditions. |
+| Quote output | Revision compare, package preview, branded PDF generation with configurable layouts and sections, email delivery. |
+| AI & agents | Multi-provider models, 150+ tools, local Ollama embeddings, MCP server, Claude Code / Codex runtime sessions, plugin framework. |
+| Quote review | Agent-driven coverage / gap / risk / competitiveness analysis with evidence-linked findings and calibration feedback. |
+| Multi-tenant ops | Organizations, users, super-admin setup, org switching, brand profiles, brand capture from website crawl, estimator personas, data import/export, admin flows. |
 
-## What Makes It Different
+**By the numbers:** 73 Prisma models · 150 agent tools across 13 modules · 17 API route files · 21 web pages · 7 MCP tool modules · 6 worker job types.
 
-- Bidwright does not stop at chat. The AI layer has access to the estimating workspace, knowledge, schedules, rate schedules, datasets, plugins, and project files.
-- Drawings, documents, structured knowledge, and estimate math live in the same system instead of being split across five separate tools.
-- The platform is designed for real estimator operations, including travel policy logic, burden periods, branded quote output, customer management, and trade-specific personas.
-- Extensibility is built in from the start through plugins, dynamic tool definitions, MCP support, and optional Claude Code or Codex runtime sessions.
+## What makes it different
 
-## AI, Agents, And Automation
+- **The agent has the keys.** Every estimate, every drawing, every catalog row, every schedule task is reachable through typed tools — not pasted into a prompt.
+- **Drawings, models, knowledge, and dollars share one schema.** A 3D element points to a worksheet line. A symbol count drives a quantity. A spec chunk justifies a finding. No CSV bridges.
+- **Built for actual estimating ops** — burdens, travel, branded output, persona-driven AI, customer management. Not a generic SaaS dressed up as a takeoff tool.
+- **Local-first AI is a real option.** Run Ollama for embeddings, LM Studio for inference. Your bid data doesn't have to leave the machine.
+- **Extensible from day one.** Plugins, dynamic tools, MCP, Claude Code / Codex runtimes. If you can write the tool, Bidwright can run it.
 
-Bidwright already includes a serious AI foundation, not just a prompt box.
-
-- Multi-provider model support in the agent layer, including Anthropic, OpenAI, OpenRouter, Gemini, and LM Studio.
-- Local embedding support through Ollama, plus `pgvector`-backed retrieval for knowledge search.
-- Tool registries for quote operations, knowledge workflows, project files, datasets, schedules, pricing, rate schedules, web-assisted tasks, and plugin management.
-- A worker runtime for ingestion, summarization, phase drafting, worksheet drafting, equipment inference, and quote QA scaffolding.
-- An MCP server package so Bidwright tools can be used from external coding and agent runtimes.
-- CLI runtime support for launching Claude Code or Codex sessions against a project workspace with project context, documents, and knowledge symlinked in.
-
-## Inside The Monorepo
+## Inside the monorepo
 
 ```text
 apps/
-  api/      Fastify API, auth, quote logic, PDF/email services, AI routes, vision routes
-  web/      Next.js app for intake, estimating, takeoff, knowledge, performance, settings
-  worker/   BullMQ-oriented orchestration for ingestion and reviewable AI workflows
+  api/            Fastify API — auth, quote logic, PDF/email, AI/vision routes, CLI runtime
+  web/            Next.js app — intake, estimating, takeoff, knowledge, performance, settings
+  worker/         BullMQ orchestration for ingestion and reviewable AI workflows
+  model-editor/   Standalone 3D model editor with bidirectional worksheet sync
 
 packages/
-  agent/       Tool-backed agent runtime and provider adapters
-  ai/          Prompt contracts and typed AI helpers
-  db/          Prisma schema, seeders, templates, and database utilities
-  domain/      Shared business models and quote logic
-  ingestion/   Package extraction, document classification, chunking, and parsing
-  mcp-server/  MCP bridge for Bidwright tools
-  vector/      Embeddings and pgvector search
-  vision/      PDF rendering plus Python/OpenCV-assisted drawing analysis
+  agent/        Tool-backed agent runtime, provider adapters, 150+ tools
+  ai/           Prompt contracts and typed AI helpers
+  db/           Prisma schema (73 models), seeders, templates, db utilities
+  domain/       Shared business models and quote logic
+  ingestion/    Package extraction, classification, chunking, parsing
+  mcp-server/   MCP bridge exposing Bidwright tools to external agents
+  vector/       Embeddings and pgvector hybrid retrieval
+  vision/       PDF rendering, 2D symbol analysis, 3D model parsing
 ```
 
-## Run It Locally
+## Run it locally
 
 ### Prerequisites
 
@@ -88,9 +169,9 @@ cp .env.example .env
 pnpm dev
 ```
 
-`pnpm dev` does more than start the apps. It brings up Postgres, Redis, and Ollama in Docker, generates Prisma client code, pushes the schema, sets up `pgvector`, and launches the web app, API, and worker together.
+`pnpm dev` brings up Postgres, Redis, and Ollama in Docker, generates the Prisma client, pushes the schema, sets up `pgvector`, and launches the web app, API, and worker together.
 
-On Windows, the native launcher is also exposed as:
+On Windows:
 
 ```powershell
 pnpm dev:windows
@@ -100,8 +181,7 @@ After startup:
 
 - Web: `http://localhost:3000`
 - API: `http://localhost:4001`
-- If no super admin exists yet, Bidwright will open the first-run setup wizard.
-- From setup, you can create your organization and optionally load sample data.
+- If no super admin exists, Bidwright opens the first-run setup wizard. From there, create your org and optionally load sample data.
 
 ### Useful commands
 
@@ -122,29 +202,27 @@ pnpm docker:down
 
 ### Script layout
 
-- `scripts/dev/` contains local hot-reload launchers.
-- `scripts/db/` contains database bootstrap and seed helpers.
-- `scripts/deploy/` contains export, restore, and server deploy helpers.
-- `scripts/launch/` contains one-click Docker launchers.
-- `scripts/ad-hoc/` contains one-off maintenance and extraction scripts.
+- `scripts/dev/` — local hot-reload launchers
+- `scripts/db/` — database bootstrap and seed helpers
+- `scripts/deploy/` — export, restore, server deploy helpers
+- `scripts/launch/` — one-click Docker launchers
+- `scripts/ad-hoc/` — one-off maintenance and extraction scripts
 
-### Docker-style run
-
-For a fuller containerized run:
+### Containerized run
 
 ```bash
 pnpm docker:up
 ```
 
-You can also use the launch wrappers:
+Wrappers:
 
 - macOS: `./scripts/launch/start-docker.command`
 - Windows: `.\scripts\launch\start-docker.bat`
 
-For an Ubuntu deployment and data migration checklist, see [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
-For the GitHub Actions release/deploy flow, see [docs/deployment/github-actions-docker.md](./docs/deployment/github-actions-docker.md).
+For Ubuntu deployment and data migration: [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
+For the GitHub Actions release/deploy flow: [docs/deployment/github-actions-docker.md](./docs/deployment/github-actions-docker.md).
 
-## Core Environment Variables
+## Core environment variables
 
 ```bash
 DATABASE_URL="postgresql://bidwright:bidwright@localhost:5432/bidwright"
@@ -176,22 +254,23 @@ SMTP_FROM=""
 SMTP_FROM_NAME="Bidwright"
 ```
 
-For Docker or server deployments, set `NEXT_PUBLIC_API_BASE_URL` to the public API URL that a browser can reach. `http://localhost:3001` only works for local single-machine runs.
+For Docker or server deployments, set `NEXT_PUBLIC_API_BASE_URL` to a URL the browser can actually reach. `http://localhost:3001` only works for single-machine local runs.
 
-## Tech Stack
+## Tech stack
 
-- Frontend: Next.js 16, React 19, Tailwind CSS, Radix UI
-- API: Fastify 5
-- Worker orchestration: BullMQ
-- Database: PostgreSQL, Prisma, `pgvector`
-- AI: Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Ollama embeddings
-- Vision: Playwright, Python, OpenCV-style symbol analysis pipeline
-- Monorepo: pnpm workspaces + Turborepo
-- Language: TypeScript with Zod validation
+- **Frontend:** Next.js 16, React 19, Tailwind CSS, Radix UI
+- **API:** Fastify 5
+- **Worker orchestration:** BullMQ
+- **Database:** PostgreSQL, Prisma, `pgvector`
+- **AI:** Anthropic, OpenAI, OpenRouter, Gemini, LM Studio, Ollama embeddings
+- **Vision:** Playwright, Python, OpenCV-style 2D symbol pipeline, 3D model parsing
+- **Agent runtimes:** Claude Code, Codex, MCP
+- **Monorepo:** pnpm workspaces + Turborepo
+- **Language:** TypeScript with Zod validation
 
 ## Status
 
-Bidwright already contains a broad working platform for AI-assisted construction estimating. Core estimating, takeoff, knowledge, pricing, scheduling, branding, admin, and plugin workflows are present in the codebase today. The platform is still moving fast, especially around deeper agent autonomy and advanced automation.
+Bidwright is a working platform for AI-assisted construction estimating. Core estimating, takeoff (2D and 3D), assemblies, knowledge, pricing, scheduling, review, branding, multi-tenant admin (organizations, users, super-admin setup and org switching), plugins, MCP, and CLI agent workflows are present in the codebase today. Areas like deeper third-party integrations and performance analytics dashboards are still filling in. The platform is moving fast — especially around agent autonomy, calibration feedback, and the model takeoff layer.
 
 ## License
 
