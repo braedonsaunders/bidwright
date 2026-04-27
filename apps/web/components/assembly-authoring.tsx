@@ -25,6 +25,9 @@ import {
 } from "@/lib/api";
 import { Badge, Button, CompactSelect, Input, Label } from "@/components/ui";
 import { SearchablePicker, type SearchablePickerOption } from "@/components/shared/searchable-picker";
+import { VALID_UOMS } from "@/components/settings-page-config";
+
+const UOM_OPTIONS = VALID_UOMS.map((u) => ({ value: u, label: u }));
 
 export interface CatalogItemRow {
   id: string;
@@ -184,11 +187,14 @@ export function AssemblyHeaderEditor({ assembly, onChange, onDelete, onError }: 
       </div>
       <div>
         <Label className="text-[10px]">Unit (per assembly)</Label>
-        <Input
-          value={unit}
-          onChange={(e) => setUnit(e.target.value)}
-          onBlur={() => unit !== assembly.unit && commit({ unit })}
-          className="text-xs"
+        <CompactSelect
+          value={VALID_UOMS.includes(unit) ? unit : "EA"}
+          onValueChange={(v) => {
+            setUnit(v);
+            if (v !== assembly.unit) commit({ unit: v });
+          }}
+          options={UOM_OPTIONS}
+          placeholder="Unit"
         />
       </div>
       <div className="col-span-2">
@@ -367,11 +373,14 @@ function ParameterRow({
           </div>
         )}
       </div>
-      <Input
-        value={unit}
-        onChange={(e) => setUnit(e.target.value)}
-        onBlur={() => unit !== parameter.unit && onPatch({ unit })}
-        className="text-xs"
+      <CompactSelect
+        value={VALID_UOMS.includes(unit) ? unit : ""}
+        onValueChange={(v) => {
+          setUnit(v);
+          if (v !== parameter.unit) onPatch({ unit: v });
+        }}
+        options={[{ value: "", label: "—" }, ...UOM_OPTIONS]}
+        placeholder="Unit"
       />
       <Button variant="ghost" onClick={onRemove} className="text-xs text-fg/50 hover:text-red-400">
         <Trash2 className="w-3.5 h-3.5" />
