@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit3, Layers, Plus, Search, Sparkles, X } from "lucide-react";
+import { Edit3, Layers, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  type AssemblyInstanceSummary,
   type AssemblyParameterRecord,
   type AssemblyPreviewResult,
   type AssemblyRecord,
@@ -11,10 +12,13 @@ import {
   type WorkspaceResponse,
   createAssembly,
   deleteAssembly,
+  deleteAssemblyInstance,
   getAssembly,
   insertAssemblyIntoWorksheet,
   listAssemblies,
+  listAssemblyInstances,
   previewAssemblyExpansion,
+  resyncAssemblyInstance,
 } from "@/lib/api";
 import { Button, Input, Label, ModalBackdrop, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
 import {
@@ -33,6 +37,7 @@ interface AssemblyInsertModalProps {
   onInserted: (workspace: WorkspaceResponse, info: { warnings: string[]; itemIds: string[] }) => void;
 }
 
+type ScopeTab = "library" | "groups";
 type PaneMode = "insert" | "author";
 
 export function AssemblyInsertModal({
@@ -55,6 +60,15 @@ export function AssemblyInsertModal({
   const [paneMode, setPaneMode] = useState<PaneMode>("insert");
   const [preview, setPreview] = useState<AssemblyPreviewResult | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  const [scope, setScope] = useState<ScopeTab>("library");
+  const [instances, setInstances] = useState<AssemblyInstanceSummary[]>([]);
+  const [instancesLoading, setInstancesLoading] = useState(false);
+  const [editingInstanceId, setEditingInstanceId] = useState<string | null>(null);
+  const [editingInstanceDetail, setEditingInstanceDetail] = useState<AssemblyRecord | null>(null);
+  const [editInstanceQty, setEditInstanceQty] = useState("1");
+  const [editInstanceParams, setEditInstanceParams] = useState<Record<string, string>>({});
+  const [instanceBusy, setInstanceBusy] = useState(false);
 
   const { catalogItems, rateItems } = useAssemblyAuthoringContext();
 
@@ -88,10 +102,27 @@ export function AssemblyInsertModal({
     }
   }, []);
 
+  const refreshInstances = useCallback(async () => {
+    if (!worksheetId) {
+      setInstances([]);
+      return;
+    }
+    setInstancesLoading(true);
+    try {
+      const rows = await listAssemblyInstances(projectId, worksheetId);
+      setInstances(rows);
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load groups");
+    } finally {
+      setInstancesLoading(false);
+    }
+  }, [projectId, worksheetId]);
+
   useEffect(() => {
     if (open) {
       setError(null);
       void refreshList();
+      void refreshInstances();
     } else {
       setSelectedId(null);
       setDetail(null);
@@ -100,8 +131,29 @@ export function AssemblyInsertModal({
       setParamValues({});
       setError(null);
       setPaneMode("insert");
+      setScope("library");
+      setEditingInstanceId(null);
+      setEditingInstanceDetail(null);
     }
-  }, [open, refreshList]);
+  }, [open, refreshList, refreshInstances]);
+
+  // Load detail of the assembly tied to the instance the user is editing.
+  useEffect(() => {
+    if (!editingInstanceId) {
+      setEditingInstanceDetail(null);
+      return;
+    }
+    const inst = instances.find((i) => i.id === editingInstanceId);
+    if (!inst || !inst.assemblyId) {
+      setEditingInstanceDetail(null);
+      return;
+    }
+    setEditInstanceQty(String(inst.quantity));
+    const initial: Record<string, string> = {};
+    for (const [k, v] of Object.entries(inst.parameterValues ?? {})) initial[k] = String(v);
+    setEditInstanceParams(initial);
+    void getAssembly(inst.assemblyId).then(setEditingInstanceDetail).catch(() => setEditingInstanceDetail(null));
+  }, [editingInstanceId, instances]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -214,18 +266,79 @@ export function AssemblyInsertModal({
     void refreshList();
   }, [selectedId, reloadDetail, refreshList]);
 
+  const handleDeleteInstance = useCallback(
+    async (instanceId: string) => {
+      if (!confirm("Delete this assembly group and all its line items?")) return;
+      setInstanceBusy(true);
+      setError(null);
+      try {
+        const result = await deleteAssemblyInstance(projectId, instanceId);
+        // Reuse onInserted to bubble the workspace back up to the parent.
+        onInserted(result.workspace, { warnings: [], itemIds: [] });
+        await refreshInstances();
+        if (editingInstanceId === instanceId) setEditingInstanceId(null);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to delete group");
+      } finally {
+        setInstanceBusy(false);
+      }
+    },
+    [projectId, refreshInstances, editingInstanceId, onInserted],
+  );
+
+  const handleResyncInstance = useCallback(
+    async (instanceId: string, opts?: { quantity?: number; parameterValues?: Record<string, string> }) => {
+      setInstanceBusy(true);
+      setError(null);
+      try {
+        const result = await resyncAssemblyInstance(projectId, instanceId, {
+          quantity: opts?.quantity,
+          parameterValues: opts?.parameterValues,
+        });
+        onInserted(result.workspace, { warnings: result.resync.warnings, itemIds: result.resync.itemIds });
+        await refreshInstances();
+        setEditingInstanceId(null);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to re-sync");
+      } finally {
+        setInstanceBusy(false);
+      }
+    },
+    [projectId, refreshInstances, onInserted],
+  );
+
   if (!open) return null;
 
   const canInsert = detail !== null && detail.components.length > 0;
 
   return (
     <ModalBackdrop open={open} onClose={onClose}>
-      <div className="bg-panel rounded-lg shadow-2xl w-[860px] max-w-[95vw] max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-panel rounded-lg shadow-2xl w-[860px] max-w-[95vw] h-[680px] max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-fg/10">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <Layers className="w-4 h-4" />
-            <div className="text-sm font-medium">
-              {paneMode === "author" ? "Author assembly" : "Insert assembly into worksheet"}
+            <div className="flex gap-1 rounded-md bg-panel2/45 p-0.5">
+              <button
+                onClick={() => setScope("library")}
+                className={cn(
+                  "px-2.5 py-1 text-[11px] rounded transition-colors",
+                  scope === "library" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/75",
+                )}
+              >
+                Library
+              </button>
+              <button
+                onClick={() => {
+                  setScope("groups");
+                  void refreshInstances();
+                }}
+                className={cn(
+                  "px-2.5 py-1 text-[11px] rounded transition-colors",
+                  scope === "groups" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/75",
+                )}
+              >
+                Groups{worksheetId && instances.length > 0 ? ` (${instances.length})` : ""}
+              </button>
             </div>
           </div>
           <Button size="sm" variant="ghost" onClick={onClose}>
@@ -239,6 +352,7 @@ export function AssemblyInsertModal({
           </div>
         )}
 
+        {scope === "library" ? (
         <div className="flex-1 grid grid-cols-[260px_1fr] gap-0 overflow-hidden">
           {/* List */}
           <div className="border-r border-fg/10 flex flex-col">
@@ -451,6 +565,110 @@ export function AssemblyInsertModal({
             )}
           </div>
         </div>
+        ) : (
+          /* ── Groups in this worksheet ── */
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {!worksheetId && (
+              <div className="text-xs text-fg/40 py-12 text-center">No worksheet selected.</div>
+            )}
+            {worksheetId && instancesLoading && <div className="text-xs text-fg/40">Loading…</div>}
+            {worksheetId && !instancesLoading && instances.length === 0 && (
+              <div className="text-xs text-fg/40 py-12 text-center">
+                No assembly groups in this worksheet yet. Switch to <button onClick={() => setScope("library")} className="underline">Library</button> to insert one.
+              </div>
+            )}
+            {instances.map((inst) => (
+              <div key={inst.id} className="rounded-md border border-fg/10 bg-panel2/40">
+                <div className="px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-medium truncate">{inst.assemblyName ?? "(deleted assembly)"}</div>
+                    <div className="text-[10px] text-fg/45 truncate">
+                      qty {inst.quantity} · {inst.itemCount} line{inst.itemCount === 1 ? "" : "s"}
+                      {Object.keys(inst.parameterValues).length > 0 &&
+                        ` · ${Object.entries(inst.parameterValues)
+                          .map(([k, v]) => `${k}=${v}`)
+                          .join(", ")}`}
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setEditingInstanceId(editingInstanceId === inst.id ? null : inst.id)}
+                      disabled={!inst.assemblyId || instanceBusy}
+                      className="text-xs"
+                      title={!inst.assemblyId ? "Source assembly was deleted" : "Re-sync or scale"}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleDeleteInstance(inst.id)}
+                      disabled={instanceBusy}
+                      className="text-xs text-red-400"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+
+                {editingInstanceId === inst.id && editingInstanceDetail && (
+                  <div className="px-3 py-3 border-t border-fg/10 space-y-2">
+                    <div>
+                      <Label className="text-[10px]">Quantity</Label>
+                      <Input
+                        value={editInstanceQty}
+                        onChange={(e) => setEditInstanceQty(e.target.value)}
+                        className="text-xs font-mono"
+                      />
+                    </div>
+                    {editingInstanceDetail.parameters.length > 0 && (
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px]">Parameters</Label>
+                        {editingInstanceDetail.parameters.map((p) => (
+                          <div key={p.id} className="grid grid-cols-[1fr_120px_60px] gap-2 items-center">
+                            <div className="text-xs">
+                              <div className="font-medium">{p.label || p.key}</div>
+                              {!p.label && <div className="text-[10px] font-mono text-fg/45">{p.key}</div>}
+                            </div>
+                            <Input
+                              value={editInstanceParams[p.key] ?? ""}
+                              onChange={(e) => setEditInstanceParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                              className="text-xs font-mono"
+                              placeholder={p.defaultValue}
+                            />
+                            <div className="text-[10px] text-fg/45">{p.unit}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button size="sm" variant="ghost" onClick={() => setEditingInstanceId(null)} className="text-xs">
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          const qty = Number.parseFloat(editInstanceQty);
+                          if (!Number.isFinite(qty)) {
+                            setError("Quantity must be a number");
+                            return;
+                          }
+                          void handleResyncInstance(inst.id, { quantity: qty, parameterValues: editInstanceParams });
+                        }}
+                        disabled={instanceBusy}
+                        className="text-xs"
+                      >
+                        {instanceBusy ? "Re-syncing…" : "Re-sync"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </ModalBackdrop>
   );
