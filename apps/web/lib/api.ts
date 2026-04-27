@@ -2540,6 +2540,61 @@ export async function searchCatalogItems(query: string, catalogId?: string) {
   return apiRequest<CatalogItem[]>(`/catalogs/search?${params.toString()}`);
 }
 
+// ── AI-assisted bulk import (CSV / XLSX / PDF) ──────────────────────────
+
+export type CatalogItemTargetField = "name" | "code" | "unit" | "unitCost" | "unitPrice" | "category" | "ignore";
+
+export interface CatalogImportTable {
+  sheetName: string;
+  headers: string[];
+  rows: string[][];
+}
+
+export interface CatalogImportAnalysis {
+  tables: CatalogImportTable[];
+  selectedTableIndex: number;
+  detectedKind: "catalog" | "labour_rate" | "price_list" | "unknown";
+  confidence: number;
+  mapping: { byHeader: Record<string, CatalogItemTargetField> };
+  notes: string;
+  warnings: string[];
+}
+
+export async function analyzeCatalogImport(file: File): Promise<CatalogImportAnalysis> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return apiRequest<CatalogImportAnalysis>("/api/catalogs/import/analyze", {
+    method: "POST",
+    body: fd,
+  });
+}
+
+// Analyze a knowledge book's stored source file (XLSX/CSV/PDF) — same response
+// shape as analyzeCatalogImport so the import modal can reuse it directly.
+export async function analyzeKnowledgeBookForImport(bookId: string): Promise<CatalogImportAnalysis> {
+  return apiRequest<CatalogImportAnalysis>(`/api/knowledge/books/${bookId}/analyze-import`, {
+    method: "POST",
+  });
+}
+
+export async function commitCatalogImport(
+  catalogId: string,
+  input: {
+    table: CatalogImportTable;
+    mapping: { byHeader: Record<string, CatalogItemTargetField> };
+    defaultCategory?: string;
+  },
+): Promise<{ created: number; catalogId: string; skipped: number; total: number }> {
+  return apiRequest<{ created: number; catalogId: string; skipped: number; total: number }>(
+    `/api/catalogs/${catalogId}/import/commit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Catalog Library (browse + adopt templates)
 // ---------------------------------------------------------------------------
