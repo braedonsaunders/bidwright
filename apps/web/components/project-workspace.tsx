@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Copy,
   FileText,
+  GitCompare,
   Layers3,
   MessageSquareText,
   Plus,
@@ -93,6 +94,7 @@ import {
 } from "@/components/workspace/modals";
 import { PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
+import { RevisionDiffModal } from "@/components/workspace/revision-diff-modal";
 import { WorkspaceSearch, type SearchNavigationTarget } from "@/components/workspace/workspace-search";
 import type {
   BidwrightModelLineItemDraft,
@@ -542,6 +544,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [chatOpen, setChatOpen] = useState(false);
   const [autoIntake, setAutoIntake] = useState(false);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
+  const [revisionDiffOpen, setRevisionDiffOpen] = useState(false);
   const intakeInitRef = useRef(false);
   const workspaceSyncOriginRef = useRef(`workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
   const [isPending, startTransition] = useTransition();
@@ -1100,6 +1103,17 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </div>
           </div>
 
+          <ToolbarTooltip label="Compare drawing revisions and re-takeoff">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setRevisionDiffOpen(true)}
+              aria-label="Compare drawing revisions"
+            >
+              <GitCompare className="h-3 w-3" />
+            </Button>
+          </ToolbarTooltip>
+
           <ToolbarTooltip label="Open plugin tools">
             <Button
               size="sm"
@@ -1415,6 +1429,21 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         autoStartIntake={autoIntake}
         onIntakeStarted={() => setAutoIntake(false)}
         onWorkspaceMutated={refreshWorkspace}
+      />
+
+      <RevisionDiffModal
+        open={revisionDiffOpen}
+        onClose={() => setRevisionDiffOpen(false)}
+        projectId={workspace.project.id}
+        onApplied={() => {
+          startTransition(async () => {
+            try {
+              const { getProjectWorkspace } = await import("@/lib/api");
+              const fresh = await getProjectWorkspace(workspace.project.id);
+              apply(fresh);
+            } catch {}
+          });
+        }}
       />
 
       <AnimatePresence>

@@ -16,7 +16,6 @@ import {
   Columns,
   Copy,
   Download,
-  GitCompare,
   GripVertical,
   Layers,
   Maximize2,
@@ -83,8 +82,6 @@ import {
 import { ItemDetailDrawer } from "./item-detail-drawer";
 import { AssemblyInsertModal } from "./assembly-insert-modal";
 import { SaveSelectionAsAssemblyModal } from "./save-selection-as-assembly-modal";
-import { AssemblyInstancesModal } from "./assembly-instances-modal";
-import { RevisionDiffModal } from "./revision-diff-modal";
 
 /* ─── Types ─── */
 
@@ -629,8 +626,6 @@ export function EstimateGrid({
   // ─── NEW STATE: Assembly insert ───
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
   const [showSaveAsAssembly, setShowSaveAsAssembly] = useState(false);
-  const [showAssemblyInstances, setShowAssemblyInstances] = useState(false);
-  const [showRevisionDiff, setShowRevisionDiff] = useState(false);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -2493,26 +2488,9 @@ export function EstimateGrid({
               variant="ghost"
               onClick={() => setShowAssemblyPicker(true)}
               disabled={isPending}
+              title="Insert, author, or manage assembly groups in this worksheet"
             >
               <Layers className="h-3 w-3" /> Assembly
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setShowAssemblyInstances(true)}
-              disabled={isPending}
-              title="Manage assembly groups in this worksheet"
-            >
-              Groups
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setShowRevisionDiff(true)}
-              disabled={isPending}
-              title="Compare two drawing revisions and re-takeoff affected items"
-            >
-              <GitCompare className="h-3 w-3" /> Revisions
             </Button>
           </div>
         </div>
@@ -2947,22 +2925,6 @@ export function EstimateGrid({
         }}
       />
 
-      {/* ─── Assembly Instances Modal ─── */}
-      <AssemblyInstancesModal
-        open={showAssemblyInstances}
-        onClose={() => setShowAssemblyInstances(false)}
-        projectId={workspace.project.id}
-        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
-        onWorkspaceUpdated={(workspace) => onApply(workspace)}
-      />
-
-      {/* ─── Revision Diff Modal ─── */}
-      <RevisionDiffModal
-        open={showRevisionDiff}
-        onClose={() => setShowRevisionDiff(false)}
-        projectId={workspace.project.id}
-        onApplied={() => onRefresh()}
-      />
 
       {/* ─── Catalog Quick-Add Modal ─── */}
       {showCatalogPicker && (
