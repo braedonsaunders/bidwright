@@ -80,6 +80,9 @@ import {
   listModelAssets,
   syncModelAssets,
   updateWorksheetItem,
+  updateWorkspaceState,
+  apiRequest,
+  type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
   Badge,
@@ -663,6 +666,11 @@ export function TakeoffTab({
   const [calibrationInput, setCalibrationInput] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
 
+  /* Persistent calibration cache: map of documentId → pageNumber → Calibration.
+     Loaded from WorkspaceState on mount, written back whenever the user
+     confirms a new calibration. */
+  const calibrationCacheRef = useRef<Record<string, Record<number, Calibration>>>({});
+
   /* Drawing config (from modal or defaults) */
   const COLOR_CYCLE = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
   const colorIndexRef = useRef(0);
@@ -1148,6 +1156,53 @@ export function TakeoffTab({
       mutObs?.disconnect();
     };
   }, [selectedDocId, page, zoom]);
+
+  /* Load any persisted calibrations from WorkspaceState on mount, then apply
+     the one for the current document/page if present. */
+  useEffect(() => {
+    apiRequest<WorkspaceStateRecord>(`/projects/${projectId}/workspace-state`)
+      .then((ws) => {
+        const map = ws.state?.takeoffCalibrations as Record<string, Record<number, Calibration>> | undefined;
+        if (map) calibrationCacheRef.current = map;
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  // Whenever the user switches doc or page, restore the matching calibration.
+  useEffect(() => {
+    if (!selectedDocId) return;
+    const cached = calibrationCacheRef.current[selectedDocId]?.[page] ?? null;
+    setCalibration(cached);
+  }, [selectedDocId, page]);
+
+  /* Mouse-wheel zoom while the cursor is inside the 2D PDF viewer.
+     Native listener (passive: false) so we can preventDefault and stop the
+     page from scrolling. CAD documents have their own zoom controls so we
+     skip them. */
+  useEffect(() => {
+    const container = viewerContainerRef.current;
+    if (!container) return;
+    if (isCadDocument) return;
+
+    function onWheel(e: WheelEvent) {
+      // Ignore horizontal-wheel devices and keep ctrl-zoom intact (browser default).
+      if (e.ctrlKey) return;
+      // Ignore if no PDF is rendered (avoid intercepting on the empty state).
+      const canvas = pdfCanvasRef.current;
+      if (!canvas || canvas.width === 0) return;
+      e.preventDefault();
+      // deltaY positive = scroll down = zoom out. Step ~10% per notch.
+      const direction = e.deltaY > 0 ? -1 : 1;
+      const factor = 1 + direction * 0.1;
+      setZoom((z) => {
+        const next = Math.max(0.25, Math.min(5, z * factor));
+        return Math.round(next * 100) / 100;
+      });
+    }
+
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [isCadDocument, selectedDocId]);
 
   /* ─── Handlers ─── */
 
@@ -1652,10 +1707,19 @@ export function TakeoffTab({
     const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
     const pixelsPerUnit = pixelDist / knownDist;
 
-    setCalibration({ pixelsPerUnit, unit: calibrationUnit });
+    const next: Calibration = { pixelsPerUnit, unit: calibrationUnit };
+    setCalibration(next);
     setCalibrationPromptOpen(false);
     setCalibrationInput("");
     setCalibrationPoints(null);
+
+    // Persist on WorkspaceState so the calibration survives reloads and
+    // syncs to other open tabs / devices.
+    if (selectedDocId) {
+      const cache = calibrationCacheRef.current;
+      cache[selectedDocId] = { ...(cache[selectedDocId] ?? {}), [page]: next };
+      void updateWorkspaceState(projectId, { takeoffCalibrations: cache }).catch(() => {});
+    }
     setActiveTool("select");
   }
 
@@ -2264,6 +2328,11 @@ export function TakeoffTab({
                   onClick={() => exportAnnotationsCsv(annotations, calibration)}
                   disabled={annotations.length === 0}
                   className="rounded-r-none"
+                  title={
+                    annotations.length === 0
+                      ? "No annotations to export — create some takeoffs first"
+                      : `Export ${annotations.length} annotation${annotations.length === 1 ? "" : "s"} as CSV`
+                  }
                 >
                   <Download className="h-3.5 w-3.5" />
                   CSV
@@ -2274,6 +2343,7 @@ export function TakeoffTab({
                   onClick={() => setExportDropdownOpen((v) => !v)}
                   disabled={annotations.length === 0}
                   className="rounded-l-none border-l border-line/50 px-1.5"
+                  title={annotations.length === 0 ? "No annotations to export" : "Export options"}
                 >
                   <ChevronDown className="h-3 w-3" />
                 </Button>
@@ -2517,13 +2587,13 @@ export function TakeoffTab({
       <div className="relative flex flex-1 overflow-hidden min-h-0">
         {/* Left: Tool palette */}
         {!isCadDocument && (
-        <div className="flex w-12 flex-col gap-0.5 border-r border-line bg-panel p-1.5 overflow-y-auto shrink-0">
+        <div className="flex w-10 flex-col border-r border-line bg-panel p-1 shrink-0">
           {TOOL_GROUPS.map((group) => {
             const groupTools = TOOLS.filter((t) => t.group === group.key);
             return (
               <div key={group.key}>
                 {group.key !== "nav" && (
-                  <div className="my-1 h-px w-full bg-line/50" />
+                  <div className="my-0.5 h-px w-full bg-line/50" />
                 )}
                 {groupTools.map(({ id, label, icon: Icon }) => (
                   <button
@@ -2531,13 +2601,13 @@ export function TakeoffTab({
                     onClick={() => handleToolSelect(id)}
                     title={label}
                     className={cn(
-                      "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
+                      "flex h-7 w-full items-center justify-center rounded-md transition-colors",
                       activeTool === id
                         ? "bg-accent/15 text-accent"
                         : "text-fg/40 hover:bg-panel2 hover:text-fg/70"
                     )}
                   >
-                    <Icon className="h-4 w-4" />
+                    <Icon className="h-3.5 w-3.5" />
                   </button>
                 ))}
               </div>
@@ -2985,7 +3055,7 @@ export function TakeoffTab({
             <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
               <ScanSearch className="h-4 w-4 text-emerald-500 shrink-0" />
               <span className="text-xs font-semibold text-fg flex-1">
-                Auto Count — {autoCountPending.included.filter(Boolean).length} of {autoCountPending.totalCount} selected
+                Auto Count — {autoCountPending.included.filter(Boolean).length} of {autoCountPending.totalCount} selected (this page)
               </span>
               <button
                 onClick={() => {
@@ -2999,6 +3069,42 @@ export function TakeoffTab({
               <button onClick={handleRejectAutoCount} className="text-fg/30 hover:text-fg/60 transition-colors">
                 <X className="h-3.5 w-3.5" />
               </button>
+            </div>
+            {/* Scope row — re-run the search at a wider scope without first
+                accepting/rejecting the per-page matches. */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-line bg-emerald-500/5 shrink-0">
+              <span className="text-[10px] text-fg/45">Search scope:</span>
+              <Button size="xs" variant="ghost" disabled className="text-emerald-500 cursor-default">
+                <ScanSearch className="h-3 w-3 mr-1" /> This page
+              </Button>
+              {totalPages > 1 && (
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => {
+                    setAutoCountModalOpen(false);
+                    void handleCrossPageSearch();
+                  }}
+                  disabled={crossPageRunning}
+                >
+                  {crossPageRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
+                  This document ({totalPages} pages)
+                </Button>
+              )}
+              {pdfDocuments.length > 1 && (
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() => {
+                    setAutoCountModalOpen(false);
+                    void handleMultiDocSearch();
+                  }}
+                  disabled={multiDocRunning}
+                >
+                  {multiDocRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
+                  All drawings ({pdfDocuments.length})
+                </Button>
+              )}
             </div>
             <div className="overflow-y-auto flex-1 min-h-0 divide-y divide-line">
               {autoCountPending.matches.map((match, i) => {
