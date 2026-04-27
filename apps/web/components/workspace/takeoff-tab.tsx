@@ -2771,6 +2771,7 @@ export function TakeoffTab({
                           : handleAnnotationComplete
                     }
                     onCalibrationRequest={handleCalibrationRequest}
+                    pdfCanvas={pdfCanvasRef.current}
                   />
 
                   {/* Processing overlay */}
@@ -3054,69 +3055,141 @@ export function TakeoffTab({
       />
 
       {/* ─── Calibration Prompt ─── */}
-      {calibrationPromptOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            onClick={() => {
-              setCalibrationPromptOpen(false);
-              setCalibrationPoints(null);
-            }}
-          />
-          <Card className="relative z-10 w-full max-w-sm">
-            <div className="border-b border-line px-5 py-4">
-              <h3 className="text-sm font-semibold text-fg">Set Calibration</h3>
-              <p className="mt-0.5 text-xs text-fg/50">
-                Enter the real-world distance for the line you just drew.
-              </p>
-            </div>
-            <div className="px-5 py-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Input
-                  className="flex-1"
-                  type="number"
-                  min={0.01}
-                  step={0.01}
-                  placeholder="Distance..."
-                  value={calibrationInput}
-                  onChange={(e) => setCalibrationInput(e.target.value)}
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleCalibrationConfirm();
-                  }}
-                />
-                <Select
-                  className="w-24"
-                  value={calibrationUnit}
-                  onChange={(e) => setCalibrationUnit(e.target.value)}
-                >
-                  <option value="ft">ft</option>
-                  <option value="in">in</option>
-                  <option value="m">m</option>
-                  <option value="cm">cm</option>
-                  <option value="mm">mm</option>
-                  <option value="yd">yd</option>
-                </Select>
+      {calibrationPromptOpen && calibrationPoints && (() => {
+        const [a, b] = calibrationPoints;
+        const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
+        const distNum = parseFloat(calibrationInput);
+        const livePerUnit = distNum > 0 ? (pixelDist / distNum) : null;
+        const presets: Array<{ value: number; unit: string; label: string }> = [
+          { value: 1, unit: "ft", label: "1 ft" },
+          { value: 5, unit: "ft", label: "5 ft" },
+          { value: 10, unit: "ft", label: "10 ft" },
+          { value: 25, unit: "ft", label: "25 ft" },
+          { value: 50, unit: "ft", label: "50 ft" },
+          { value: 100, unit: "ft", label: "100 ft" },
+          { value: 1, unit: "m", label: "1 m" },
+          { value: 5, unit: "m", label: "5 m" },
+          { value: 10, unit: "m", label: "10 m" },
+        ];
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => {
+                setCalibrationPromptOpen(false);
+                setCalibrationPoints(null);
+              }}
+            />
+            <Card className="relative z-10 w-full max-w-md border-amber-500/30 shadow-2xl">
+              <div className="border-b border-line px-5 py-4 flex items-center gap-3">
+                <div className="rounded-full bg-amber-500/15 p-2">
+                  <Scaling className="h-4 w-4 text-amber-500" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-fg">Set drawing scale</h3>
+                  <p className="mt-0.5 text-[11px] text-fg/55">
+                    The line you drew measures{" "}
+                    <span className="font-mono text-fg">{pixelDist.toFixed(1)} px</span>.
+                    Enter what that distance represents in real life.
+                  </p>
+                </div>
               </div>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setCalibrationPromptOpen(false);
-                    setCalibrationPoints(null);
-                  }}
+              <div className="px-5 py-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Input
+                    className="flex-1 text-base h-10"
+                    type="number"
+                    min={0.01}
+                    step={0.01}
+                    placeholder="Distance"
+                    value={calibrationInput}
+                    onChange={(e) => setCalibrationInput(e.target.value)}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleCalibrationConfirm();
+                    }}
+                  />
+                  <Select
+                    className="w-24 h-10"
+                    value={calibrationUnit}
+                    onChange={(e) => setCalibrationUnit(e.target.value)}
+                  >
+                    <option value="ft">ft</option>
+                    <option value="in">in</option>
+                    <option value="m">m</option>
+                    <option value="cm">cm</option>
+                    <option value="mm">mm</option>
+                    <option value="yd">yd</option>
+                  </Select>
+                </div>
+
+                {/* Quick presets */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-fg/40 mb-1.5">Common distances</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {presets.map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => {
+                          setCalibrationInput(String(p.value));
+                          setCalibrationUnit(p.unit);
+                        }}
+                        className={cn(
+                          "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                          parseFloat(calibrationInput) === p.value && calibrationUnit === p.unit
+                            ? "border-amber-500/50 bg-amber-500/10 text-amber-500"
+                            : "border-line text-fg/60 hover:border-amber-500/30 hover:text-fg",
+                        )}
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Live preview */}
+                <div
+                  className={cn(
+                    "rounded-md px-3 py-2 text-xs font-mono transition-colors",
+                    livePerUnit
+                      ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20"
+                      : "bg-panel2/40 text-fg/35 border border-line",
+                  )}
                 >
-                  Cancel
-                </Button>
-                <Button variant="accent" size="sm" onClick={handleCalibrationConfirm}>
-                  Apply
-                </Button>
+                  {livePerUnit ? (
+                    <>
+                      Resulting scale: <span className="font-semibold">1 {calibrationUnit} = {livePerUnit.toFixed(2)} px</span>
+                    </>
+                  ) : (
+                    "Enter a distance to see the resulting scale"
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setCalibrationPromptOpen(false);
+                      setCalibrationPoints(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    onClick={handleCalibrationConfirm}
+                    disabled={!livePerUnit}
+                  >
+                    Apply scale
+                  </Button>
+                </div>
               </div>
-            </div>
-          </Card>
-        </div>
-      )}
+            </Card>
+          </div>
+        );
+      })()}
 
       {/* ─── Ask AI Slide-Up Panel ─── */}
       {/* ─── Auto Count Results Modal ─── */}

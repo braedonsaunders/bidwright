@@ -37,6 +37,8 @@ interface AnnotationCanvasProps {
   activeThickness: number;
   onAnnotationComplete: (data: Partial<TakeoffAnnotation>) => void;
   onCalibrationRequest?: (points: [Point, Point]) => void;
+  /** Source canvas the loupe samples from when calibrating. */
+  pdfCanvas?: HTMLCanvasElement | null;
 }
 
 /* ─── Drawing Helpers ─── */
@@ -311,10 +313,13 @@ export function AnnotationCanvas({
   activeThickness,
   onAnnotationComplete,
   onCalibrationRequest,
+  pdfCanvas,
 }: AnnotationCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const loupeCanvasRef = useRef<HTMLCanvasElement>(null);
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
   const [cursorPos, setCursorPos] = useState<Point | null>(null);
+  const [screenCursor, setScreenCursor] = useState<{ x: number; y: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
@@ -588,7 +593,48 @@ export function AnnotationCanvas({
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
     setCursorPos(pt);
+    if (activeTool === "calibrate") {
+      setScreenCursor({ x: e.clientX, y: e.clientY });
+    }
   }
+
+  // When the loupe is active, redraw it whenever the cursor moves.
+  // We sample a small region of the underlying PDF canvas and blow it up.
+  useEffect(() => {
+    if (activeTool !== "calibrate" || !cursorPos || !pdfCanvas) return;
+    const loupe = loupeCanvasRef.current;
+    if (!loupe) return;
+    const ctx = loupe.getContext("2d");
+    if (!ctx) return;
+    const SRC_SIZE = 60;       // pixels of source PDF to sample
+    const MAGNIFY = 4;         // zoom factor inside the loupe
+    const DEST_SIZE = SRC_SIZE * MAGNIFY;
+    loupe.width = DEST_SIZE;
+    loupe.height = DEST_SIZE;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#0b0d10";
+    ctx.fillRect(0, 0, DEST_SIZE, DEST_SIZE);
+    const sx = Math.max(0, cursorPos.x - SRC_SIZE / 2);
+    const sy = Math.max(0, cursorPos.y - SRC_SIZE / 2);
+    try {
+      ctx.drawImage(pdfCanvas, sx, sy, SRC_SIZE, SRC_SIZE, 0, 0, DEST_SIZE, DEST_SIZE);
+    } catch {
+      /* ignore — canvas may not be ready */
+    }
+    // Crosshair at the centre.
+    ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(DEST_SIZE / 2, 0);
+    ctx.lineTo(DEST_SIZE / 2, DEST_SIZE);
+    ctx.moveTo(0, DEST_SIZE / 2);
+    ctx.lineTo(DEST_SIZE, DEST_SIZE / 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
+    ctx.beginPath();
+    ctx.arc(DEST_SIZE / 2, DEST_SIZE / 2, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }, [activeTool, cursorPos, pdfCanvas]);
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
     if (panStateRef.current) {
@@ -725,16 +771,42 @@ export function AnnotationCanvas({
   const cursorStyle =
     !activeTool || activeTool === "select" ? "grab" : "crosshair";
 
+  const showLoupe = activeTool === "calibrate" && screenCursor !== null;
+
   return (
-    <canvas
-      ref={canvasRef}
-      className="absolute left-0 top-0"
-      style={{ cursor: cursorStyle, width, height }}
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        className="absolute left-0 top-0"
+        style={{ cursor: cursorStyle, width, height }}
+        onClick={handleClick}
+        onDoubleClick={handleDoubleClick}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => setScreenCursor(null)}
+      />
+      {showLoupe && screenCursor && (
+        <div
+          className="pointer-events-none fixed z-[300] rounded-full border-2 border-amber-500 bg-panel shadow-2xl overflow-hidden"
+          style={{
+            width: 180,
+            height: 180,
+            left: screenCursor.x + 24,
+            top: screenCursor.y - 200,
+            // Flip to the left of the cursor when too close to the right edge
+            transform:
+              typeof window !== "undefined" && screenCursor.x + 220 > window.innerWidth
+                ? "translateX(calc(-100% - 48px))"
+                : undefined,
+          }}
+        >
+          <canvas ref={loupeCanvasRef} className="w-full h-full" />
+          <div className="absolute bottom-0 inset-x-0 bg-black/60 text-amber-400 text-[10px] font-mono text-center py-0.5 backdrop-blur-sm">
+            calibrate · 4× zoom
+          </div>
+        </div>
+      )}
+    </>
   );
 }
