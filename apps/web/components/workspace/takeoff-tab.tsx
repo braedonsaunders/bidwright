@@ -1462,6 +1462,9 @@ export function TakeoffTab({
       }
     } catch (err) {
       console.error("Auto-count failed:", err);
+      const message = err instanceof Error ? err.message : "Auto-count failed";
+      setToastMessage(`Auto-count failed: ${message}`);
+      setToastType("error");
     } finally {
       setAutoCountRunning(false);
     }
@@ -2402,18 +2405,18 @@ export function TakeoffTab({
       </div>
 
       {/* ─── Auto-Count Banner ─── */}
-      {!isCadDocument && isAutoCountActive && (
+      {!isCadDocument && (isAutoCountActive || autoCountRunning) && (
         <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
             <p className="text-xs font-medium text-fg/80">
               {autoCountRunning
-                ? "Analyzing drawing for matches..."
+                ? "Analyzing drawing for matches… (this can take 5-15 seconds)"
                 : "Draw a rectangle around a symbol to auto-count all occurrences on this page"}
             </p>
             {!autoCountRunning && (
               <p className="text-[11px] text-fg/40 mt-0.5">
-                Select a symbol by clicking and dragging. The CV pipeline will find all matching symbols.
+                Click and drag a tight box around one example. The CV pipeline finds all visual matches and shows them in a review modal.
               </p>
             )}
           </div>
