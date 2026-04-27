@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { catalogLibrary } from "../prisma-store.js";
+import {
+  analyzeImport,
+  materialiseRows,
+  type ColumnMapping,
+  type SpreadsheetTable,
+} from "../services/catalog-import-service.js";
 
 export async function catalogRoutes(app: FastifyInstance) {
   // ── Catalog Library (browse + adopt) ────────────────────────────────
@@ -28,6 +34,68 @@ export async function catalogRoutes(app: FastifyInstance) {
     } catch (err) {
       request.log.error(err, "Failed to get catalog template");
       return reply.code(500).send({ error: "Failed to get catalog template" });
+    }
+  });
+
+  // ── AI-assisted bulk import (CSV / XLSX / PDF) ──────────────────────
+
+  // POST /api/catalogs/import/analyze — multipart file upload
+  // Returns the parsed tables, AI-suggested column mapping, and detected kind.
+  app.post("/api/catalogs/import/analyze", async (request, reply) => {
+    try {
+      const parts = request.parts();
+      let buffer: Buffer | undefined;
+      let filename = "";
+      let mimeType = "";
+      for await (const part of parts) {
+        if (part.type === "file") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) chunks.push(chunk);
+          buffer = Buffer.concat(chunks);
+          filename = part.filename ?? "upload";
+          mimeType = part.mimetype ?? "";
+        }
+      }
+      if (!buffer || buffer.length === 0) {
+        return reply.code(400).send({ error: "No file provided" });
+      }
+      const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
+      const provider = process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.OPENAI_API_KEY ? "openai" : "anthropic";
+      const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+
+      const analysis = await analyzeImport({
+        buffer,
+        filename,
+        mimeType,
+        aiConfig: apiKey ? { provider, apiKey, model } : undefined,
+      });
+      return analysis;
+    } catch (err: any) {
+      request.log.error(err, "Catalog import analyze failed");
+      return reply.code(500).send({ error: err?.message ?? "Analyze failed" });
+    }
+  });
+
+  // POST /api/catalogs/:catalogId/import/commit
+  // Body: { table: SpreadsheetTable, mapping: ColumnMapping, defaultCategory?: string }
+  app.post("/api/catalogs/:catalogId/import/commit", async (request, reply) => {
+    const { catalogId } = request.params as { catalogId: string };
+    const body = (request.body ?? {}) as { table?: SpreadsheetTable; mapping?: ColumnMapping; defaultCategory?: string };
+    if (!body.table || !body.mapping) {
+      return reply.code(400).send({ error: "table and mapping are required" });
+    }
+    try {
+      const { candidates, skipped } = materialiseRows(body.table, body.mapping);
+      const final = candidates.map((c) => ({
+        ...c,
+        category: c.category || body.defaultCategory || "",
+      }));
+      const result = await request.store!.bulkCreateCatalogItems(catalogId, final);
+      reply.code(201);
+      return { ...result, skipped, total: candidates.length + skipped };
+    } catch (err: any) {
+      const status = err?.message?.includes("not found") ? 404 : 500;
+      return reply.code(status).send({ error: err?.message ?? "Commit failed" });
     }
   });
 

@@ -5,6 +5,7 @@ import { prisma } from "@bidwright/db";
 import { resolveApiPath } from "../paths.js";
 import { readFile } from "node:fs/promises";
 import * as XLSX from "xlsx";
+import { analyzeImport } from "../services/catalog-import-service.js";
 
 /**
  * Knowledge API routes — Fastify plugin.
@@ -603,6 +604,34 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         message: "Spreadsheet reading failed",
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  });
+
+  // ── POST /api/knowledge/books/:bookId/analyze-import ────────────────
+  // Reads the original uploaded file for a knowledge book and runs the
+  // catalog-import analyzer so the user can pull rate sheets / supplier
+  // price lists into a catalog without re-uploading.
+  app.post("/knowledge/books/:bookId/analyze-import", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    try {
+      const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
+      if (!book?.storagePath) {
+        return reply.code(404).send({ message: "Source file not available for this book" });
+      }
+      const absPath = resolveApiPath(book.storagePath);
+      const buffer = await readFile(absPath);
+      const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
+      const provider = process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai";
+      const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+      const analysis = await analyzeImport({
+        buffer,
+        filename: book.sourceFileName || "upload",
+        aiConfig: apiKey ? { provider, apiKey, model } : undefined,
+      });
+      return analysis;
+    } catch (err) {
+      request.log.error(err, "Knowledge book analyze-import failed");
+      return reply.code(500).send({ message: err instanceof Error ? err.message : "Analyze failed" });
     }
   });
 }

@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Edit3,
+  FileSpreadsheet,
   Library,
   Loader2,
   Package,
@@ -21,6 +22,7 @@ import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent } from "@/lib/format";
 import type { CatalogSummary, CatalogItem } from "@/lib/api";
+import { CatalogImportModal } from "@/components/catalog-import-modal";
 import {
   createCatalog,
   updateCatalog,
@@ -334,6 +336,9 @@ export function ItemsManager({
   const pageSize = 50;
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null);
+
+  // AI-assisted bulk import
+  const [showImport, setShowImport] = useState(false);
 
   // New catalog form
   const [showNewCatalog, setShowNewCatalog] = useState(false);
@@ -795,6 +800,18 @@ export function ItemsManager({
               )}
 
               <Button
+                variant="ghost"
+                size="sm"
+                className="whitespace-nowrap"
+                onClick={() => setShowImport(true)}
+                disabled={catalogs.length === 0}
+                title="Import items from XLSX, CSV, or PDF using AI column mapping"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                Import
+              </Button>
+
+              <Button
                 variant="accent"
                 size="sm"
                 className="whitespace-nowrap"
@@ -1179,6 +1196,23 @@ export function ItemsManager({
       </AnimatePresence>,
       document.body
       )}
+
+      <CatalogImportModal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        catalogs={catalogs}
+        defaultCatalogId={selectedCatalogId ?? undefined}
+        onImported={(info) => {
+          // Re-trigger the items load by clearing then re-setting the
+          // selectedCatalogId — the useEffect on line 378 reloads.
+          if (selectedCatalogId === info.catalogId) {
+            setSelectedCatalogId(null);
+            setTimeout(() => setSelectedCatalogId(info.catalogId), 0);
+          } else {
+            setSelectedCatalogId(info.catalogId);
+          }
+        }}
+      />
     </div>
   );
 }

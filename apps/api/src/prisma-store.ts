@@ -8034,6 +8034,40 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
+  async bulkCreateCatalogItems(
+    catalogId: string,
+    items: Array<{ name: string; code?: string; unit?: string; unitCost?: number; unitPrice?: number; category?: string; metadata?: Record<string, unknown> }>,
+  ): Promise<{ created: number; catalogId: string }> {
+    const catalog = await this.db.catalog.findFirst({
+      where: { id: catalogId, organizationId: this.organizationId },
+    });
+    if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+
+    const maxOrder = await this.db.catalogItem.aggregate({
+      where: { catalogId },
+      _max: { order: true },
+    });
+    let order = (maxOrder._max.order ?? 0) + 1;
+
+    const data = items
+      .filter((it) => (it.name ?? "").trim().length > 0)
+      .map((it) => ({
+        id: createId("ci"),
+        catalogId,
+        code: it.code ?? "",
+        name: it.name.trim(),
+        unit: it.unit ?? "EA",
+        unitCost: it.unitCost ?? 0,
+        unitPrice: it.unitPrice ?? 0,
+        metadata: { category: it.category ?? "", ...(it.metadata ?? {}) } as any,
+        order: order++,
+      }));
+
+    if (data.length === 0) return { created: 0, catalogId };
+    await this.db.catalogItem.createMany({ data });
+    return { created: data.length, catalogId };
+  }
+
   async searchCatalogItems(query: string, catalogId?: string) {
     const catalogIds = catalogId
       ? [catalogId]
