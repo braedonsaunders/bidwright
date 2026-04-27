@@ -305,37 +305,39 @@ model Worksheet {
   name       String        @default("Worksheet 1")
   order      Int           @default(0)
 
-  items WorksheetItem[]
+  items             WorksheetItem[]
+  assemblyInstances AssemblyInstance[]
 
   @@index([revisionId])
 }
 
 model WorksheetItem {
-  id                 String    @id @default(cuid())
+  id                 String            @id @default(cuid())
   worksheetId        String
-  worksheet          Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  worksheet          Worksheet         @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
   phaseId            String?
-  category           String    @default("Material")
-  entityType         String    @default("Material")
-  entityName         String    @default("")
+  category           String            @default("Material")
+  entityType         String            @default("Material")
+  entityName         String            @default("")
   vendor             String?
-  description        String    @default("")
-  quantity           Float     @default(0)
-  uom                String    @default("EA")
-  cost               Float     @default(0)
-  markup             Float     @default(0)
-  price              Float     @default(0)
-  unit1              Float     @default(0) @map("laborHourReg")
-  unit2              Float     @default(0) @map("laborHourOver")
-  unit3              Float     @default(0) @map("laborHourDouble")
-  lineOrder          Int       @default(0)
+  description        String            @default("")
+  quantity           Float             @default(0)
+  uom                String            @default("EA")
+  cost               Float             @default(0)
+  markup             Float             @default(0)
+  price              Float             @default(0)
+  unit1              Float             @default(0) @map("laborHourReg")
+  unit2              Float             @default(0) @map("laborHourOver")
+  unit3              Float             @default(0) @map("laborHourDouble")
+  lineOrder          Int               @default(0)
   rateScheduleItemId String?
   itemId             String? // FK to CatalogItem (for catalog-backed categories)
-  tierUnits          Json      @default("{}")
-  sourceNotes        String    @default("")
+  tierUnits          Json              @default("{}")
+  sourceNotes        String            @default("")
   sourceAssemblyId   String?
-  sourceAssembly     Assembly? @relation("WorksheetItemSourceAssembly", fields: [sourceAssemblyId], references: [id], onDelete: SetNull)
+  sourceAssembly     Assembly?         @relation("WorksheetItemSourceAssembly", fields: [sourceAssemblyId], references: [id], onDelete: SetNull)
   assemblyInstanceId String?
+  assemblyInstance   AssemblyInstance? @relation(fields: [assemblyInstanceId], references: [id], onDelete: SetNull)
 
   takeoffLinks      TakeoffLink[]
   modelTakeoffLinks ModelTakeoffLink[]
@@ -1244,6 +1246,7 @@ model Assembly {
   components         AssemblyComponent[]
   parentReferences   AssemblyComponent[] @relation("AssemblyComponentSubAssembly")
   worksheetSnapshots WorksheetItem[]     @relation("WorksheetItemSourceAssembly")
+  assemblyInstances  AssemblyInstance[]
 
   @@index([organizationId])
   @@index([isTemplate])
@@ -1262,6 +1265,24 @@ model AssemblyParameter {
   sortOrder    Int      @default(0)
 
   @@unique([assemblyId, key])
+  @@index([assemblyId])
+}
+
+model AssemblyInstance {
+  id              String    @id @default(cuid())
+  worksheetId     String
+  worksheet       Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  assemblyId      String?
+  assembly        Assembly? @relation(fields: [assemblyId], references: [id], onDelete: SetNull)
+  phaseId         String?
+  quantity        Float     @default(1)
+  parameterValues Json      @default("{}")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  worksheetItems WorksheetItem[]
+
+  @@index([worksheetId])
   @@index([assemblyId])
 }
 

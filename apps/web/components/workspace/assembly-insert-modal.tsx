@@ -5,6 +5,7 @@ import { Edit3, Layers, Plus, Search, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   type AssemblyParameterRecord,
+  type AssemblyPreviewResult,
   type AssemblyRecord,
   type AssemblySummaryRecord,
   type WorkspaceResponse,
@@ -13,6 +14,7 @@ import {
   getAssembly,
   insertAssemblyIntoWorksheet,
   listAssemblies,
+  previewAssemblyExpansion,
 } from "@/lib/api";
 import { Button, Input, Label, ModalBackdrop, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
 import {
@@ -51,6 +53,8 @@ export function AssemblyInsertModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [paneMode, setPaneMode] = useState<PaneMode>("insert");
+  const [preview, setPreview] = useState<AssemblyPreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const { catalogItems, rateItems } = useAssemblyAuthoringContext();
 
@@ -106,6 +110,39 @@ export function AssemblyInsertModal({
     }
     void reloadDetail(selectedId);
   }, [selectedId, reloadDetail]);
+
+  // Debounced cost preview when in insert mode and parameters/quantity change.
+  useEffect(() => {
+    if (!detail || paneMode !== "insert") {
+      setPreview(null);
+      return;
+    }
+    const qty = Number.parseFloat(quantity);
+    if (!Number.isFinite(qty)) {
+      setPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const result = await previewAssemblyExpansion({
+          assemblyId: detail.id,
+          quantity: qty,
+          parameterValues: paramValues,
+        });
+        if (!cancelled) setPreview(result);
+      } catch {
+        if (!cancelled) setPreview(null);
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [detail, paneMode, quantity, paramValues]);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return list;
@@ -344,27 +381,56 @@ export function AssemblyInsertModal({
                   )}
 
                   <div>
-                    <Label className="text-[10px]">Components ({detail.components.length})</Label>
-                    <div className="rounded-md border border-fg/10 bg-panel2/40 max-h-[180px] overflow-y-auto">
-                      {detail.components.length === 0 && (
-                        <div className="text-[11px] text-fg/40 p-3">
-                          This assembly has no components yet.{" "}
-                          <button onClick={() => setPaneMode("author")} className="underline text-fg/60">
-                            Add some
-                          </button>
-                          .
-                        </div>
-                      )}
-                      {detail.components.map((c) => (
-                        <div key={c.id} className="px-3 py-1.5 text-[11px] border-b border-fg/5 last:border-b-0 flex items-center justify-between gap-2">
-                          <div className="truncate">
-                            <span className="text-fg/40 mr-2">{c.componentType.replace(/_/g, " ")}</span>
-                            {c.description || c.category || "(referenced item)"}
+                    <Label className="text-[10px]">Preview</Label>
+                    {!preview && !previewLoading && (
+                      <div className="text-[11px] text-fg/40">Set a quantity to preview the expansion.</div>
+                    )}
+                    {previewLoading && <div className="text-[11px] text-fg/40">Calculating…</div>}
+                    {preview && (
+                      <div className="rounded-md border border-fg/10 bg-panel2/40">
+                        <div className="px-3 py-2 border-b border-fg/10 flex items-center justify-between text-[11px]">
+                          <div className="text-fg/60">
+                            <span className="font-medium text-fg">{preview.totals.lineCount}</span> line
+                            {preview.totals.lineCount === 1 ? "" : "s"}
                           </div>
-                          <code className="text-fg/60 font-mono">{c.quantityExpr}</code>
+                          <div className="flex gap-3 tabular-nums">
+                            <div>
+                              <span className="text-fg/40">cost</span>{" "}
+                              <span className="font-medium text-fg">{formatCurrency(preview.totals.cost)}</span>
+                            </div>
+                            <div>
+                              <span className="text-fg/40">price</span>{" "}
+                              <span className="font-medium text-fg">{formatCurrency(preview.totals.price)}</span>
+                            </div>
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                        <div className="max-h-[180px] overflow-y-auto">
+                          {preview.items.map((it, idx) => (
+                            <div
+                              key={`${it.entityName}-${idx}`}
+                              className="px-3 py-1.5 text-[11px] border-b border-fg/5 last:border-b-0 grid grid-cols-[1fr_70px_70px_70px] gap-2 items-center"
+                            >
+                              <div className="truncate">
+                                <span className="text-fg/40 mr-2">{it.category}</span>
+                                {it.entityName}
+                              </div>
+                              <div className="text-right text-fg/55 tabular-nums">
+                                {it.quantity.toFixed(2)} {it.uom}
+                              </div>
+                              <div className="text-right text-fg/55 tabular-nums">{formatCurrency(it.lineCost)}</div>
+                              <div className="text-right text-fg/55 tabular-nums">{formatCurrency(it.linePrice)}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {preview.warnings.length > 0 && (
+                          <div className="px-3 py-2 text-[11px] text-amber-400 border-t border-fg/10 space-y-0.5">
+                            {preview.warnings.map((w, i) => (
+                              <div key={i}>⚠ {w}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -388,6 +454,11 @@ export function AssemblyInsertModal({
       </div>
     </ModalBackdrop>
   );
+}
+
+function formatCurrency(n: number): string {
+  if (!Number.isFinite(n)) return "$0.00";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
 }
 
 function ParamInput({
