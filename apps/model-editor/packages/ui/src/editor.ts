@@ -14,6 +14,7 @@ import {
     NodeUtils,
     PubSub,
     type Ribbon,
+    type Serialized,
     ShapeNode,
     ShapeTypes,
     Transaction,
@@ -83,9 +84,23 @@ interface BidWrightModelSelectionMessage {
     };
 }
 
+interface BidWrightModelDocumentSaveMessage {
+    type: "bidwright:model-document-save";
+    source: "bidwright-model-editor";
+    version: 1;
+    eventId: string;
+    projectId?: string;
+    modelId?: string;
+    modelDocumentId?: string;
+    fileName?: string;
+    documentId: string;
+    documentName: string;
+    serializedDocument: Serialized;
+}
+
 type BidWrightQuantityBasis = "count" | "area" | "volume";
 
-type BidWrightBroadcastType = "model-selection";
+type BidWrightBroadcastType = "model-selection" | "model-document-save";
 
 interface ContextMenuAction {
     label: string;
@@ -353,6 +368,7 @@ export class Editor extends HTMLElement {
         PubSub.default.sub("editMaterial", this._handleMaterialEdit);
         PubSub.default.sub("clearSelectionControl", this.clearSelectionControl);
         PubSub.default.sub("selectionChanged", this._handleBidWrightSelectionChanged);
+        PubSub.default.sub("documentSaved", this._handleBidWrightDocumentSaved);
         this.addEventListener("contextmenu", this._handleContextMenu);
         window.addEventListener("pointerdown", this._handleContextMenuOutsidePointerDown, true);
         window.addEventListener("keydown", this._handleContextMenuKeyDown);
@@ -364,6 +380,7 @@ export class Editor extends HTMLElement {
         PubSub.default.remove("editMaterial", this._handleMaterialEdit);
         PubSub.default.remove("clearSelectionControl", this.clearSelectionControl);
         PubSub.default.remove("selectionChanged", this._handleBidWrightSelectionChanged);
+        PubSub.default.remove("documentSaved", this._handleBidWrightDocumentSaved);
         this.removeEventListener("contextmenu", this._handleContextMenu);
         window.removeEventListener("pointerdown", this._handleContextMenuOutsidePointerDown, true);
         window.removeEventListener("keydown", this._handleContextMenuKeyDown);
@@ -748,6 +765,29 @@ export class Editor extends HTMLElement {
         });
     }
 
+    private _postBidWrightDocumentSave(message: BidWrightModelDocumentSaveMessage) {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage(message, window.location.origin);
+        }
+        if (window.opener && window.opener !== window) {
+            window.opener.postMessage(message, window.location.origin);
+        }
+        this._bidwrightChannel?.postMessage({
+            type: "model-document-save",
+            source: "bidwright-model-editor",
+            version: 1,
+            eventId: message.eventId,
+            originId: this._bidwrightOriginId,
+            projectId: this._bidwrightContext.projectId,
+            modelId: this._bidwrightContext.modelId,
+            modelDocumentId: this._bidwrightContext.modelDocumentId,
+            fileName: message.fileName,
+            documentId: message.documentId,
+            documentName: message.documentName,
+            serializedDocument: message.serializedDocument,
+        });
+    }
+
     private readonly showSelectionControl = (controller: AsyncController) => {
         this._selectionController.setControl(controller);
         this._selectionController.style.visibility = "visible";
@@ -766,6 +806,24 @@ export class Editor extends HTMLElement {
     ) => {
         const context = new MaterialDataContent(document, callback, editingMaterial);
         this._viewportContainer.append(new MaterialEditor(context));
+    };
+
+    private readonly _handleBidWrightDocumentSaved = (document: IDocument) => {
+        if (!isBidWrightEmbedded()) return;
+        const message: BidWrightModelDocumentSaveMessage = {
+            type: "bidwright:model-document-save",
+            source: "bidwright-model-editor",
+            version: 1,
+            eventId: makeBidWrightEventId("model-document-save"),
+            projectId: this._bidwrightContext.projectId,
+            modelId: this._bidwrightContext.modelId,
+            modelDocumentId: this._bidwrightContext.modelDocumentId,
+            fileName: this._bidwrightContext.fileName ?? document.name,
+            documentId: document.id,
+            documentName: document.name,
+            serializedDocument: document.serialize(),
+        };
+        this._postBidWrightDocumentSave(message);
     };
 
     private readonly _handleBidWrightSelectionChanged = (document: IDocument, selected: INode[]) => {

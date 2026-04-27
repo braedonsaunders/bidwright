@@ -3617,6 +3617,54 @@ export function buildServer() {
     return updated;
   });
 
+  app.put("/projects/:projectId/files/:nodeId/content", async (request, reply) => {
+    const { projectId, nodeId } = request.params as { projectId: string; nodeId: string };
+    const node = await request.store!.getFileNode(nodeId);
+    if (!node || node.projectId !== projectId) {
+      return reply.code(404).send({ message: "File not found" });
+    }
+    if (node.type === "directory") {
+      return reply.code(400).send({ message: "Cannot replace content for a directory" });
+    }
+
+    let fileBuffer: Buffer | null = null;
+    let originalFileName = node.name || "untitled";
+    let fileSize = 0;
+    let fileSeen = false;
+
+    for await (const part of request.parts()) {
+      if (part.type !== "file") continue;
+      if (fileSeen) {
+        return reply.code(400).send({ message: "Only one file per upload" });
+      }
+      fileSeen = true;
+      originalFileName = part.filename || originalFileName;
+      fileBuffer = await part.toBuffer();
+      fileSize = fileBuffer.length;
+    }
+
+    if (!fileSeen || !fileBuffer) {
+      return reply.code(400).send({ message: "A file is required" });
+    }
+
+    const fileExt = path.extname(originalFileName).replace(/^\./, "").toLowerCase();
+    const relPath = relativeProjectFilePath(projectId, node.id, originalFileName);
+    const absPath = resolveApiPath(relPath);
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, fileBuffer);
+
+    return request.store!.updateFileNode(node.id, {
+      name: originalFileName,
+      storagePath: relPath,
+      fileType: fileExt || undefined,
+      size: fileSize,
+      metadata: {
+        ...(node.metadata ?? {}),
+        lastSavedAt: new Date().toISOString(),
+      },
+    });
+  });
+
   // ── File Download ──────────────────────────────────────────────────────
 
   const MIME_MAP: Record<string, string> = {
@@ -3638,6 +3686,13 @@ export function buildServer() {
     xml: "application/xml",
     yaml: "application/x-yaml",
     yml: "application/x-yaml",
+    cd: "application/json",
+    dxf: "image/vnd.dxf",
+    dwg: "application/acad",
+    step: "model/step",
+    stp: "model/step",
+    iges: "model/iges",
+    igs: "model/iges",
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     xls: "application/vnd.ms-excel",
     doc: "application/msword",

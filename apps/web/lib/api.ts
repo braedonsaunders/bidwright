@@ -2669,6 +2669,32 @@ export async function uploadFile(
   return response.json();
 }
 
+export async function saveFileNodeContent(
+  projectId: string,
+  nodeId: string,
+  file: File
+): Promise<FileNode> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(resolveApiUrl(`/projects/${projectId}/files/${nodeId}/content`), {
+    method: "PUT",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+    },
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Save failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export function getFileDownloadUrl(projectId: string, nodeId: string, inline = false): string {
   return resolveApiUrl(`/projects/${projectId}/files/${nodeId}/download${inline ? "?inline=1" : ""}`);
 }

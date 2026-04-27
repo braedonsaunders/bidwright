@@ -113,6 +113,7 @@ import {
   getDocumentDownloadUrl,
   getFileTree,
   listModelAssets,
+  saveFileNodeContent,
   updateFileNode,
   uploadFile,
 } from "@/lib/api";
@@ -130,6 +131,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
+import type { BidwrightModelDocumentSaveMessage } from "./editors/bidwright-model-editor";
 
 /* ─── Types ─── */
 
@@ -181,7 +183,7 @@ const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "t
 const PDF_EXTENSIONS = new Set(["pdf"]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv"]);
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "log", "cfg", "ini", "html", "css", "js", "ts"]);
-const CAD_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
+const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
 const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
 const XLSX_EXTENSIONS = new Set(["xlsx", "xls"]);
 const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
@@ -207,7 +209,24 @@ function getFileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
 }
 
+function ensureModelDocumentName(name?: string | null): string {
+  const cleaned = name?.trim() || "Untitled Model";
+  return cleaned.toLowerCase().endsWith(".cd") ? cleaned : `${cleaned.replace(/\.[^.]+$/, "")}.cd`;
+}
+
+function nextUntitledModelName(nodes: FileNode[]): string {
+  const names = new Set(nodes.map((node) => node.name.toLowerCase()));
+  const base = "Untitled Model";
+  let index = 0;
+  while (true) {
+    const candidate = index === 0 ? `${base}.cd` : `${base} ${index + 1}.cd`;
+    if (!names.has(candidate.toLowerCase())) return candidate;
+    index += 1;
+  }
+}
+
 type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
+type EditorMode = "none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist" | "model";
 
 function getFilePreviewType(item: TreeItem): FilePreviewType {
   const ext = getFileExtension(item.name);
@@ -1209,6 +1228,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     new Set(["auto-specs", "auto-drawings"])
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<EditorMode>("none");
+  const [editorFileName, setEditorFileName] = useState("");
+  const [modelEditorFileNodeId, setModelEditorFileNodeId] = useState<string | null>(null);
   const [userNodes, setUserNodes] = useState<FileNode[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(true);
 
@@ -1276,6 +1298,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   const handleSelect = useCallback((item: TreeItem) => {
     setSelectedId(item.id);
+    setEditorMode("none");
   }, []);
 
   // ── Upload handling ────────────────────────────────────────────────────
@@ -1384,10 +1407,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         return prev.filter((n) => !toDelete.has(n.id));
       });
       if (selectedId === item.id) setSelectedId(null);
+      if (modelEditorFileNodeId === item.fileNode.id) setModelEditorFileNodeId(null);
     } catch (err) {
       showError(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, selectedId, showError]);
+  }, [modelEditorFileNodeId, projectId, selectedId, showError]);
 
   const handleContextAction = useCallback((action: string, item: TreeItem) => {
     if (action === "rename" && item.fileNode) {
@@ -1422,8 +1446,15 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   // Show tabs when there is extracted content (so user can toggle between file view and text)
   const showPreviewTabs = selectedItem?.type === "file" && (hasExtracted && filePreviewType !== "none" || hasExtracted);
   const [previewTab, setPreviewTab] = useState<"file" | "extracted">("file");
-  const [editorMode, setEditorMode] = useState<"none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist">("none");
-  const [editorFileName, setEditorFileName] = useState("");
+
+  useEffect(() => {
+    if (editorMode === "model") return;
+    const nativeModelNodeId =
+      selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "cd"
+        ? selectedItem.fileNode.id
+        : null;
+    setModelEditorFileNodeId(nativeModelNodeId);
+  }, [editorMode, selectedItem?.fileNode]);
 
   useEffect(() => {
     if (!isEmbeddedModelEditorPreview) return;
@@ -1592,6 +1623,63 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [projectId, showError]);
 
+  const handleCreateModelDocument = useCallback(async () => {
+    try {
+      const name = nextUntitledModelName(userNodes);
+      const node = await createFileNode(projectId, {
+        parentId: null,
+        name,
+        type: "file",
+        fileType: "cd",
+        size: 0,
+        metadata: { kind: "bidwright-model", native: true },
+      });
+      setUserNodes((prev) => [...prev, node]);
+      setSelectedId(node.id);
+      setEditorFileName(node.name);
+      setModelEditorFileNodeId(node.id);
+      setEditorMode("model");
+    } catch (err) {
+      showError(`Failed to create model: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [projectId, showError, userNodes]);
+
+  const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
+    try {
+      const selectedNativeNode = selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "cd"
+        ? selectedItem.fileNode
+        : undefined;
+      const localNativeNode = modelEditorFileNodeId
+        ? userNodes.find((node) => node.id === modelEditorFileNodeId && getFileExtension(node.name) === "cd")
+        : undefined;
+      const messageNativeNode = message.modelDocumentId
+        ? userNodes.find((node) => node.id === message.modelDocumentId && getFileExtension(node.name) === "cd")
+        : undefined;
+      const nativeNode = selectedNativeNode ?? localNativeNode ?? messageNativeNode;
+      const fallbackName = editorFileName || message.fileName || message.documentName || selectedItem?.name || "Untitled Model";
+      const fileName = ensureModelDocumentName(nativeNode?.name ?? fallbackName);
+      const file = new globalThis.File(
+        [JSON.stringify(message.serializedDocument)],
+        fileName,
+        { type: "application/json" },
+      );
+
+      const savedNode = nativeNode
+        ? await saveFileNodeContent(projectId, nativeNode.id, file)
+        : await uploadFile(projectId, file, selectedItem?.fileNode?.parentId ?? null);
+
+      setUserNodes((prev) => {
+        const exists = prev.some((node) => node.id === savedNode.id);
+        return exists ? prev.map((node) => (node.id === savedNode.id ? savedNode : node)) : [...prev, savedNode];
+      });
+      setSelectedId(savedNode.id);
+      setEditorFileName(savedNode.name);
+      setModelEditorFileNodeId(savedNode.id);
+    } catch (err) {
+      showError(`Failed to save model: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [editorFileName, modelEditorFileNodeId, projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes]);
+
   // Reset to file tab when selection changes
   useEffect(() => {
     setPreviewTab("file");
@@ -1614,6 +1702,21 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       )}
       {editorMode === "checklist" && (
         <ChecklistEditor fileName={editorFileName} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "checklist.json")} onClose={() => setEditorMode("none")} />
+      )}
+      {editorMode === "model" && (
+        <BidwrightModelEditor
+          fileName={editorFileName}
+          projectId={projectId}
+          modelDocumentId={modelEditorFileNodeId}
+          syncChannelName={modelEditorChannelName}
+          estimateEnabled={Boolean(selectedWorksheet)}
+          isolateSyncChannel={false}
+          estimateTargetWorksheetId={selectedWorksheet?.id}
+          estimateTargetWorksheetName={selectedWorksheet?.name}
+          estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
+          estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
+          onSaveDocument={handleModelDocumentSave}
+        />
       )}
     </div>
   ) : !selectedItem ? (
@@ -1665,6 +1768,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     estimateTargetWorksheetName={selectedWorksheet?.name}
                     estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
                     estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
+                    onSaveDocument={handleModelDocumentSave}
                   />
                 ) : (
                   <CadViewer fileUrl={previewUrl} fileName={selectedItem.name} />
@@ -1774,6 +1878,15 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       Markdown Note
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        void handleCreateModelDocument();
+                      }}
+                    >
+                      <Box className="h-3.5 w-3.5" />
+                      3D Model
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"

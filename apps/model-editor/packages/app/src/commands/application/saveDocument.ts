@@ -10,11 +10,13 @@ import { command, I18n, type IApplication, type ICommand, PubSub } from "@chili3
 })
 export class SaveDocument implements ICommand {
     async execute(app: IApplication): Promise<void> {
-        if (!app.activeView?.document) return;
+        const document = app.activeView?.document;
+        if (!document) return;
         PubSub.default.pub(
             "showPermanent",
             async () => {
-                await app.activeView?.document.save();
+                await document.save();
+                PubSub.default.pub("documentSaved", document);
                 PubSub.default.pub("showToast", "toast.document.saved");
             },
             "toast.executing{0}",

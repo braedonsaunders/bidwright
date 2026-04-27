@@ -813,6 +813,9 @@ export interface FileNodePatchInput {
   name?: string;
   parentId?: string | null;
   storagePath?: string;
+  fileType?: string;
+  size?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CreateTakeoffAnnotationInput {
@@ -8018,6 +8021,9 @@ export class PrismaApiStore {
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.parentId !== undefined) data.parentId = patch.parentId ?? null;
     if (patch.storagePath !== undefined) data.storagePath = patch.storagePath;
+    if (patch.fileType !== undefined) data.fileType = patch.fileType;
+    if (patch.size !== undefined) data.size = patch.size;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
 
     const updated = await this.db.fileNode.update({ where: { id: nodeId }, data });
     return mapFileNode(updated);
