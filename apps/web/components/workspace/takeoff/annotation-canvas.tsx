@@ -515,7 +515,63 @@ export function AnnotationCanvas({
 
   /* ─── Mouse Handlers ─── */
 
+  // Click-and-drag panning when the user is on the Select tool, or any time
+  // the middle mouse button is held. We adjust scrollLeft/scrollTop on the
+  // nearest scrollable ancestor so the PDF + annotations move together.
+  const panStateRef = useRef<{ container: HTMLElement; startX: number; startY: number; startScrollX: number; startScrollY: number } | null>(null);
+
+  function findScrollContainer(el: HTMLElement | null): HTMLElement | null {
+    let current = el?.parentElement ?? null;
+    while (current) {
+      const style = getComputedStyle(current);
+      if (/(auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
+  function endPan() {
+    panStateRef.current = null;
+    if (canvasRef.current) {
+      canvasRef.current.style.cursor =
+        !activeTool || activeTool === "select" ? "grab" : "crosshair";
+    }
+    window.removeEventListener("mousemove", handleWindowPanMove);
+    window.removeEventListener("mouseup", endPan);
+  }
+
+  function handleWindowPanMove(e: MouseEvent) {
+    if (!panStateRef.current) return;
+    const { container, startX, startY, startScrollX, startScrollY } = panStateRef.current;
+    container.scrollLeft = startScrollX - (e.clientX - startX);
+    container.scrollTop = startScrollY - (e.clientY - startY);
+  }
+
   function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    const isMiddle = e.button === 1;
+    const isSelectLeftDrag = (!activeTool || activeTool === "select") && e.button === 0;
+    if (isMiddle || isSelectLeftDrag) {
+      const container = findScrollContainer(canvasRef.current);
+      if (container) {
+        e.preventDefault();
+        panStateRef.current = {
+          container,
+          startX: e.clientX,
+          startY: e.clientY,
+          startScrollX: container.scrollLeft,
+          startScrollY: container.scrollTop,
+        };
+        if (canvasRef.current) canvasRef.current.style.cursor = "grabbing";
+        // Track panning at the window level so it keeps working even if the
+        // cursor leaves the canvas, and ends cleanly on mouseup anywhere.
+        window.addEventListener("mousemove", handleWindowPanMove);
+        window.addEventListener("mouseup", endPan);
+      }
+      return;
+    }
+
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
 
@@ -528,12 +584,17 @@ export function AnnotationCanvas({
   }
 
   function handleMouseMove(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (panStateRef.current) return; // window listener handles it
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
     setCursorPos(pt);
   }
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
+    if (panStateRef.current) {
+      endPan();
+      return;
+    }
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
 
@@ -659,9 +720,10 @@ export function AnnotationCanvas({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  /* Cursor style based on active tool */
+  /* Cursor style based on active tool. Select mode shows grab to hint
+     that you can click-and-drag to pan. */
   const cursorStyle =
-    !activeTool || activeTool === "select" ? "default" : "crosshair";
+    !activeTool || activeTool === "select" ? "grab" : "crosshair";
 
   return (
     <canvas
