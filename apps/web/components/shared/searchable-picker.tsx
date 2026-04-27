@@ -94,7 +94,7 @@ export function SearchablePicker({
       <AnimatePresence>
         {open && (
           <Popover.Portal forceMount>
-            <Popover.Content asChild sideOffset={4} align="start" className="z-50">
+            <Popover.Content asChild sideOffset={4} align="start" className="z-[300]">
               <motion.div
                 initial={{ opacity: 0, y: -4, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
