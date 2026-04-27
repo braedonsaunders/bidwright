@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
+  FileSpreadsheet,
   FolderPlus,
   MoveRight,
 } from "lucide-react";
@@ -19,7 +20,9 @@ import {
   Select,
 } from "@/components/ui";
 import { TreeView, type TreeNode } from "@/components/shared/tree-view";
-import type { KnowledgeBookRecord, FileNode } from "@/lib/api";
+import type { CatalogImportAnalysis, CatalogSummary, KnowledgeBookRecord, FileNode } from "@/lib/api";
+import { analyzeKnowledgeBookForImport, getCatalogs } from "@/lib/api";
+import { CatalogImportModal } from "@/components/catalog-import-modal";
 import {
   getFileTree,
   createFileNode,
@@ -80,6 +83,11 @@ export function KnowledgeBrowser({
 
   // Move modal
   const [movingBookId, setMovingBookId] = useState<string | null>(null);
+  const [importBookId, setImportBookId] = useState<string | null>(null);
+  const [importAnalysis, setImportAnalysis] = useState<CatalogImportAnalysis | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importCatalogs, setImportCatalogs] = useState<CatalogSummary[]>([]);
+  const [importSourceLabel, setImportSourceLabel] = useState<string>("");
   const [moveTargetFolderId, setMoveTargetFolderId] = useState<string | null>(
     null
   );
@@ -504,7 +512,7 @@ export function KnowledgeBrowser({
                   </p>
                 </div>
 
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-2 flex-wrap">
                   <Button
                     variant="secondary"
                     size="xs"
@@ -516,6 +524,35 @@ export function KnowledgeBrowser({
                     <MoveRight className="h-3.5 w-3.5" />
                     Move to Folder
                   </Button>
+                  {isImportableSourceFile(selectedBook.sourceFileName) && (
+                    <Button
+                      variant="secondary"
+                      size="xs"
+                      onClick={async () => {
+                        setImportBookId(selectedBook.id);
+                        setImportSourceLabel(selectedBook.sourceFileName ?? "");
+                        setImportLoading(true);
+                        try {
+                          const [analysis, catalogs] = await Promise.all([
+                            analyzeKnowledgeBookForImport(selectedBook.id),
+                            getCatalogs(),
+                          ]);
+                          setImportAnalysis(analysis);
+                          setImportCatalogs(catalogs);
+                        } catch (e: any) {
+                          setError(e?.message ?? "Failed to analyze for import");
+                          setImportBookId(null);
+                        } finally {
+                          setImportLoading(false);
+                        }
+                      }}
+                      disabled={importLoading}
+                      title="Use AI to map columns and import this file's rows into a catalog as line items"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      {importLoading ? "Analyzing…" : "Import as line items"}
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -570,6 +607,29 @@ export function KnowledgeBrowser({
           </CardBody>
         </Card>
       </ModalBackdrop>
+
+      <CatalogImportModal
+        open={importBookId !== null && importAnalysis !== null}
+        onClose={() => {
+          setImportBookId(null);
+          setImportAnalysis(null);
+          setImportSourceLabel("");
+        }}
+        catalogs={importCatalogs}
+        prefillAnalysis={importAnalysis}
+        sourceLabel={importSourceLabel}
+        onImported={() => {
+          setImportBookId(null);
+          setImportAnalysis(null);
+          setImportSourceLabel("");
+        }}
+      />
     </div>
   );
+}
+
+function isImportableSourceFile(fileName: string | undefined | null): boolean {
+  if (!fileName) return false;
+  const lower = fileName.toLowerCase();
+  return /\.(csv|xlsx|xls|xlsm|pdf)$/.test(lower);
 }
