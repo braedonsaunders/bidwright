@@ -1426,14 +1426,16 @@ export function TakeoffTab({
 
     // If user picked a wider scope, route through the existing
     // cross-page / multi-doc handlers instead of running a single-page count.
+    // Pass `bbox` directly so we don't race on the just-queued
+    // setCrossPageLastBbox state update.
     if (autoCountScope === "document" && totalPages > 1) {
       setAutoCountRunning(false);
-      void handleCrossPageSearch();
+      void handleCrossPageSearch(bbox);
       return;
     }
     if (autoCountScope === "all" && pdfDocuments.length > 1) {
       setAutoCountRunning(false);
-      void handleMultiDocSearch();
+      void handleMultiDocSearch(bbox);
       return;
     }
 
@@ -1633,8 +1635,12 @@ export function TakeoffTab({
 
   /* ─── Cross-Page Search (server-side, uses count-symbols-all-pages) ─── */
 
-  async function handleCrossPageSearch() {
-    if (!selectedDoc || !crossPageLastBbox) return;
+  async function handleCrossPageSearch(overrideBbox?: VisionBoundingBox) {
+    // Allow callers to pass a freshly-drawn bbox so we don't race on the
+    // setCrossPageLastBbox state update (the closed-over crossPageLastBbox
+    // here is from the previous render).
+    const bbox = overrideBbox ?? crossPageLastBbox;
+    if (!selectedDoc || !bbox) return;
 
     const realDocId = selectedDoc.source === "knowledge" && selectedDoc.bookId
       ? selectedDoc.bookId
@@ -1647,7 +1653,7 @@ export function TakeoffTab({
       const result = await runVisionCountAllPages({
         projectId,
         documentId: realDocId,
-        boundingBox: crossPageLastBbox,
+        boundingBox: bbox,
         threshold: autoCountThreshold,
         crossScale: crossScaleEnabled,
       });
@@ -1667,8 +1673,9 @@ export function TakeoffTab({
 
   /* ─── Multi-Document Search (same symbol across all project drawings) ─── */
 
-  async function handleMultiDocSearch() {
-    if (!crossPageLastBbox) return;
+  async function handleMultiDocSearch(overrideBbox?: VisionBoundingBox) {
+    const bbox = overrideBbox ?? crossPageLastBbox;
+    if (!bbox) return;
     const searchableDocs = pdfDocuments;
     if (searchableDocs.length === 0) return;
 
@@ -1685,7 +1692,7 @@ export function TakeoffTab({
           const result = await runVisionCountAllPages({
             projectId,
             documentId: realDocId,
-            boundingBox: crossPageLastBbox,
+            boundingBox: bbox,
             threshold: autoCountThreshold,
             crossScale: true, // Always use cross-scale for multi-document
           });
@@ -2554,13 +2561,13 @@ export function TakeoffTab({
           {crossPageLastBbox && (
             <div className="flex items-center gap-2 pt-1 border-t border-green-500/10">
               {totalPages > 1 && (
-                <Button variant="secondary" size="xs" onClick={handleCrossPageSearch} disabled={crossPageRunning}>
+                <Button variant="secondary" size="xs" onClick={() => handleCrossPageSearch()} disabled={crossPageRunning}>
                   {crossPageRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
                   All Pages ({totalPages})
                 </Button>
               )}
               {pdfDocuments.length > 1 && (
-                <Button variant="secondary" size="xs" onClick={handleMultiDocSearch} disabled={multiDocRunning}>
+                <Button variant="secondary" size="xs" onClick={() => handleMultiDocSearch()} disabled={multiDocRunning}>
                   {multiDocRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
                   All PDFs ({pdfDocuments.length})
                 </Button>
