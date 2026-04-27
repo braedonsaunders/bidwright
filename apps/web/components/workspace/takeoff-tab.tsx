@@ -2328,6 +2328,11 @@ export function TakeoffTab({
                   onClick={() => exportAnnotationsCsv(annotations, calibration)}
                   disabled={annotations.length === 0}
                   className="rounded-r-none"
+                  title={
+                    annotations.length === 0
+                      ? "No annotations to export — create some takeoffs first"
+                      : `Export ${annotations.length} annotation${annotations.length === 1 ? "" : "s"} as CSV`
+                  }
                 >
                   <Download className="h-3.5 w-3.5" />
                   CSV
@@ -2338,6 +2343,7 @@ export function TakeoffTab({
                   onClick={() => setExportDropdownOpen((v) => !v)}
                   disabled={annotations.length === 0}
                   className="rounded-l-none border-l border-line/50 px-1.5"
+                  title={annotations.length === 0 ? "No annotations to export" : "Export options"}
                 >
                   <ChevronDown className="h-3 w-3" />
                 </Button>
