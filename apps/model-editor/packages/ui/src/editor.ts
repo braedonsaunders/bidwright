@@ -290,6 +290,7 @@ export class Editor extends HTMLElement {
             }),
         );
         this._setActiveSidebarTab(this._activeSidebarTab);
+        this._refreshSidebarViews();
         this.append(
             div(
                 { className: style.root },
@@ -312,6 +313,13 @@ export class Editor extends HTMLElement {
         for (const [id, button] of this._sidebarButtons) {
             button.classList.toggle(style.sidebarTabActive, id === tabId);
             button.setAttribute("aria-selected", id === tabId ? "true" : "false");
+        }
+        this._refreshSidebarViews();
+    }
+
+    private _refreshSidebarViews() {
+        if (this.app.activeView) {
+            PubSub.default.pub("activeViewChanged", this.app.activeView);
         }
     }
 
