@@ -17,6 +17,7 @@ import {
   Copy,
   Download,
   GripVertical,
+  Layers,
   Maximize2,
   MoreHorizontal,
   Package,
@@ -79,6 +80,7 @@ import {
   applyWorksheetItemUpsert,
 } from "@/lib/workspace-mutations";
 import { ItemDetailDrawer } from "./item-detail-drawer";
+import { AssemblyInsertModal } from "./assembly-insert-modal";
 
 /* ─── Types ─── */
 
@@ -619,6 +621,9 @@ export function EstimateGrid({
   const [showCatalogPicker, setShowCatalogPicker] = useState(false);
   const [catalogSearchTerm, setCatalogSearchTerm] = useState("");
   const [selectedCatalogItemIds, setSelectedCatalogItemIds] = useState<Set<string>>(new Set());
+
+  // ─── NEW STATE: Assembly insert ───
+  const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -2476,6 +2481,14 @@ export function EstimateGrid({
             >
               <Package className="h-3 w-3" /> Catalog
             </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setShowAssemblyPicker(true)}
+              disabled={isPending}
+            >
+              <Layers className="h-3 w-3" /> Assembly
+            </Button>
           </div>
         </div>
 
@@ -2869,6 +2882,20 @@ export function EstimateGrid({
         </ModalBackdrop>
       )}
 
+
+      {/* ─── Assembly Insert Modal ─── */}
+      <AssemblyInsertModal
+        open={showAssemblyPicker}
+        onClose={() => setShowAssemblyPicker(false)}
+        projectId={workspace.project.id}
+        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
+        onInserted={(next, info) => {
+          onApply(next);
+          if (info.warnings.length > 0) {
+            onError(`Inserted with warnings: ${info.warnings.join("; ")}`);
+          }
+        }}
+      />
 
       {/* ─── Catalog Quick-Add Modal ─── */}
       {showCatalogPicker && (

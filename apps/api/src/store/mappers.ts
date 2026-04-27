@@ -275,6 +275,8 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
     sourceNotes: decodeHtmlEntities(i.sourceNotes ?? ""),
+    sourceAssemblyId: i.sourceAssemblyId ?? null,
+    assemblyInstanceId: i.assemblyInstanceId ?? null,
   };
 }
 
@@ -546,6 +548,77 @@ export function mapCatalog(c: any): Catalog {
 
 export function mapCatalogItem(i: any): CatalogItem {
   return { id: i.id, catalogId: i.catalogId, code: i.code, name: i.name, unit: i.unit, unitCost: i.unitCost, unitPrice: i.unitPrice, metadata: (i.metadata as Record<string, unknown>) ?? {} };
+}
+
+export function mapAssemblyParameter(p: any): import("@bidwright/domain").AssemblyParameter {
+  return {
+    id: p.id,
+    assemblyId: p.assemblyId,
+    key: p.key,
+    label: p.label ?? "",
+    description: p.description ?? "",
+    paramType: p.paramType ?? "number",
+    defaultValue: p.defaultValue ?? "0",
+    unit: p.unit ?? "",
+    sortOrder: p.sortOrder ?? 0,
+  };
+}
+
+export function mapAssemblyComponent(c: any): import("@bidwright/domain").AssemblyComponent {
+  return {
+    id: c.id,
+    assemblyId: c.assemblyId,
+    componentType: c.componentType,
+    catalogItemId: c.catalogItemId ?? null,
+    rateScheduleItemId: c.rateScheduleItemId ?? null,
+    subAssemblyId: c.subAssemblyId ?? null,
+    quantityExpr: c.quantityExpr ?? "1",
+    description: c.description ?? "",
+    category: c.category ?? "",
+    uomOverride: c.uomOverride ?? null,
+    costOverride: c.costOverride ?? null,
+    markupOverride: c.markupOverride ?? null,
+    parameterBindings: (c.parameterBindings as Record<string, string>) ?? {},
+    notes: c.notes ?? "",
+    sortOrder: c.sortOrder ?? 0,
+  };
+}
+
+export function mapAssembly(a: any): import("@bidwright/domain").Assembly {
+  const params = (a.parameters ?? []).map(mapAssemblyParameter);
+  const comps = (a.components ?? []).map(mapAssemblyComponent);
+  return {
+    id: a.id,
+    organizationId: a.organizationId ?? null,
+    name: a.name,
+    code: a.code ?? "",
+    description: a.description ?? "",
+    category: a.category ?? "",
+    unit: a.unit ?? "EA",
+    isTemplate: a.isTemplate ?? false,
+    sourceTemplateId: a.sourceTemplateId ?? null,
+    metadata: (a.metadata as Record<string, unknown>) ?? {},
+    parameters: params.sort((x: any, y: any) => x.sortOrder - y.sortOrder),
+    components: comps.sort((x: any, y: any) => x.sortOrder - y.sortOrder),
+    createdAt: toISO(a.createdAt),
+    updatedAt: toISO(a.updatedAt),
+  };
+}
+
+export function mapAssemblySummary(a: any): import("@bidwright/domain").AssemblySummary {
+  return {
+    id: a.id,
+    name: a.name,
+    code: a.code ?? "",
+    category: a.category ?? "",
+    unit: a.unit ?? "EA",
+    description: a.description ?? "",
+    componentCount: a._count?.components ?? (a.components?.length ?? 0),
+    parameterCount: a._count?.parameters ?? (a.parameters?.length ?? 0),
+    isTemplate: a.isTemplate ?? false,
+    createdAt: toISO(a.createdAt),
+    updatedAt: toISO(a.updatedAt),
+  };
 }
 
 export function mapAiRun(r: any): { id: string; projectId: string; revisionId: string | null; kind: string; status: string; model: string; promptVersion: string; input: Record<string, unknown>; output: Record<string, unknown>; createdAt: string; updatedAt: string } {

@@ -17,67 +17,68 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  settings         OrganizationSettings?
-  users            User[]
-  sessions         Session[]
-  projects         Project[]
-  catalogs         Catalog[]
-  plugins          Plugin[]
-  entityCategories EntityCategory[]
-  conditionLibrary ConditionLibraryEntry[]
-  knowledgeBooks   KnowledgeBook[]
-  knowledgeDocuments KnowledgeDocument[]
+  settings                 OrganizationSettings?
+  users                    User[]
+  sessions                 Session[]
+  projects                 Project[]
+  catalogs                 Catalog[]
+  plugins                  Plugin[]
+  entityCategories         EntityCategory[]
+  conditionLibrary         ConditionLibraryEntry[]
+  knowledgeBooks           KnowledgeBook[]
+  knowledgeDocuments       KnowledgeDocument[]
   knowledgeLibraryCabinets KnowledgeLibraryCabinet[]
-  datasets         Dataset[]
-  rateSchedules    RateSchedule[]
-  customers        Customer[]
-  departments      Department[]
-  labourCostTables LabourCostTable[]
-  burdenPeriods    BurdenPeriod[]
-  travelPolicies   TravelPolicy[]
-  estimatorPersonas EstimatorPersona[]
+  datasets                 Dataset[]
+  rateSchedules            RateSchedule[]
+  customers                Customer[]
+  departments              Department[]
+  labourCostTables         LabourCostTable[]
+  burdenPeriods            BurdenPeriod[]
+  travelPolicies           TravelPolicy[]
+  estimatorPersonas        EstimatorPersona[]
+  assemblies               Assembly[]
 }
 
 model OrganizationSettings {
-  id             String       @id @default(cuid())
-  organizationId String       @unique
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  general        Json         @default("{}")
-  email          Json         @default("{}")
-  defaults       Json         @default("{}")
-  integrations   Json         @default("{}")
-  brand          Json         @default("{}")
-  maxUsers       Int          @default(0) // 0 = unlimited
-  maxProjects    Int          @default(0) // 0 = unlimited
-  maxStorage     Int          @default(0) // MB, 0 = unlimited
-  maxKnowledgeBooks Int       @default(0) // 0 = unlimited
-  termsAndConditions String   @default("")
-  updatedAt      DateTime     @updatedAt
+  id                 String       @id @default(cuid())
+  organizationId     String       @unique
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  general            Json         @default("{}")
+  email              Json         @default("{}")
+  defaults           Json         @default("{}")
+  integrations       Json         @default("{}")
+  brand              Json         @default("{}")
+  maxUsers           Int          @default(0) // 0 = unlimited
+  maxProjects        Int          @default(0) // 0 = unlimited
+  maxStorage         Int          @default(0) // MB, 0 = unlimited
+  maxKnowledgeBooks  Int          @default(0) // 0 = unlimited
+  termsAndConditions String       @default("")
+  updatedAt          DateTime     @updatedAt
 }
 
 // ── Estimator Personas ───────────────────────────────────────────────────
 
 model EstimatorPersona {
-  id               String       @id @default(cuid())
-  organizationId   String
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name             String
-  trade            String       @default("mechanical")
-  description      String       @default("")
-  systemPrompt     String       @default("")
-  knowledgeBookIds Json         @default("[]")
-  knowledgeDocumentIds Json     @default("[]")
-  datasetTags      Json         @default("[]")
-  packageBuckets   String[]     @default([])
-  defaultAssumptions Json       @default("{}")
-  productivityGuidance Json     @default("{}")
-  commercialGuidance Json       @default("{}")
-  reviewFocusAreas String[]     @default([])
-  isDefault        Boolean      @default(false)
-  enabled          Boolean      @default(true)
-  order            Int          @default(0)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id                   String       @id @default(cuid())
+  organizationId       String
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name                 String
+  trade                String       @default("mechanical")
+  description          String       @default("")
+  systemPrompt         String       @default("")
+  knowledgeBookIds     Json         @default("[]")
+  knowledgeDocumentIds Json         @default("[]")
+  datasetTags          Json         @default("[]")
+  packageBuckets       String[]     @default([])
+  defaultAssumptions   Json         @default("{}")
+  productivityGuidance Json         @default("{}")
+  commercialGuidance   Json         @default("{}")
+  reviewFocusAreas     String[]     @default([])
+  isDefault            Boolean      @default(false)
+  enabled              Boolean      @default(true)
+  order                Int          @default(0)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
 
   @@index([organizationId])
 }
@@ -138,42 +139,42 @@ model Session {
 // ── Projects ──────────────────────────────────────────────────────────────
 
 model Project {
-  id               String       @id @default(cuid())
-  organizationId   String
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name             String
-  clientName       String       @default("")
-  location         String       @default("")
-  packageName      String       @default("")
-  packageUploadedAt String      @default("")
-  ingestionStatus  String       @default("queued")
-  scope            String       @default("")
-  summary          String       @default("")
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  clientName        String       @default("")
+  location          String       @default("")
+  packageName       String       @default("")
+  packageUploadedAt String       @default("")
+  ingestionStatus   String       @default("queued")
+  scope             String       @default("")
+  summary           String       @default("")
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  sourceDocuments    SourceDocument[]
-  quotes             Quote[]
-  fileNodes          FileNode[]
-  aiRuns             AiRun[]
-  citations          Citation[]
-  activities         Activity[]
-  jobs               Job[]
-  packages           StoredPackage[]
-  ingestionJobs      IngestionJob[]
-  workspaceState     WorkspaceState?
-  pluginExecutions   PluginExecution[]
-  takeoffAnnotations TakeoffAnnotation[]
-  takeoffLinks       TakeoffLink[]
-  modelAssets        ModelAsset[]
-  modelTakeoffLinks  ModelTakeoffLink[]
-  modelRevisionDiffs ModelRevisionDiff[]
-  scheduleTasks      ScheduleTask[]
-  scheduleCalendars  ScheduleCalendar[]
-  scheduleBaselines  ScheduleBaseline[]
-  scheduleResources  ScheduleResource[]
-  quoteReviews       QuoteReview[]
-  estimateStrategies EstimateStrategy[]
+  sourceDocuments             SourceDocument[]
+  quotes                      Quote[]
+  fileNodes                   FileNode[]
+  aiRuns                      AiRun[]
+  citations                   Citation[]
+  activities                  Activity[]
+  jobs                        Job[]
+  packages                    StoredPackage[]
+  ingestionJobs               IngestionJob[]
+  workspaceState              WorkspaceState?
+  pluginExecutions            PluginExecution[]
+  takeoffAnnotations          TakeoffAnnotation[]
+  takeoffLinks                TakeoffLink[]
+  modelAssets                 ModelAsset[]
+  modelTakeoffLinks           ModelTakeoffLink[]
+  modelRevisionDiffs          ModelRevisionDiff[]
+  scheduleTasks               ScheduleTask[]
+  scheduleCalendars           ScheduleCalendar[]
+  scheduleBaselines           ScheduleBaseline[]
+  scheduleResources           ScheduleResource[]
+  quoteReviews                QuoteReview[]
+  estimateStrategies          EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([organizationId])
@@ -194,7 +195,7 @@ model SourceDocument {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  citations Citation[]
+  citations   Citation[]
   modelAssets ModelAsset[]
 
   @@index([projectId])
@@ -203,26 +204,26 @@ model SourceDocument {
 // ── Quotes & Revisions ────────────────────────────────────────────────────
 
 model Quote {
-  id                       String   @id @default(cuid())
-  projectId                String
-  project                  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  quoteNumber              String   @default("")
-  title                    String   @default("")
-  status                   String   @default("draft")
-  currentRevisionId        String   @default("")
-  customerExistingNew      String   @default("New")
-  customerId               String?
-  customer                 Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  customerString           String   @default("")
-  customerContactId        String?
-  customerContact          CustomerContact? @relation(fields: [customerContactId], references: [id], onDelete: SetNull)
-  customerContactString    String   @default("")
-  customerContactEmailString String @default("")
-  departmentId             String?
-  department               Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  userId                   String?
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                         String           @id @default(cuid())
+  projectId                  String
+  project                    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  quoteNumber                String           @default("")
+  title                      String           @default("")
+  status                     String           @default("draft")
+  currentRevisionId          String           @default("")
+  customerExistingNew        String           @default("New")
+  customerId                 String?
+  customer                   Customer?        @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  customerString             String           @default("")
+  customerContactId          String?
+  customerContact            CustomerContact? @relation(fields: [customerContactId], references: [id], onDelete: SetNull)
+  customerContactString      String           @default("")
+  customerContactEmailString String           @default("")
+  departmentId               String?
+  department                 Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  userId                     String?
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
 
   revisions QuoteRevision[]
 
@@ -232,64 +233,64 @@ model Quote {
 }
 
 model QuoteRevision {
-  id                    String   @id @default(cuid())
-  quoteId               String
-  quote                 Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  revisionNumber        Int      @default(0)
-  title                 String   @default("")
-  description           String   @default("")
-  notes                 String   @default("")
-  breakoutStyle         String   @default("grand_total")
-  type                  String   @default("Firm")
-  scratchpad            String   @default("")
-  leadLetter            String   @default("")
-  dateEstimatedShip     String?
-  dateQuote             String?
-  dateDue               String?
-  dateWalkdown          String?
-  dateWorkStart         String?
-  dateWorkEnd           String?
-  shippingMethod        String   @default("")
-  shippingTerms         String   @default("")
-  freightOnBoard        String   @default("")
-  status                String   @default("Open")
-  defaultMarkup         Float    @default(0)
-  necaDifficulty        String   @default("")
-  followUpNote          String   @default("")
-  printEmptyNotesColumn Boolean  @default(false)
-  printCategory         String[] @default([])
-  printPhaseTotalOnly   Boolean  @default(false)
-  grandTotal            Float    @default(0)
-  regHours              Float    @default(0)
-  overHours             Float    @default(0)
-  doubleHours           Float    @default(0)
-  subtotal              Float    @default(0)
-  cost                  Float    @default(0)
-  estimatedProfit       Float    @default(0)
-  estimatedMargin       Float    @default(0)
-  calculatedTotal       Float    @default(0)
-  totalHours            Float    @default(0)
-  breakoutPackage       Json     @default("[]")
-  calculatedCategoryTotals Json  @default("[]")
-  summaryLayoutPreset   String   @default("custom")
-  pdfPreferences        Json     @default("{}")
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                       String   @id @default(cuid())
+  quoteId                  String
+  quote                    Quote    @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  revisionNumber           Int      @default(0)
+  title                    String   @default("")
+  description              String   @default("")
+  notes                    String   @default("")
+  breakoutStyle            String   @default("grand_total")
+  type                     String   @default("Firm")
+  scratchpad               String   @default("")
+  leadLetter               String   @default("")
+  dateEstimatedShip        String?
+  dateQuote                String?
+  dateDue                  String?
+  dateWalkdown             String?
+  dateWorkStart            String?
+  dateWorkEnd              String?
+  shippingMethod           String   @default("")
+  shippingTerms            String   @default("")
+  freightOnBoard           String   @default("")
+  status                   String   @default("Open")
+  defaultMarkup            Float    @default(0)
+  necaDifficulty           String   @default("")
+  followUpNote             String   @default("")
+  printEmptyNotesColumn    Boolean  @default(false)
+  printCategory            String[] @default([])
+  printPhaseTotalOnly      Boolean  @default(false)
+  grandTotal               Float    @default(0)
+  regHours                 Float    @default(0)
+  overHours                Float    @default(0)
+  doubleHours              Float    @default(0)
+  subtotal                 Float    @default(0)
+  cost                     Float    @default(0)
+  estimatedProfit          Float    @default(0)
+  estimatedMargin          Float    @default(0)
+  calculatedTotal          Float    @default(0)
+  totalHours               Float    @default(0)
+  breakoutPackage          Json     @default("[]")
+  calculatedCategoryTotals Json     @default("[]")
+  summaryLayoutPreset      String   @default("custom")
+  pdfPreferences           Json     @default("{}")
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-  worksheets      Worksheet[]
-  phases          Phase[]
-  adjustments     Adjustment[]
-  modifiers       Modifier[]
-  additionalLineItems AdditionalLineItem[]
-  summaryRows     SummaryRow[]
-  conditions      Condition[]
-  reportSections  ReportSection[]
-  scheduleTasks   ScheduleTask[]
-  scheduleCalendars ScheduleCalendar[]
-  scheduleBaselines ScheduleBaseline[]
-  scheduleResources ScheduleResource[]
-  rateSchedules   RateSchedule[]
-  estimateStrategies EstimateStrategy[]
+  worksheets                  Worksheet[]
+  phases                      Phase[]
+  adjustments                 Adjustment[]
+  modifiers                   Modifier[]
+  additionalLineItems         AdditionalLineItem[]
+  summaryRows                 SummaryRow[]
+  conditions                  Condition[]
+  reportSections              ReportSection[]
+  scheduleTasks               ScheduleTask[]
+  scheduleCalendars           ScheduleCalendar[]
+  scheduleBaselines           ScheduleBaseline[]
+  scheduleResources           ScheduleResource[]
+  rateSchedules               RateSchedule[]
+  estimateStrategies          EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([quoteId])
@@ -310,34 +311,39 @@ model Worksheet {
 }
 
 model WorksheetItem {
-  id             String    @id @default(cuid())
-  worksheetId    String
-  worksheet      Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
-  phaseId        String?
-  category       String    @default("Material")
-  entityType     String    @default("Material")
-  entityName     String    @default("")
-  vendor         String?
-  description    String    @default("")
-  quantity       Float     @default(0)
-  uom            String    @default("EA")
-  cost           Float     @default(0)
-  markup         Float     @default(0)
-  price          Float     @default(0)
-  unit1   Float     @default(0)  @map("laborHourReg")
-  unit2   Float     @default(0)  @map("laborHourOver")
-  unit3   Float     @default(0)  @map("laborHourDouble")
-  lineOrder           Int      @default(0)
-  rateScheduleItemId  String?
-  itemId              String?  // FK to CatalogItem (for catalog-backed categories)
-  tierUnits           Json     @default("{}")
-  sourceNotes         String   @default("")
+  id                 String    @id @default(cuid())
+  worksheetId        String
+  worksheet          Worksheet @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
+  phaseId            String?
+  category           String    @default("Material")
+  entityType         String    @default("Material")
+  entityName         String    @default("")
+  vendor             String?
+  description        String    @default("")
+  quantity           Float     @default(0)
+  uom                String    @default("EA")
+  cost               Float     @default(0)
+  markup             Float     @default(0)
+  price              Float     @default(0)
+  unit1              Float     @default(0) @map("laborHourReg")
+  unit2              Float     @default(0) @map("laborHourOver")
+  unit3              Float     @default(0) @map("laborHourDouble")
+  lineOrder          Int       @default(0)
+  rateScheduleItemId String?
+  itemId             String? // FK to CatalogItem (for catalog-backed categories)
+  tierUnits          Json      @default("{}")
+  sourceNotes        String    @default("")
+  sourceAssemblyId   String?
+  sourceAssembly     Assembly? @relation("WorksheetItemSourceAssembly", fields: [sourceAssemblyId], references: [id], onDelete: SetNull)
+  assemblyInstanceId String?
 
-  takeoffLinks TakeoffLink[]
+  takeoffLinks      TakeoffLink[]
   modelTakeoffLinks ModelTakeoffLink[]
 
   @@index([worksheetId])
   @@index([phaseId])
+  @@index([sourceAssemblyId])
+  @@index([assemblyInstanceId])
 }
 
 // ── Phases ────────────────────────────────────────────────────────────────
@@ -360,41 +366,41 @@ model Phase {
 // ── Schedule Tasks ──────────────────────────────────────────────────────
 
 model ScheduleTask {
-  id            String        @id @default(cuid())
-  projectId     String
-  project       Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  revisionId    String
-  revision      QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
-  phaseId       String?
-  calendarId    String?
-  calendar      ScheduleCalendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
-  parentTaskId  String?
-  parentTask    ScheduleTask? @relation("ScheduleTaskTree", fields: [parentTaskId], references: [id], onDelete: SetNull)
-  childTasks    ScheduleTask[] @relation("ScheduleTaskTree")
-  outlineLevel  Int           @default(0)
-  name          String        @default("")
-  description   String        @default("")
-  taskType      String        @default("task")
-  status        String        @default("not_started")
-  startDate     String?
-  endDate       String?
-  duration      Int           @default(0)
-  progress      Float         @default(0)
-  assignee      String        @default("")
-  order         Int           @default(0)
-  constraintType String       @default("asap")
+  id             String            @id @default(cuid())
+  projectId      String
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId     String
+  revision       QuoteRevision     @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  phaseId        String?
+  calendarId     String?
+  calendar       ScheduleCalendar? @relation(fields: [calendarId], references: [id], onDelete: SetNull)
+  parentTaskId   String?
+  parentTask     ScheduleTask?     @relation("ScheduleTaskTree", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  childTasks     ScheduleTask[]    @relation("ScheduleTaskTree")
+  outlineLevel   Int               @default(0)
+  name           String            @default("")
+  description    String            @default("")
+  taskType       String            @default("task")
+  status         String            @default("not_started")
+  startDate      String?
+  endDate        String?
+  duration       Int               @default(0)
+  progress       Float             @default(0)
+  assignee       String            @default("")
+  order          Int               @default(0)
+  constraintType String            @default("asap")
   constraintDate String?
-  deadlineDate  String?
-  actualStart   String?
-  actualEnd     String?
-  baselineStart String?
-  baselineEnd   String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  deadlineDate   String?
+  actualStart    String?
+  actualEnd      String?
+  baselineStart  String?
+  baselineEnd    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
-  predecessors  ScheduleDependency[] @relation("successorTask")
-  successors    ScheduleDependency[] @relation("predecessorTask")
-  assignments   ScheduleTaskAssignment[]
+  predecessors ScheduleDependency[]     @relation("successorTask")
+  successors   ScheduleDependency[]     @relation("predecessorTask")
+  assignments  ScheduleTaskAssignment[]
 
   @@index([projectId])
   @@index([revisionId])
@@ -432,8 +438,8 @@ model ScheduleCalendar {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  tasks             ScheduleTask[]
-  resources         ScheduleResource[]
+  tasks     ScheduleTask[]
+  resources ScheduleResource[]
 
   @@index([projectId])
   @@index([revisionId])
@@ -452,7 +458,7 @@ model ScheduleBaseline {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  items       ScheduleBaselineTask[]
+  items ScheduleBaselineTask[]
 
   @@index([projectId])
   @@index([revisionId])
@@ -493,7 +499,7 @@ model ScheduleResource {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
-  assignments    ScheduleTaskAssignment[]
+  assignments ScheduleTaskAssignment[]
 
   @@index([projectId])
   @@index([revisionId])
@@ -502,14 +508,14 @@ model ScheduleResource {
 
 model ScheduleTaskAssignment {
   id         String           @id @default(cuid())
-  taskId      String
-  task        ScheduleTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  resourceId  String
-  resource    ScheduleResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  units       Float            @default(1)
-  role        String           @default("")
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  taskId     String
+  task       ScheduleTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  resourceId String
+  resource   ScheduleResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  units      Float            @default(1)
+  role       String           @default("")
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
 
   @@unique([taskId, resourceId])
   @@index([resourceId])
@@ -568,30 +574,30 @@ model Adjustment {
 }
 
 model SummaryRow {
-  id              String        @id @default(cuid())
-  revisionId      String
-  revision        QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  id         String        @id @default(cuid())
+  revisionId String
+  revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
 
-  type            String        @default("heading")   // category | phase | adjustment | heading | subtotal | separator
-  label           String        @default("")
-  order           Int           @default(0)
-  visible         Boolean       @default(true)
-  style           String        @default("normal")    // normal | bold | indent | highlight
+  type    String  @default("heading") // category | phase | adjustment | heading | subtotal | separator
+  label   String  @default("")
+  order   Int     @default(0)
+  visible Boolean @default(true)
+  style   String  @default("normal") // normal | bold | indent | highlight
 
-  sourceCategory  String?
-  sourcePhase     String?
-  sourceCategoryId String?
+  sourceCategory      String?
+  sourcePhase         String?
+  sourceCategoryId    String?
   sourceCategoryLabel String?
-  sourcePhaseId   String?
-  sourceAdjustmentId String?
+  sourcePhaseId       String?
+  sourceAdjustmentId  String?
 
   // Computed (filled by recalculate)
-  computedValue   Float         @default(0)
-  computedCost    Float         @default(0)
-  computedMargin  Float         @default(0)
+  computedValue  Float @default(0)
+  computedCost   Float @default(0)
+  computedMargin Float @default(0)
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([revisionId])
   @@map("summary_rows")
@@ -632,8 +638,8 @@ model RateSchedule {
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
-  travelPolicyId   String?
-  travelPolicy     TravelPolicy? @relation(fields: [travelPolicyId], references: [id])
+  travelPolicyId String?
+  travelPolicy   TravelPolicy? @relation(fields: [travelPolicyId], references: [id])
 
   tiers RateScheduleTier[]
   items RateScheduleItem[]
@@ -667,6 +673,8 @@ model RateScheduleItem {
   perDiem       Float        @default(0)
   metadata      Json         @default("{}")
   sortOrder     Int          @default(0)
+
+  assemblyComponents AssemblyComponent[]
 
   @@index([scheduleId])
 }
@@ -729,18 +737,18 @@ model TravelPolicy {
   description    String       @default("")
 
   // Per diem
-  perDiemRate      Float   @default(0)
-  perDiemEmbedMode String  @default("separate")
-  hoursPerDay      Float   @default(8)
+  perDiemRate      Float  @default(0)
+  perDiemEmbedMode String @default("separate")
+  hoursPerDay      Float  @default(8)
 
   // Travel time
   travelTimeHours Float @default(0)
   travelTimeTrips Int   @default(1)
 
   // Distance & fuel
-  kmToDestination        Float @default(0)
-  mileageRate            Float @default(0)
-  fuelSurchargePercent   Float @default(0)
+  kmToDestination        Float  @default(0)
+  mileageRate            Float  @default(0)
+  fuelSurchargePercent   Float  @default(0)
   fuelSurchargeAppliesTo String @default("labour")
 
   // Accommodation
@@ -824,24 +832,24 @@ model FileNode {
 // ── Takeoff Annotations ──────────────────────────────────────────────────
 
 model TakeoffAnnotation {
-  id              String   @id @default(cuid())
-  projectId       String
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  documentId      String
-  pageNumber      Int
-  annotationType  String   // linear, linear-polyline, linear-drop, count, count-by-distance, area-vertical-wall, area-rectangle, area-triangle, area-ellipse, area-polygon
-  label           String   @default("")
-  color           String   @default("#3b82f6")
-  lineThickness   Float    @default(4)
-  visible         Boolean  @default(true)
-  groupName       String   @default("")
-  points          Json     @default("[]")
-  measurement     Json     @default("{}")
-  calibration     Json?
-  metadata        Json     @default("{}")
-  createdBy       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id             String   @id @default(cuid())
+  projectId      String
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentId     String
+  pageNumber     Int
+  annotationType String // linear, linear-polyline, linear-drop, count, count-by-distance, area-vertical-wall, area-rectangle, area-triangle, area-ellipse, area-polygon
+  label          String   @default("")
+  color          String   @default("#3b82f6")
+  lineThickness  Float    @default(4)
+  visible        Boolean  @default(true)
+  groupName      String   @default("")
+  points         Json     @default("[]")
+  measurement    Json     @default("{}")
+  calibration    Json?
+  metadata       Json     @default("{}")
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   takeoffLinks TakeoffLink[]
 
@@ -859,9 +867,9 @@ model TakeoffLink {
   annotation      TakeoffAnnotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
   worksheetItemId String
   worksheetItem   WorksheetItem     @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
-  quantityField   String            @default("value")   // "value" | "area" | "volume" | "count"
-  multiplier      Float             @default(1.0)        // 1.1 = 10% waste
-  derivedQuantity Float             @default(0)          // cached: measurement[quantityField] * multiplier
+  quantityField   String            @default("value") // "value" | "area" | "volume" | "count"
+  multiplier      Float             @default(1.0) // 1.1 = 10% waste
+  derivedQuantity Float             @default(0) // cached: measurement[quantityField] * multiplier
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
@@ -942,19 +950,19 @@ model ModelElement {
 }
 
 model ModelQuantity {
-  id           String             @id @default(cuid())
+  id           String        @id @default(cuid())
   modelId      String
-  model        ModelAsset         @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  model        ModelAsset    @relation(fields: [modelId], references: [id], onDelete: Cascade)
   elementId    String?
-  element      ModelElement?      @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  element      ModelElement? @relation(fields: [elementId], references: [id], onDelete: Cascade)
   quantityType String
-  value        Float              @default(0)
-  unit         String             @default("")
-  method       String             @default("computed")
-  confidence   Float              @default(1)
-  metadata     Json               @default("{}")
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  value        Float         @default(0)
+  unit         String        @default("")
+  method       String        @default("computed")
+  confidence   Float         @default(1)
+  metadata     Json          @default("{}")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   takeoffLinks ModelTakeoffLink[]
 
@@ -1058,19 +1066,19 @@ model AiRun {
 // ── Quote Reviews ─────────────────────────────────────────────────────────
 
 model QuoteReview {
-  id              String   @id @default(cuid())
-  projectId       String
-  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  revisionId      String
-  aiRunId         String?
-  status          String   @default("running") // running | completed | failed
-  summary         Json     @default("{}")
-  coverage        Json     @default("[]")
-  findings        Json     @default("[]")
-  competitiveness Json     @default("{}")
-  recommendations Json     @default("[]")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                          String                        @id @default(cuid())
+  projectId                   String
+  project                     Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId                  String
+  aiRunId                     String?
+  status                      String                        @default("running") // running | completed | failed
+  summary                     Json                          @default("{}")
+  coverage                    Json                          @default("[]")
+  findings                    Json                          @default("[]")
+  competitiveness             Json                          @default("{}")
+  recommendations             Json                          @default("[]")
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
 
   @@index([projectId])
@@ -1111,26 +1119,26 @@ model EstimateStrategy {
 }
 
 model EstimateCalibrationFeedback {
-  id            String         @id @default(cuid())
+  id            String            @id @default(cuid())
   projectId     String
-  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
   revisionId    String
-  revision      QuoteRevision  @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  revision      QuoteRevision     @relation(fields: [revisionId], references: [id], onDelete: Cascade)
   strategyId    String?
   strategy      EstimateStrategy? @relation(fields: [strategyId], references: [id], onDelete: SetNull)
   quoteReviewId String?
-  quoteReview   QuoteReview?   @relation(fields: [quoteReviewId], references: [id], onDelete: SetNull)
-  source        String         @default("manual")
-  feedbackType  String         @default("comparison")
-  sourceLabel   String         @default("")
-  aiSnapshot    Json           @default("{}")
-  humanSnapshot Json           @default("{}")
-  deltaSummary  Json           @default("{}")
-  corrections   Json           @default("[]")
-  lessons       Json           @default("[]")
-  notes         String         @default("")
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  quoteReview   QuoteReview?      @relation(fields: [quoteReviewId], references: [id], onDelete: SetNull)
+  source        String            @default("manual")
+  feedbackType  String            @default("comparison")
+  sourceLabel   String            @default("")
+  aiSnapshot    Json              @default("{}")
+  humanSnapshot Json              @default("{}")
+  deltaSummary  Json              @default("{}")
+  corrections   Json              @default("[]")
+  lessons       Json              @default("[]")
+  notes         String            @default("")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   @@index([projectId])
   @@index([revisionId])
@@ -1175,20 +1183,20 @@ model Activity {
 // ── Catalogs ──────────────────────────────────────────────────────────────
 
 model Catalog {
-  id               String        @id @default(cuid())
-  organizationId   String?
-  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name             String
-  kind             String
-  scope            String        @default("global")
-  projectId        String?
-  description      String        @default("")
-  source           String        @default("manual")
-  sourceDescription String       @default("")
-  isTemplate       Boolean       @default(false)
-  sourceTemplateId String?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  id                String        @id @default(cuid())
+  organizationId    String?
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  kind              String
+  scope             String        @default("global")
+  projectId         String?
+  description       String        @default("")
+  source            String        @default("manual")
+  sourceDescription String        @default("")
+  isTemplate        Boolean       @default(false)
+  sourceTemplateId  String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   items CatalogItem[]
 
@@ -1210,7 +1218,78 @@ model CatalogItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  assemblyComponents AssemblyComponent[]
+
   @@index([catalogId])
+}
+
+// ── Assemblies ────────────────────────────────────────────────────────────
+
+model Assembly {
+  id               String        @id @default(cuid())
+  organizationId   String?
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name             String
+  code             String        @default("")
+  description      String        @default("")
+  category         String        @default("")
+  unit             String        @default("EA")
+  isTemplate       Boolean       @default(false)
+  sourceTemplateId String?
+  metadata         Json          @default("{}")
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  parameters         AssemblyParameter[]
+  components         AssemblyComponent[]
+  parentReferences   AssemblyComponent[] @relation("AssemblyComponentSubAssembly")
+  worksheetSnapshots WorksheetItem[]     @relation("WorksheetItemSourceAssembly")
+
+  @@index([organizationId])
+  @@index([isTemplate])
+}
+
+model AssemblyParameter {
+  id           String   @id @default(cuid())
+  assemblyId   String
+  assembly     Assembly @relation(fields: [assemblyId], references: [id], onDelete: Cascade)
+  key          String
+  label        String   @default("")
+  description  String   @default("")
+  paramType    String   @default("number")
+  defaultValue String   @default("0")
+  unit         String   @default("")
+  sortOrder    Int      @default(0)
+
+  @@unique([assemblyId, key])
+  @@index([assemblyId])
+}
+
+model AssemblyComponent {
+  id                 String            @id @default(cuid())
+  assemblyId         String
+  assembly           Assembly          @relation(fields: [assemblyId], references: [id], onDelete: Cascade)
+  componentType      String
+  catalogItemId      String?
+  catalogItem        CatalogItem?      @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  rateScheduleItemId String?
+  rateScheduleItem   RateScheduleItem? @relation(fields: [rateScheduleItemId], references: [id], onDelete: SetNull)
+  subAssemblyId      String?
+  subAssembly        Assembly?         @relation("AssemblyComponentSubAssembly", fields: [subAssemblyId], references: [id], onDelete: Restrict)
+  quantityExpr       String            @default("1")
+  description        String            @default("")
+  category           String            @default("")
+  uomOverride        String?
+  costOverride       Float?
+  markupOverride     Float?
+  parameterBindings  Json              @default("{}")
+  notes              String            @default("")
+  sortOrder          Int               @default(0)
+
+  @@index([assemblyId])
+  @@index([catalogItemId])
+  @@index([rateScheduleItemId])
+  @@index([subAssemblyId])
 }
 
 // ── Condition Library (global per-org) ────────────────────────────────────
@@ -1257,23 +1336,23 @@ model Plugin {
 }
 
 model PluginExecution {
-  id                String   @id @default(cuid())
-  pluginId          String
-  plugin            Plugin   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
-  toolId            String
-  projectId         String
-  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  revisionId        String
-  worksheetId       String?
-  input             Json     @default("{}")
-  formState         Json?
-  output            Json     @default("{}")
+  id                 String   @id @default(cuid())
+  pluginId           String
+  plugin             Plugin   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  toolId             String
+  projectId          String
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisionId         String
+  worksheetId        String?
+  input              Json     @default("{}")
+  formState          Json?
+  output             Json     @default("{}")
   appliedLineItemIds String[] @default([])
-  status            String   @default("pending")
-  error             String?
-  executedBy        String?
-  agentSessionId    String?
-  createdAt         DateTime @default(now())
+  status             String   @default("pending")
+  error              String?
+  executedBy         String?
+  agentSessionId     String?
+  createdAt          DateTime @default(now())
 
   @@index([projectId])
   @@index([pluginId])
@@ -1282,25 +1361,25 @@ model PluginExecution {
 // ── Knowledge ─────────────────────────────────────────────────────────────
 
 model KnowledgeBook {
-  id             String       @id @default(cuid())
+  id             String                   @id @default(cuid())
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   cabinetId      String?
   cabinet        KnowledgeLibraryCabinet? @relation("KnowledgeBookCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
   name           String
-  description    String       @default("")
-  category       String       @default("general")
-  scope          String       @default("global")
+  description    String                   @default("")
+  category       String                   @default("general")
+  scope          String                   @default("global")
   projectId      String?
-  pageCount      Int          @default(0)
-  chunkCount     Int          @default(0)
-  status         String       @default("uploading")
-  sourceFileName String       @default("")
-  sourceFileSize Int          @default(0)
+  pageCount      Int                      @default(0)
+  chunkCount     Int                      @default(0)
+  status         String                   @default("uploading")
+  sourceFileName String                   @default("")
+  sourceFileSize Int                      @default(0)
   storagePath    String?
-  metadata       Json         @default("{}")
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  metadata       Json                     @default("{}")
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
 
   chunks KnowledgeChunk[]
 
@@ -1323,23 +1402,23 @@ model KnowledgeChunk {
 }
 
 model KnowledgeDocument {
-  id             String       @id @default(cuid())
+  id             String                   @id @default(cuid())
   organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   cabinetId      String?
   cabinet        KnowledgeLibraryCabinet? @relation("KnowledgeDocumentCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
   title          String
-  description    String       @default("")
-  category       String       @default("general")
-  scope          String       @default("global")
+  description    String                   @default("")
+  category       String                   @default("general")
+  scope          String                   @default("global")
   projectId      String?
-  tags           String[]     @default([])
-  pageCount      Int          @default(0)
-  chunkCount     Int          @default(0)
-  status         String       @default("draft")
-  metadata       Json         @default("{}")
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  tags           String[]                 @default([])
+  pageCount      Int                      @default(0)
+  chunkCount     Int                      @default(0)
+  status         String                   @default("draft")
+  metadata       Json                     @default("{}")
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
 
   pages  KnowledgeDocumentPage[]
   chunks KnowledgeDocumentChunk[]
@@ -1387,16 +1466,16 @@ model KnowledgeDocumentChunk {
 }
 
 model KnowledgeLibraryCabinet {
-  id             String                   @id @default(cuid())
+  id             String                    @id @default(cuid())
   organizationId String
-  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   parentId       String?
-  parent         KnowledgeLibraryCabinet? @relation("KnowledgeLibraryCabinetTree", fields: [parentId], references: [id], onDelete: SetNull)
+  parent         KnowledgeLibraryCabinet?  @relation("KnowledgeLibraryCabinetTree", fields: [parentId], references: [id], onDelete: SetNull)
   children       KnowledgeLibraryCabinet[] @relation("KnowledgeLibraryCabinetTree")
   itemType       String
   name           String
-  createdAt      DateTime                 @default(now())
-  updatedAt      DateTime                 @updatedAt
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
 
   books     KnowledgeBook[]     @relation("KnowledgeBookCabinet")
   documents KnowledgeDocument[] @relation("KnowledgeDocumentCabinet")
@@ -1410,27 +1489,27 @@ model KnowledgeLibraryCabinet {
 // ── Datasets ──────────────────────────────────────────────────────────────
 
 model Dataset {
-  id                String        @id @default(cuid())
+  id                String                   @id @default(cuid())
   organizationId    String?
-  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   cabinetId         String?
   cabinet           KnowledgeLibraryCabinet? @relation("DatasetCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
   name              String
-  description       String        @default("")
-  category          String        @default("custom")
-  scope             String        @default("global")
+  description       String                   @default("")
+  category          String                   @default("custom")
+  scope             String                   @default("global")
   projectId         String?
-  columns           Json          @default("[]")
-  rowCount          Int           @default(0)
-  source            String        @default("manual")
-  sourceDescription String        @default("")
-  sourceBookId      String?       // Link back to KnowledgeBook this was extracted from
-  sourcePages       String        @default("") // Page range(s) e.g. "85-87, 100"
-  tags              String[]      @default([]) // Rich tags for search: ["pipe", "flange", "man-hours", "carbon-steel"]
-  isTemplate        Boolean       @default(false)
+  columns           Json                     @default("[]")
+  rowCount          Int                      @default(0)
+  source            String                   @default("manual")
+  sourceDescription String                   @default("")
+  sourceBookId      String? // Link back to KnowledgeBook this was extracted from
+  sourcePages       String                   @default("") // Page range(s) e.g. "85-87, 100"
+  tags              String[]                 @default([]) // Rich tags for search: ["pipe", "flange", "man-hours", "carbon-steel"]
+  isTemplate        Boolean                  @default(false)
   sourceTemplateId  String?
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
 
   rows DatasetRow[]
 
@@ -1464,11 +1543,11 @@ model EntityCategory {
   defaultUom      String       @default("EA")
   validUoms       String[]     @default([])
   editableFields  Json         @default("{}")
-  unitLabels      Json         @default("{}")  @map("laborHourLabels")
+  unitLabels      Json         @default("{}") @map("laborHourLabels")
   calculationType String       @default("manual")
   calcFormula     String       @default("") // custom formula expression for "formula" calc type
   itemSource      String       @default("freeform") // "rate_schedule" | "catalog" | "freeform"
-  catalogId       String?      // When itemSource="catalog", which catalog backs this category
+  catalogId       String? // When itemSource="catalog", which catalog backs this category
   color           String       @default("#6b7280")
   order           Int          @default(0)
   isBuiltIn       Boolean      @default(false)
@@ -1481,25 +1560,25 @@ model EntityCategory {
 // ── Package & Ingestion Tracking ──────────────────────────────────────────
 
 model StoredPackage {
-  id               String   @id @default(cuid())
+  id               String    @id @default(cuid())
   projectId        String
-  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  packageName      String   @default("")
-  originalFileName String   @default("")
-  sourceKind       String   @default("project")
-  storagePath      String   @default("")
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  packageName      String    @default("")
+  originalFileName String    @default("")
+  sourceKind       String    @default("project")
+  storagePath      String    @default("")
   reportPath       String?
   chunksPath       String?
-  checksum         String   @default("")
-  totalBytes       Int      @default(0)
-  status           String   @default("uploaded")
-  documentCount    Int      @default(0)
-  chunkCount       Int      @default(0)
-  documentIds      String[] @default([])
-  unknownFiles     String[] @default([])
-  uploadedAt       DateTime @default(now())
+  checksum         String    @default("")
+  totalBytes       Int       @default(0)
+  status           String    @default("uploaded")
+  documentCount    Int       @default(0)
+  chunkCount       Int       @default(0)
+  documentIds      String[]  @default([])
+  unknownFiles     String[]  @default([])
+  uploadedAt       DateTime  @default(now())
   ingestedAt       DateTime?
-  updatedAt        DateTime @updatedAt
+  updatedAt        DateTime  @updatedAt
   error            String?
 
   @@index([projectId])
@@ -1538,23 +1617,23 @@ model WorkspaceState {
 // ── Customers ─────────────────────────────────────────────────────────────
 
 model Customer {
-  id               String       @id @default(cuid())
-  organizationId   String
-  organization     Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  name             String
-  shortName        String       @default("")
-  phone            String       @default("")
-  email            String       @default("")
-  website          String       @default("")
-  addressStreet    String       @default("")
-  addressCity      String       @default("")
-  addressProvince  String       @default("")
-  addressPostalCode String      @default("")
-  addressCountry   String       @default("")
-  notes            String       @default("")
-  active           Boolean      @default(true)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name              String
+  shortName         String       @default("")
+  phone             String       @default("")
+  email             String       @default("")
+  website           String       @default("")
+  addressStreet     String       @default("")
+  addressCity       String       @default("")
+  addressProvince   String       @default("")
+  addressPostalCode String       @default("")
+  addressCountry    String       @default("")
+  notes             String       @default("")
+  active            Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
   contacts CustomerContact[]
   quotes   Quote[]

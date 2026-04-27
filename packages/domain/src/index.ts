@@ -8,3 +8,4 @@ export * from "./plugin-output-templates";
 export * from "./first-party-plugins";
 export * from "./summary-builder";
 export * from "./worksheet-hours";
+export * from "./assembly-expansion";
