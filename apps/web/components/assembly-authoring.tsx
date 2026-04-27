@@ -301,7 +301,12 @@ export function ParametersEditor({ assemblyId, parameters, onChange, onError }: 
           <Input value={draftKey} onChange={(e) => setDraftKey(e.target.value)} placeholder="key (e.g. wallHeight)" className="text-xs" />
           <Input value={draftLabel} onChange={(e) => setDraftLabel(e.target.value)} placeholder="label" className="text-xs" />
           <Input value={draftDefault} onChange={(e) => setDraftDefault(e.target.value)} placeholder="default" className="text-xs" />
-          <Input value={draftUnit} onChange={(e) => setDraftUnit(e.target.value)} placeholder="unit" className="text-xs" />
+          <CompactSelect
+            value={draftUnit}
+            onValueChange={setDraftUnit}
+            options={[{ value: "", label: "—" }, ...UOM_OPTIONS]}
+            placeholder="unit"
+          />
           <Button onClick={add} disabled={!draftKey.trim()} className="text-xs">
             <Plus className="w-3.5 h-3.5" />
           </Button>
@@ -543,7 +548,7 @@ export function ComponentsEditor({
             searchPlaceholder={refSearchPlaceholder}
             emptyMessage={refEmptyMessage}
           />
-          <Input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="qty / expr" className="text-xs font-mono" />
+          <Input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="qty / expr" className="h-7 text-xs font-mono" />
           <Button onClick={add} disabled={!draftRef} className="text-xs">
             <Plus className="w-3.5 h-3.5" />
           </Button>
@@ -654,7 +659,7 @@ function ComponentRow({
           onChange={(e) => setQty(e.target.value)}
           onBlur={() => qty !== component.quantityExpr && qtyValidation.ok && onPatch({ quantityExpr: qty || "1" })}
           placeholder="qty / expr"
-          className={cn("text-xs font-mono", !qtyValidation.ok && "border-red-400")}
+          className={cn("h-7 text-xs font-mono", !qtyValidation.ok && "border-red-400")}
           title={qtyValidation.ok ? "" : qtyValidation.message}
         />
         {!qtyValidation.ok && (
