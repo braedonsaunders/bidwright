@@ -195,6 +195,8 @@ export interface WorksheetItem {
   itemId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  sourceAssemblyId?: string | null;
+  assemblyInstanceId?: string | null;
 }
 
 export interface Phase {
@@ -468,6 +470,69 @@ export interface CatalogItem {
   unitCost: number;
   unitPrice: number;
   metadata: Record<string, unknown>;
+}
+
+export type AssemblyComponentType = "catalog_item" | "rate_schedule_item" | "sub_assembly";
+
+export interface AssemblyParameter {
+  id: string;
+  assemblyId: string;
+  key: string;
+  label: string;
+  description: string;
+  paramType: string;
+  defaultValue: string;
+  unit: string;
+  sortOrder: number;
+}
+
+export interface AssemblyComponent {
+  id: string;
+  assemblyId: string;
+  componentType: AssemblyComponentType;
+  catalogItemId: string | null;
+  rateScheduleItemId: string | null;
+  subAssemblyId: string | null;
+  quantityExpr: string;
+  description: string;
+  category: string;
+  uomOverride: string | null;
+  costOverride: number | null;
+  markupOverride: number | null;
+  parameterBindings: Record<string, string>;
+  notes: string;
+  sortOrder: number;
+}
+
+export interface Assembly {
+  id: string;
+  organizationId: string | null;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  unit: string;
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  metadata: Record<string, unknown>;
+  parameters: AssemblyParameter[];
+  components: AssemblyComponent[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssemblySummary {
+  id: string;
+  name: string;
+  code: string;
+  category: string;
+  unit: string;
+  description: string;
+  componentCount: number;
+  parameterCount: number;
+  isTemplate: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AiRun {

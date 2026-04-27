@@ -11,6 +11,8 @@ import {
   computeSummaryRows,
   createSummaryBuilderPreset,
   deriveSummaryBuilderFromLegacy,
+  expandAssembly,
+  findAssemblyCycles,
   getExtendedWorksheetHourBreakdown,
   getWorksheetHourBreakdown,
   inferSummaryPresetFromBuilder,
@@ -25,8 +27,15 @@ import type {
   Adjustment,
   AdditionalLineItem,
   AppSettings,
+  Assembly,
+  AssemblyComponent,
+  AssemblyDefinition,
+  AssemblyParameter,
+  AssemblySummary,
   AuthSession,
   BidwrightStore,
+  CatalogItemRef,
+  RateScheduleItemRef,
   Catalog,
   CatalogItem,
   Condition,
@@ -126,6 +135,10 @@ import {
   mapAdditionalLineItem,
   mapAiRun,
   mapBurdenPeriod,
+  mapAssembly,
+  mapAssemblyComponent,
+  mapAssemblyParameter,
+  mapAssemblySummary,
   mapCatalog,
   mapCatalogItem,
   mapCitation,
@@ -794,6 +807,83 @@ export interface CatalogItemPatchInput {
   unitPrice?: number;
   category?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface CreateAssemblyInput {
+  name: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  unit?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AssemblyPatchInput {
+  name?: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  unit?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AssemblyParameterInput {
+  key: string;
+  label?: string;
+  description?: string;
+  paramType?: string;
+  defaultValue?: string;
+  unit?: string;
+  sortOrder?: number;
+}
+
+export interface AssemblyParameterPatchInput {
+  key?: string;
+  label?: string;
+  description?: string;
+  paramType?: string;
+  defaultValue?: string;
+  unit?: string;
+  sortOrder?: number;
+}
+
+export interface AssemblyComponentInput {
+  componentType: "catalog_item" | "rate_schedule_item" | "sub_assembly";
+  catalogItemId?: string | null;
+  rateScheduleItemId?: string | null;
+  subAssemblyId?: string | null;
+  quantityExpr?: string;
+  description?: string;
+  category?: string;
+  uomOverride?: string | null;
+  costOverride?: number | null;
+  markupOverride?: number | null;
+  parameterBindings?: Record<string, string>;
+  notes?: string;
+  sortOrder?: number;
+}
+
+export interface AssemblyComponentPatchInput {
+  componentType?: "catalog_item" | "rate_schedule_item" | "sub_assembly";
+  catalogItemId?: string | null;
+  rateScheduleItemId?: string | null;
+  subAssemblyId?: string | null;
+  quantityExpr?: string;
+  description?: string;
+  category?: string;
+  uomOverride?: string | null;
+  costOverride?: number | null;
+  markupOverride?: number | null;
+  parameterBindings?: Record<string, string>;
+  notes?: string;
+  sortOrder?: number;
+}
+
+export interface InsertAssemblyIntoWorksheetInput {
+  assemblyId: string;
+  quantity: number;
+  parameterValues?: Record<string, number | string>;
+  phaseId?: string | null;
 }
 
 export interface CreateFileNodeInput {
@@ -7960,6 +8050,478 @@ export class PrismaApiStore {
         (typeof (i.metadata as any)?.category === "string" && (i.metadata as any).category.toLowerCase().includes(q))
       )
       .map(mapCatalogItem);
+  }
+
+  // ── Assembly CRUD ──────────────────────────────────────────────────────
+
+  async listAssemblies(): Promise<AssemblySummary[]> {
+    const rows = await this.db.assembly.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: { name: "asc" },
+      include: { _count: { select: { components: true, parameters: true } } },
+    });
+    return rows.map(mapAssemblySummary);
+  }
+
+  async getAssembly(assemblyId: string): Promise<Assembly | null> {
+    const row = await this.db.assembly.findFirst({
+      where: { id: assemblyId, organizationId: this.organizationId },
+      include: { parameters: true, components: true },
+    });
+    return row ? mapAssembly(row) : null;
+  }
+
+  async createAssembly(input: CreateAssemblyInput): Promise<Assembly> {
+    const row = await this.db.assembly.create({
+      data: {
+        id: createId("asm"),
+        organizationId: this.organizationId,
+        name: input.name.trim() || "Untitled assembly",
+        code: input.code ?? "",
+        description: input.description ?? "",
+        category: input.category ?? "",
+        unit: input.unit || "EA",
+        metadata: (input.metadata ?? {}) as any,
+      },
+      include: { parameters: true, components: true },
+    });
+    return mapAssembly(row);
+  }
+
+  async updateAssembly(assemblyId: string, patch: AssemblyPatchInput): Promise<Assembly> {
+    const existing = await this.db.assembly.findFirst({
+      where: { id: assemblyId, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Assembly ${assemblyId} not found`);
+
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name.trim() || existing.name;
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.unit !== undefined) data.unit = patch.unit || existing.unit;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
+
+    const updated = await this.db.assembly.update({
+      where: { id: assemblyId },
+      data,
+      include: { parameters: true, components: true },
+    });
+    return mapAssembly(updated);
+  }
+
+  async deleteAssembly(assemblyId: string): Promise<{ deleted: true }> {
+    const existing = await this.db.assembly.findFirst({
+      where: { id: assemblyId, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Assembly ${assemblyId} not found`);
+
+    const referencedBy = await this.db.assemblyComponent.findFirst({
+      where: { subAssemblyId: assemblyId },
+      select: { assemblyId: true },
+    });
+    if (referencedBy) {
+      throw new Error(
+        `Assembly ${assemblyId} cannot be deleted while it is referenced by another assembly. Remove the references first.`,
+      );
+    }
+
+    await this.db.assembly.delete({ where: { id: assemblyId } });
+    return { deleted: true };
+  }
+
+  async createAssemblyParameter(
+    assemblyId: string,
+    input: AssemblyParameterInput,
+  ): Promise<AssemblyParameter> {
+    await this.requireAssembly(assemblyId);
+    const maxOrder = await this.db.assemblyParameter.aggregate({
+      where: { assemblyId },
+      _max: { sortOrder: true },
+    });
+    const row = await this.db.assemblyParameter.create({
+      data: {
+        id: createId("ap"),
+        assemblyId,
+        key: input.key.trim(),
+        label: input.label ?? "",
+        description: input.description ?? "",
+        paramType: input.paramType ?? "number",
+        defaultValue: input.defaultValue ?? "0",
+        unit: input.unit ?? "",
+        sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? 0) + 1),
+      },
+    });
+    return mapAssemblyParameter(row);
+  }
+
+  async updateAssemblyParameter(
+    assemblyId: string,
+    parameterId: string,
+    patch: AssemblyParameterPatchInput,
+  ): Promise<AssemblyParameter> {
+    await this.requireAssembly(assemblyId);
+    const existing = await this.db.assemblyParameter.findFirst({
+      where: { id: parameterId, assemblyId },
+    });
+    if (!existing) throw new Error(`Parameter ${parameterId} not found`);
+
+    const data: any = {};
+    if (patch.key !== undefined) data.key = patch.key.trim();
+    if (patch.label !== undefined) data.label = patch.label;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.paramType !== undefined) data.paramType = patch.paramType;
+    if (patch.defaultValue !== undefined) data.defaultValue = patch.defaultValue;
+    if (patch.unit !== undefined) data.unit = patch.unit;
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+
+    const updated = await this.db.assemblyParameter.update({ where: { id: parameterId }, data });
+    return mapAssemblyParameter(updated);
+  }
+
+  async deleteAssemblyParameter(assemblyId: string, parameterId: string): Promise<{ deleted: true }> {
+    await this.requireAssembly(assemblyId);
+    const existing = await this.db.assemblyParameter.findFirst({
+      where: { id: parameterId, assemblyId },
+    });
+    if (!existing) throw new Error(`Parameter ${parameterId} not found`);
+    await this.db.assemblyParameter.delete({ where: { id: parameterId } });
+    return { deleted: true };
+  }
+
+  async createAssemblyComponent(
+    assemblyId: string,
+    input: AssemblyComponentInput,
+  ): Promise<AssemblyComponent> {
+    await this.requireAssembly(assemblyId);
+    await this.validateAssemblyComponentRefs(assemblyId, input);
+
+    const maxOrder = await this.db.assemblyComponent.aggregate({
+      where: { assemblyId },
+      _max: { sortOrder: true },
+    });
+
+    const row = await this.db.assemblyComponent.create({
+      data: {
+        id: createId("ac"),
+        assemblyId,
+        componentType: input.componentType,
+        catalogItemId: input.catalogItemId ?? null,
+        rateScheduleItemId: input.rateScheduleItemId ?? null,
+        subAssemblyId: input.subAssemblyId ?? null,
+        quantityExpr: input.quantityExpr ?? "1",
+        description: input.description ?? "",
+        category: input.category ?? "",
+        uomOverride: input.uomOverride ?? null,
+        costOverride: input.costOverride ?? null,
+        markupOverride: input.markupOverride ?? null,
+        parameterBindings: (input.parameterBindings ?? {}) as any,
+        notes: input.notes ?? "",
+        sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? 0) + 1),
+      },
+    });
+    return mapAssemblyComponent(row);
+  }
+
+  async updateAssemblyComponent(
+    assemblyId: string,
+    componentId: string,
+    patch: AssemblyComponentPatchInput,
+  ): Promise<AssemblyComponent> {
+    await this.requireAssembly(assemblyId);
+    const existing = await this.db.assemblyComponent.findFirst({
+      where: { id: componentId, assemblyId },
+    });
+    if (!existing) throw new Error(`Component ${componentId} not found`);
+
+    if (
+      patch.componentType !== undefined ||
+      patch.catalogItemId !== undefined ||
+      patch.rateScheduleItemId !== undefined ||
+      patch.subAssemblyId !== undefined
+    ) {
+      await this.validateAssemblyComponentRefs(assemblyId, {
+        componentType: patch.componentType ?? (existing.componentType as any),
+        catalogItemId: patch.catalogItemId ?? existing.catalogItemId,
+        rateScheduleItemId: patch.rateScheduleItemId ?? existing.rateScheduleItemId,
+        subAssemblyId: patch.subAssemblyId ?? existing.subAssemblyId,
+      });
+    }
+
+    const data: any = {};
+    if (patch.componentType !== undefined) data.componentType = patch.componentType;
+    if (patch.catalogItemId !== undefined) data.catalogItemId = patch.catalogItemId ?? null;
+    if (patch.rateScheduleItemId !== undefined) data.rateScheduleItemId = patch.rateScheduleItemId ?? null;
+    if (patch.subAssemblyId !== undefined) data.subAssemblyId = patch.subAssemblyId ?? null;
+    if (patch.quantityExpr !== undefined) data.quantityExpr = patch.quantityExpr;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.uomOverride !== undefined) data.uomOverride = patch.uomOverride ?? null;
+    if (patch.costOverride !== undefined) data.costOverride = patch.costOverride ?? null;
+    if (patch.markupOverride !== undefined) data.markupOverride = patch.markupOverride ?? null;
+    if (patch.parameterBindings !== undefined) data.parameterBindings = patch.parameterBindings as any;
+    if (patch.notes !== undefined) data.notes = patch.notes;
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+
+    const updated = await this.db.assemblyComponent.update({ where: { id: componentId }, data });
+    return mapAssemblyComponent(updated);
+  }
+
+  async deleteAssemblyComponent(
+    assemblyId: string,
+    componentId: string,
+  ): Promise<{ deleted: true }> {
+    await this.requireAssembly(assemblyId);
+    const existing = await this.db.assemblyComponent.findFirst({
+      where: { id: componentId, assemblyId },
+    });
+    if (!existing) throw new Error(`Component ${componentId} not found`);
+    await this.db.assemblyComponent.delete({ where: { id: componentId } });
+    return { deleted: true };
+  }
+
+  private async requireAssembly(assemblyId: string): Promise<void> {
+    const found = await this.db.assembly.findFirst({
+      where: { id: assemblyId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!found) throw new Error(`Assembly ${assemblyId} not found`);
+  }
+
+  private async validateAssemblyComponentRefs(
+    assemblyId: string,
+    input: {
+      componentType: AssemblyComponentInput["componentType"];
+      catalogItemId?: string | null;
+      rateScheduleItemId?: string | null;
+      subAssemblyId?: string | null;
+    },
+  ): Promise<void> {
+    if (input.componentType === "catalog_item") {
+      if (!input.catalogItemId) throw new Error("catalogItemId is required for catalog_item components");
+      const ci = await this.db.catalogItem.findFirst({
+        where: {
+          id: input.catalogItemId,
+          catalog: { organizationId: this.organizationId },
+        },
+        select: { id: true },
+      });
+      if (!ci) throw new Error(`Catalog item ${input.catalogItemId} not found in this organization`);
+    } else if (input.componentType === "rate_schedule_item") {
+      if (!input.rateScheduleItemId) throw new Error("rateScheduleItemId is required for rate_schedule_item components");
+      const rsi = await this.db.rateScheduleItem.findFirst({
+        where: {
+          id: input.rateScheduleItemId,
+          schedule: { organizationId: this.organizationId },
+        },
+        select: { id: true },
+      });
+      if (!rsi) throw new Error(`Rate-schedule item ${input.rateScheduleItemId} not found in this organization`);
+    } else if (input.componentType === "sub_assembly") {
+      if (!input.subAssemblyId) throw new Error("subAssemblyId is required for sub_assembly components");
+      if (input.subAssemblyId === assemblyId) {
+        throw new Error("An assembly cannot reference itself as a sub-assembly");
+      }
+      await this.requireAssembly(input.subAssemblyId);
+
+      const cycleMap = await this.buildAssemblyDefinitionMap();
+      // Pretend the component is already in place to check whether adding it would form a cycle.
+      const draftAssembly = cycleMap.get(assemblyId);
+      if (draftAssembly) {
+        const draft: AssemblyDefinition = {
+          ...draftAssembly,
+          components: [
+            ...draftAssembly.components,
+            {
+              id: "__draft__",
+              componentType: "sub_assembly",
+              subAssemblyId: input.subAssemblyId,
+              quantityExpr: "1",
+            },
+          ],
+        };
+        const next = new Map(cycleMap);
+        next.set(assemblyId, draft);
+        const cycles = findAssemblyCycles(assemblyId, next);
+        if (cycles.length > 0) {
+          throw new Error(
+            `Adding this sub-assembly would create a cycle: ${cycles[0]!.join(" -> ")}`,
+          );
+        }
+      }
+    } else {
+      throw new Error(`Unknown component type "${input.componentType}"`);
+    }
+  }
+
+  private async buildAssemblyDefinitionMap(): Promise<Map<string, AssemblyDefinition>> {
+    const rows = await this.db.assembly.findMany({
+      where: { organizationId: this.organizationId },
+      include: { parameters: true, components: true },
+    });
+    const map = new Map<string, AssemblyDefinition>();
+    for (const row of rows) {
+      map.set(row.id, {
+        id: row.id,
+        name: row.name,
+        unit: row.unit,
+        parameters: (row.parameters ?? []).map((p: any) => ({
+          key: p.key,
+          label: p.label,
+          defaultValue: p.defaultValue,
+          paramType: p.paramType,
+          unit: p.unit,
+        })),
+        components: (row.components ?? []).map((c: any) => ({
+          id: c.id,
+          componentType: c.componentType,
+          catalogItemId: c.catalogItemId,
+          rateScheduleItemId: c.rateScheduleItemId,
+          subAssemblyId: c.subAssemblyId,
+          quantityExpr: c.quantityExpr,
+          description: c.description,
+          category: c.category,
+          uomOverride: c.uomOverride,
+          costOverride: c.costOverride,
+          markupOverride: c.markupOverride,
+          parameterBindings: (c.parameterBindings as Record<string, string>) ?? {},
+          notes: c.notes,
+          sortOrder: c.sortOrder,
+        })),
+      });
+    }
+    return map;
+  }
+
+  // ── Insert Assembly Into Worksheet ─────────────────────────────────────
+
+  async insertAssemblyIntoWorksheet(
+    projectId: string,
+    worksheetId: string,
+    input: InsertAssemblyIntoWorksheetInput,
+  ): Promise<{ items: WorksheetItem[]; warnings: string[]; instanceId: string }> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
+    if (!revision || !worksheet || worksheet.revisionId !== revision.id) {
+      throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
+    }
+
+    await this.requireAssembly(input.assemblyId);
+
+    // Build expansion context: every assembly visible to this org, plus all
+    // catalog items they reference and all rate-schedule items in this revision.
+    const assemblyMap = await this.buildAssemblyDefinitionMap();
+
+    const allComponents = await this.db.assemblyComponent.findMany({
+      where: { assembly: { organizationId: this.organizationId } },
+      select: { catalogItemId: true, rateScheduleItemId: true },
+    });
+    const catalogItemIds = Array.from(
+      new Set(allComponents.map((c) => c.catalogItemId).filter((id): id is string => Boolean(id))),
+    );
+    const rateScheduleItemIds = Array.from(
+      new Set(allComponents.map((c) => c.rateScheduleItemId).filter((id): id is string => Boolean(id))),
+    );
+
+    const catalogRows = catalogItemIds.length > 0
+      ? await this.db.catalogItem.findMany({ where: { id: { in: catalogItemIds } } })
+      : [];
+    const rateRows = rateScheduleItemIds.length > 0
+      ? await this.db.rateScheduleItem.findMany({ where: { id: { in: rateScheduleItemIds } } })
+      : [];
+
+    const catalogMap = new Map<string, CatalogItemRef>(
+      catalogRows.map((c) => [
+        c.id,
+        {
+          id: c.id,
+          code: c.code,
+          name: c.name,
+          unit: c.unit,
+          unitCost: c.unitCost,
+          unitPrice: c.unitPrice,
+        },
+      ]),
+    );
+    const rateMap = new Map<string, RateScheduleItemRef>(
+      rateRows.map((r) => [
+        r.id,
+        {
+          id: r.id,
+          code: r.code,
+          name: r.name,
+          unit: r.unit,
+          rates: (r.rates as Record<string, number>) ?? {},
+          costRates: (r.costRates as Record<string, number>) ?? {},
+        },
+      ]),
+    );
+
+    const expansion = expandAssembly(
+      input.assemblyId,
+      input.quantity,
+      input.parameterValues ?? {},
+      { assemblies: assemblyMap, catalogItems: catalogMap, rateScheduleItems: rateMap },
+    );
+
+    if (expansion.items.length === 0) {
+      return { items: [], warnings: expansion.warnings, instanceId: "" };
+    }
+
+    const instanceId = createId("asmi");
+    const maxOrder = await this.db.worksheetItem.aggregate({
+      where: { worksheetId },
+      _max: { lineOrder: true },
+    });
+    let nextLineOrder = (maxOrder._max.lineOrder ?? 0) + 1;
+
+    const created: WorksheetItem[] = [];
+    for (const expanded of expansion.items) {
+      const baseInput: CreateWorksheetItemInput = {
+        phaseId: input.phaseId ?? null,
+        category: expanded.category,
+        entityType: expanded.entityType,
+        entityName: expanded.entityName,
+        description: expanded.description,
+        quantity: expanded.quantity,
+        uom: expanded.uom,
+        cost: expanded.unitCost,
+        markup: expanded.markup,
+        price: expanded.unitPrice,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        rateScheduleItemId: expanded.rateScheduleItemId ?? null,
+        itemId: expanded.catalogItemId ?? null,
+        tierUnits: {},
+        sourceNotes: expanded.notes,
+        lineOrder: nextLineOrder++,
+      };
+
+      // Re-use the standard worksheet item creation path so we get the same
+      // calculation pipeline (tier resolution, hour breakdown, calc engine,
+      // estimate snapshot sync, activity log) — then patch the assembly link
+      // fields on top.
+      const { item } = await this.createWorksheetItemWithSnapshot(projectId, worksheetId, baseInput);
+      const patched = await this.db.worksheetItem.update({
+        where: { id: item.id },
+        data: { sourceAssemblyId: input.assemblyId, assemblyInstanceId: instanceId },
+      });
+      created.push({ ...item, sourceAssemblyId: input.assemblyId, assemblyInstanceId: instanceId });
+      void patched;
+    }
+
+    await this.pushActivity(projectId, revision.id, "assembly_inserted", {
+      assemblyId: input.assemblyId,
+      worksheetId,
+      instanceId,
+      itemCount: created.length,
+      parameterValues: input.parameterValues ?? {},
+      quantity: input.quantity,
+    });
+
+    return { items: created, warnings: expansion.warnings, instanceId };
   }
 
   // ── File Node CRUD ─────────────────────────────────────────────────────
