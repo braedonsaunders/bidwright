@@ -685,6 +685,7 @@ export function TakeoffTab({
   const [autoCountResults, setAutoCountResults] = useState<VisionMatch[] | null>(null);
   const [autoCountSnippet, setAutoCountSnippet] = useState<string | null>(null);
   const [autoCountThreshold, setAutoCountThreshold] = useState(0.65);
+  const [autoCountScope, setAutoCountScope] = useState<"page" | "document" | "all">("page");
   const [autoCountModalOpen, setAutoCountModalOpen] = useState(false);
   const [autoCountPending, setAutoCountPending] = useState<{
     matches: VisionMatch[];
@@ -1423,6 +1424,19 @@ export function TakeoffTab({
     setAutoCountSnippet(null);
     setCrossPageLastBbox(bbox);
 
+    // If user picked a wider scope, route through the existing
+    // cross-page / multi-doc handlers instead of running a single-page count.
+    if (autoCountScope === "document" && totalPages > 1) {
+      setAutoCountRunning(false);
+      void handleCrossPageSearch();
+      return;
+    }
+    if (autoCountScope === "all" && pdfDocuments.length > 1) {
+      setAutoCountRunning(false);
+      void handleMultiDocSearch();
+      return;
+    }
+
     try {
       const result = await runVisionCountSymbols({
         projectId,
@@ -1462,6 +1476,9 @@ export function TakeoffTab({
       }
     } catch (err) {
       console.error("Auto-count failed:", err);
+      const message = err instanceof Error ? err.message : "Auto-count failed";
+      setToastMessage(`Auto-count failed: ${message}`);
+      setToastType("error");
     } finally {
       setAutoCountRunning(false);
     }
@@ -2290,15 +2307,27 @@ export function TakeoffTab({
 
             <Separator className="!h-6 !w-px" />
 
-            {/* Calibration indicator */}
+            {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (
-              <Badge tone="success" className="text-[11px]">
-                Calibrated: 1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
-              </Badge>
+              <button
+                type="button"
+                onClick={() => handleToolSelect("calibrate")}
+                className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-500 hover:bg-emerald-500/20 transition-colors"
+                title="Click to recalibrate"
+              >
+                <Scaling className="h-3 w-3" />
+                1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
+              </button>
             ) : (
-              <Badge tone="warning" className="text-[11px]">
-                Not calibrated
-              </Badge>
+              <button
+                type="button"
+                onClick={() => handleToolSelect("calibrate")}
+                className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-500 hover:bg-amber-500/20 transition-colors animate-pulse"
+                title="Click to set the drawing scale"
+              >
+                <Scaling className="h-3 w-3" />
+                Set scale
+              </button>
             )}
           </>
         )}
@@ -2402,18 +2431,18 @@ export function TakeoffTab({
       </div>
 
       {/* ─── Auto-Count Banner ─── */}
-      {!isCadDocument && isAutoCountActive && (
+      {!isCadDocument && (isAutoCountActive || autoCountRunning) && (
         <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
             <p className="text-xs font-medium text-fg/80">
               {autoCountRunning
-                ? "Analyzing drawing for matches..."
+                ? "Analyzing drawing for matches… (this can take 5-15 seconds)"
                 : "Draw a rectangle around a symbol to auto-count all occurrences on this page"}
             </p>
             {!autoCountRunning && (
               <p className="text-[11px] text-fg/40 mt-0.5">
-                Select a symbol by clicking and dragging. The CV pipeline will find all matching symbols.
+                Click and drag a tight box around one example. The CV pipeline finds all visual matches and shows them in a review modal.
               </p>
             )}
           </div>
@@ -2421,6 +2450,48 @@ export function TakeoffTab({
           {autoCountRunning && (
             <Loader2 className="h-4 w-4 animate-spin text-accent" />
           )}
+
+          {/* Scope selector — pick where to search BEFORE drawing the bbox */}
+          <div className="flex items-center gap-1 rounded-md bg-panel2/45 p-0.5">
+            <button
+              type="button"
+              onClick={() => setAutoCountScope("page")}
+              disabled={autoCountRunning}
+              className={cn(
+                "px-2 py-0.5 text-[11px] rounded transition-colors",
+                autoCountScope === "page" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/75",
+              )}
+              title="Search only the current page"
+            >
+              This page
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoCountScope("document")}
+              disabled={autoCountRunning || totalPages <= 1}
+              className={cn(
+                "px-2 py-0.5 text-[11px] rounded transition-colors",
+                autoCountScope === "document" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/75",
+                totalPages <= 1 && "opacity-40 cursor-not-allowed",
+              )}
+              title={totalPages <= 1 ? "Only one page in this document" : `Search all ${totalPages} pages`}
+            >
+              This doc{totalPages > 1 ? ` (${totalPages})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAutoCountScope("all")}
+              disabled={autoCountRunning || pdfDocuments.length <= 1}
+              className={cn(
+                "px-2 py-0.5 text-[11px] rounded transition-colors",
+                autoCountScope === "all" ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/75",
+                pdfDocuments.length <= 1 && "opacity-40 cursor-not-allowed",
+              )}
+              title={pdfDocuments.length <= 1 ? "Only one drawing in the project" : `Search all ${pdfDocuments.length} drawings`}
+            >
+              All drawings{pdfDocuments.length > 1 ? ` (${pdfDocuments.length})` : ""}
+            </button>
+          </div>
 
           {/* Threshold control */}
           <div className="flex items-center gap-1.5">
