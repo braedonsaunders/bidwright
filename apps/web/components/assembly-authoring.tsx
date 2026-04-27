@@ -22,7 +22,8 @@ import {
   updateAssemblyComponent,
   updateAssemblyParameter,
 } from "@/lib/api";
-import { Badge, Button, Input, Label, Select } from "@/components/ui";
+import { Badge, Button, CompactSelect, Input, Label } from "@/components/ui";
+import { SearchablePicker, type SearchablePickerOption } from "@/components/shared/searchable-picker";
 
 export interface CatalogItemRow {
   id: string;
@@ -428,23 +429,45 @@ export function ComponentsEditor({
     [assemblyId, onChange, onError],
   );
 
-  const refOptions = useMemo(() => {
+  const refOptions: SearchablePickerOption[] = useMemo(() => {
     if (draftType === "catalog_item") {
       return catalogItems.map((c) => ({
         id: c.id,
-        label: `${c.code ? `${c.code} — ` : ""}${c.name}`,
-        secondary: `${c.catalogName} · ${c.unit}`,
+        label: c.name,
+        code: c.code || undefined,
+        secondary: c.unit,
+        group: c.catalogName || "Uncategorized",
       }));
     }
     if (draftType === "rate_schedule_item") {
       return rateItems.map((r) => ({
         id: r.id,
-        label: `${r.code ? `${r.code} — ` : ""}${r.name}`,
-        secondary: `${r.scheduleName} · ${r.unit}`,
+        label: r.name,
+        code: r.code || undefined,
+        secondary: r.unit,
+        group: r.scheduleName || "Uncategorized",
       }));
     }
-    return otherAssemblyOptions.map((a) => ({ id: a.id, label: a.label, secondary: a.unit }));
+    return otherAssemblyOptions.map((a) => ({
+      id: a.id,
+      label: a.label,
+      secondary: a.unit,
+    }));
   }, [draftType, catalogItems, rateItems, otherAssemblyOptions]);
+
+  const refSearchPlaceholder =
+    draftType === "catalog_item"
+      ? "Search catalog items by name, code, or catalog…"
+      : draftType === "rate_schedule_item"
+      ? "Search labour rates by name, code, or schedule…"
+      : "Search assemblies by name…";
+
+  const refEmptyMessage =
+    draftType === "catalog_item"
+      ? "No catalog items available. Add some in Settings → Items & Catalogs."
+      : draftType === "rate_schedule_item"
+      ? "No rate-schedule items available. Add some in Settings → Rate Schedules."
+      : "No other assemblies available to nest.";
 
   return (
     <div className="rounded-md border border-fg/10 bg-panel2/40">
@@ -469,18 +492,26 @@ export function ComponentsEditor({
             onRemove={() => remove(c.id)}
           />
         ))}
-        <div className="grid grid-cols-[140px_1fr_120px_auto] gap-2 pt-2 border-t border-fg/10">
-          <Select value={draftType} onChange={(e) => { setDraftType(e.target.value as AssemblyComponentTypeValue); setDraftRef(""); }} className="text-xs">
-            {(["catalog_item", "rate_schedule_item", "sub_assembly"] as AssemblyComponentTypeValue[]).map((t) => (
-              <option key={t} value={t}>{COMPONENT_TYPE_LABELS[t]}</option>
-            ))}
-          </Select>
-          <Select value={draftRef} onChange={(e) => setDraftRef(e.target.value)} className="text-xs">
-            <option value="">Choose…</option>
-            {refOptions.map((opt) => (
-              <option key={opt.id} value={opt.id}>{opt.label} ({opt.secondary})</option>
-            ))}
-          </Select>
+        <div className="grid grid-cols-[150px_1fr_120px_auto] gap-2 pt-2 border-t border-fg/10">
+          <CompactSelect
+            value={draftType}
+            onValueChange={(v) => {
+              setDraftType(v as AssemblyComponentTypeValue);
+              setDraftRef("");
+            }}
+            options={(["catalog_item", "rate_schedule_item", "sub_assembly"] as AssemblyComponentTypeValue[]).map((t) => ({
+              value: t,
+              label: COMPONENT_TYPE_LABELS[t],
+            }))}
+          />
+          <SearchablePicker
+            value={draftRef || null}
+            options={refOptions}
+            onSelect={(id) => setDraftRef(id)}
+            placeholder="Choose…"
+            searchPlaceholder={refSearchPlaceholder}
+            emptyMessage={refEmptyMessage}
+          />
           <Input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="qty / expr" className="text-xs font-mono" />
           <Button onClick={add} disabled={!draftRef} className="text-xs">
             <Plus className="w-3.5 h-3.5" />
