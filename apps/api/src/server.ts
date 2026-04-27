@@ -78,6 +78,7 @@ import { registerCliRoutes } from "./routes/cli-routes.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
+import { assemblyRoutes } from "./routes/assembly-routes.js";
 import { labourCostRoutes } from "./routes/labour-cost-routes.js";
 import { burdenRoutes } from "./routes/burden-routes.js";
 import { travelPolicyRoutes } from "./routes/travel-policy-routes.js";
@@ -5144,6 +5145,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(settingsRoutes);
   app.register(estimateRoutes);
   app.register(catalogRoutes);
+  app.register(assemblyRoutes);
   registerCliRoutes(app);
   registerReviewRoutes(app);
 

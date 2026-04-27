@@ -142,6 +142,7 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
+import { AssemblyManager } from "@/components/assembly-manager";
 import { PluginsPage } from "@/components/plugins-page";
 import { LabourCostManager } from "@/components/labour-cost-manager";
 import { BurdenManager } from "@/components/burden-manager";
@@ -2683,6 +2684,11 @@ export function SettingsPage({
           {/* ── Rate Schedules ─── */}
           {activeGroup === "data" && dataSubTab === "rates" && (
             <RateScheduleManager schedules={rateSchedules} setSchedules={setRateSchedules} loading={ratesLoading} catalogs={initialCatalogs} />
+          )}
+
+          {/* ── Assemblies ─── */}
+          {activeGroup === "data" && dataSubTab === "assemblies" && (
+            <AssemblyManager />
           )}
 
           {/* ── Inclusions / Exclusions ─── */}

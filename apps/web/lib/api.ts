@@ -4342,3 +4342,249 @@ export async function deleteModelTakeoffLink(projectId: string, modelId: string,
     method: "DELETE",
   });
 }
+
+// ---------------------------------------------------------------------------
+// Assemblies
+// ---------------------------------------------------------------------------
+
+export interface AssemblySummaryRecord {
+  id: string;
+  name: string;
+  code: string;
+  category: string;
+  unit: string;
+  description: string;
+  componentCount: number;
+  parameterCount: number;
+  isTemplate: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssemblyParameterRecord {
+  id: string;
+  assemblyId: string;
+  key: string;
+  label: string;
+  description: string;
+  paramType: string;
+  defaultValue: string;
+  unit: string;
+  sortOrder: number;
+}
+
+export type AssemblyComponentTypeValue = "catalog_item" | "rate_schedule_item" | "sub_assembly";
+
+export interface AssemblyComponentRecord {
+  id: string;
+  assemblyId: string;
+  componentType: AssemblyComponentTypeValue;
+  catalogItemId: string | null;
+  rateScheduleItemId: string | null;
+  subAssemblyId: string | null;
+  quantityExpr: string;
+  description: string;
+  category: string;
+  uomOverride: string | null;
+  costOverride: number | null;
+  markupOverride: number | null;
+  parameterBindings: Record<string, string>;
+  notes: string;
+  sortOrder: number;
+}
+
+export interface AssemblyRecord {
+  id: string;
+  organizationId: string | null;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  unit: string;
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  metadata: Record<string, unknown>;
+  parameters: AssemblyParameterRecord[];
+  components: AssemblyComponentRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AssemblyInsertResult {
+  workspace: WorkspaceResponse;
+  insertion: {
+    itemIds: string[];
+    instanceId: string;
+    warnings: string[];
+  };
+}
+
+export async function listAssemblies(): Promise<AssemblySummaryRecord[]> {
+  return apiRequest<AssemblySummaryRecord[]>("/api/assemblies");
+}
+
+export async function getAssembly(assemblyId: string): Promise<AssemblyRecord> {
+  return apiRequest<AssemblyRecord>(`/api/assemblies/${assemblyId}`);
+}
+
+export async function createAssembly(input: {
+  name: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  unit?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<AssemblyRecord> {
+  return apiRequest<AssemblyRecord>("/api/assemblies", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAssembly(
+  assemblyId: string,
+  patch: Partial<{
+    name: string;
+    code: string;
+    description: string;
+    category: string;
+    unit: string;
+    metadata: Record<string, unknown>;
+  }>,
+): Promise<AssemblyRecord> {
+  return apiRequest<AssemblyRecord>(`/api/assemblies/${assemblyId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteAssembly(assemblyId: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/assemblies/${assemblyId}`, { method: "DELETE" });
+}
+
+export async function createAssemblyParameter(
+  assemblyId: string,
+  input: {
+    key: string;
+    label?: string;
+    description?: string;
+    paramType?: string;
+    defaultValue?: string;
+    unit?: string;
+    sortOrder?: number;
+  },
+): Promise<AssemblyParameterRecord> {
+  return apiRequest<AssemblyParameterRecord>(`/api/assemblies/${assemblyId}/parameters`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAssemblyParameter(
+  assemblyId: string,
+  parameterId: string,
+  patch: Partial<{
+    key: string;
+    label: string;
+    description: string;
+    paramType: string;
+    defaultValue: string;
+    unit: string;
+    sortOrder: number;
+  }>,
+): Promise<AssemblyParameterRecord> {
+  return apiRequest<AssemblyParameterRecord>(`/api/assemblies/${assemblyId}/parameters/${parameterId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteAssemblyParameter(assemblyId: string, parameterId: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/assemblies/${assemblyId}/parameters/${parameterId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function createAssemblyComponent(
+  assemblyId: string,
+  input: {
+    componentType: AssemblyComponentTypeValue;
+    catalogItemId?: string | null;
+    rateScheduleItemId?: string | null;
+    subAssemblyId?: string | null;
+    quantityExpr?: string;
+    description?: string;
+    category?: string;
+    uomOverride?: string | null;
+    costOverride?: number | null;
+    markupOverride?: number | null;
+    parameterBindings?: Record<string, string>;
+    notes?: string;
+    sortOrder?: number;
+  },
+): Promise<AssemblyComponentRecord> {
+  return apiRequest<AssemblyComponentRecord>(`/api/assemblies/${assemblyId}/components`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateAssemblyComponent(
+  assemblyId: string,
+  componentId: string,
+  patch: Partial<{
+    componentType: AssemblyComponentTypeValue;
+    catalogItemId: string | null;
+    rateScheduleItemId: string | null;
+    subAssemblyId: string | null;
+    quantityExpr: string;
+    description: string;
+    category: string;
+    uomOverride: string | null;
+    costOverride: number | null;
+    markupOverride: number | null;
+    parameterBindings: Record<string, string>;
+    notes: string;
+    sortOrder: number;
+  }>,
+): Promise<AssemblyComponentRecord> {
+  return apiRequest<AssemblyComponentRecord>(`/api/assemblies/${assemblyId}/components/${componentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteAssemblyComponent(
+  assemblyId: string,
+  componentId: string,
+): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/assemblies/${assemblyId}/components/${componentId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function insertAssemblyIntoWorksheet(
+  projectId: string,
+  worksheetId: string,
+  input: {
+    assemblyId: string;
+    quantity: number;
+    parameterValues?: Record<string, number | string>;
+    phaseId?: string | null;
+  },
+): Promise<AssemblyInsertResult> {
+  return apiRequest<AssemblyInsertResult>(
+    `/projects/${projectId}/worksheets/${worksheetId}/assemblies/insert`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
