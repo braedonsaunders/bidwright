@@ -491,12 +491,35 @@ export class Editor extends HTMLElement {
         const activeDocument = activeView?.document;
         const selectedNodes = activeDocument?.selection.getSelectedNodes() ?? [];
         const visualNodes = activeDocument?.modelManager.findNodes((node) => node instanceof VisualNode) ?? [];
-        const hasDocument = Boolean(activeDocument);
         const hasSelection = selectedNodes.length > 0;
         return [
             {
                 title: "Selection",
                 items: [
+                    {
+                        label: "Isolate Selected",
+                        icon: "icon-filter",
+                        disabled: !hasSelection,
+                        action: () => this._isolateSelection(),
+                    },
+                    {
+                        label: "Hide Selected",
+                        icon: "icon-eye-slash",
+                        disabled: !hasSelection,
+                        action: () => this._setSelectedVisibility(false),
+                    },
+                    {
+                        label: "Move",
+                        icon: "icon-move",
+                        disabled: !hasSelection,
+                        action: () => this._executeCommand("modify.move"),
+                    },
+                    {
+                        label: "Rotate",
+                        icon: "icon-rotate",
+                        disabled: !hasSelection,
+                        action: () => this._executeCommand("modify.rotate"),
+                    },
                     {
                         label: "Select All Geometry",
                         icon: "icon-all",
@@ -518,30 +541,6 @@ export class Editor extends HTMLElement {
                         action: () => this._copyBidWrightQuantitySummary(),
                     },
                     {
-                        label: "Hide Selected",
-                        icon: "icon-eye-slash",
-                        disabled: !hasSelection,
-                        action: () => this._setSelectedVisibility(false),
-                    },
-                    {
-                        label: "Isolate Selected",
-                        icon: "icon-filter",
-                        disabled: !hasSelection,
-                        action: () => this._isolateSelection(),
-                    },
-                    {
-                        label: "Show All",
-                        icon: "icon-eye",
-                        disabled: visualNodes.length === 0,
-                        action: () => this._showAllGeometry(),
-                    },
-                    {
-                        label: "Duplicate Selected",
-                        icon: "icon-copy",
-                        disabled: !hasSelection,
-                        action: () => this._duplicateSelection(),
-                    },
-                    {
                         label: "Delete Selected",
                         icon: "icon-delete",
                         shortcut: "Del",
@@ -561,68 +560,7 @@ export class Editor extends HTMLElement {
                         disabled: !activeView,
                         action: () => this._fitActiveView(),
                     },
-                    {
-                        label: "Zoom In",
-                        icon: "icon-zoomin",
-                        disabled: !activeView,
-                        action: () => this._zoomActiveView(-5),
-                    },
-                    {
-                        label: "Zoom Out",
-                        icon: "icon-zoomout",
-                        disabled: !activeView,
-                        action: () => this._zoomActiveView(5),
-                    },
-                    {
-                        label: "Orthographic",
-                        icon: "icon-orthographic",
-                        checked: (activeView?.cameraController as { cameraType?: string } | undefined)?.cameraType === "orthographic",
-                        disabled: !activeView,
-                        action: () => this._setCameraType("orthographic"),
-                    },
-                    {
-                        label: "Perspective",
-                        icon: "icon-perspective",
-                        checked: (activeView?.cameraController as { cameraType?: string } | undefined)?.cameraType === "perspective",
-                        disabled: !activeView,
-                        action: () => this._setCameraType("perspective"),
-                    },
-                ],
-            },
-            {
-                title: "Edit",
-                items: [
-                    { label: "Undo", icon: "icon-undo", shortcut: "Ctrl+Z", disabled: !hasDocument, action: () => this._executeCommand("edit.undo") },
-                    { label: "Redo", icon: "icon-redo", shortcut: "Ctrl+Y", disabled: !hasDocument, action: () => this._executeCommand("edit.redo") },
-                    { label: "Properties", icon: "icon-cog", disabled: !hasDocument, action: () => this._setActiveSidebarTab("properties") },
-                    { label: "New Folder", icon: "icon-folder-plus", disabled: !hasDocument, action: () => this._executeCommand("create.folder") },
-                    { label: "Import Model", icon: "icon-import", disabled: !hasDocument, action: () => this._executeCommand("file.import") },
-                    { label: "Export Model", icon: "icon-export", disabled: !hasDocument, action: () => this._executeCommand("file.export") },
-                ],
-            },
-            {
-                title: "Modify",
-                items: [
-                    { label: "Move", icon: "icon-move", disabled: !hasSelection, action: () => this._executeCommand("modify.move") },
-                    { label: "Rotate", icon: "icon-rotate", disabled: !hasSelection, action: () => this._executeCommand("modify.rotate") },
-                    { label: "Mirror", icon: "icon-mirror", disabled: !hasSelection, action: () => this._executeCommand("modify.mirror") },
-                    { label: "Explode", icon: "icon-explode", disabled: !hasSelection, action: () => this._executeCommand("modify.explode") },
-                    { label: "Fillet", icon: "icon-fillet", disabled: !hasSelection, action: () => this._executeCommand("modify.fillet") },
-                    { label: "Chamfer", icon: "icon-chamfer", disabled: !hasSelection, action: () => this._executeCommand("modify.chamfer") },
-                    { label: "Simplify Shape", icon: "icon-simplify", disabled: !hasSelection, action: () => this._executeCommand("modify.simplifyShape") },
-                ],
-            },
-            {
-                title: "Create / Measure",
-                items: [
-                    { label: "Box", icon: "icon-box", disabled: !hasDocument, action: () => this._executeCommand("create.box") },
-                    { label: "Cylinder", icon: "icon-cylinder", disabled: !hasDocument, action: () => this._executeCommand("create.cylinder") },
-                    { label: "Sphere", icon: "icon-sphere", disabled: !hasDocument, action: () => this._executeCommand("create.sphere") },
-                    { label: "Line", icon: "icon-line", disabled: !hasDocument, action: () => this._executeCommand("create.line") },
-                    { label: "Rectangle", icon: "icon-rect", disabled: !hasDocument, action: () => this._executeCommand("create.rect") },
-                    { label: "Circle", icon: "icon-circle", disabled: !hasDocument, action: () => this._executeCommand("create.circle") },
-                    { label: "Measure Length", icon: "icon-measureLength", disabled: !hasDocument, action: () => this._executeCommand("measure.length") },
-                    { label: "Measure Angle", icon: "icon-measureAngle", disabled: !hasDocument, action: () => this._executeCommand("measure.angle") },
+                    { label: "Show All", icon: "icon-eye", disabled: visualNodes.length === 0, action: () => this._showAllGeometry() },
                 ],
             },
         ];

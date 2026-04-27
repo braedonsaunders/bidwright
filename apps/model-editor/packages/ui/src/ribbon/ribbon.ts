@@ -90,7 +90,7 @@ export class RibbonUI extends HTMLElement {
     }
 
     private header() {
-        return div({ className: style.titleBar }, this.leftPanel(), this.centerPanel(), this.rightPanel());
+        return div({ className: style.titleBar }, this.leftPanel(), this.rightPanel());
     }
 
     private leftPanel() {
