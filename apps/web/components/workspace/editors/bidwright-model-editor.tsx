@@ -153,6 +153,20 @@ interface BidwrightModelLineItemDeleteMessage {
   worksheetItemId: string;
 }
 
+export interface BidwrightModelDocumentSaveMessage {
+  type: "bidwright:model-document-save";
+  source: "bidwright-model-editor";
+  version: number;
+  eventId?: string;
+  projectId?: string;
+  modelId?: string;
+  modelDocumentId?: string;
+  fileName?: string;
+  documentId: string;
+  documentName: string;
+  serializedDocument: Record<string, unknown>;
+}
+
 interface BidwrightModelChannelMessage {
   type:
     | "model-selection"
@@ -160,7 +174,8 @@ interface BidwrightModelChannelMessage {
     | "model-line-items-request"
     | "model-estimate-context-request"
     | "model-line-item-update"
-    | "model-line-item-delete";
+    | "model-line-item-delete"
+    | "model-document-save";
   source: "bidwright-model-editor";
   version: number;
   eventId?: string;
@@ -174,6 +189,10 @@ interface BidwrightModelChannelMessage {
   linkId?: string;
   worksheetItemId?: string;
   patch?: BidwrightModelLineItemUpdateMessage["patch"];
+  fileName?: string;
+  documentId?: string;
+  documentName?: string;
+  serializedDocument?: Record<string, unknown>;
 }
 
 interface BidwrightModelEditorProps {
@@ -206,9 +225,10 @@ interface BidwrightModelEditorProps {
   onDeleteLinkedLineItem?: (
     payload: Pick<BidwrightModelLineItemDeleteMessage, "linkId" | "worksheetItemId">,
   ) => void | Promise<void>;
+  onSaveDocument?: (payload: BidwrightModelDocumentSaveMessage) => void | Promise<void>;
 }
 
-export const MODEL_EDITOR_EDITABLE_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl"]);
+export const MODEL_EDITOR_EDITABLE_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl"]);
 
 export function getModelFileExtension(fileName?: string | null): string {
   return fileName?.split(".").pop()?.toLowerCase() ?? "";
@@ -314,6 +334,18 @@ function isLineItemDeleteMessage(data: unknown): data is BidwrightModelLineItemD
   );
 }
 
+function isModelDocumentSaveMessage(data: unknown): data is BidwrightModelDocumentSaveMessage {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      (data as { type?: unknown }).type === "bidwright:model-document-save" &&
+      (data as { source?: unknown }).source === "bidwright-model-editor" &&
+      typeof (data as { documentId?: unknown }).documentId === "string" &&
+      typeof (data as { documentName?: unknown }).documentName === "string" &&
+      typeof (data as { serializedDocument?: unknown }).serializedDocument === "object"
+  );
+}
+
 function isModelChannelMessage(data: unknown): data is BidwrightModelChannelMessage {
   return Boolean(
     data &&
@@ -323,7 +355,8 @@ function isModelChannelMessage(data: unknown): data is BidwrightModelChannelMess
         (data as { type?: unknown }).type === "model-line-items-request" ||
         (data as { type?: unknown }).type === "model-estimate-context-request" ||
         (data as { type?: unknown }).type === "model-line-item-update" ||
-        (data as { type?: unknown }).type === "model-line-item-delete") &&
+        (data as { type?: unknown }).type === "model-line-item-delete" ||
+        (data as { type?: unknown }).type === "model-document-save") &&
       (data as { source?: unknown }).source === "bidwright-model-editor"
   );
 }
@@ -359,6 +392,7 @@ export function BidwrightModelEditor({
   onSendSelectionToEstimate,
   onUpdateLinkedLineItem,
   onDeleteLinkedLineItem,
+  onSaveDocument,
 }: BidwrightModelEditorProps) {
   const [loading, setLoading] = useState(true);
   const [sendingSelection, setSendingSelection] = useState(false);
@@ -367,6 +401,7 @@ export function BidwrightModelEditor({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const handledSendEventsRef = useRef<Set<string>>(new Set());
   const handledLineItemEventsRef = useRef<Set<string>>(new Set());
+  const handledDocumentSaveEventsRef = useRef<Set<string>>(new Set());
   const channelRef = useRef<BroadcastChannel | null>(null);
   const linkedLineItemsRef = useRef(linkedLineItems);
   const channelInstanceIdRef = useRef(makeModelEditorChannelId());
@@ -553,6 +588,18 @@ export function BidwrightModelEditor({
     [onDeleteLinkedLineItem]
   );
 
+  const handleIncomingDocumentSave = useCallback(
+    async (message: BidwrightModelDocumentSaveMessage) => {
+      if (!onSaveDocument) return;
+      if (message.eventId) {
+        if (handledDocumentSaveEventsRef.current.has(message.eventId)) return;
+        handledDocumentSaveEventsRef.current.add(message.eventId);
+      }
+      await onSaveDocument(message);
+    },
+    [onSaveDocument]
+  );
+
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
       if (iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow) return;
@@ -578,6 +625,10 @@ export function BidwrightModelEditor({
       }
       if (isLineItemDeleteMessage(event.data)) {
         void handleIncomingLineItemDelete(event.data);
+        return;
+      }
+      if (isModelDocumentSaveMessage(event.data)) {
+        void handleIncomingDocumentSave(event.data);
       }
     }
 
@@ -588,6 +639,7 @@ export function BidwrightModelEditor({
     handleIncomingLineItemUpdate,
     handleIncomingSelection,
     handleIncomingSendToEstimate,
+    handleIncomingDocumentSave,
     postEstimateContext,
     postLinkedLineItemsState,
   ]);
@@ -640,6 +692,27 @@ export function BidwrightModelEditor({
           linkId: event.data.linkId,
           worksheetItemId: event.data.worksheetItemId,
         });
+        return;
+      }
+      if (
+        event.data.type === "model-document-save" &&
+        event.data.documentId &&
+        event.data.documentName &&
+        event.data.serializedDocument
+      ) {
+        void handleIncomingDocumentSave({
+          type: "bidwright:model-document-save",
+          source: "bidwright-model-editor",
+          version: event.data.version,
+          eventId: event.data.eventId,
+          projectId: event.data.projectId,
+          modelId: event.data.modelId,
+          modelDocumentId: event.data.modelDocumentId,
+          fileName: event.data.fileName,
+          documentId: event.data.documentId,
+          documentName: event.data.documentName,
+          serializedDocument: event.data.serializedDocument,
+        });
       }
     };
 
@@ -649,6 +722,7 @@ export function BidwrightModelEditor({
     };
   }, [
     effectiveSyncChannelName,
+    handleIncomingDocumentSave,
     handleIncomingLineItemDelete,
     handleIncomingLineItemUpdate,
     handleIncomingSelection,
@@ -670,6 +744,7 @@ export function BidwrightModelEditor({
 
   useEffect(() => {
     handledSendEventsRef.current.clear();
+    handledDocumentSaveEventsRef.current.clear();
   }, [editorUrl]);
 
   const canSendSelection = Boolean(
