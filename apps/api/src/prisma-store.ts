@@ -30,6 +30,7 @@ import type {
   Assembly,
   AssemblyComponent,
   AssemblyDefinition,
+  AssemblyInstanceRecord,
   AssemblyParameter,
   AssemblySummary,
   AuthSession,
@@ -137,6 +138,7 @@ import {
   mapBurdenPeriod,
   mapAssembly,
   mapAssemblyComponent,
+  mapAssemblyInstance,
   mapAssemblyParameter,
   mapAssemblySummary,
   mapCatalog,
@@ -8393,24 +8395,13 @@ export class PrismaApiStore {
     return map;
   }
 
-  // ── Insert Assembly Into Worksheet ─────────────────────────────────────
+  // ── Assembly Expansion Context ─────────────────────────────────────────
 
-  async insertAssemblyIntoWorksheet(
-    projectId: string,
-    worksheetId: string,
-    input: InsertAssemblyIntoWorksheetInput,
-  ): Promise<{ items: WorksheetItem[]; warnings: string[]; instanceId: string }> {
-    await this.requireProject(projectId);
-    const { revision } = await this.findCurrentRevision(projectId);
-    const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
-    if (!revision || !worksheet || worksheet.revisionId !== revision.id) {
-      throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
-    }
-
-    await this.requireAssembly(input.assemblyId);
-
-    // Build expansion context: every assembly visible to this org, plus all
-    // catalog items they reference and all rate-schedule items in this revision.
+  private async buildExpansionContext(): Promise<{
+    assemblyMap: Map<string, AssemblyDefinition>;
+    catalogMap: Map<string, CatalogItemRef>;
+    rateMap: Map<string, RateScheduleItemRef>;
+  }> {
     const assemblyMap = await this.buildAssemblyDefinitionMap();
 
     const allComponents = await this.db.assemblyComponent.findMany({
@@ -8434,14 +8425,7 @@ export class PrismaApiStore {
     const catalogMap = new Map<string, CatalogItemRef>(
       catalogRows.map((c) => [
         c.id,
-        {
-          id: c.id,
-          code: c.code,
-          name: c.name,
-          unit: c.unit,
-          unitCost: c.unitCost,
-          unitPrice: c.unitPrice,
-        },
+        { id: c.id, code: c.code, name: c.name, unit: c.unit, unitCost: c.unitCost, unitPrice: c.unitPrice },
       ]),
     );
     const rateMap = new Map<string, RateScheduleItemRef>(
@@ -8458,6 +8442,91 @@ export class PrismaApiStore {
       ]),
     );
 
+    return { assemblyMap, catalogMap, rateMap };
+  }
+
+  async previewAssemblyExpansion(
+    assemblyId: string,
+    quantity: number,
+    parameterValues: Record<string, number | string>,
+  ): Promise<{
+    items: Array<{
+      componentPath: string[];
+      componentType: string;
+      catalogItemId?: string;
+      rateScheduleItemId?: string;
+      category: string;
+      entityName: string;
+      description: string;
+      quantity: number;
+      uom: string;
+      unitCost: number;
+      unitPrice: number;
+      markup: number;
+      lineCost: number;
+      linePrice: number;
+    }>;
+    totals: { cost: number; price: number; lineCount: number };
+    warnings: string[];
+  }> {
+    await this.requireAssembly(assemblyId);
+    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
+
+    const expansion = expandAssembly(assemblyId, quantity, parameterValues ?? {}, {
+      assemblies: assemblyMap,
+      catalogItems: catalogMap,
+      rateScheduleItems: rateMap,
+    });
+
+    let totalCost = 0;
+    let totalPrice = 0;
+    const items = expansion.items.map((it) => {
+      const lineCost = it.unitCost * it.quantity;
+      const linePrice = it.unitPrice * it.quantity * (1 + (it.markup ?? 0));
+      totalCost += lineCost;
+      totalPrice += linePrice;
+      return {
+        componentPath: it.componentPath,
+        componentType: it.componentType,
+        catalogItemId: it.catalogItemId,
+        rateScheduleItemId: it.rateScheduleItemId,
+        category: it.category,
+        entityName: it.entityName,
+        description: it.description,
+        quantity: it.quantity,
+        uom: it.uom,
+        unitCost: it.unitCost,
+        unitPrice: it.unitPrice,
+        markup: it.markup,
+        lineCost,
+        linePrice,
+      };
+    });
+
+    return {
+      items,
+      totals: { cost: totalCost, price: totalPrice, lineCount: items.length },
+      warnings: expansion.warnings,
+    };
+  }
+
+  // ── Insert Assembly Into Worksheet ─────────────────────────────────────
+
+  async insertAssemblyIntoWorksheet(
+    projectId: string,
+    worksheetId: string,
+    input: InsertAssemblyIntoWorksheetInput,
+  ): Promise<{ items: WorksheetItem[]; warnings: string[]; instanceId: string }> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
+    if (!revision || !worksheet || worksheet.revisionId !== revision.id) {
+      throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
+    }
+
+    await this.requireAssembly(input.assemblyId);
+
+    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
     const expansion = expandAssembly(
       input.assemblyId,
       input.quantity,
@@ -8469,7 +8538,60 @@ export class PrismaApiStore {
       return { items: [], warnings: expansion.warnings, instanceId: "" };
     }
 
-    const instanceId = createId("asmi");
+    const instance = await this.db.assemblyInstance.create({
+      data: {
+        id: createId("asmi"),
+        worksheetId,
+        assemblyId: input.assemblyId,
+        phaseId: input.phaseId ?? null,
+        quantity: input.quantity,
+        parameterValues: (input.parameterValues ?? {}) as any,
+      },
+    });
+
+    const created = await this.expandInstanceIntoWorksheet(
+      projectId,
+      worksheetId,
+      instance.id,
+      input.assemblyId,
+      expansion.items,
+    );
+
+    await this.pushActivity(projectId, revision.id, "assembly_inserted", {
+      assemblyId: input.assemblyId,
+      worksheetId,
+      instanceId: instance.id,
+      itemCount: created.length,
+      parameterValues: input.parameterValues ?? {},
+      quantity: input.quantity,
+    });
+
+    return { items: created, warnings: expansion.warnings, instanceId: instance.id };
+  }
+
+  // Materialise an array of expanded leaf components into WorksheetItem rows
+  // tagged with the given assembly + instance ids. Reused by the initial
+  // insertion flow and the resync-instance flow.
+  private async expandInstanceIntoWorksheet(
+    projectId: string,
+    worksheetId: string,
+    instanceId: string,
+    assemblyId: string,
+    expandedItems: Array<{
+      catalogItemId?: string;
+      rateScheduleItemId?: string;
+      category: string;
+      entityType: string;
+      entityName: string;
+      description: string;
+      quantity: number;
+      uom: string;
+      unitCost: number;
+      unitPrice: number;
+      markup: number;
+      notes: string;
+    }>,
+  ): Promise<WorksheetItem[]> {
     const maxOrder = await this.db.worksheetItem.aggregate({
       where: { worksheetId },
       _max: { lineOrder: true },
@@ -8477,9 +8599,9 @@ export class PrismaApiStore {
     let nextLineOrder = (maxOrder._max.lineOrder ?? 0) + 1;
 
     const created: WorksheetItem[] = [];
-    for (const expanded of expansion.items) {
+    for (const expanded of expandedItems) {
       const baseInput: CreateWorksheetItemInput = {
-        phaseId: input.phaseId ?? null,
+        phaseId: null,
         category: expanded.category,
         entityType: expanded.entityType,
         entityName: expanded.entityName,
@@ -8499,29 +8621,224 @@ export class PrismaApiStore {
         lineOrder: nextLineOrder++,
       };
 
-      // Re-use the standard worksheet item creation path so we get the same
-      // calculation pipeline (tier resolution, hour breakdown, calc engine,
-      // estimate snapshot sync, activity log) — then patch the assembly link
-      // fields on top.
       const { item } = await this.createWorksheetItemWithSnapshot(projectId, worksheetId, baseInput);
-      const patched = await this.db.worksheetItem.update({
+      await this.db.worksheetItem.update({
         where: { id: item.id },
-        data: { sourceAssemblyId: input.assemblyId, assemblyInstanceId: instanceId },
+        data: { sourceAssemblyId: assemblyId, assemblyInstanceId: instanceId },
       });
-      created.push({ ...item, sourceAssemblyId: input.assemblyId, assemblyInstanceId: instanceId });
-      void patched;
+      created.push({ ...item, sourceAssemblyId: assemblyId, assemblyInstanceId: instanceId });
     }
+    return created;
+  }
 
-    await this.pushActivity(projectId, revision.id, "assembly_inserted", {
-      assemblyId: input.assemblyId,
-      worksheetId,
-      instanceId,
-      itemCount: created.length,
-      parameterValues: input.parameterValues ?? {},
-      quantity: input.quantity,
+  // ── Assembly Instance Operations ───────────────────────────────────────
+
+  async listAssemblyInstancesForWorksheet(worksheetId: string): Promise<AssemblyInstanceRecord[]> {
+    const rows = await this.db.assemblyInstance.findMany({
+      where: { worksheetId },
+      include: {
+        assembly: { select: { name: true, organizationId: true } },
+        _count: { select: { worksheetItems: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows
+      .filter((r) => !r.assembly || r.assembly.organizationId === this.organizationId)
+      .map(mapAssemblyInstance);
+  }
+
+  async deleteAssemblyInstance(
+    projectId: string,
+    instanceId: string,
+  ): Promise<{ deleted: true; itemCount: number }> {
+    await this.requireProject(projectId);
+    const instance = await this.db.assemblyInstance.findFirst({ where: { id: instanceId } });
+    if (!instance) throw new Error(`Assembly instance ${instanceId} not found`);
+
+    const items = await this.db.worksheetItem.findMany({
+      where: { assemblyInstanceId: instanceId },
+      select: { id: true },
     });
 
-    return { items: created, warnings: expansion.warnings, instanceId };
+    for (const it of items) {
+      await this.deleteWorksheetItem(projectId, it.id);
+    }
+    await this.db.assemblyInstance.delete({ where: { id: instanceId } });
+
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (revision) {
+      await this.pushActivity(projectId, revision.id, "assembly_instance_deleted", {
+        instanceId,
+        assemblyId: instance.assemblyId,
+        worksheetId: instance.worksheetId,
+        itemCount: items.length,
+      });
+    }
+    return { deleted: true, itemCount: items.length };
+  }
+
+  async resyncAssemblyInstance(
+    projectId: string,
+    instanceId: string,
+    overrides?: { quantity?: number; parameterValues?: Record<string, number | string>; phaseId?: string | null },
+  ): Promise<{ items: WorksheetItem[]; warnings: string[]; instanceId: string; itemCount: number }> {
+    await this.requireProject(projectId);
+    const instance = await this.db.assemblyInstance.findFirst({ where: { id: instanceId } });
+    if (!instance) throw new Error(`Assembly instance ${instanceId} not found`);
+    if (!instance.assemblyId) throw new Error(`Assembly instance ${instanceId} has no source assembly to re-sync from`);
+
+    const nextQuantity = overrides?.quantity ?? instance.quantity;
+    const nextParams =
+      overrides?.parameterValues !== undefined
+        ? overrides.parameterValues
+        : ((instance.parameterValues as Record<string, number | string>) ?? {});
+    const nextPhase = overrides?.phaseId !== undefined ? overrides.phaseId : instance.phaseId;
+
+    await this.requireAssembly(instance.assemblyId);
+    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
+    const expansion = expandAssembly(instance.assemblyId, nextQuantity, nextParams, {
+      assemblies: assemblyMap,
+      catalogItems: catalogMap,
+      rateScheduleItems: rateMap,
+    });
+
+    // Delete the existing line items for this instance.
+    const existing = await this.db.worksheetItem.findMany({
+      where: { assemblyInstanceId: instanceId },
+      select: { id: true },
+    });
+    for (const it of existing) {
+      await this.deleteWorksheetItem(projectId, it.id);
+    }
+
+    // Update the instance with the new parameters / quantity / phase.
+    await this.db.assemblyInstance.update({
+      where: { id: instanceId },
+      data: {
+        quantity: nextQuantity,
+        parameterValues: (nextParams ?? {}) as any,
+        phaseId: nextPhase ?? null,
+      },
+    });
+
+    const created = await this.expandInstanceIntoWorksheet(
+      projectId,
+      instance.worksheetId,
+      instanceId,
+      instance.assemblyId,
+      expansion.items,
+    );
+
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (revision) {
+      await this.pushActivity(projectId, revision.id, "assembly_instance_resynced", {
+        instanceId,
+        assemblyId: instance.assemblyId,
+        worksheetId: instance.worksheetId,
+        replacedCount: existing.length,
+        newCount: created.length,
+        quantity: nextQuantity,
+        parameterValues: nextParams,
+      });
+    }
+
+    return { items: created, warnings: expansion.warnings, instanceId, itemCount: created.length };
+  }
+
+  // ── Save Selection As Assembly ─────────────────────────────────────────
+
+  async saveSelectionAsAssembly(
+    projectId: string,
+    worksheetId: string,
+    input: { name: string; code?: string; description?: string; category?: string; unit?: string; worksheetItemIds: string[] },
+  ): Promise<{ assembly: Assembly; skippedFreeform: number }> {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) throw new Error(`Project ${projectId} has no active revision`);
+
+    const items = await this.db.worksheetItem.findMany({
+      where: { id: { in: input.worksheetItemIds }, worksheetId },
+    });
+    if (items.length === 0) throw new Error("No worksheet items provided to save as assembly");
+
+    // Fetch ref names + units so we can populate component overrides accurately.
+    const catalogIds = items.map((i) => i.itemId).filter((x): x is string => Boolean(x));
+    const rateIds = items.map((i) => i.rateScheduleItemId).filter((x): x is string => Boolean(x));
+    const [catalogRows, rateRows] = await Promise.all([
+      catalogIds.length > 0
+        ? this.db.catalogItem.findMany({
+            where: { id: { in: catalogIds }, catalog: { organizationId: this.organizationId } },
+          })
+        : Promise.resolve([]),
+      rateIds.length > 0
+        ? this.db.rateScheduleItem.findMany({
+            where: { id: { in: rateIds }, schedule: { organizationId: this.organizationId } },
+          })
+        : Promise.resolve([]),
+    ]);
+    const catalogSet = new Set(catalogRows.map((c) => c.id));
+    const rateSet = new Set(rateRows.map((r) => r.id));
+
+    const assembly = await this.db.assembly.create({
+      data: {
+        id: createId("asm"),
+        organizationId: this.organizationId,
+        name: input.name.trim() || "New assembly",
+        code: input.code ?? "",
+        description: input.description ?? "",
+        category: input.category ?? "",
+        unit: input.unit || "EA",
+      },
+    });
+
+    let skippedFreeform = 0;
+    let sortOrder = 1;
+    for (const item of items) {
+      let componentType: "catalog_item" | "rate_schedule_item" | null = null;
+      let catalogItemId: string | null = null;
+      let rateScheduleItemId: string | null = null;
+      if (item.itemId && catalogSet.has(item.itemId)) {
+        componentType = "catalog_item";
+        catalogItemId = item.itemId;
+      } else if (item.rateScheduleItemId && rateSet.has(item.rateScheduleItemId)) {
+        componentType = "rate_schedule_item";
+        rateScheduleItemId = item.rateScheduleItemId;
+      } else {
+        skippedFreeform++;
+        continue;
+      }
+
+      await this.db.assemblyComponent.create({
+        data: {
+          id: createId("ac"),
+          assemblyId: assembly.id,
+          componentType,
+          catalogItemId,
+          rateScheduleItemId,
+          quantityExpr: String(item.quantity ?? 1),
+          description: item.description ?? "",
+          category: item.category ?? "",
+          uomOverride: item.uom ?? null,
+          costOverride: item.cost ?? null,
+          markupOverride: item.markup ?? null,
+          notes: item.sourceNotes ?? "",
+          sortOrder: sortOrder++,
+        },
+      });
+    }
+
+    await this.pushActivity(projectId, revision.id, "assembly_saved_from_selection", {
+      assemblyId: assembly.id,
+      worksheetId,
+      worksheetItemIds: input.worksheetItemIds,
+      skippedFreeform,
+    });
+
+    const full = await this.db.assembly.findFirst({
+      where: { id: assembly.id },
+      include: { parameters: true, components: true },
+    });
+    return { assembly: mapAssembly(full!), skippedFreeform };
   }
 
   // ── File Node CRUD ─────────────────────────────────────────────────────

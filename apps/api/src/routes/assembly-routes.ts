@@ -52,6 +52,27 @@ const insertAssemblySchema = z.object({
   phaseId: z.string().nullable().optional(),
 });
 
+const previewAssemblySchema = z.object({
+  assemblyId: z.string().min(1),
+  quantity: z.number().refine((n) => Number.isFinite(n), "quantity must be finite"),
+  parameterValues: z.record(z.union([z.number(), z.string()])).optional(),
+});
+
+const saveSelectionSchema = z.object({
+  name: z.string().min(1),
+  code: z.string().optional(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  unit: z.string().optional(),
+  worksheetItemIds: z.array(z.string()).min(1),
+});
+
+const resyncInstanceSchema = z.object({
+  quantity: z.number().optional(),
+  parameterValues: z.record(z.union([z.number(), z.string()])).optional(),
+  phaseId: z.string().nullable().optional(),
+});
+
 function statusForError(message: string): number {
   if (!message) return 500;
   if (message.includes("not found")) return 404;
@@ -206,6 +227,101 @@ export async function assemblyRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // ── Insert Into Worksheet ──────────────────────────────────────────────
+
+  // ── Preview / Dry-run ──────────────────────────────────────────────────
+
+  app.post("/api/assemblies/preview", async (request, reply) => {
+    const parsed = previewAssemblySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: "Invalid payload", issues: parsed.error.flatten() };
+    }
+    try {
+      return await request.store!.previewAssemblyExpansion(
+        parsed.data.assemblyId,
+        parsed.data.quantity,
+        parsed.data.parameterValues ?? {},
+      );
+    } catch (e: any) {
+      reply.code(statusForError(e?.message ?? ""));
+      return { error: e?.message ?? "Internal error" };
+    }
+  });
+
+  // ── Save selection from worksheet ──────────────────────────────────────
+
+  app.post("/projects/:projectId/worksheets/:worksheetId/assemblies/save-selection", async (request, reply) => {
+    const { projectId, worksheetId } = request.params as { projectId: string; worksheetId: string };
+    const parsed = saveSelectionSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: "Invalid payload", issues: parsed.error.flatten() };
+    }
+    try {
+      const result = await request.store!.saveSelectionAsAssembly(projectId, worksheetId, parsed.data);
+      reply.code(201);
+      return result;
+    } catch (e: any) {
+      reply.code(statusForError(e?.message ?? ""));
+      return { error: e?.message ?? "Internal error" };
+    }
+  });
+
+  // ── Instance Operations ────────────────────────────────────────────────
+
+  app.get("/projects/:projectId/worksheets/:worksheetId/assemblies/instances", async (request, reply) => {
+    const { worksheetId } = request.params as { worksheetId: string };
+    try {
+      return await request.store!.listAssemblyInstancesForWorksheet(worksheetId);
+    } catch (e: any) {
+      reply.code(statusForError(e?.message ?? ""));
+      return { error: e?.message ?? "Internal error" };
+    }
+  });
+
+  app.delete("/projects/:projectId/assemblies/instances/:instanceId", async (request, reply) => {
+    const { projectId, instanceId } = request.params as { projectId: string; instanceId: string };
+    try {
+      const result = await request.store!.deleteAssemblyInstance(projectId, instanceId);
+      const workspace = await buildWorkspaceResponse(request.store!, projectId);
+      if (!workspace) {
+        reply.code(404);
+        return { error: "Project workspace not found" };
+      }
+      return { workspace, deleted: result };
+    } catch (e: any) {
+      reply.code(statusForError(e?.message ?? ""));
+      return { error: e?.message ?? "Internal error" };
+    }
+  });
+
+  app.post("/projects/:projectId/assemblies/instances/:instanceId/resync", async (request, reply) => {
+    const { projectId, instanceId } = request.params as { projectId: string; instanceId: string };
+    const parsed = resyncInstanceSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      reply.code(400);
+      return { error: "Invalid payload", issues: parsed.error.flatten() };
+    }
+    try {
+      const result = await request.store!.resyncAssemblyInstance(projectId, instanceId, {
+        quantity: parsed.data.quantity,
+        parameterValues: parsed.data.parameterValues,
+        phaseId: parsed.data.phaseId,
+      });
+      const workspace = await buildWorkspaceResponse(request.store!, projectId);
+      if (!workspace) {
+        reply.code(404);
+        return { error: "Project workspace not found" };
+      }
+      return {
+        workspace,
+        resync: { itemIds: result.items.map((i) => i.id), instanceId, warnings: result.warnings, itemCount: result.itemCount },
+      };
+    } catch (e: any) {
+      reply.code(statusForError(e?.message ?? ""));
+      return { error: e?.message ?? "Internal error" };
+    }
+  });
 
   app.post("/projects/:projectId/worksheets/:worksheetId/assemblies/insert", async (request, reply) => {
     const { projectId, worksheetId } = request.params as { projectId: string; worksheetId: string };

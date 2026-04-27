@@ -605,6 +605,21 @@ export function mapAssembly(a: any): import("@bidwright/domain").Assembly {
   };
 }
 
+export function mapAssemblyInstance(row: any): import("@bidwright/domain").AssemblyInstanceRecord {
+  return {
+    id: row.id,
+    worksheetId: row.worksheetId,
+    assemblyId: row.assemblyId ?? null,
+    assemblyName: row.assembly?.name ?? null,
+    phaseId: row.phaseId ?? null,
+    quantity: row.quantity ?? 1,
+    parameterValues: (row.parameterValues as Record<string, number | string>) ?? {},
+    itemCount: row._count?.worksheetItems ?? row.worksheetItems?.length ?? 0,
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
+  };
+}
+
 export function mapAssemblySummary(a: any): import("@bidwright/domain").AssemblySummary {
   return {
     id: a.id,

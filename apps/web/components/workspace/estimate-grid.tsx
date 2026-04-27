@@ -81,6 +81,8 @@ import {
 } from "@/lib/workspace-mutations";
 import { ItemDetailDrawer } from "./item-detail-drawer";
 import { AssemblyInsertModal } from "./assembly-insert-modal";
+import { SaveSelectionAsAssemblyModal } from "./save-selection-as-assembly-modal";
+import { AssemblyInstancesModal } from "./assembly-instances-modal";
 
 /* ─── Types ─── */
 
@@ -624,6 +626,8 @@ export function EstimateGrid({
 
   // ─── NEW STATE: Assembly insert ───
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
+  const [showSaveAsAssembly, setShowSaveAsAssembly] = useState(false);
+  const [showAssemblyInstances, setShowAssemblyInstances] = useState(false);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -2489,6 +2493,15 @@ export function EstimateGrid({
             >
               <Layers className="h-3 w-3" /> Assembly
             </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => setShowAssemblyInstances(true)}
+              disabled={isPending}
+              title="Manage assembly groups in this worksheet"
+            >
+              Groups
+            </Button>
           </div>
         </div>
 
@@ -2503,6 +2516,16 @@ export function EstimateGrid({
 
           <Button size="xs" variant="ghost" onClick={handleBulkDuplicate} disabled={isPending}>
             <Copy className="h-3 w-3" /> Duplicate Selected
+          </Button>
+
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => setShowSaveAsAssembly(true)}
+            disabled={isPending}
+            title="Create a reusable assembly from these line items"
+          >
+            <Layers className="h-3 w-3" /> Save as Assembly
           </Button>
 
           {/* Move to Worksheet dropdown */}
@@ -2895,6 +2918,30 @@ export function EstimateGrid({
             onError(`Inserted with warnings: ${info.warnings.join("; ")}`);
           }
         }}
+      />
+
+      {/* ─── Save Selection As Assembly Modal ─── */}
+      <SaveSelectionAsAssemblyModal
+        open={showSaveAsAssembly}
+        onClose={() => setShowSaveAsAssembly(false)}
+        projectId={workspace.project.id}
+        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
+        selectedItemIds={Array.from(selectedIds)}
+        onSaved={(info) => {
+          setSelectedIds(new Set());
+          if (info.skippedFreeform > 0) {
+            onError(`Saved "${info.assemblyName}" — skipped ${info.skippedFreeform} freeform line${info.skippedFreeform === 1 ? "" : "s"} (no catalog or rate-schedule reference).`);
+          }
+        }}
+      />
+
+      {/* ─── Assembly Instances Modal ─── */}
+      <AssemblyInstancesModal
+        open={showAssemblyInstances}
+        onClose={() => setShowAssemblyInstances(false)}
+        projectId={workspace.project.id}
+        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
+        onWorkspaceUpdated={(workspace) => onApply(workspace)}
       />
 
       {/* ─── Catalog Quick-Add Modal ─── */}

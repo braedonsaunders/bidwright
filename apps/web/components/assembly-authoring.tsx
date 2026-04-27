@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Layers, Plus, Trash2, Variable } from "lucide-react";
+import { AlertCircle, Layers, Plus, Trash2, Variable } from "lucide-react";
+import { evalExpression } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import {
   type AssemblyComponentRecord,
@@ -304,6 +305,17 @@ export function ParametersEditor({ assemblyId, parameters, onChange, onError }: 
   );
 }
 
+function validateExpression(expr: string, scope: Record<string, number>): { ok: boolean; message?: string; value?: number } {
+  if (!expr || !expr.trim()) return { ok: true, value: 0 };
+  try {
+    const value = evalExpression(expr, scope);
+    if (!Number.isFinite(value)) return { ok: false, message: "Expression evaluates to a non-finite value" };
+    return { ok: true, value };
+  } catch (err) {
+    return { ok: false, message: (err as Error).message };
+  }
+}
+
 function ParameterRow({
   parameter,
   onPatch,
@@ -325,6 +337,8 @@ function ParameterRow({
     setUnit(parameter.unit);
   }, [parameter.id, parameter.key, parameter.label, parameter.defaultValue, parameter.unit]);
 
+  const defaultValidation = useMemo(() => validateExpression(defaultValue, {}), [defaultValue]);
+
   return (
     <div className="grid grid-cols-[1fr_1fr_1fr_80px_auto] gap-2 items-center">
       <Input
@@ -339,12 +353,20 @@ function ParameterRow({
         onBlur={() => label !== parameter.label && onPatch({ label })}
         className="text-xs"
       />
-      <Input
-        value={defaultValue}
-        onChange={(e) => setDefaultValue(e.target.value)}
-        onBlur={() => defaultValue !== parameter.defaultValue && onPatch({ defaultValue })}
-        className="text-xs font-mono"
-      />
+      <div className="flex flex-col gap-0.5">
+        <Input
+          value={defaultValue}
+          onChange={(e) => setDefaultValue(e.target.value)}
+          onBlur={() => defaultValue !== parameter.defaultValue && defaultValidation.ok && onPatch({ defaultValue })}
+          className={cn("text-xs font-mono", !defaultValidation.ok && "border-red-400")}
+          title={defaultValidation.ok ? "" : defaultValidation.message}
+        />
+        {!defaultValidation.ok && (
+          <div className="text-[9px] text-red-400 truncate" title={defaultValidation.message}>
+            {defaultValidation.message}
+          </div>
+        )}
+      </div>
       <Input
         value={unit}
         onChange={(e) => setUnit(e.target.value)}
@@ -548,6 +570,22 @@ function ComponentRow({
     setBindingsText(JSON.stringify(component.parameterBindings ?? {}));
   }, [component.id, component.quantityExpr, component.parameterBindings]);
 
+  // Validate the quantity expression against all known parameter keys (using
+  // their defaults as sample values) so users see syntax / unknown-identifier
+  // errors before they save.
+  const qtyScope = useMemo(() => {
+    const scope: Record<string, number> = {};
+    for (const p of parameters) {
+      try {
+        scope[p.key] = evalExpression(p.defaultValue || "0", {});
+      } catch {
+        scope[p.key] = 0;
+      }
+    }
+    return scope;
+  }, [parameters]);
+  const qtyValidation = useMemo(() => validateExpression(qty, qtyScope), [qty, qtyScope]);
+
   const refLabel = useMemo(() => {
     if (component.componentType === "catalog_item") {
       const ci = catalogItems.find((c) => c.id === component.catalogItemId);
@@ -601,13 +639,25 @@ function ComponentRow({
           </div>
         )}
       </div>
-      <Input
-        value={qty}
-        onChange={(e) => setQty(e.target.value)}
-        onBlur={() => qty !== component.quantityExpr && onPatch({ quantityExpr: qty || "1" })}
-        placeholder="qty / expr"
-        className="text-xs font-mono"
-      />
+      <div className="flex flex-col gap-0.5">
+        <Input
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          onBlur={() => qty !== component.quantityExpr && qtyValidation.ok && onPatch({ quantityExpr: qty || "1" })}
+          placeholder="qty / expr"
+          className={cn("text-xs font-mono", !qtyValidation.ok && "border-red-400")}
+          title={qtyValidation.ok ? "" : qtyValidation.message}
+        />
+        {!qtyValidation.ok && (
+          <div className="text-[9px] text-red-400 truncate flex items-center gap-1" title={qtyValidation.message}>
+            <AlertCircle className="w-2.5 h-2.5 shrink-0" />
+            <span className="truncate">{qtyValidation.message}</span>
+          </div>
+        )}
+        {qtyValidation.ok && qtyValidation.value !== undefined && parameters.length > 0 && (
+          <div className="text-[9px] text-fg/35">≈ {qtyValidation.value.toFixed(2)} (with defaults)</div>
+        )}
+      </div>
       <Button variant="ghost" onClick={onRemove} className="text-xs text-fg/50 hover:text-red-400">
         <Trash2 className="w-3.5 h-3.5" />
       </Button>

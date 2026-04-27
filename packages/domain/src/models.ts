@@ -535,6 +535,19 @@ export interface AssemblySummary {
   updatedAt: string;
 }
 
+export interface AssemblyInstanceRecord {
+  id: string;
+  worksheetId: string;
+  assemblyId: string | null;
+  assemblyName: string | null;
+  phaseId: string | null;
+  quantity: number;
+  parameterValues: Record<string, number | string>;
+  itemCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AiRun {
   id: string;
   projectId: string;
