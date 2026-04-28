@@ -49,6 +49,7 @@ export async function extractLegendFromPage(
   projectId: string,
   documentId: string,
   pageNumber: number,
+  azureConfig?: { endpoint?: string; key?: string },
 ): Promise<ExtractLegendResult> {
   const warnings: string[] = [];
   let storagePath: string | null = null;
@@ -77,16 +78,18 @@ export async function extractLegendFromPage(
   }
 
   const buffer = await readFile(resolveApiPath(storagePath));
-  const hasAzure = !!(process.env.AZURE_DI_ENDPOINT && process.env.AZURE_DI_KEY);
-  if (!hasAzure) {
+  // Resolve Azure DI creds: caller-supplied (org settings) wins, then env.
+  const azureEndpoint = azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT;
+  const azureKey = azureConfig?.key || process.env.AZURE_DI_KEY;
+  if (!azureEndpoint || !azureKey) {
     warnings.push("Azure Document Intelligence isn't configured — legend extraction needs OCR.");
     return { entries: [], warnings };
   }
 
   const parser = createPdfParser({
     provider: "azure",
-    azureEndpoint: process.env.AZURE_DI_ENDPOINT,
-    azureKey: process.env.AZURE_DI_KEY,
+    azureEndpoint,
+    azureKey,
     azureModel: "prebuilt-layout",
     options: { tableExtractionEnabled: true },
   });
