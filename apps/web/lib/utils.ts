@@ -1,5 +1,13 @@
+import { twMerge } from "tailwind-merge";
+
+// Merges Tailwind utility classes, resolving conflicts so the *last* class
+// wins (e.g. cn("w-full", "w-32") → "w-32"). This is what every caller
+// expects — without twMerge, both classes end up in the className attribute
+// and the browser uses whichever Tailwind emits later in the stylesheet,
+// which silently breaks size overrides on wrapped components like Input
+// and Select. Falsy values are filtered so callers can do `cn("a", flag && "b")`.
 export function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
+  return twMerge(classes.filter(Boolean).join(" "));
 }
 
 const NAMED_HTML_ENTITIES: Record<string, string> = {
