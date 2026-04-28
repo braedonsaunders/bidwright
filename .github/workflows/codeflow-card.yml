@@ -1,0 +1,37 @@
+name: CodeFlow Card
+
+# Recomputes the codeflow stats card on every merge to main and on every
+# closed PR. The Action commits .github/codeflow-card.svg back to the repo;
+# the README references it via <img src=".github/codeflow-card.svg">.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: codeflow-card-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  card:
+    runs-on: ubuntu-latest
+    # Skip PR-close events that weren't merged (avoids running on closed-without-merge).
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Render CodeFlow Card
+        uses: braedonsaunders/codeflow/card@main
+        with:
+          theme: dark
+          # Flip to true to enable thermal-receipt PR comments on every merge.
+          receipts: false
