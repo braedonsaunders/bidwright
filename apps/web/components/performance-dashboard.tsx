@@ -3,9 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence, LayoutGroup, animate, useMotionValue, useTransform } from "motion/react";
 import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
   Award,
   BarChart3,
   CheckCircle2,
@@ -30,12 +27,10 @@ import {
   Input,
   Select,
 } from "@/components/ui";
-import { formatDate, formatMoney, formatPercent } from "@/lib/format";
+import { formatMoney, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type Stage = "active" | "won" | "lost" | "other";
-type SortKey = "quoteNumber" | "title" | "client" | "subtotal" | "profit" | "margin" | "status" | "date";
-type SortDir = "asc" | "desc";
 
 interface Filters {
   dateFrom: string;
@@ -73,23 +68,6 @@ function statusToStage(status?: string): Stage {
       return "lost";
     default:
       return "other";
-  }
-}
-
-function statusTone(status: string) {
-  switch (status?.toLowerCase()) {
-    case "awarded":
-    case "closed":
-      return "success" as const;
-    case "open":
-    case "pending":
-      return "warning" as const;
-    case "didnotget":
-    case "declined":
-    case "cancelled":
-      return "danger" as const;
-    default:
-      return "default" as const;
   }
 }
 
@@ -313,9 +291,6 @@ function TimeSeries({ buckets }: { buckets: Array<{ key: string; label: string; 
 
 export function PerformanceDashboard({ projects }: { projects: ProjectListItem[] }) {
   const [filters, setFilters] = useState<Filters>({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" });
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-
   const clients = useMemo(() => {
     const set = new Set(projects.map((p) => p.clientName).filter(Boolean));
     return Array.from(set).sort();
@@ -403,30 +378,6 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
     })).sort((a, b) => Math.abs(b.primary) - Math.abs(a.primary)).slice(0, 8);
   }, [filtered]);
 
-  const sortedRows = useMemo(() => {
-    const arr = [...filtered];
-    arr.sort((a, b) => {
-      const dir = sortDir === "asc" ? 1 : -1;
-      const get = (p: ProjectListItem): string | number => {
-        switch (sortKey) {
-          case "quoteNumber": return p.quote?.quoteNumber ?? "";
-          case "title": return p.quote?.title ?? p.name;
-          case "client": return p.clientName ?? "";
-          case "subtotal": return p.latestRevision?.subtotal ?? 0;
-          case "profit": return p.latestRevision?.estimatedProfit ?? 0;
-          case "margin": return p.latestRevision?.estimatedMargin ?? 0;
-          case "status": return p.quote?.status ?? "";
-          case "date": return new Date(p.createdAt).getTime();
-        }
-      };
-      const va = get(a);
-      const vb = get(b);
-      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
-      return String(va).localeCompare(String(vb)) * dir;
-    });
-    return arr;
-  }, [filtered, sortKey, sortDir]);
-
   const activeChips: Array<{ key: keyof Filters; label: string }> = [];
   if (filters.dateFrom) activeChips.push({ key: "dateFrom", label: `From ${filters.dateFrom}` });
   if (filters.dateTo) activeChips.push({ key: "dateTo", label: `To ${filters.dateTo}` });
@@ -434,11 +385,6 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
   if (filters.client) activeChips.push({ key: "client", label: `Client: ${filters.client}` });
   if (filters.stage) activeChips.push({ key: "stage", label: `Stage: ${STAGE_LABEL[filters.stage]}` });
   const hasFilters = activeChips.length > 0;
-
-  function toggleSort(k: SortKey) {
-    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(k); setSortDir("desc"); }
-  }
 
   return (
     <LayoutGroup>
@@ -466,20 +412,22 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
 
         <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.4 }}>
           <Card>
-            <CardBody className="py-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center gap-2 text-xs text-fg/50">
+            <CardBody className="py-2.5">
+              <div className="flex items-center gap-2 overflow-x-auto">
+                <div className="flex shrink-0 items-center gap-1.5 text-fg/50">
                   <Filter className="h-3.5 w-3.5" />
-                  <span className="font-medium uppercase tracking-wider text-[10px]">Filters</span>
+                  <span className="text-[10px] font-medium uppercase tracking-wider">Filters</span>
                 </div>
-                <Input type="date" className="h-8 w-36 text-xs" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
-                <Input type="date" className="h-8 w-36 text-xs" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
-                <Select size="sm" className="w-40" value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: "All stages" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "other", label: "Other" }]} />
-                <Select size="sm" className="w-40" value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All statuses" }, ...statuses.map((s) => ({ value: s, label: s }))]} />
-                <Select size="sm" className="w-48" value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All clients" }, ...clients.map((c) => ({ value: c, label: c }))]} />
+                <span className="ml-1 shrink-0 text-[10px] uppercase tracking-wider text-fg/35">From</span>
+                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="From date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
+                <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">To</span>
+                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="To date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
+                <Select size="xs" className="w-28 shrink-0" ariaLabel="Stage" value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: "All stages" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "other", label: "Other" }]} />
+                <Select size="xs" className="w-32 shrink-0" ariaLabel="Status" value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All statuses" }, ...statuses.map((s) => ({ value: s, label: s }))]} />
+                <Select size="xs" className="w-40 shrink-0" ariaLabel="Client" value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All clients" }, ...clients.map((c) => ({ value: c, label: c }))]} />
                 {hasFilters && (
-                  <Button variant="ghost" size="xs" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
-                    Clear all
+                  <Button variant="ghost" size="xs" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
+                    Clear
                   </Button>
                 )}
               </div>
@@ -579,64 +527,6 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
           </motion.div>
         </div>
 
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5, duration: 0.4 }}>
-          <Card>
-            <CardHeader><CardTitle>Quote detail</CardTitle></CardHeader>
-            <div className="overflow-x-auto">
-              {sortedRows.length === 0 ? (
-                <CardBody><EmptyState>No quotes match the current filters.</EmptyState></CardBody>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-line bg-panel2/30 text-left">
-                      <SortHead label="Quote #" k="quoteNumber" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                      <SortHead label="Title" k="title" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                      <SortHead label="Client" k="client" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                      <SortHead label="Subtotal" k="subtotal" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                      <SortHead label="Profit" k="profit" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                      <SortHead label="Margin" k="margin" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                      <SortHead label="Status" k="status" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                      <SortHead label="Date" k="date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <AnimatePresence initial={false}>
-                      {sortedRows.map((p, i) => (
-                        <motion.tr key={p.id} layout initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ delay: Math.min(i * 0.012, 0.3), duration: 0.25 }} className="border-b border-line/50 hover:bg-panel2/25 transition-colors">
-                          <td className="px-4 py-2.5 text-xs font-medium text-fg/85">{p.quote?.quoteNumber || "—"}</td>
-                          <td className="px-4 py-2.5 text-xs text-fg/70 max-w-[220px] truncate">{p.quote?.title || p.name}</td>
-                          <td className="px-4 py-2.5 text-xs text-fg/60">{p.clientName || "—"}</td>
-                          <td className="px-4 py-2.5 text-xs text-fg/75 text-right font-mono">{formatMoney(p.latestRevision?.subtotal ?? 0)}</td>
-                          <td className={cn("px-4 py-2.5 text-xs text-right font-mono", (p.latestRevision?.estimatedProfit ?? 0) >= 0 ? "text-success" : "text-danger")}>
-                            {formatMoney(p.latestRevision?.estimatedProfit ?? 0)}
-                          </td>
-                          <td className={cn("px-4 py-2.5 text-xs text-right font-mono", (p.latestRevision?.estimatedMargin ?? 0) >= 0 ? "text-success" : "text-danger")}>
-                            {formatPercent(p.latestRevision?.estimatedMargin ?? 0)}
-                          </td>
-                          <td className="px-4 py-2.5"><Badge tone={statusTone(p.quote?.status ?? "")}>{p.quote?.status ?? "—"}</Badge></td>
-                          <td className="px-4 py-2.5 text-xs text-fg/50">{formatDate(p.createdAt)}</td>
-                        </motion.tr>
-                      ))}
-                    </AnimatePresence>
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t border-line bg-panel2/30 font-medium">
-                      <td className="px-4 py-2.5 text-xs text-fg/60" colSpan={3}>Totals · {filtered.length} {filtered.length === 1 ? "quote" : "quotes"}</td>
-                      <td className="px-4 py-2.5 text-xs text-fg/85 text-right font-mono">{formatMoney(kpis.totalEstimatedValue)}</td>
-                      <td className={cn("px-4 py-2.5 text-xs text-right font-mono", kpis.totalEstimatedProfit >= 0 ? "text-success" : "text-danger")}>
-                        {formatMoney(kpis.totalEstimatedProfit)}
-                      </td>
-                      <td className={cn("px-4 py-2.5 text-xs text-right font-mono", kpis.avgMargin >= 0 ? "text-success" : "text-danger")}>
-                        {formatPercent(kpis.avgMargin)}
-                      </td>
-                      <td className="px-4 py-2.5" colSpan={2} />
-                    </tr>
-                  </tfoot>
-                </table>
-              )}
-            </div>
-          </Card>
-        </motion.div>
       </div>
     </LayoutGroup>
   );
@@ -691,14 +581,3 @@ function FunnelStat({ icon: Icon, label, value, sub, tone }: { icon: typeof Chec
   );
 }
 
-function SortHead({ label, k, sortKey, sortDir, onClick, align = "left" }: { label: string; k: SortKey; sortKey: SortKey; sortDir: SortDir; onClick: (k: SortKey) => void; align?: "left" | "right" }) {
-  const active = sortKey === k;
-  return (
-    <th className={cn("px-4 py-2.5 text-xs font-medium text-fg/50", align === "right" ? "text-right" : "text-left")}>
-      <button onClick={() => onClick(k)} className={cn("inline-flex items-center gap-1 hover:text-fg/85 transition-colors", align === "right" && "flex-row-reverse", active && "text-fg/85")}>
-        {label}
-        {active ? (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
-      </button>
-    </th>
-  );
-}
