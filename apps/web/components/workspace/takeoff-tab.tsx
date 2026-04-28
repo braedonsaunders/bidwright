@@ -30,6 +30,7 @@ import {
   X,
   Crosshair,
   RotateCcw,
+  BookOpen,
   BrainCircuit,
   Wand2,
   FileJson,
@@ -85,7 +86,10 @@ import {
   updateWorkspaceState,
   apiRequest,
   detectTitleBlockScale,
+  extractLegendFromPage,
+  type DetectedDisciplineRecord,
   type DetectedScaleRecord,
+  type LegendEntryRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -678,6 +682,13 @@ export function TakeoffTab({
   /* Title-block OCR scale detection */
   const [detectingScale, setDetectingScale] = useState(false);
   const [detectedScales, setDetectedScales] = useState<DetectedScaleRecord[] | null>(null);
+  const [detectedDiscipline, setDetectedDiscipline] = useState<DetectedDisciplineRecord | null>(null);
+
+  /* Symbol legend reader state */
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [legendLoading, setLegendLoading] = useState(false);
+  const [legendEntries, setLegendEntries] = useState<LegendEntryRecord[] | null>(null);
+  const [legendWarnings, setLegendWarnings] = useState<string[]>([]);
 
   /* Verify-scale flow: when user clicks "Verify" they re-enter the calibrate
      two-point flow but with verifyMode set, so the completion handler shows
@@ -1968,6 +1979,7 @@ export function TakeoffTab({
     try {
       const result = await detectTitleBlockScale(projectId, docId, page);
       setDetectedScales(result.detectedScales);
+      setDetectedDiscipline(result.detectedDiscipline);
       if (result.detectedScales.length === 0 && result.warnings.length > 0) {
         setToastMessage(result.warnings[0]);
         setToastType("error");
@@ -1979,6 +1991,33 @@ export function TakeoffTab({
       setDetectingScale(false);
     }
   }
+
+  async function handleReadLegend() {
+    if (!selectedDoc) return;
+    const docId = selectedDoc.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDoc.id;
+    setLegendOpen(true);
+    setLegendLoading(true);
+    setLegendEntries(null);
+    setLegendWarnings([]);
+    try {
+      const result = await extractLegendFromPage(projectId, docId, page);
+      setLegendEntries(result.entries);
+      setLegendWarnings(result.warnings);
+    } catch (err) {
+      setLegendWarnings([err instanceof Error ? err.message : "Legend extraction failed"]);
+    } finally {
+      setLegendLoading(false);
+    }
+  }
+
+  // Reset legend when the user switches doc or page — entries are page-specific.
+  useEffect(() => {
+    setLegendOpen(false);
+    setLegendEntries(null);
+    setLegendWarnings([]);
+  }, [selectedDocId, page]);
 
   function handleCalibrationConfirm() {
     if (!calibrationPoints || !calibrationInput) return;
@@ -2629,6 +2668,19 @@ export function TakeoffTab({
                 Set scale
               </button>
             )}
+            <button
+              type="button"
+              onClick={handleReadLegend}
+              disabled={legendLoading || !selectedDoc}
+              className="inline-flex items-center gap-1 rounded-md border border-line bg-panel2/40 px-2 py-1 text-[11px] font-medium text-fg/70 hover:bg-panel2 transition-colors disabled:opacity-50"
+              title="Read the legend / symbol schedule on this page (uses Azure DI OCR)"
+            >
+              <BookOpen className="h-3 w-3" />
+              {legendLoading ? "Reading…" : "Legend"}
+              {legendEntries && legendEntries.length > 0 && (
+                <span className="text-[10px] text-fg/45 ml-0.5">{legendEntries.length}</span>
+              )}
+            </button>
           </>
         )}
 
@@ -3622,6 +3674,19 @@ export function TakeoffTab({
                       No scale notation found on this page. Use the manual presets below.
                     </div>
                   )}
+                  {detectedDiscipline && (
+                    <div className="text-[11px] text-fg/55 mt-1.5">
+                      <Sparkles className="inline h-2.5 w-2.5 text-emerald-500 mr-1" />
+                      Looks like a{" "}
+                      <span className="font-medium text-fg/85 capitalize">
+                        {detectedDiscipline.key.replace("-", " ")}
+                      </span>{" "}
+                      sheet
+                      <span className="text-fg/35 ml-1">
+                        (matched "{detectedDiscipline.raw}", {(detectedDiscipline.confidence * 100).toFixed(0)}%)
+                      </span>
+                    </div>
+                  )}
                   {detectedScales && detectedScales.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {detectedScales.map((s, i) => {
@@ -4013,6 +4078,58 @@ export function TakeoffTab({
               </div>
             )}
           </Card>
+        </div>
+      )}
+
+      {/* ─── Legend Reader Panel ─── */}
+      {legendOpen && (
+        <div className="absolute top-16 right-4 z-30 w-[340px] max-h-[70vh] flex flex-col rounded-lg border border-amber-500/30 bg-panel shadow-2xl animate-in slide-in-from-right-4 duration-200">
+          <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
+            <BookOpen className="h-4 w-4 text-amber-500 shrink-0" />
+            <span className="text-xs font-semibold text-fg flex-1">
+              Page legend
+              {legendEntries && legendEntries.length > 0 && (
+                <span className="ml-2 text-fg/45 font-normal">{legendEntries.length} entries</span>
+              )}
+            </span>
+            <button onClick={() => setLegendOpen(false)} className="text-fg/30 hover:text-fg/60 transition-colors">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+            {legendLoading && (
+              <div className="flex items-center gap-2 py-2">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500 shrink-0" />
+                <span className="text-xs text-fg/60">Reading legend table on this page…</span>
+              </div>
+            )}
+            {!legendLoading && legendEntries && legendEntries.length === 0 && (
+              <div className="text-[11px] text-fg/50 py-2">
+                {legendWarnings[0] ?? "No legend table or symbol list found on this page."}
+              </div>
+            )}
+            {legendEntries?.map((entry, i) => (
+              <div
+                key={`${entry.symbol}-${i}`}
+                className="flex items-start gap-3 rounded-md border border-line bg-panel2/30 px-2.5 py-2"
+              >
+                <div className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-md border border-amber-500/40 bg-amber-500/10 font-mono text-[11px] font-semibold text-amber-400">
+                  {entry.symbol}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-fg/85 leading-snug">{entry.label}</div>
+                  {entry.confidence < 0.7 && (
+                    <div className="text-[10px] text-fg/35 mt-0.5">low confidence</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {legendEntries && legendEntries.length > 0 && (
+            <div className="px-3 py-2 border-t border-line text-[10px] text-fg/40">
+              Tip: drop the AI-detected names into Smart Count or Auto Count to enrich your tally.
+            </div>
+          )}
         </div>
       )}
 
