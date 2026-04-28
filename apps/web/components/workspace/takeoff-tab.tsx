@@ -3075,7 +3075,9 @@ export function TakeoffTab({
         const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
         const distNum = parseFloat(calibrationInput);
         const livePerUnit = distNum > 0 ? (pixelDist / distNum) : null;
-        const presets: Array<{ value: number; unit: string; label: string }> = [
+        // pdfjs renders at 72 DPI × zoom, so 1 page-inch = 72 × zoom canvas px.
+        const paperInches = pixelDist / (72 * zoom);
+        const distancePresets: Array<{ value: number; unit: string; label: string }> = [
           { value: 1, unit: "ft", label: "1 ft" },
           { value: 5, unit: "ft", label: "5 ft" },
           { value: 10, unit: "ft", label: "10 ft" },
@@ -3085,6 +3087,28 @@ export function TakeoffTab({
           { value: 1, unit: "m", label: "1 m" },
           { value: 5, unit: "m", label: "5 m" },
           { value: 10, unit: "m", label: "10 m" },
+        ];
+        // Architectural / engineering scale presets. Each one converts the
+        // drawn paper distance into a real-world value via the formula:
+        //   paperInches × multiplier = realValue
+        const scalePresets: Array<{
+          label: string;
+          group: "metric" | "imperial";
+          multiplier: number;
+          unit: string;
+        }> = [
+          { label: "1:50",      group: "metric",   multiplier: 50  * 0.0254, unit: "m"  },
+          { label: "1:100",     group: "metric",   multiplier: 100 * 0.0254, unit: "m"  },
+          { label: "1:200",     group: "metric",   multiplier: 200 * 0.0254, unit: "m"  },
+          { label: "1:500",     group: "metric",   multiplier: 500 * 0.0254, unit: "m"  },
+          { label: "1:1000",    group: "metric",   multiplier: 1000 * 0.0254, unit: "m" },
+          { label: '1/8"=1\'',  group: "imperial", multiplier: 8,  unit: "ft" },
+          { label: '1/4"=1\'',  group: "imperial", multiplier: 4,  unit: "ft" },
+          { label: '1/2"=1\'',  group: "imperial", multiplier: 2,  unit: "ft" },
+          { label: '1"=1\'',    group: "imperial", multiplier: 1,  unit: "ft" },
+          { label: '1"=10\'',   group: "imperial", multiplier: 10, unit: "ft" },
+          { label: '1"=20\'',   group: "imperial", multiplier: 20, unit: "ft" },
+          { label: '1"=50\'',   group: "imperial", multiplier: 50, unit: "ft" },
         ];
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -3110,13 +3134,13 @@ export function TakeoffTab({
                 </div>
               </div>
               <div className="px-5 py-4 space-y-3">
-                <div className="flex items-center gap-2">
+                <div className="grid grid-cols-[1fr_80px] gap-2">
                   <Input
-                    className="flex-1 text-base h-10"
+                    className="text-base h-10"
                     type="number"
                     min={0.01}
                     step={0.01}
-                    placeholder="Distance"
+                    placeholder="Distance the line represents"
                     value={calibrationInput}
                     onChange={(e) => setCalibrationInput(e.target.value)}
                     autoFocus
@@ -3125,7 +3149,7 @@ export function TakeoffTab({
                     }}
                   />
                   <Select
-                    className="w-24 h-10"
+                    className="h-10"
                     value={calibrationUnit}
                     onChange={(e) => setCalibrationUnit(e.target.value)}
                   >
@@ -3138,11 +3162,35 @@ export function TakeoffTab({
                   </Select>
                 </div>
 
-                {/* Quick presets */}
+                {/* Drawing scale presets — auto-fill the input from the line's
+                    paper-distance using zoom-aware DPI math. */}
                 <div>
-                  <div className="text-[10px] uppercase tracking-wider text-fg/40 mb-1.5">Common distances</div>
+                  <div className="text-[10px] uppercase tracking-wider text-fg/40 mb-1.5">Drawing scale</div>
                   <div className="flex flex-wrap gap-1.5">
-                    {presets.map((p) => (
+                    {scalePresets.map((p) => {
+                      const realValue = paperInches * p.multiplier;
+                      return (
+                        <button
+                          key={p.label}
+                          onClick={() => {
+                            setCalibrationInput(realValue.toFixed(p.unit === "ft" ? 2 : 3));
+                            setCalibrationUnit(p.unit);
+                          }}
+                          title={`At ${p.label}, this line ≈ ${realValue.toFixed(2)} ${p.unit}`}
+                          className="rounded-md border border-line bg-panel2/30 px-2 py-1 text-[11px] text-fg/60 hover:border-amber-500/40 hover:text-fg transition-colors"
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Common distances — manual values the user already knows */}
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-fg/40 mb-1.5">Or known distance</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {distancePresets.map((p) => (
                       <button
                         key={p.label}
                         onClick={() => {
