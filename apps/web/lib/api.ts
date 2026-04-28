@@ -4587,6 +4587,40 @@ export async function extractLegendFromPage(
   );
 }
 
+// ─── Auto-takeoff line-item suggestions ─────────────────────────────────
+
+export type LineItemSuggestionKind = "catalog" | "rateScheduleItem";
+
+export interface LineItemSuggestionRecord {
+  kind: LineItemSuggestionKind;
+  id: string;
+  name: string;
+  code: string;
+  unit: string;
+  reasoning: string;
+  confidence: number;
+  recommendedQuantity: number;
+}
+
+export interface SuggestLineItemsResultRecord {
+  annotationId: string;
+  suggestions: LineItemSuggestionRecord[];
+  warnings: string[];
+}
+
+export async function suggestLineItemsForAnnotation(
+  projectId: string,
+  annotationId: string,
+): Promise<SuggestLineItemsResultRecord> {
+  return apiRequest<SuggestLineItemsResultRecord>(
+    `/api/takeoff/${projectId}/annotations/${annotationId}/suggest-line-items`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
   return apiRequest<{ deleted: boolean }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/${linkId}`, {
     method: "DELETE",

@@ -87,9 +87,11 @@ import {
   apiRequest,
   detectTitleBlockScale,
   extractLegendFromPage,
+  suggestLineItemsForAnnotation,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type LegendEntryRecord,
+  type LineItemSuggestionRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -2169,6 +2171,76 @@ export function TakeoffTab({
     }
   }
 
+  /* ─── AI line-item suggestions for an annotation ─── */
+
+  async function handleSuggestLineItems(annotationId: string) {
+    return suggestLineItemsForAnnotation(projectId, annotationId);
+  }
+
+  /* Apply one of the AI's suggestions: create a worksheet item using the
+     suggestion's name/code/unit (instead of the raw annotation label) and
+     the annotation's measured quantity, then link the new line item back
+     to the annotation. Same shape as handleSendToEstimate, just sourced
+     from the catalog/rate-schedule match. */
+  async function handleApplySuggestion(
+    annotationId: string,
+    suggestion: LineItemSuggestionRecord,
+  ) {
+    const ann = annotations.find((a) => a.id === annotationId);
+    if (!ann?.measurement) return;
+    const targetWs = selectedWorksheet;
+    if (!targetWs) {
+      console.warn("[takeoff:suggest] No worksheet selected; cannot apply suggestion");
+      return;
+    }
+
+    const quantity =
+      suggestion.recommendedQuantity > 0
+        ? suggestion.recommendedQuantity
+        : ann.measurement.value ?? 0;
+    const uom = suggestion.unit || ann.measurement.unit || "EA";
+    const category = suggestion.kind === "rateScheduleItem" ? "Labour" : "Material";
+    const entityName = suggestion.code
+      ? `[${suggestion.code}] ${suggestion.name}`
+      : suggestion.name;
+
+    try {
+      const result = await createWorksheetItem(projectId, targetWs.id, {
+        category,
+        entityType: category,
+        entityName,
+        description: suggestion.reasoning ?? "",
+        quantity,
+        uom,
+        cost: 0,
+        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
+      });
+
+      const newItems = result?.workspace?.worksheets
+        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
+      const newItem = newItems.find((i: { id: string }) =>
+        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id),
+      );
+
+      if (newItem) {
+        await createTakeoffLink(projectId, {
+          annotationId,
+          worksheetItemId: newItem.id,
+        });
+        await loadTakeoffLinks();
+        notifyTakeoffLinksMutated();
+      }
+      notifyWorkspaceMutated();
+    } catch (err) {
+      console.error("[takeoff:suggest] Failed to apply suggestion:", err);
+    }
+  }
+
   async function resolveSelectedModelAsset() {
     if (selectedModelAsset) return selectedModelAsset;
     if (!isCadDocument || !selectedDoc) return undefined;
@@ -3185,6 +3257,8 @@ export function TakeoffTab({
               takeoffLinks={takeoffLinks}
               onLinkToLineItem={handleLinkToLineItem}
               onSendToEstimate={handleSendToEstimate}
+              onSuggestLineItems={handleSuggestLineItems}
+              onApplySuggestion={handleApplySuggestion}
             />
           </div>
         ) : (
