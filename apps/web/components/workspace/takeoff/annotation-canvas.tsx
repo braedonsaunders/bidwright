@@ -600,6 +600,10 @@ export function AnnotationCanvas({
 
   // When the loupe is active, redraw it whenever the cursor moves.
   // We sample a small region of the underlying PDF canvas and blow it up.
+  // If the user has placed the first calibration point, also render the
+  // in-progress line from that point to the current cursor in the magnified
+  // view so they can see exactly where they're about to land the second
+  // point relative to the first.
   useEffect(() => {
     if (activeTool !== "calibrate" || !cursorPos || !pdfCanvas) return;
     const loupe = loupeCanvasRef.current;
@@ -614,14 +618,42 @@ export function AnnotationCanvas({
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#0b0d10";
     ctx.fillRect(0, 0, DEST_SIZE, DEST_SIZE);
-    const sx = Math.max(0, cursorPos.x - SRC_SIZE / 2);
-    const sy = Math.max(0, cursorPos.y - SRC_SIZE / 2);
+    const srcX = Math.max(0, cursorPos.x - SRC_SIZE / 2);
+    const srcY = Math.max(0, cursorPos.y - SRC_SIZE / 2);
     try {
-      ctx.drawImage(pdfCanvas, sx, sy, SRC_SIZE, SRC_SIZE, 0, 0, DEST_SIZE, DEST_SIZE);
+      ctx.drawImage(pdfCanvas, srcX, srcY, SRC_SIZE, SRC_SIZE, 0, 0, DEST_SIZE, DEST_SIZE);
     } catch {
       /* ignore — canvas may not be ready */
     }
-    // Crosshair at the centre.
+
+    // Helper to map a canvas-space point into the loupe's destination space.
+    const toLoupe = (p: Point) => ({
+      x: (p.x - srcX) * MAGNIFY,
+      y: (p.y - srcY) * MAGNIFY,
+    });
+
+    // Draw the in-progress line from the first calibration point to the
+    // cursor, if the user has already placed point 1.
+    const firstPoint = drawingPoints[0];
+    if (firstPoint) {
+      const a = toLoupe(firstPoint);
+      const b = toLoupe(cursorPos);
+      ctx.save();
+      ctx.strokeStyle = "rgba(245, 158, 11, 0.85)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      // Filled circle at the first point so it's identifiable in the loupe.
+      ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
+      ctx.beginPath();
+      ctx.arc(a.x, a.y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Crosshair pinned to the centre = current cursor position.
     ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -632,9 +664,9 @@ export function AnnotationCanvas({
     ctx.stroke();
     ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
     ctx.beginPath();
-    ctx.arc(DEST_SIZE / 2, DEST_SIZE / 2, 2, 0, Math.PI * 2);
+    ctx.arc(DEST_SIZE / 2, DEST_SIZE / 2, 2.5, 0, Math.PI * 2);
     ctx.fill();
-  }, [activeTool, cursorPos, pdfCanvas]);
+  }, [activeTool, cursorPos, pdfCanvas, drawingPoints]);
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
     if (panStateRef.current) {
