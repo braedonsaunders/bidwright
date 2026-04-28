@@ -1200,14 +1200,30 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <motion.div key="estimate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col gap-3">
               {/* Estimate sub-tabs */}
               <div className="flex items-center gap-1 shrink-0">
-                {estimateSubTabs.map((st) => (
-                  <button key={st} onClick={() => handleEstimateSubTabChange(st)}
-                    className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
-                      estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
-                    )}>
-                    {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
-                  </button>
-                ))}
+                {estimateSubTabs.map((st) => {
+                  const isActive = estimateSubTab === st;
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => handleEstimateSubTabChange(st)}
+                      className={cn(
+                        "relative px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
+                        isActive ? "text-fg" : "text-fg/40 hover:text-fg/60",
+                      )}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="estimate-subtab-bg"
+                          className="absolute inset-0 rounded-md bg-panel2"
+                          transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                        />
+                      )}
+                      <span className="relative z-10">
+                        {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
 
 
