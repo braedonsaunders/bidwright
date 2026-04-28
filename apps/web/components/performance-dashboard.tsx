@@ -413,18 +413,18 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
         <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.4 }}>
           <Card>
             <CardBody className="py-2.5">
-              <div className="flex items-center gap-2 overflow-x-auto">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                 <div className="flex shrink-0 items-center gap-1.5 text-fg/50">
                   <Filter className="h-3.5 w-3.5" />
                   <span className="text-[10px] font-medium uppercase tracking-wider">Filters</span>
                 </div>
                 <span className="ml-1 shrink-0 text-[10px] uppercase tracking-wider text-fg/35">From</span>
-                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="From date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
+                <Input type="date" className="!h-7 !w-32 shrink-0 text-[11px]" aria-label="From date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
                 <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">To</span>
-                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="To date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
-                <Select size="xs" className="w-28 shrink-0" ariaLabel="Stage" value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: "All stages" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "other", label: "Other" }]} />
-                <Select size="xs" className="w-32 shrink-0" ariaLabel="Status" value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All statuses" }, ...statuses.map((s) => ({ value: s, label: s }))]} />
-                <Select size="xs" className="w-40 shrink-0" ariaLabel="Client" value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All clients" }, ...clients.map((c) => ({ value: c, label: c }))]} />
+                <Input type="date" className="!h-7 !w-32 shrink-0 text-[11px]" aria-label="To date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
+                <Select size="xs" className="!w-28 shrink-0" ariaLabel="Stage" value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: "All stages" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "other", label: "Other" }]} />
+                <Select size="xs" className="!w-32 shrink-0" ariaLabel="Status" value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All statuses" }, ...statuses.map((s) => ({ value: s, label: s }))]} />
+                <Select size="xs" className="!w-40 shrink-0" ariaLabel="Client" value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All clients" }, ...clients.map((c) => ({ value: c, label: c }))]} />
                 {hasFilters && (
                   <Button variant="ghost" size="xs" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
                     Clear
