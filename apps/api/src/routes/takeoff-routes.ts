@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
+import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 
 export async function takeoffRoutes(app: FastifyInstance) {
   // ── POST /api/takeoff/:projectId/documents/:documentId/detect-scale ──
@@ -14,6 +15,22 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return result;
     } catch (err) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Detect failed" });
+    }
+  });
+
+  // ── POST /api/takeoff/:projectId/documents/:documentId/extract-legend ──
+  // Runs Azure DI prebuilt-layout on the page, then heuristically pairs
+  // short-token cells with description cells to recover the drawing's
+  // legend / symbol schedule.
+  app.post("/api/takeoff/:projectId/documents/:documentId/extract-legend", async (request, reply) => {
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    const body = (request.body ?? {}) as { pageNumber?: number };
+    const pageNumber = body.pageNumber ?? 1;
+    try {
+      const result = await extractLegendFromPage(projectId, documentId, pageNumber);
+      return result;
+    } catch (err) {
+      return reply.code(500).send({ message: err instanceof Error ? err.message : "Legend extraction failed" });
     }
   });
 

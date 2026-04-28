@@ -4517,9 +4517,29 @@ export interface DetectedScaleRecord {
   confidence: number;
 }
 
+export type DisciplineKey =
+  | "architectural"
+  | "structural"
+  | "civil"
+  | "electrical"
+  | "mechanical"
+  | "plumbing"
+  | "fire-protection"
+  | "site"
+  | "demolition"
+  | "interior"
+  | "landscape";
+
+export interface DetectedDisciplineRecord {
+  key: DisciplineKey;
+  raw: string;
+  confidence: number;
+}
+
 export interface DetectScaleResultRecord {
   ocrText: string;
   detectedScales: DetectedScaleRecord[];
+  detectedDiscipline: DetectedDisciplineRecord | null;
   warnings: string[];
 }
 
@@ -4530,6 +4550,35 @@ export async function detectTitleBlockScale(
 ): Promise<DetectScaleResultRecord> {
   return apiRequest<DetectScaleResultRecord>(
     `/api/takeoff/${projectId}/documents/${documentId}/detect-scale`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageNumber }),
+    },
+  );
+}
+
+// ─── Symbol legend reader ───────────────────────────────────────────────
+
+export interface LegendEntryRecord {
+  symbol: string;
+  label: string;
+  pageNumber: number;
+  confidence: number;
+}
+
+export interface ExtractLegendResultRecord {
+  entries: LegendEntryRecord[];
+  warnings: string[];
+}
+
+export async function extractLegendFromPage(
+  projectId: string,
+  documentId: string,
+  pageNumber: number,
+): Promise<ExtractLegendResultRecord> {
+  return apiRequest<ExtractLegendResultRecord>(
+    `/api/takeoff/${projectId}/documents/${documentId}/extract-legend`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -33,7 +33,61 @@ export interface DetectedScale {
 export interface DetectScaleResult {
   ocrText: string;
   detectedScales: DetectedScale[];
+  detectedDiscipline: DetectedDiscipline | null;
   warnings: string[];
+}
+
+export type DisciplineKey =
+  | "architectural"
+  | "structural"
+  | "civil"
+  | "electrical"
+  | "mechanical"
+  | "plumbing"
+  | "fire-protection"
+  | "site"
+  | "demolition"
+  | "interior"
+  | "landscape";
+
+export interface DetectedDiscipline {
+  key: DisciplineKey;
+  /** The exact substring that triggered the detection. */
+  raw: string;
+  confidence: number;
+}
+
+const DISCIPLINE_PATTERNS: Array<{ key: DisciplineKey; re: RegExp }> = [
+  { key: "electrical",       re: /\b(electrical|power|lighting plan|panel(?:board)? schedule)\b/i },
+  { key: "mechanical",       re: /\b(mechanical|HVAC|ductwork|VAV|RTU)\b/i },
+  { key: "plumbing",         re: /\b(plumbing|sanitary|sewer plan|water riser|DWV)\b/i },
+  { key: "fire-protection",  re: /\b(fire\s*protection|sprinkler|fire alarm|fire suppression)\b/i },
+  { key: "structural",       re: /\b(structural|framing plan|footing plan|foundation plan|beam schedule|column schedule)\b/i },
+  { key: "civil",            re: /\b(civil|grading|drainage plan|utility plan|stormwater)\b/i },
+  { key: "site",             re: /\b(site plan|sitework|civil site)\b/i },
+  { key: "landscape",        re: /\b(landscape|planting plan|hardscape)\b/i },
+  { key: "demolition",       re: /\b(demolition|demo plan)\b/i },
+  { key: "interior",         re: /\b(interior|finish plan|finishes|RCP|reflected ceiling)\b/i },
+  { key: "architectural",    re: /\b(architectural|floor plan|building plan|enlarged plan)\b/i },
+];
+
+function detectDiscipline(text: string): DetectedDiscipline | null {
+  // Score each pattern by how often + how early it matches; surface the top.
+  let best: { key: DisciplineKey; raw: string; score: number } | null = null;
+  for (const { key, re } of DISCIPLINE_PATTERNS) {
+    const all = Array.from(text.matchAll(new RegExp(re.source, re.flags + (re.flags.includes("g") ? "" : "g"))));
+    if (all.length === 0) continue;
+    const first = all[0]!;
+    const earliness = Math.max(0, 1 - (first.index ?? 0) / Math.max(text.length, 1));
+    const score = all.length + earliness * 0.5;
+    if (!best || score > best.score) {
+      best = { key, raw: first[0], score };
+    }
+  }
+  if (!best) return null;
+  // Confidence: scale linearly to a sensible 0.5 .. 0.95 range.
+  const confidence = Math.min(0.95, 0.5 + best.score * 0.1);
+  return { key: best.key, raw: best.raw, confidence };
 }
 
 const METRIC_RE = /\b1\s*[:：]\s*(\d{1,5})\b/g;
@@ -149,14 +203,14 @@ export async function detectTitleBlockScale(
   }
 
   if (!storagePath) {
-    return { ocrText: "", detectedScales: [], warnings: ["Source file not available for OCR"] };
+    return { ocrText: "", detectedScales: [], detectedDiscipline: null, warnings: ["Source file not available for OCR"] };
   }
 
   const buffer = await readFile(resolveApiPath(storagePath));
   const hasAzure = !!(process.env.AZURE_DI_ENDPOINT && process.env.AZURE_DI_KEY);
   if (!hasAzure) {
     warnings.push("Azure Document Intelligence isn't configured — OCR cannot run.");
-    return { ocrText: "", detectedScales: [], warnings };
+    return { ocrText: "", detectedScales: [], detectedDiscipline: null, warnings };
   }
 
   const parser = createPdfParser({
@@ -174,12 +228,13 @@ export async function detectTitleBlockScale(
     text = targetPage?.content ?? parsed.content ?? "";
   } catch (err) {
     warnings.push(`OCR failed: ${(err as Error).message}`);
-    return { ocrText: "", detectedScales: [], warnings };
+    return { ocrText: "", detectedScales: [], detectedDiscipline: null, warnings };
   }
 
   const detectedScales = parseScalesFromText(text);
   if (detectedScales.length === 0) {
     warnings.push("No scale notation matched on this page.");
   }
-  return { ocrText: text, detectedScales, warnings };
+  const detectedDiscipline = detectDiscipline(text);
+  return { ocrText: text, detectedScales, detectedDiscipline, warnings };
 }
