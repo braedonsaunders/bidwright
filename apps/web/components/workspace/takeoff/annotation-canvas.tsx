@@ -3,6 +3,7 @@
 import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import type { Point, Calibration } from "@/lib/takeoff-math";
 import { computeMeasurement } from "@/lib/takeoff-math";
+import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
@@ -329,7 +330,12 @@ export function AnnotationCanvas({
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
   const [cursorPos, setCursorPos] = useState<Point | null>(null);
   const [screenCursor, setScreenCursor] = useState<{ x: number; y: number } | null>(null);
+  const [snapPoint, setSnapPoint] = useState<Point | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const snapPointRef = useRef<Point | null>(null);
+  useEffect(() => {
+    snapPointRef.current = snapPoint;
+  }, [snapPoint]);
 
   /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
      even if React hasn't re-rendered yet (stale closure problem). */
@@ -608,20 +614,23 @@ export function AnnotationCanvas({
   }
 
   // When the loupe is active, redraw it whenever the cursor moves.
-  // We sample a small region of the underlying PDF canvas and blow it up.
-  // If the user has placed the first calibration point, also render the
-  // in-progress line from that point to the current cursor in the magnified
-  // view so they can see exactly where they're about to land the second
-  // point relative to the first.
+  // We sample a small region of the underlying PDF canvas, blow it up, and
+  // (a) render the in-progress line from point 1 to the target,
+  // (b) detect the nearest dark feature within a small search radius and
+  //     surface it as a snap candidate. Lines are dark on a light background
+  //     in virtually every construction PDF, so darkest-pixel-near-cursor is
+  //     a robust heuristic for "what the user wants to land on".
   useEffect(() => {
     if (activeTool !== "calibrate" || !cursorPos || !pdfCanvas) return;
     const loupe = loupeCanvasRef.current;
     if (!loupe) return;
     const ctx = loupe.getContext("2d");
     if (!ctx) return;
-    const SRC_SIZE = 60;       // pixels of source PDF to sample
-    const MAGNIFY = 4;         // zoom factor inside the loupe
+    const SRC_SIZE = 60;
+    const MAGNIFY = 4;
     const DEST_SIZE = SRC_SIZE * MAGNIFY;
+    const SEARCH_RADIUS = 10;
+    const DARKNESS_THRESHOLD = 110;
     loupe.width = DEST_SIZE;
     loupe.height = DEST_SIZE;
     ctx.imageSmoothingEnabled = false;
@@ -635,18 +644,59 @@ export function AnnotationCanvas({
       /* ignore — canvas may not be ready */
     }
 
-    // Helper to map a canvas-space point into the loupe's destination space.
+    // ── Snap detection ──
+    let nextSnap: Point | null = null;
+    try {
+      const srcCtx = pdfCanvas.getContext("2d");
+      if (srcCtx) {
+        const data = srcCtx.getImageData(srcX, srcY, SRC_SIZE, SRC_SIZE).data;
+        const cx = SRC_SIZE / 2;
+        const cy = SRC_SIZE / 2;
+        let bestScore = -Infinity;
+        let bestPx = -1;
+        let bestPy = -1;
+        for (let dy = -SEARCH_RADIUS; dy <= SEARCH_RADIUS; dy++) {
+          for (let dx = -SEARCH_RADIUS; dx <= SEARCH_RADIUS; dx++) {
+            const dist2 = dx * dx + dy * dy;
+            if (dist2 > SEARCH_RADIUS * SEARCH_RADIUS) continue;
+            const px = Math.round(cx + dx);
+            const py = Math.round(cy + dy);
+            if (px < 0 || px >= SRC_SIZE || py < 0 || py >= SRC_SIZE) continue;
+            const idx = (py * SRC_SIZE + px) * 4;
+            const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+            if (lum > DARKNESS_THRESHOLD) continue;
+            const score = (255 - lum) * 4 - Math.sqrt(dist2);
+            if (score > bestScore) {
+              bestScore = score;
+              bestPx = px;
+              bestPy = py;
+            }
+          }
+        }
+        if (bestPx >= 0) {
+          nextSnap = { x: srcX + bestPx, y: srcY + bestPy };
+        }
+      }
+    } catch {
+      /* ignore — cross-origin or other read failure */
+    }
+    setSnapPoint((prev) => {
+      if (!prev && !nextSnap) return prev;
+      if (prev && nextSnap && prev.x === nextSnap.x && prev.y === nextSnap.y) return prev;
+      return nextSnap;
+    });
+
     const toLoupe = (p: Point) => ({
       x: (p.x - srcX) * MAGNIFY,
       y: (p.y - srcY) * MAGNIFY,
     });
 
-    // Draw the in-progress line from the first calibration point to the
-    // cursor, if the user has already placed point 1.
+    // In-progress line from point 1 → target (snap or cursor).
     const firstPoint = drawingPoints[0];
+    const targetPoint = nextSnap ?? cursorPos;
     if (firstPoint) {
       const a = toLoupe(firstPoint);
-      const b = toLoupe(cursorPos);
+      const b = toLoupe(targetPoint);
       ctx.save();
       ctx.strokeStyle = "rgba(245, 158, 11, 0.85)";
       ctx.lineWidth = 2.5;
@@ -654,7 +704,6 @@ export function AnnotationCanvas({
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
-      // Filled circle at the first point so it's identifiable in the loupe.
       ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
       ctx.beginPath();
       ctx.arc(a.x, a.y, 4, 0, Math.PI * 2);
@@ -662,20 +711,62 @@ export function AnnotationCanvas({
       ctx.restore();
     }
 
-    // Crosshair pinned to the centre = current cursor position.
-    ctx.strokeStyle = "rgba(245, 158, 11, 0.95)";
-    ctx.lineWidth = 1.5;
+    // Crosshair always shown for orientation.
+    ctx.strokeStyle = "rgba(245, 158, 11, 0.55)";
+    ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(DEST_SIZE / 2, 0);
     ctx.lineTo(DEST_SIZE / 2, DEST_SIZE);
     ctx.moveTo(0, DEST_SIZE / 2);
     ctx.lineTo(DEST_SIZE, DEST_SIZE / 2);
     ctx.stroke();
-    ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
-    ctx.beginPath();
-    ctx.arc(DEST_SIZE / 2, DEST_SIZE / 2, 2.5, 0, Math.PI * 2);
-    ctx.fill();
+
+    if (nextSnap) {
+      const s = toLoupe(nextSnap);
+      ctx.save();
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.fillStyle = "rgba(34, 197, 94, 0.18)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    } else {
+      ctx.fillStyle = "rgba(245, 158, 11, 0.95)";
+      ctx.beginPath();
+      ctx.arc(DEST_SIZE / 2, DEST_SIZE / 2, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }, [activeTool, cursorPos, pdfCanvas, drawingPoints]);
+
+  // Keyboard nudge: arrow keys move the most recently placed calibrate point
+  // by 1 px (5 with Shift) so the user can fine-tune sub-pixel placement
+  // without re-clicking. Only active during a calibrate-in-progress session.
+  useEffect(() => {
+    if (activeTool !== "calibrate") return;
+    if (drawingPoints.length === 0) return;
+    function onKey(e: KeyboardEvent) {
+      const step = e.shiftKey ? 5 : 1;
+      let dx = 0;
+      let dy = 0;
+      if (e.key === "ArrowLeft") dx = -step;
+      else if (e.key === "ArrowRight") dx = step;
+      else if (e.key === "ArrowUp") dy = -step;
+      else if (e.key === "ArrowDown") dy = step;
+      else return;
+      e.preventDefault();
+      setDrawingPoints((prev) =>
+        prev.length === 0 ? prev : [{ x: prev[0]!.x + dx, y: prev[0]!.y + dy }, ...prev.slice(1)],
+      );
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTool, drawingPoints.length]);
 
   function handleMouseUp(e: React.MouseEvent<HTMLCanvasElement>) {
     if (panStateRef.current) {
@@ -736,14 +827,18 @@ export function AnnotationCanvas({
     }
 
     if (isTwoPointTool(activeTool)) {
+      // Honour any active snap target — if the loupe is suggesting a snap
+      // point, commit at the snap location instead of the raw cursor.
+      const commitPoint = activeTool === "calibrate" && snapPointRef.current ? snapPointRef.current : pt;
       if (drawingPoints.length === 0) {
-        setDrawingPoints([pt]);
+        setDrawingPoints([commitPoint]);
       } else {
-        const finalPoints = [drawingPoints[0], pt];
+        const finalPoints = [drawingPoints[0], commitPoint];
         if (activeTool === "calibrate") {
           onCalibrationRequest?.(finalPoints as [Point, Point]);
           setDrawingPoints([]);
           setCursorPos(null);
+          setSnapPoint(null);
         } else {
           finishAnnotation(finalPoints);
         }
@@ -843,8 +938,15 @@ export function AnnotationCanvas({
           }}
         >
           <canvas ref={loupeCanvasRef} className="w-full h-full" />
-          <div className="absolute bottom-0 inset-x-0 bg-black/60 text-amber-400 text-[10px] font-mono text-center py-0.5 backdrop-blur-sm">
-            calibrate · 4× zoom
+          <div
+            className={cn(
+              "absolute bottom-0 inset-x-0 text-[10px] font-mono text-center py-0.5 backdrop-blur-sm transition-colors",
+              snapPoint
+                ? "bg-emerald-900/70 text-emerald-300"
+                : "bg-black/60 text-amber-400",
+            )}
+          >
+            {snapPoint ? "snapped · 4× · ↑↓←→ to nudge" : "calibrate · 4× · ↑↓←→ to nudge"}
           </div>
         </div>
       )}

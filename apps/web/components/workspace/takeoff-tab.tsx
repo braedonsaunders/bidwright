@@ -3128,6 +3128,17 @@ export function TakeoffTab({
         const livePerUnit = distNum > 0 ? (pixelDist / distNum) : null;
         // pdfjs renders at 72 DPI × zoom, so 1 page-inch = 72 × zoom canvas px.
         const paperInches = pixelDist / (72 * zoom);
+        // Sanity warnings: surface common calibration mistakes.
+        const lineDx = Math.abs(b.x - a.x);
+        const lineDy = Math.abs(b.y - a.y);
+        const isLineHorizontal = lineDx > lineDy * 2;
+        const isLineVertical = lineDy > lineDx * 2;
+        const canvas = pdfCanvasRef.current;
+        const pageIsPortrait = canvas ? canvas.height > canvas.width * 1.05 : false;
+        const pageIsLandscape = canvas ? canvas.width > canvas.height * 1.05 : false;
+        const orientationMismatch =
+          (isLineHorizontal && pageIsPortrait) || (isLineVertical && pageIsLandscape);
+        const lineTooShort = pixelDist < 50;
         const distancePresets: Array<{ value: number; unit: string; label: string }> = [
           { value: 1, unit: "ft", label: "1 ft" },
           { value: 5, unit: "ft", label: "5 ft" },
@@ -3282,6 +3293,26 @@ export function TakeoffTab({
                     "Enter a distance to see the resulting scale"
                   )}
                 </div>
+
+                {/* Sanity warnings */}
+                {(orientationMismatch || lineTooShort) && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-500 space-y-0.5">
+                    {orientationMismatch && (
+                      <div>
+                        ⚠ The calibration line runs {isLineHorizontal ? "horizontally" : "vertically"} but
+                        the page is {pageIsPortrait ? "portrait" : "landscape"}.
+                        Some drawings use different scales for each axis — confirm this scale is correct
+                        for the line's direction.
+                      </div>
+                    )}
+                    {lineTooShort && (
+                      <div>
+                        ⚠ The calibration line is only {pixelDist.toFixed(0)} px. Short reference lines
+                        amplify error — for best accuracy, use a labelled dimension at least 100 px long.
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Apply to all pages toggle */}
                 {totalPages > 1 && (
