@@ -59,6 +59,33 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
   return `${value.toFixed(2)} ${unit}`;
 }
 
+/* Roll up a list of annotations into a single summary string. Linear ones
+   sum into a single distance, area-* into a single area, counts into a
+   total, and mixed groups fall back to "N items". */
+function formatGroupTotal(items: TakeoffAnnotation[]): string {
+  if (items.length === 0) return "";
+  const measurements = items.filter((a) => a.measurement && a.measurement.value > 0);
+  if (measurements.length === 0) return `${items.length} items`;
+  const units = new Set(measurements.map((a) => a.measurement!.unit));
+  if (units.size === 1) {
+    const unit = measurements[0]!.measurement!.unit;
+    if (unit === "count") {
+      // For count tools, sum the points (each annotation is a single click for "count" tool;
+      // count-by-distance produces a value per annotation).
+      const total = items.reduce((s, a) => {
+        if (a.measurement?.unit === "count") return s + (a.measurement.value || 0);
+        if (a.type === "count") return s + (a.points?.length ?? 0);
+        return s;
+      }, 0);
+      return `${total} count`;
+    }
+    const total = measurements.reduce((s, a) => s + (a.measurement!.value || 0), 0);
+    const fmt = total >= 1000 ? total.toFixed(0) : total.toFixed(2);
+    return `${fmt} ${unit}`;
+  }
+  return `${items.length} items`;
+}
+
 /* Pretty label for annotation type */
 const TYPE_LABELS: Record<string, string> = {
   calibrate: "Calibration",
@@ -193,8 +220,11 @@ export function AnnotationSidebar({
                   ) : (
                     <ChevronDown className="h-3 w-3" />
                   )}
-                  <span>{groupLabel}</span>
-                  <span className="ml-auto text-[11px] text-fg/30">{items.length}</span>
+                  <span className="truncate">{groupLabel}</span>
+                  <span className="ml-auto text-[11px] font-mono text-emerald-400/85">
+                    {formatGroupTotal(items)}
+                  </span>
+                  <span className="text-[10px] text-fg/30 ml-2">×{items.length}</span>
                 </button>
 
                 {/* Group items */}
