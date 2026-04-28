@@ -1,7 +1,30 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
+
+// Resolve Azure Document Intelligence creds the same way the rest of the
+// API does: organisation Settings > Integrations override env vars. Without
+// this lookup, takeoff OCR (legend / scale) would refuse to run for orgs
+// that store creds in Settings instead of env — even though knowledge book
+// ingestion happily uses them.
+async function resolveAzureConfig(
+  request: FastifyRequest,
+): Promise<{ endpoint?: string; key?: string }> {
+  try {
+    const settings = await request.store!.getSettings();
+    const integrations = (settings.integrations ?? {}) as {
+      azureDiEndpoint?: string;
+      azureDiKey?: string;
+    };
+    return {
+      endpoint: integrations.azureDiEndpoint || process.env.AZURE_DI_ENDPOINT,
+      key: integrations.azureDiKey || process.env.AZURE_DI_KEY,
+    };
+  } catch {
+    return { endpoint: process.env.AZURE_DI_ENDPOINT, key: process.env.AZURE_DI_KEY };
+  }
+}
 
 export async function takeoffRoutes(app: FastifyInstance) {
   // ── POST /api/takeoff/:projectId/documents/:documentId/detect-scale ──
@@ -12,7 +35,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
     const body = (request.body ?? {}) as { pageNumber?: number };
     const pageNumber = body.pageNumber ?? 1;
     try {
-      const result = await detectTitleBlockScale(projectId, documentId, pageNumber);
+      const azureConfig = await resolveAzureConfig(request);
+      const result = await detectTitleBlockScale(projectId, documentId, pageNumber, azureConfig);
       return result;
     } catch (err) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Detect failed" });
@@ -28,7 +52,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
     const body = (request.body ?? {}) as { pageNumber?: number };
     const pageNumber = body.pageNumber ?? 1;
     try {
-      const result = await extractLegendFromPage(projectId, documentId, pageNumber);
+      const azureConfig = await resolveAzureConfig(request);
+      const result = await extractLegendFromPage(projectId, documentId, pageNumber, azureConfig);
       return result;
     } catch (err) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Legend extraction failed" });
