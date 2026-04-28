@@ -1,6 +1,22 @@
 import type { FastifyInstance } from "fastify";
+import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 
 export async function takeoffRoutes(app: FastifyInstance) {
+  // ── POST /api/takeoff/:projectId/documents/:documentId/detect-scale ──
+  // OCRs the page via Azure Document Intelligence and parses the text for
+  // standard scale notations like "1:50" or "1/4\" = 1'-0\"".
+  app.post("/api/takeoff/:projectId/documents/:documentId/detect-scale", async (request, reply) => {
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    const body = (request.body ?? {}) as { pageNumber?: number };
+    const pageNumber = body.pageNumber ?? 1;
+    try {
+      const result = await detectTitleBlockScale(projectId, documentId, pageNumber);
+      return result;
+    } catch (err) {
+      return reply.code(500).send({ message: err instanceof Error ? err.message : "Detect failed" });
+    }
+  });
+
   // ── GET /api/takeoff/:projectId/annotations ───────────────────────────
   app.get("/api/takeoff/:projectId/annotations", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };

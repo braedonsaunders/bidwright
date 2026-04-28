@@ -144,17 +144,173 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   );
 }
 
-/* ─────────────────────── Select ─────────────────────── */
+/* ─────────────────────── Select (Radix + native fallback) ───────────────────────
+ * Two forms supported:
+ *   1) New Radix-style: <Select value onValueChange options=[...] />
+ *   2) Legacy native:   <Select value onChange><option/>...</Select>
+ * The native fallback keeps existing call sites working until they migrate. */
 
-export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+export interface SelectOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
+type RadixSelectProps = {
+  value: string;
+  onValueChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  className?: string;
+  triggerClassName?: string;
+  contentClassName?: string;
+  size?: "xs" | "sm" | "md";
+  disabled?: boolean;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  id?: string;
+  ariaLabel?: string;
+  align?: "start" | "center" | "end";
+  "data-testid"?: string;
+};
+
+type NativeSelectProps = React.SelectHTMLAttributes<HTMLSelectElement>;
+
+function isRadixSelect(props: RadixSelectProps | NativeSelectProps): props is RadixSelectProps {
+  return "options" in props && Array.isArray((props as RadixSelectProps).options);
+}
+
+export function Select(props: RadixSelectProps | NativeSelectProps) {
+  if (!isRadixSelect(props)) {
+    const { className, ...rest } = props;
+    return (
+      <select
+        className={cn(
+          "h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
+          className,
+        )}
+        {...rest}
+      />
+    );
+  }
+  const {
+    value,
+    onValueChange,
+    options,
+    placeholder = "Select...",
+    className,
+    triggerClassName,
+    contentClassName,
+    size = "md",
+    disabled = false,
+    defaultOpen,
+    open,
+    onOpenChange,
+    id,
+    ariaLabel,
+    align = "start",
+    "data-testid": dataTestId,
+  } = props;
+  const _unused: never[] = []; void _unused;
+  /* fall through to Radix render below */
+  return _renderRadixSelect({
+    value,
+    onValueChange,
+    options,
+    placeholder,
+    className,
+    triggerClassName,
+    contentClassName,
+    size,
+    disabled,
+    defaultOpen,
+    open,
+    onOpenChange,
+    id,
+    ariaLabel,
+    align,
+    dataTestId,
+  });
+}
+
+function _renderRadixSelect({
+  value,
+  onValueChange,
+  options,
+  placeholder,
+  className,
+  triggerClassName,
+  contentClassName,
+  size = "md",
+  disabled,
+  defaultOpen,
+  open,
+  onOpenChange,
+  id,
+  ariaLabel,
+  align,
+  dataTestId,
+}: Omit<RadixSelectProps, "data-testid"> & { dataTestId?: string }) {
+  const sizes = {
+    xs: "h-7 px-2 text-[11px]",
+    sm: "h-8 px-2.5 text-xs",
+    md: "h-9 px-3 text-sm",
+  }[size];
+
   return (
-    <select
-      className={cn(
-        "h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none transition-colors focus:border-accent/50 focus:ring-1 focus:ring-accent/20",
-        className
-      )}
-      {...props}
-    />
+    <SelectPrimitive.Root
+      value={value}
+      onValueChange={onValueChange}
+      disabled={disabled}
+      defaultOpen={defaultOpen}
+      open={open}
+      onOpenChange={onOpenChange}
+    >
+      <SelectPrimitive.Trigger
+        id={id}
+        aria-label={ariaLabel}
+        data-testid={dataTestId}
+        className={cn(
+          "inline-flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-bg/50 text-fg outline-none transition-colors hover:border-accent/30 focus-visible:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
+          sizes,
+          triggerClassName,
+          className,
+        )}
+      >
+        <SelectPrimitive.Value placeholder={<span className="text-fg/30">{placeholder}</span>} />
+        <SelectPrimitive.Icon className="text-fg/35 shrink-0">
+          <ChevronDown className="h-3.5 w-3.5" />
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content
+          position="popper"
+          sideOffset={6}
+          align={align}
+          className={cn(
+            "z-[300] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-lg border border-line bg-panel shadow-xl",
+            contentClassName,
+          )}
+        >
+          <SelectPrimitive.Viewport className="p-1 max-h-[280px]">
+            {options.map((option) => (
+              <SelectPrimitive.Item
+                key={option.value}
+                value={option.value}
+                disabled={option.disabled}
+                className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-35 data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
+              >
+                <SelectPrimitive.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
+                  <Check className="h-3.5 w-3.5" />
+                </SelectPrimitive.ItemIndicator>
+                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
   );
 }
 
