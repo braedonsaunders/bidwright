@@ -144,11 +144,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
   );
 }
 
-/* ─────────────────────── Select (Radix + native fallback) ───────────────────────
- * Two forms supported:
- *   1) New Radix-style: <Select value onValueChange options=[...] />
- *   2) Legacy native:   <Select value onChange><option/>...</Select>
- * The native fallback keeps existing call sites working until they migrate. */
+/* ─────────────────────── Select (Radix) ─────────────────────── */
 
 export interface SelectOption {
   value: string;
@@ -156,7 +152,24 @@ export interface SelectOption {
   disabled?: boolean;
 }
 
-type RadixSelectProps = {
+export function Select({
+  value,
+  onValueChange,
+  options,
+  placeholder = "Select...",
+  className,
+  triggerClassName,
+  contentClassName,
+  size = "md",
+  disabled = false,
+  defaultOpen,
+  open,
+  onOpenChange,
+  id,
+  ariaLabel,
+  align = "start",
+  "data-testid": dataTestId,
+}: {
   value: string;
   onValueChange: (value: string) => void;
   options: SelectOption[];
@@ -173,85 +186,7 @@ type RadixSelectProps = {
   ariaLabel?: string;
   align?: "start" | "center" | "end";
   "data-testid"?: string;
-};
-
-type NativeSelectProps = React.SelectHTMLAttributes<HTMLSelectElement>;
-
-function isRadixSelect(props: RadixSelectProps | NativeSelectProps): props is RadixSelectProps {
-  return "options" in props && Array.isArray((props as RadixSelectProps).options);
-}
-
-export function Select(props: RadixSelectProps | NativeSelectProps) {
-  if (!isRadixSelect(props)) {
-    const { className, ...rest } = props;
-    return (
-      <select
-        className={cn(
-          "h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
-          className,
-        )}
-        {...rest}
-      />
-    );
-  }
-  const {
-    value,
-    onValueChange,
-    options,
-    placeholder = "Select...",
-    className,
-    triggerClassName,
-    contentClassName,
-    size = "md",
-    disabled = false,
-    defaultOpen,
-    open,
-    onOpenChange,
-    id,
-    ariaLabel,
-    align = "start",
-    "data-testid": dataTestId,
-  } = props;
-  const _unused: never[] = []; void _unused;
-  /* fall through to Radix render below */
-  return _renderRadixSelect({
-    value,
-    onValueChange,
-    options,
-    placeholder,
-    className,
-    triggerClassName,
-    contentClassName,
-    size,
-    disabled,
-    defaultOpen,
-    open,
-    onOpenChange,
-    id,
-    ariaLabel,
-    align,
-    dataTestId,
-  });
-}
-
-function _renderRadixSelect({
-  value,
-  onValueChange,
-  options,
-  placeholder,
-  className,
-  triggerClassName,
-  contentClassName,
-  size = "md",
-  disabled,
-  defaultOpen,
-  open,
-  onOpenChange,
-  id,
-  ariaLabel,
-  align,
-  dataTestId,
-}: Omit<RadixSelectProps, "data-testid"> & { dataTestId?: string }) {
+}) {
   const sizes = {
     xs: "h-7 px-2 text-[11px]",
     sm: "h-8 px-2.5 text-xs",

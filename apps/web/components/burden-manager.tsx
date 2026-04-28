@@ -169,15 +169,15 @@ export function BurdenManager() {
           <CardTitle>Burden Periods</CardTitle>
           <div className="flex items-center gap-2">
             <Select
-              value={groupFilter}
-              onChange={(e) => setGroupFilter(e.target.value)}
-              className="h-7 text-xs w-32"
-            >
-              <option value="">All Groups</option>
-              {GROUPS.map((g) => (
-                <option key={g} value={g}>{g}</option>
-              ))}
-            </Select>
+              value={groupFilter || "__all__"}
+              onValueChange={(v) => setGroupFilter(v === "__all__" ? "" : v)}
+              className="w-32"
+              size="xs"
+              options={[
+                { value: "__all__", label: "All Groups" },
+                ...GROUPS.map((g) => ({ value: g, label: g })),
+              ]}
+            />
             <Button variant="accent" size="xs" onClick={() => setShowAdd(true)}>
               <Plus className="h-3 w-3" />
               Add
@@ -210,13 +210,10 @@ export function BurdenManager() {
                     <Label className="text-[10px]">Group</Label>
                     <Select
                       value={newForm.group}
-                      onChange={(e) => setNewForm((f) => ({ ...f, group: e.target.value }))}
-                      className="h-7 text-xs"
-                    >
-                      {GROUPS.map((g) => (
-                        <option key={g} value={g}>{g}</option>
-                      ))}
-                    </Select>
+                      onValueChange={(v) => setNewForm((f) => ({ ...f, group: v }))}
+                      size="xs"
+                      options={GROUPS.map((g) => ({ value: g, label: g }))}
+                    />
                   </div>
                   <div>
                     <Label className="text-[10px]">Percentage</Label>
@@ -294,13 +291,11 @@ export function BurdenManager() {
                       <td className="px-4 py-2">
                         <Select
                           value={editForm.group}
-                          onChange={(e) => setEditForm((f) => ({ ...f, group: e.target.value }))}
-                          className="h-6 text-xs"
-                        >
-                          {GROUPS.map((g) => (
-                            <option key={g} value={g}>{g}</option>
-                          ))}
-                        </Select>
+                          onValueChange={(v) => setEditForm((f) => ({ ...f, group: v }))}
+                          className="h-6 text-[11px]"
+                          size="xs"
+                          options={GROUPS.map((g) => ({ value: g, label: g }))}
+                        />
                       </td>
                       <td className="px-4 py-2">
                         <Input

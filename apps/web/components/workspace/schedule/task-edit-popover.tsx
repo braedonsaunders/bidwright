@@ -370,13 +370,14 @@ export function TaskEditPopover({
                         <Label>Type</Label>
                         <Select
                           value={effectiveTaskType}
-                          onChange={(event) => setTaskType(event.target.value as ScheduleTaskType)}
+                          onValueChange={(v) => setTaskType(v as ScheduleTaskType)}
                           disabled={hasChildren}
-                        >
-                          <option value="task">Task</option>
-                          <option value="milestone">Milestone</option>
-                          <option value="summary">Summary Task</option>
-                        </Select>
+                          options={[
+                            { value: "task", label: "Task" },
+                            { value: "milestone", label: "Milestone" },
+                            { value: "summary", label: "Summary Task" },
+                          ]}
+                        />
                         {hasChildren ? (
                           <p className="text-[11px] text-fg/40">
                             Tasks with children behave as summary tasks and roll up their child dates automatically.
@@ -385,13 +386,12 @@ export function TaskEditPopover({
                       </div>
                       <div className="space-y-1.5">
                         <Label>Status</Label>
-                        <Select value={status} onChange={(event) => setStatus(event.target.value as ScheduleTaskStatus)} disabled={isRollupLocked}>
-                          {(Object.entries(STATUS_LABELS) as [ScheduleTaskStatus, string][]).map(([key, label]) => (
-                            <option key={key} value={key}>
-                              {label}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={status}
+                          onValueChange={(v) => setStatus(v as ScheduleTaskStatus)}
+                          disabled={isRollupLocked}
+                          options={(Object.entries(STATUS_LABELS) as [ScheduleTaskStatus, string][]).map(([key, label]) => ({ value: key, label }))}
+                        />
                       </div>
                     </div>
 
@@ -402,15 +402,17 @@ export function TaskEditPopover({
                       </div>
                       <div className="space-y-1.5">
                         <Label>Calendar</Label>
-                        <Select value={calendarId} onChange={(event) => setCalendarId(event.target.value)}>
-                          <option value="">Default Project Calendar</option>
-                          {calendars.map((calendar) => (
-                            <option key={calendar.id} value={calendar.id}>
-                              {calendar.isDefault ? "[Default] " : ""}
-                              {calendar.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={calendarId || "__default__"}
+                          onValueChange={(v) => setCalendarId(v === "__default__" ? "" : v)}
+                          options={[
+                            { value: "__default__", label: "Default Project Calendar" },
+                            ...calendars.map((calendar) => ({
+                              value: calendar.id,
+                              label: `${calendar.isDefault ? "[Default] " : ""}${calendar.name}`,
+                            })),
+                          ]}
+                        />
                       </div>
                     </div>
                   </TabsContent>
@@ -419,29 +421,34 @@ export function TaskEditPopover({
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label>Phase</Label>
-                        <Select value={phaseId} onChange={(event) => setPhaseId(event.target.value)}>
-                          <option value="">No Phase</option>
-                          {phases.map((phase) => (
-                            <option key={phase.id} value={phase.id}>
-                              {phase.number ? `${phase.number}. ` : ""}
-                              {phase.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={phaseId || "__none__"}
+                          onValueChange={(v) => setPhaseId(v === "__none__" ? "" : v)}
+                          options={[
+                            { value: "__none__", label: "No Phase" },
+                            ...phases.map((phase) => ({
+                              value: phase.id,
+                              label: `${phase.number ? `${phase.number}. ` : ""}${phase.name}`,
+                            })),
+                          ]}
+                        />
                       </div>
                       <div className="space-y-1.5">
                         <Label>Parent Task</Label>
-                        <Select value={parentTaskId} onChange={(event) => setParentTaskId(event.target.value)}>
-                          <option value="">Top Level Task</option>
-                          {availableParentTasks.map((item) => {
-                            const depth = currentPhaseHierarchy.get(item.id)?.depth ?? item.outlineLevel ?? 0;
-                            return (
-                              <option key={item.id} value={item.id}>
-                                {`${"  ".repeat(depth)}${item.name || "Untitled"}`}
-                              </option>
-                            );
-                          })}
-                        </Select>
+                        <Select
+                          value={parentTaskId || "__top__"}
+                          onValueChange={(v) => setParentTaskId(v === "__top__" ? "" : v)}
+                          options={[
+                            { value: "__top__", label: "Top Level Task" },
+                            ...availableParentTasks.map((item) => {
+                              const depth = currentPhaseHierarchy.get(item.id)?.depth ?? item.outlineLevel ?? 0;
+                              return {
+                                value: item.id,
+                                label: `${"  ".repeat(depth)}${item.name || "Untitled"}`,
+                              };
+                            }),
+                          ]}
+                        />
                       </div>
                     </div>
 
@@ -518,13 +525,11 @@ export function TaskEditPopover({
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label>Constraint</Label>
-                        <Select value={constraintType} onChange={(event) => setConstraintType(event.target.value as ScheduleConstraintType)}>
-                          {(Object.entries(CONSTRAINT_LABELS) as [ScheduleConstraintType, string][]).map(([key, label]) => (
-                            <option key={key} value={key}>
-                              {label}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={constraintType}
+                          onValueChange={(v) => setConstraintType(v as ScheduleConstraintType)}
+                          options={(Object.entries(CONSTRAINT_LABELS) as [ScheduleConstraintType, string][]).map(([key, label]) => ({ value: key, label }))}
+                        />
                       </div>
                       <div className="space-y-1.5">
                         <Label>Constraint Date</Label>
@@ -610,22 +615,19 @@ export function TaskEditPopover({
                         <div key={`${assignment.resourceId}-${index}`} className="grid gap-2 rounded-lg border border-line/70 bg-panel px-3 py-3 md:grid-cols-[minmax(0,1fr)_92px_minmax(0,1fr)_36px]">
                           <Select
                             data-testid={`task-resource-${index}`}
-                            value={assignment.resourceId}
-                            onChange={(event) =>
+                            value={assignment.resourceId || "__choose__"}
+                            onValueChange={(v) =>
                               setResourceAssignments((current) =>
                                 current.map((entry, entryIndex) =>
-                                  entryIndex === index ? { ...entry, resourceId: event.target.value } : entry
+                                  entryIndex === index ? { ...entry, resourceId: v === "__choose__" ? "" : v } : entry
                                 )
                               )
                             }
-                          >
-                            <option value="">Choose resource...</option>
-                            {resources.map((resource) => (
-                              <option key={resource.id} value={resource.id}>
-                                {resource.name}
-                              </option>
-                            ))}
-                          </Select>
+                            options={[
+                              { value: "__choose__", label: "Choose resource..." },
+                              ...resources.map((resource) => ({ value: resource.id, label: resource.name })),
+                            ]}
+                          />
                           <Input
                             data-testid={`task-resource-units-${index}`}
                             type="number"
@@ -710,22 +712,20 @@ export function TaskEditPopover({
 
                     <div className="space-y-2 rounded-xl border border-dashed border-line p-4">
                       <Label>Add Predecessor</Label>
-                      <Select value={selectedPredecessorId} onChange={(event) => setSelectedPredecessorId(event.target.value)}>
-                        <option value="">Choose a task...</option>
-                        {availablePredecessors.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {item.name || "Untitled"}
-                          </option>
-                        ))}
-                      </Select>
+                      <Select
+                        value={selectedPredecessorId || "__choose__"}
+                        onValueChange={(v) => setSelectedPredecessorId(v === "__choose__" ? "" : v)}
+                        options={[
+                          { value: "__choose__", label: "Choose a task..." },
+                          ...availablePredecessors.map((item) => ({ value: item.id, label: item.name || "Untitled" })),
+                        ]}
+                      />
                       <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_88px]">
-                        <Select value={dependencyType} onChange={(event) => setDependencyType(event.target.value as DependencyType)}>
-                          {(Object.entries(DEPENDENCY_TYPE_LABELS) as [DependencyType, string][]).map(([key, label]) => (
-                            <option key={key} value={key}>
-                              {label}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={dependencyType}
+                          onValueChange={(v) => setDependencyType(v as DependencyType)}
+                          options={(Object.entries(DEPENDENCY_TYPE_LABELS) as [DependencyType, string][]).map(([key, label]) => ({ value: key, label }))}
+                        />
                         <Input
                           type="number"
                           value={dependencyLagDays}

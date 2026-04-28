@@ -1059,32 +1059,37 @@ export function SettingsPage({
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Timezone</Label>
-                    <Select value={settings.general.timezone} onChange={(e) => updateGeneral({ timezone: e.target.value })}>
-                      {TIMEZONES.map((tz) => <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>)}
-                    </Select>
+                    <Select
+                      value={settings.general.timezone}
+                      onValueChange={(v) => updateGeneral({ timezone: v })}
+                      options={TIMEZONES.map((tz) => ({ value: tz, label: tz.replace(/_/g, " ") }))}
+                    />
                   </div>
                   <div>
                     <Label>Currency</Label>
-                    <Select value={settings.general.currency} onChange={(e) => updateGeneral({ currency: e.target.value })}>
-                      {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </Select>
+                    <Select
+                      value={settings.general.currency}
+                      onValueChange={(v) => updateGeneral({ currency: v })}
+                      options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>Date Format</Label>
-                    <Select value={settings.general.dateFormat} onChange={(e) => updateGeneral({ dateFormat: e.target.value })}>
-                      {DATE_FORMATS.map((f) => <option key={f} value={f}>{f}</option>)}
-                    </Select>
+                    <Select
+                      value={settings.general.dateFormat}
+                      onValueChange={(v) => updateGeneral({ dateFormat: v })}
+                      options={DATE_FORMATS.map((f) => ({ value: f, label: f }))}
+                    />
                   </div>
                   <div>
                     <Label>Fiscal Year Start</Label>
                     <Select
                       value={String(settings.general.fiscalYearStart)}
-                      onChange={(e) => updateGeneral({ fiscalYearStart: parseInt(e.target.value, 10) })}
-                    >
-                      {MONTHS.map((m, i) => <option key={i} value={String(i + 1)}>{m}</option>)}
-                    </Select>
+                      onValueChange={(v) => updateGeneral({ fiscalYearStart: parseInt(v, 10) })}
+                      options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
+                    />
                   </div>
                 </div>
               </CardBody>
@@ -1367,20 +1372,28 @@ export function SettingsPage({
                   </div>
                   <div>
                     <Label>Default Breakout Style</Label>
-                    <Select value={settings.defaults.defaultBreakoutStyle} onChange={(e) => updateDefaults({ defaultBreakoutStyle: e.target.value })}>
-                      <option value="category">By Category</option>
-                      <option value="phase">By Phase</option>
-                      <option value="worksheet">By Worksheet</option>
-                      <option value="flat">Flat (No Breakout)</option>
-                    </Select>
+                    <Select
+                      value={settings.defaults.defaultBreakoutStyle}
+                      onValueChange={(v) => updateDefaults({ defaultBreakoutStyle: v })}
+                      options={[
+                        { value: "category", label: "By Category" },
+                        { value: "phase", label: "By Phase" },
+                        { value: "worksheet", label: "By Worksheet" },
+                        { value: "flat", label: "Flat (No Breakout)" },
+                      ]}
+                    />
                   </div>
                   <div>
                     <Label>Default Quote Type</Label>
-                    <Select value={settings.defaults.defaultQuoteType} onChange={(e) => updateDefaults({ defaultQuoteType: e.target.value })}>
-                      <option value="Firm">Firm</option>
-                      <option value="Budget">Budget</option>
-                      <option value="BudgetDNE">Budget DNE</option>
-                    </Select>
+                    <Select
+                      value={settings.defaults.defaultQuoteType}
+                      onValueChange={(v) => updateDefaults({ defaultQuoteType: v })}
+                      options={[
+                        { value: "Firm", label: "Firm" },
+                        { value: "Budget", label: "Budget" },
+                        { value: "BudgetDNE", label: "Budget DNE" },
+                      ]}
+                    />
                   </div>
                 </div>
 
@@ -1501,11 +1514,17 @@ export function SettingsPage({
                           <Input className="h-7 text-xs" value={user.email} onChange={(e) => updateUserLocal(user.id, { email: e.target.value })} onBlur={() => saveUser(user)} placeholder="email@company.com" />
                         </td>
                         <td className="px-5 py-2.5">
-                          <Select className="h-7 text-xs" value={user.role} onChange={(e) => { const role = e.target.value as UserRecord["role"]; updateUserLocal(user.id, { role }); saveUser({ ...user, role }); }}>
-                            <option value="Estimator">Estimator</option>
-                            <option value="Admin">Admin</option>
-                            <option value="Viewer">Viewer</option>
-                          </Select>
+                          <Select
+                            className="h-7 text-xs"
+                            size="xs"
+                            value={user.role}
+                            onValueChange={(v) => { const role = v as UserRecord["role"]; updateUserLocal(user.id, { role }); saveUser({ ...user, role }); }}
+                            options={[
+                              { value: "Estimator", label: "Estimator" },
+                              { value: "Admin", label: "Admin" },
+                              { value: "Viewer", label: "Viewer" },
+                            ]}
+                          />
                         </td>
                         <td className="px-5 py-2.5">
                           <Toggle checked={user.active} onChange={(val) => { updateUserLocal(user.id, { active: val }); saveUser({ ...user, active: val }); }} />
@@ -1574,17 +1593,13 @@ export function SettingsPage({
                     <Label>LLM Provider</Label>
                     <Select
                       value={provider}
-                      onChange={(e) => {
-                        const next = e.target.value;
-                        updateIntegrations({ llmProvider: next, llmModel: "" });
+                      onValueChange={(v) => {
+                        updateIntegrations({ llmProvider: v, llmModel: "" });
                         setKeyTestStatus({ loading: false });
                         setProviderModels([]);
                       }}
-                    >
-                      {Object.entries(PROVIDER_CONFIG).map(([k, v]) => (
-                        <option key={k} value={k}>{v.label}</option>
-                      ))}
-                    </Select>
+                      options={Object.entries(PROVIDER_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
+                    />
                   </div>
 
                   <Separator />
@@ -1828,12 +1843,9 @@ export function SettingsPage({
                             <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Item Source</p>
                             <Select
                               value={edited.itemSource || "freeform"}
-                              onChange={(e) => updateCatEdit(cat.id, { itemSource: e.target.value as EntityCategory["itemSource"] })}
-                            >
-                              {ITEM_SOURCE_OPTIONS.map((opt) => (
-                                <option key={opt.value} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </Select>
+                              onValueChange={(v) => updateCatEdit(cat.id, { itemSource: v as EntityCategory["itemSource"] })}
+                              options={ITEM_SOURCE_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+                            />
                             <p className="mt-1 text-[11px] text-fg/40">
                               {ITEM_SOURCE_OPTIONS.find((o) => o.value === (edited.itemSource || "freeform"))?.description}
                             </p>
@@ -1841,14 +1853,13 @@ export function SettingsPage({
                               <div className="mt-3">
                                 <Label>Linked Catalog</Label>
                                 <Select
-                                  value={edited.catalogId || ""}
-                                  onChange={(e) => updateCatEdit(cat.id, { catalogId: e.target.value || null })}
-                                >
-                                  <option value="">Any catalog</option>
-                                  {initialCatalogs.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.name} ({c.kind})</option>
-                                  ))}
-                                </Select>
+                                  value={edited.catalogId || "__any__"}
+                                  onValueChange={(v) => updateCatEdit(cat.id, { catalogId: v === "__any__" ? null : v })}
+                                  options={[
+                                    { value: "__any__", label: "Any catalog" },
+                                    ...initialCatalogs.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` })),
+                                  ]}
+                                />
                               </div>
                             )}
                             {edited.itemSource === "rate_schedule" && (
@@ -1864,9 +1875,11 @@ export function SettingsPage({
                             <div className="grid grid-cols-2 gap-3">
                               <div>
                                 <Label>Default UOM</Label>
-                                <Select value={edited.defaultUom} onChange={(e) => updateCatEdit(cat.id, { defaultUom: e.target.value })}>
-                                  {VALID_UOMS.map((u) => <option key={u} value={u}>{u}</option>)}
-                                </Select>
+                                <Select
+                                  value={edited.defaultUom}
+                                  onValueChange={(v) => updateCatEdit(cat.id, { defaultUom: v })}
+                                  options={VALID_UOMS.map((u) => ({ value: u, label: u }))}
+                                />
                               </div>
                               <div>
                                 <Label>Valid UOMs</Label>
@@ -1942,11 +1955,11 @@ export function SettingsPage({
                                   Apply Preset
                                 </Button>
                               </div>
-                              <Select value={edited.calculationType} onChange={(e) => updateCatEdit(cat.id, { calculationType: e.target.value as CalculationType })}>
-                                {CALCULATION_TYPES.map((ct) => (
-                                  <option key={ct.value} value={ct.value}>{ct.label}</option>
-                                ))}
-                              </Select>
+                              <Select
+                                value={edited.calculationType}
+                                onValueChange={(v) => updateCatEdit(cat.id, { calculationType: v as CalculationType })}
+                                options={CALCULATION_TYPES.map((ct) => ({ value: ct.value, label: ct.label }))}
+                              />
                             </div>
                             <div className="mt-3 rounded-lg border border-line bg-panel2/30 px-3 py-2.5">
                               <p className="text-xs font-medium text-fg">{calculationOption.label}</p>
@@ -2405,11 +2418,11 @@ export function SettingsPage({
                             </div>
                             <div>
                               <Label>Trade</Label>
-                              <Select value={edited.trade} onChange={(e) => updatePersonaEdit(persona.id, { trade: e.target.value })}>
-                                {TRADE_OPTIONS.map((t) => (
-                                  <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
-                                ))}
-                              </Select>
+                              <Select
+                                value={edited.trade}
+                                onValueChange={(v) => updatePersonaEdit(persona.id, { trade: v })}
+                                options={TRADE_OPTIONS.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
+                              />
                             </div>
                           </div>
                           <div>
@@ -2504,19 +2517,20 @@ export function SettingsPage({
                                   <Label>Coverage Mode</Label>
                                   <Select
                                     value={String(supervisionGuidance.coverageMode ?? "single_source")}
-                                    onChange={(e) => patchPersonaNestedJsonField(
+                                    onValueChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "productivityGuidance",
                                       (edited as any).productivityGuidance,
                                       "supervision",
-                                      { coverageMode: e.target.value },
+                                      { coverageMode: v },
                                     )}
-                                  >
-                                    <option value="single_source">Single source only</option>
-                                    <option value="embedded">Embedded in packages</option>
-                                    <option value="general_conditions">General Conditions</option>
-                                    <option value="hybrid">Hybrid split</option>
-                                  </Select>
+                                    options={[
+                                      { value: "single_source", label: "Single source only" },
+                                      { value: "embedded", label: "Embedded in packages" },
+                                      { value: "general_conditions", label: "General Conditions" },
+                                      { value: "hybrid", label: "Hybrid split" },
+                                    ]}
+                                  />
                                 </div>
                                 <div>
                                   <Label>Foreman To Trades</Label>
@@ -2554,37 +2568,39 @@ export function SettingsPage({
                                   <Label>Weak Evidence Pricing Mode</Label>
                                   <Select
                                     value={String(packagingGuidance.weakEvidencePricingMode ?? "allowance")}
-                                    onChange={(e) => patchPersonaNestedJsonField(
+                                    onValueChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "commercialGuidance",
                                       (edited as any).commercialGuidance,
                                       "packaging",
-                                      { weakEvidencePricingMode: e.target.value },
+                                      { weakEvidencePricingMode: v },
                                     )}
-                                  >
-                                    <option value="allowance">Allowance</option>
-                                    <option value="subcontract">Subcontract</option>
-                                    <option value="historical_allowance">Historical allowance</option>
-                                    <option value="detailed">Detailed takeoff</option>
-                                  </Select>
+                                    options={[
+                                      { value: "allowance", label: "Allowance" },
+                                      { value: "subcontract", label: "Subcontract" },
+                                      { value: "historical_allowance", label: "Historical allowance" },
+                                      { value: "detailed", label: "Detailed takeoff" },
+                                    ]}
+                                  />
                                 </div>
                                 <div>
                                   <Label>Shop Fabrication Pricing Mode</Label>
                                   <Select
                                     value={String(packagingGuidance.shopFabricationPricingMode ?? "detailed")}
-                                    onChange={(e) => patchPersonaNestedJsonField(
+                                    onValueChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "commercialGuidance",
                                       (edited as any).commercialGuidance,
                                       "packaging",
-                                      { shopFabricationPricingMode: e.target.value },
+                                      { shopFabricationPricingMode: v },
                                     )}
-                                  >
-                                    <option value="detailed">Detailed takeoff</option>
-                                    <option value="subcontract">Subcontract</option>
-                                    <option value="historical_allowance">Historical allowance</option>
-                                    <option value="allowance">Allowance</option>
-                                  </Select>
+                                    options={[
+                                      { value: "detailed", label: "Detailed takeoff" },
+                                      { value: "subcontract", label: "Subcontract" },
+                                      { value: "historical_allowance", label: "Historical allowance" },
+                                      { value: "allowance", label: "Allowance" },
+                                    ]}
+                                  />
                                 </div>
                                 <div>
                                   <Label>Default Subcontract Scopes</Label>

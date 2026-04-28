@@ -1171,16 +1171,13 @@ function RatesSubTab({
                 <>
                   <Select
                     className="flex-1"
-                    value={selectedImportId}
-                    onChange={(e) => setSelectedImportId(e.target.value)}
-                  >
-                    <option value="">Select a rate schedule...</option>
-                    {masterSchedules.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.category})
-                      </option>
-                    ))}
-                  </Select>
+                    value={selectedImportId || "__choose__"}
+                    onValueChange={(v) => setSelectedImportId(v === "__choose__" ? "" : v)}
+                    options={[
+                      { value: "__choose__", label: "Select a rate schedule..." },
+                      ...masterSchedules.map((s) => ({ value: s.id, label: `${s.name} (${s.category})` })),
+                    ]}
+                  />
                   <Button
                     size="sm"
                     onClick={handleImportSchedule}

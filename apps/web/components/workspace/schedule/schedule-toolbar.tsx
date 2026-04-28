@@ -370,19 +370,19 @@ export function ScheduleToolbar({
                   <div>
                     <Select
                       data-testid="schedule-baseline-select"
-                      value={activeBaselineId}
-                      onChange={(event) => onActiveBaselineChange(event.target.value)}
+                      value={activeBaselineId || "__none__"}
+                      onValueChange={(v) => onActiveBaselineChange(v === "__none__" ? "" : v)}
                       disabled={baselines.length === 0}
                       className="h-8 text-xs"
-                    >
-                      <option value="">No Baseline</option>
-                      {baselines.map((baseline) => (
-                        <option key={baseline.id} value={baseline.id}>
-                          {baseline.isPrimary ? "[Primary] " : ""}
-                          {baseline.name}
-                        </option>
-                      ))}
-                    </Select>
+                      size="sm"
+                      options={[
+                        { value: "__none__", label: "No Baseline" },
+                        ...baselines.map((baseline) => ({
+                          value: baseline.id,
+                          label: `${baseline.isPrimary ? "[Primary] " : ""}${baseline.name}`,
+                        })),
+                      ]}
+                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">

@@ -676,12 +676,13 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                           <Select
                             className="mt-1"
                             value={options.pageSetup.pageSize}
-                            onChange={(e) => updatePageSetup("pageSize", e.target.value as "letter" | "a4" | "legal")}
-                          >
-                            <option value="letter">Letter (8.5 x 11)</option>
-                            <option value="a4">A4 (210 x 297mm)</option>
-                            <option value="legal">Legal (8.5 x 14)</option>
-                          </Select>
+                            onValueChange={(v) => updatePageSetup("pageSize", v as "letter" | "a4" | "legal")}
+                            options={[
+                              { value: "letter", label: "Letter (8.5 x 11)" },
+                              { value: "a4", label: "A4 (210 x 297mm)" },
+                              { value: "legal", label: "Legal (8.5 x 14)" },
+                            ]}
+                          />
                         </div>
                       </div>
                     </SidebarPanel>
@@ -810,13 +811,15 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                         <span className="text-[11px] text-fg/50">Group By</span>
                                         <Select
                                           className="mt-1 h-7 text-xs"
+                                          size="xs"
                                           value={options.lineItemOptions.groupBy}
-                                          onChange={(e) => updateLineItemOptions("groupBy", e.target.value as "none" | "phase" | "worksheet")}
-                                        >
-                                          <option value="worksheet">Separate Tables by Worksheet</option>
-                                          <option value="none">Combined Table</option>
-                                          <option value="phase">Separate Tables by Phase</option>
-                                        </Select>
+                                          onValueChange={(v) => updateLineItemOptions("groupBy", v as "none" | "phase" | "worksheet")}
+                                          options={[
+                                            { value: "worksheet", label: "Separate Tables by Worksheet" },
+                                            { value: "none", label: "Combined Table" },
+                                            { value: "phase", label: "Separate Tables by Phase" },
+                                          ]}
+                                        />
                                       </div>
                                     </>
                                   )}
@@ -833,13 +836,15 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                         <Label className="text-[10px] text-fg/40">Cover Background</Label>
                                         <Select
                                           className="mt-1 h-7 text-xs"
+                                          size="xs"
                                           value={options.coverPageOptions.backgroundStyle}
-                                          onChange={(e) => updateCoverPage("backgroundStyle", e.target.value as PdfLayoutOptions["coverPageOptions"]["backgroundStyle"])}
-                                        >
-                                          <option value="minimal">Minimal</option>
-                                          <option value="accent">Accent Wash</option>
-                                          <option value="grid">Grid Texture</option>
-                                        </Select>
+                                          onValueChange={(v) => updateCoverPage("backgroundStyle", v as PdfLayoutOptions["coverPageOptions"]["backgroundStyle"])}
+                                          options={[
+                                            { value: "minimal", label: "Minimal" },
+                                            { value: "accent", label: "Accent Wash" },
+                                            { value: "grid", label: "Grid Texture" },
+                                          ]}
+                                        />
                                       </div>
                                       <div className="text-[10px] text-fg/40">
                                         Organization branding is pulled automatically from settings.

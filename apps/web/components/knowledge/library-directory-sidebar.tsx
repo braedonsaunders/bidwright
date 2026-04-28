@@ -217,14 +217,15 @@ export function MoveToCabinetModal({
 
         <div className="mt-4 space-y-2">
           <Label className="text-xs">Folder</Label>
-          <Select value={value} onChange={(event) => onValueChange(event.target.value)} className="text-xs">
-            <option value="__root__">Unassigned</option>
-            {options.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
+          <Select
+            value={value}
+            onValueChange={onValueChange}
+            className="text-xs"
+            options={[
+              { value: "__root__", label: "Unassigned" },
+              ...options.map((option) => ({ value: option.id, label: option.label })),
+            ]}
+          />
         </div>
 
         <div className="mt-5 flex justify-end gap-2">

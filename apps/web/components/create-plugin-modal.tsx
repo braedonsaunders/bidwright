@@ -653,16 +653,20 @@ export function CreatePluginModal({
                       </div>
                       <div>
                         <Label>Type</Label>
-                        <Select value={field.type} onChange={(e) => {
-                          const next = [...configFields]; next[i] = { ...next[i], type: e.target.value }; setConfigFields(next);
-                        }}>
-                          <option value="text">Text</option>
-                          <option value="password">Password</option>
-                          <option value="number">Number</option>
-                          <option value="boolean">Boolean</option>
-                          <option value="url">URL</option>
-                          <option value="select">Select</option>
-                        </Select>
+                        <Select
+                          value={field.type}
+                          onValueChange={(v) => {
+                            const next = [...configFields]; next[i] = { ...next[i], type: v }; setConfigFields(next);
+                          }}
+                          options={[
+                            { value: "text", label: "Text" },
+                            { value: "password", label: "Password" },
+                            { value: "number", label: "Number" },
+                            { value: "boolean", label: "Boolean" },
+                            { value: "url", label: "URL" },
+                            { value: "select", label: "Select" },
+                          ]}
+                        />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -759,17 +763,21 @@ export function CreatePluginModal({
                             </div>
                             <div>
                               <Label>Output Type</Label>
-                              <Select value={tool.outputType} onChange={(e) => {
-                                const next = [...tools]; next[ti] = { ...next[ti], outputType: e.target.value }; setTools(next);
-                              }}>
-                                <option value="line_items">Line Items</option>
-                                <option value="worksheet">Worksheet</option>
-                                <option value="text_content">Text Content</option>
-                                <option value="revision_patch">Revision Patch</option>
-                                <option value="score">Score</option>
-                                <option value="summary">Summary</option>
-                                <option value="composite">Composite</option>
-                              </Select>
+                              <Select
+                                value={tool.outputType}
+                                onValueChange={(v) => {
+                                  const next = [...tools]; next[ti] = { ...next[ti], outputType: v }; setTools(next);
+                                }}
+                                options={[
+                                  { value: "line_items", label: "Line Items" },
+                                  { value: "worksheet", label: "Worksheet" },
+                                  { value: "text_content", label: "Text Content" },
+                                  { value: "revision_patch", label: "Revision Patch" },
+                                  { value: "score", label: "Score" },
+                                  { value: "summary", label: "Summary" },
+                                  { value: "composite", label: "Composite" },
+                                ]}
+                              />
                             </div>
                             <div>
                               <Label>Tags</Label>
@@ -815,13 +823,19 @@ export function CreatePluginModal({
                                 <Input className="col-span-3 text-xs h-7" value={p.name} placeholder="name" onChange={(e) => {
                                   const next = [...tools]; next[ti].parameters[pi] = { ...p, name: e.target.value }; setTools(next);
                                 }} />
-                                <Select className="col-span-2 text-xs h-7" value={p.type} onChange={(e) => {
-                                  const next = [...tools]; next[ti].parameters[pi] = { ...p, type: e.target.value }; setTools(next);
-                                }}>
-                                  <option value="string">string</option>
-                                  <option value="number">number</option>
-                                  <option value="boolean">boolean</option>
-                                </Select>
+                                <Select
+                                  className="col-span-2 text-xs h-7"
+                                  size="xs"
+                                  value={p.type}
+                                  onValueChange={(v) => {
+                                    const next = [...tools]; next[ti].parameters[pi] = { ...p, type: v }; setTools(next);
+                                  }}
+                                  options={[
+                                    { value: "string", label: "string" },
+                                    { value: "number", label: "number" },
+                                    { value: "boolean", label: "boolean" },
+                                  ]}
+                                />
                                 <Input className="col-span-5 text-xs h-7" value={p.description} placeholder="description" onChange={(e) => {
                                   const next = [...tools]; next[ti].parameters[pi] = { ...p, description: e.target.value }; setTools(next);
                                 }} />
@@ -884,15 +898,19 @@ export function CreatePluginModal({
                                       <div className="grid grid-cols-3 gap-2">
                                         <div>
                                           <Label>Type</Label>
-                                          <Select value={section.type} onChange={(e) => {
-                                            const next = [...tools]; next[ti].uiSections[si] = { ...section, type: e.target.value }; setTools(next);
-                                          }}>
-                                            <option value="fields">Fields</option>
-                                            <option value="table">Table</option>
-                                            <option value="search">Search</option>
-                                            <option value="scoring">Scoring</option>
-                                            <option value="preview">Preview</option>
-                                          </Select>
+                                          <Select
+                                            value={section.type}
+                                            onValueChange={(v) => {
+                                              const next = [...tools]; next[ti].uiSections[si] = { ...section, type: v }; setTools(next);
+                                            }}
+                                            options={[
+                                              { value: "fields", label: "Fields" },
+                                              { value: "table", label: "Table" },
+                                              { value: "search", label: "Search" },
+                                              { value: "scoring", label: "Scoring" },
+                                              { value: "preview", label: "Preview" },
+                                            ]}
+                                          />
                                         </div>
                                         <div>
                                           <Label>Label</Label>
@@ -933,35 +951,47 @@ export function CreatePluginModal({
                                                 <Input className="text-[10px] h-6" value={field.id} placeholder="id" onChange={(e) => {
                                                   const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, id: e.target.value }; setTools(next);
                                                 }} />
-                                                <Select className="text-[10px] h-6" value={field.type} onChange={(e) => {
-                                                  const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, type: e.target.value }; setTools(next);
-                                                }}>
-                                                  <option value="text">text</option>
-                                                  <option value="number">number</option>
-                                                  <option value="currency">currency</option>
-                                                  <option value="percentage">percentage</option>
-                                                  <option value="select">select</option>
-                                                  <option value="multi-select">multi-select</option>
-                                                  <option value="radio">radio</option>
-                                                  <option value="slider">slider</option>
-                                                  <option value="date">date</option>
-                                                  <option value="textarea">textarea</option>
-                                                  <option value="boolean">boolean</option>
-                                                  <option value="computed">computed</option>
-                                                  <option value="search">search</option>
-                                                  <option value="hidden">hidden</option>
-                                                </Select>
+                                                <Select
+                                                  className="text-[10px] h-6"
+                                                  size="xs"
+                                                  value={field.type}
+                                                  onValueChange={(v) => {
+                                                    const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, type: v }; setTools(next);
+                                                  }}
+                                                  options={[
+                                                    { value: "text", label: "text" },
+                                                    { value: "number", label: "number" },
+                                                    { value: "currency", label: "currency" },
+                                                    { value: "percentage", label: "percentage" },
+                                                    { value: "select", label: "select" },
+                                                    { value: "multi-select", label: "multi-select" },
+                                                    { value: "radio", label: "radio" },
+                                                    { value: "slider", label: "slider" },
+                                                    { value: "date", label: "date" },
+                                                    { value: "textarea", label: "textarea" },
+                                                    { value: "boolean", label: "boolean" },
+                                                    { value: "computed", label: "computed" },
+                                                    { value: "search", label: "search" },
+                                                    { value: "hidden", label: "hidden" },
+                                                  ]}
+                                                />
                                                 <Input className="text-[10px] h-6" value={field.label} placeholder="Label" onChange={(e) => {
                                                   const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, label: e.target.value }; setTools(next);
                                                 }} />
-                                                <Select className="text-[10px] h-6" value={field.width} onChange={(e) => {
-                                                  const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, width: e.target.value }; setTools(next);
-                                                }}>
-                                                  <option value="full">Full</option>
-                                                  <option value="half">Half</option>
-                                                  <option value="third">Third</option>
-                                                  <option value="quarter">Quarter</option>
-                                                </Select>
+                                                <Select
+                                                  className="text-[10px] h-6"
+                                                  size="xs"
+                                                  value={field.width}
+                                                  onValueChange={(v) => {
+                                                    const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, width: v }; setTools(next);
+                                                  }}
+                                                  options={[
+                                                    { value: "full", label: "Full" },
+                                                    { value: "half", label: "Half" },
+                                                    { value: "third", label: "Third" },
+                                                    { value: "quarter", label: "Quarter" },
+                                                  ]}
+                                                />
                                               </div>
                                               {/* Options / Dataset binding */}
                                               {(field.type === "select" || field.type === "multi-select" || field.type === "radio") && (
@@ -975,23 +1005,31 @@ export function CreatePluginModal({
                                                   <div>
                                                     <span className="text-[9px] text-fg/30">Or Dataset Binding</span>
                                                     <div className="flex gap-1">
-                                                      <Select className="text-[10px] h-6 flex-1" value={field.datasetId} onChange={(e) => {
-                                                        const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, datasetId: e.target.value }; setTools(next);
-                                                      }}>
-                                                        <option value="">None</option>
-                                                        {(datasets ?? []).map((ds) => (
-                                                          <option key={ds.id} value={ds.id}>{ds.name}</option>
-                                                        ))}
-                                                      </Select>
+                                                      <Select
+                                                        className="text-[10px] h-6 flex-1"
+                                                        size="xs"
+                                                        value={field.datasetId || "__none__"}
+                                                        onValueChange={(v) => {
+                                                          const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, datasetId: v === "__none__" ? "" : v }; setTools(next);
+                                                        }}
+                                                        options={[
+                                                          { value: "__none__", label: "None" },
+                                                          ...(datasets ?? []).map((ds) => ({ value: ds.id, label: ds.name })),
+                                                        ]}
+                                                      />
                                                       {field.datasetId && (
-                                                        <Select className="text-[10px] h-6 flex-1" value={field.datasetColumn} onChange={(e) => {
-                                                          const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, datasetColumn: e.target.value }; setTools(next);
-                                                        }}>
-                                                          <option value="">Column...</option>
-                                                          {(datasets ?? []).find((ds) => ds.id === field.datasetId)?.columns.map((col) => (
-                                                            <option key={col.key} value={col.key}>{col.name}</option>
-                                                          ))}
-                                                        </Select>
+                                                        <Select
+                                                          className="text-[10px] h-6 flex-1"
+                                                          size="xs"
+                                                          value={field.datasetColumn || "__none__"}
+                                                          onValueChange={(v) => {
+                                                            const next = [...tools]; next[ti].uiSections[si].fields[fi] = { ...field, datasetColumn: v === "__none__" ? "" : v }; setTools(next);
+                                                          }}
+                                                          options={[
+                                                            { value: "__none__", label: "Column..." },
+                                                            ...((datasets ?? []).find((ds) => ds.id === field.datasetId)?.columns ?? []).map((col) => ({ value: col.key, label: col.name })),
+                                                          ]}
+                                                        />
                                                       )}
                                                     </div>
                                                   </div>
@@ -1063,23 +1101,35 @@ export function CreatePluginModal({
                                               <Input className="text-[10px] h-6" value={col.label} placeholder="Label" onChange={(e) => {
                                                 const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, label: e.target.value }; setTools(next);
                                               }} />
-                                              <Select className="text-[10px] h-6" value={col.type} onChange={(e) => {
-                                                const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, type: e.target.value }; setTools(next);
-                                              }}>
-                                                <option value="text">text</option>
-                                                <option value="number">number</option>
-                                                <option value="select">select</option>
-                                                <option value="computed">computed</option>
-                                                <option value="currency">currency</option>
-                                              </Select>
-                                              <Select className="text-[10px] h-6" value={col.aggregate} onChange={(e) => {
-                                                const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, aggregate: e.target.value }; setTools(next);
-                                              }}>
-                                                <option value="">No agg</option>
-                                                <option value="sum">Sum</option>
-                                                <option value="avg">Avg</option>
-                                                <option value="count">Count</option>
-                                              </Select>
+                                              <Select
+                                                className="text-[10px] h-6"
+                                                size="xs"
+                                                value={col.type}
+                                                onValueChange={(v) => {
+                                                  const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, type: v }; setTools(next);
+                                                }}
+                                                options={[
+                                                  { value: "text", label: "text" },
+                                                  { value: "number", label: "number" },
+                                                  { value: "select", label: "select" },
+                                                  { value: "computed", label: "computed" },
+                                                  { value: "currency", label: "currency" },
+                                                ]}
+                                              />
+                                              <Select
+                                                className="text-[10px] h-6"
+                                                size="xs"
+                                                value={col.aggregate || "__none__"}
+                                                onValueChange={(v) => {
+                                                  const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, aggregate: v === "__none__" ? "" : v }; setTools(next);
+                                                }}
+                                                options={[
+                                                  { value: "__none__", label: "No agg" },
+                                                  { value: "sum", label: "Sum" },
+                                                  { value: "avg", label: "Avg" },
+                                                  { value: "count", label: "Count" },
+                                                ]}
+                                              />
                                               <Input className="text-[10px] h-6" value={col.width} placeholder="120px" onChange={(e) => {
                                                 const next = [...tools]; next[ti].uiSections[si].tableColumns[ci] = { ...col, width: e.target.value }; setTools(next);
                                               }} />

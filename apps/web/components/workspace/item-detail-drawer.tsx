@@ -322,15 +322,12 @@ export function ItemDetailDrawer({
                   <Select
                     className="mt-1"
                     value={form.uom}
-                    onChange={(e) => {
-                      setForm({ ...form, uom: e.target.value });
-                      handleFieldBlur("uom", e.target.value);
+                    onValueChange={(v) => {
+                      setForm({ ...form, uom: v });
+                      handleFieldBlur("uom", v);
                     }}
-                  >
-                    {catDef.validUoms.map((u) => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </Select>
+                    options={catDef.validUoms.map((u) => ({ value: u, label: u }))}
+                  />
                 ) : (
                   <Input
                     className="mt-1"
@@ -389,19 +386,17 @@ export function ItemDetailDrawer({
               </label>
               <Select
                 className="mt-1"
-                value={form.phaseId}
-                onChange={(e) => {
-                  setForm({ ...form, phaseId: e.target.value });
-                  handleFieldBlur("phaseId", e.target.value);
+                value={form.phaseId || "__none__"}
+                onValueChange={(v) => {
+                  const next = v === "__none__" ? "" : v;
+                  setForm({ ...form, phaseId: next });
+                  handleFieldBlur("phaseId", next);
                 }}
-              >
-                <option value="">None</option>
-                {(workspace.phases ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.number} - {p.name}
-                  </option>
-                ))}
-              </Select>
+                options={[
+                  { value: "__none__", label: "None" },
+                  ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+                ]}
+              />
             </div>
 
             <div className="border border-line rounded-lg overflow-hidden">

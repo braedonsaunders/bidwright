@@ -25,6 +25,7 @@ import {
   Label,
   Badge,
   ModalBackdrop,
+  Select,
 } from "@/components/ui";
 import {
   Building2,
@@ -277,15 +278,17 @@ function OrgUsersSection({
                 <td className="py-1.5">
                   {editingUser === u.id ? (
                     <div className="flex items-center gap-1">
-                      <select
-                        className="rounded border border-line bg-panel px-1.5 py-0.5 text-[10px] text-fg"
+                      <Select
+                        size="xs"
+                        className="w-28"
                         value={editRole}
-                        onChange={(e) => setEditRole(e.target.value)}
-                      >
-                        <option value="admin">admin</option>
-                        <option value="estimator">estimator</option>
-                        <option value="viewer">viewer</option>
-                      </select>
+                        onValueChange={setEditRole}
+                        options={[
+                          { value: "admin", label: "admin" },
+                          { value: "estimator", label: "estimator" },
+                          { value: "viewer", label: "viewer" },
+                        ]}
+                      />
                       <button onClick={() => handleRoleChange(u.id)} className="text-accent hover:text-accent/80">
                         <Save className="h-3 w-3" />
                       </button>
@@ -384,15 +387,16 @@ function AddUserForm({
           className="text-xs h-8"
           required
         />
-        <select
-          className="rounded-lg border border-line bg-panel px-2 py-1 text-xs text-fg"
+        <Select
+          size="sm"
           value={role}
-          onChange={(e) => setRole(e.target.value)}
-        >
-          <option value="admin">Admin</option>
-          <option value="estimator">Estimator</option>
-          <option value="viewer">Viewer</option>
-        </select>
+          onValueChange={setRole}
+          options={[
+            { value: "admin", label: "Admin" },
+            { value: "estimator", label: "Estimator" },
+            { value: "viewer", label: "Viewer" },
+          ]}
+        />
         <Input
           type="password"
           placeholder="Password (optional)"

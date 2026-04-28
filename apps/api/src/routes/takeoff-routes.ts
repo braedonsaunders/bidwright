@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
+import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
 
 export async function takeoffRoutes(app: FastifyInstance) {
   // ── POST /api/takeoff/:projectId/documents/:documentId/detect-scale ──
@@ -33,6 +34,28 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Legend extraction failed" });
     }
   });
+
+  // ── POST /api/takeoff/:projectId/annotations/:annotationId/suggest-line-items ──
+  // Asks the LLM to match a takeoff annotation against the org's catalog
+  // and rate-schedule items. Returns ranked line-item suggestions the user
+  // can drop into a worksheet with one click.
+  app.post(
+    "/api/takeoff/:projectId/annotations/:annotationId/suggest-line-items",
+    async (request, reply) => {
+      const { projectId, annotationId } = request.params as {
+        projectId: string;
+        annotationId: string;
+      };
+      try {
+        const result = await suggestLineItemsForAnnotation(projectId, annotationId);
+        return result;
+      } catch (err) {
+        return reply.code(500).send({
+          message: err instanceof Error ? err.message : "Suggestion failed",
+        });
+      }
+    },
+  );
 
   // ── GET /api/takeoff/:projectId/annotations ───────────────────────────
   app.get("/api/takeoff/:projectId/annotations", async (request, reply) => {

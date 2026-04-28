@@ -434,15 +434,15 @@ export function LabourCostManager() {
                             />
                           </div>
                           <Select
-                            value={groupFilter}
-                            onChange={(e) => setGroupFilter(e.target.value)}
-                            className="h-7 text-xs w-32"
-                          >
-                            <option value="">All Groups</option>
-                            {GROUPS.map((g) => (
-                              <option key={g} value={g}>{g}</option>
-                            ))}
-                          </Select>
+                            value={groupFilter || "__all__"}
+                            onValueChange={(v) => setGroupFilter(v === "__all__" ? "" : v)}
+                            className="w-32"
+                            size="xs"
+                            options={[
+                              { value: "__all__", label: "All Groups" },
+                              ...GROUPS.map((g) => ({ value: g, label: g })),
+                            ]}
+                          />
                           <Button variant="ghost" size="xs" onClick={handleAutoCalculate} title="Calculate OT/DT from Regular (1.5× / 2.0×)">
                             <Calculator className="h-3 w-3" /> Auto-Calc
                           </Button>
@@ -485,13 +485,11 @@ export function LabourCostManager() {
                                   <Label className="text-[10px]">Group</Label>
                                   <Select
                                     value={newEntry.group}
-                                    onChange={(e) => setNewEntry((f) => ({ ...f, group: e.target.value }))}
-                                    className="h-7 text-xs w-28"
-                                  >
-                                    {GROUPS.map((g) => (
-                                      <option key={g} value={g}>{g}</option>
-                                    ))}
-                                  </Select>
+                                    onValueChange={(v) => setNewEntry((f) => ({ ...f, group: v }))}
+                                    className="w-28"
+                                    size="xs"
+                                    options={GROUPS.map((g) => ({ value: g, label: g }))}
+                                  />
                                 </div>
                                 <Button variant="accent" size="xs" onClick={handleAddEntry}>Add</Button>
                                 <Button variant="ghost" size="xs" onClick={() => setShowAddEntry(false)}>

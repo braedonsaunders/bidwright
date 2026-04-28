@@ -1200,14 +1200,30 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <motion.div key="estimate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col gap-3">
               {/* Estimate sub-tabs */}
               <div className="flex items-center gap-1 shrink-0">
-                {estimateSubTabs.map((st) => (
-                  <button key={st} onClick={() => handleEstimateSubTabChange(st)}
-                    className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
-                      estimateSubTab === st ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60"
-                    )}>
-                    {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
-                  </button>
-                ))}
+                {estimateSubTabs.map((st) => {
+                  const isActive = estimateSubTab === st;
+                  return (
+                    <button
+                      key={st}
+                      onClick={() => handleEstimateSubTabChange(st)}
+                      className={cn(
+                        "relative px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
+                        isActive ? "text-fg" : "text-fg/40 hover:text-fg/60",
+                      )}
+                    >
+                      {isActive && (
+                        <motion.span
+                          layoutId="estimate-subtab-bg"
+                          className="absolute inset-0 rounded-md bg-panel2"
+                          transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                        />
+                      )}
+                      <span className="relative z-10">
+                        {st === "worksheets" ? "Worksheets" : st === "phases" ? "Phases" : st === "takeoff" ? "Takeoff" : "Schedule"}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
 
 
@@ -1637,10 +1653,15 @@ function EstimateTab({
     <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
       <div className="space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <Select className="w-48" value={selectedWsId} onChange={(e) => setSelectedWsId(e.target.value)}>
-            <option value="all">All worksheets</option>
-            {(workspace.worksheets ?? []).map((ws) => <option key={ws.id} value={ws.id}>{ws.name} ({ws.items.length})</option>)}
-          </Select>
+          <Select
+            className="w-48"
+            value={selectedWsId}
+            onValueChange={setSelectedWsId}
+            options={[
+              { value: "all", label: "All worksheets" },
+              ...(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: `${ws.name} (${ws.items.length})` })),
+            ]}
+          />
           <Input className="flex-1 min-w-[200px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           <Button size="sm" variant="secondary" onClick={onCreateWs}><Plus className="h-3 w-3" /> Worksheet</Button>
           {currentWs && (
@@ -1725,27 +1746,37 @@ function EstimateTab({
           {itemDraft ? (
             <>
               <div className="grid gap-3 grid-cols-2">
-                <div><Label>Worksheet</Label><Select value={itemDraft.worksheetId} onChange={(e) => setItemDraft((c) => c ? { ...c, worksheetId: e.target.value } : c)}>
-                  {(workspace.worksheets ?? []).map((ws) => <option key={ws.id} value={ws.id}>{ws.name}</option>)}
-                </Select></div>
-                <div><Label>Phase</Label><Select value={itemDraft.phaseId} onChange={(e) => setItemDraft((c) => c ? { ...c, phaseId: e.target.value } : c)}>
-                  <option value="">None</option>
-                  {(workspace.phases ?? []).map((p) => <option key={p.id} value={p.id}>{p.number} – {p.name}</option>)}
-                </Select></div>
+                <div><Label>Worksheet</Label><Select
+                  value={itemDraft.worksheetId}
+                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, worksheetId: v } : c)}
+                  options={(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
+                /></div>
+                <div><Label>Phase</Label><Select
+                  value={itemDraft.phaseId || "__none__"}
+                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, phaseId: v === "__none__" ? "" : v } : c)}
+                  options={[
+                    { value: "__none__", label: "None" },
+                    ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} – ${p.name}` })),
+                  ]}
+                /></div>
               </div>
               <div><Label>Name</Label><Input value={itemDraft.entityName} onChange={(e) => setItemDraft((c) => c ? { ...c, entityName: e.target.value } : c)} /></div>
               <div><Label>Description</Label><Textarea value={itemDraft.description} onChange={(e) => setItemDraft((c) => c ? { ...c, description: e.target.value } : c)} className="min-h-14" /></div>
               <div className="grid gap-3 grid-cols-2">
-                <div><Label>Category</Label><Select value={itemDraft.category} onChange={(e) => setItemDraft((c) => c ? { ...c, category: e.target.value } : c)}>
-                  {["Labour","Equipment","Stock Items","Material","Consumables","Other Charges","Travel & Per Diem","Subcontractors","Rental Equipment"].map((cat) => <option key={cat} value={cat}>{cat}</option>)}
-                </Select></div>
+                <div><Label>Category</Label><Select
+                  value={itemDraft.category}
+                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, category: v } : c)}
+                  options={["Labour","Equipment","Stock Items","Material","Consumables","Other Charges","Travel & Per Diem","Subcontractors","Rental Equipment"].map((cat) => ({ value: cat, label: cat }))}
+                /></div>
                 <div><Label>Entity type</Label><Input value={itemDraft.entityType} onChange={(e) => setItemDraft((c) => c ? { ...c, entityType: e.target.value } : c)} /></div>
               </div>
               <div className="grid gap-3 grid-cols-2">
                 <div><Label>Vendor</Label><Input value={itemDraft.vendor} onChange={(e) => setItemDraft((c) => c ? { ...c, vendor: e.target.value } : c)} /></div>
-                <div><Label>UOM</Label><Select value={itemDraft.uom} onChange={(e) => setItemDraft((c) => c ? { ...c, uom: e.target.value } : c)}>
-                  {["EA","LF","FT","SF","HR","DAY","WK","MO","LS","CY","LB","TON","GAL","SET","LOT","IN","M","CM"].map((u) => <option key={u} value={u}>{u}</option>)}
-                </Select></div>
+                <div><Label>UOM</Label><Select
+                  value={itemDraft.uom}
+                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, uom: v } : c)}
+                  options={["EA","LF","FT","SF","HR","DAY","WK","MO","LS","CY","LB","TON","GAL","SET","LOT","IN","M","CM"].map((u) => ({ value: u, label: u }))}
+                /></div>
               </div>
               <Separator />
               <div className="grid gap-3 grid-cols-3">

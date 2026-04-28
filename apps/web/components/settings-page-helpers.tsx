@@ -396,24 +396,22 @@ export function AgentRuntimeSettings({
         <div>
           <Label>Preferred Runtime</Label>
           <Select
-            value={currentRuntime}
-            onChange={(e) => {
-              const nextRuntime = isAgentRuntime(e.target.value) ? e.target.value : null;
+            value={currentRuntime || "__auto__"}
+            onValueChange={(v) => {
+              const raw = v === "__auto__" ? "" : v;
+              const nextRuntime = isAgentRuntime(raw) ? raw : null;
               const nextEffectiveRuntime = nextRuntime ?? getAutoRuntime(cliStatus);
               onUpdate({
                 agentRuntime: nextRuntime,
                 agentModel: isCompatibleModel(nextEffectiveRuntime, rawCurrentModel) ? rawCurrentModel : null,
               });
             }}
-          >
-            <option value="">Auto-detect (best available)</option>
-            <option value="claude-code" disabled={!cliStatus?.claude?.available}>
-              Claude Code CLI {!cliStatus?.claude?.available ? "(not installed)" : ""}
-            </option>
-            <option value="codex" disabled={!cliStatus?.codex?.available}>
-              Codex CLI {!cliStatus?.codex?.available ? "(not installed)" : ""}
-            </option>
-          </Select>
+            options={[
+              { value: "__auto__", label: "Auto-detect (best available)" },
+              { value: "claude-code", label: `Claude Code CLI ${!cliStatus?.claude?.available ? "(not installed)" : ""}`, disabled: !cliStatus?.claude?.available },
+              { value: "codex", label: `Codex CLI ${!cliStatus?.codex?.available ? "(not installed)" : ""}`, disabled: !cliStatus?.codex?.available },
+            ]}
+          />
         </div>
 
         <div>
@@ -423,14 +421,13 @@ export function AgentRuntimeSettings({
             const displayModels = models.filter((model, index) => models.findIndex((candidate) => candidate.id === model.id) === index);
             return (
               <Select
-                value={currentModel}
-                onChange={(e) => onUpdate({ agentModel: e.target.value || null })}
-              >
-                <option value="">Default</option>
-                {displayModels.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name} — {m.description}</option>
-                ))}
-              </Select>
+                value={currentModel || "__default__"}
+                onValueChange={(v) => onUpdate({ agentModel: v === "__default__" ? null : v })}
+                options={[
+                  { value: "__default__", label: "Default" },
+                  ...displayModels.map((m) => ({ value: m.id, label: `${m.name} — ${m.description}` })),
+                ]}
+              />
             );
           })()}
           <p className="text-[10px] text-fg/30 mt-1.5">
@@ -443,14 +440,12 @@ export function AgentRuntimeSettings({
           <Label>Reasoning Effort</Label>
           <Select
             value={reasoningEffort}
-            onChange={(e) => onUpdate({ agentReasoningEffort: e.target.value || "extra_high" })}
-          >
-            {REASONING_EFFORT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label} - {option.description}
-              </option>
-            ))}
-          </Select>
+            onValueChange={(v) => onUpdate({ agentReasoningEffort: v || "extra_high" })}
+            options={REASONING_EFFORT_OPTIONS.map((option) => ({
+              value: option.value,
+              label: `${option.label} - ${option.description}`,
+            }))}
+          />
           <p className="text-[10px] text-fg/30 mt-1.5">`Extra High` maps to `xhigh` for Codex and the strongest supported non-max level for Claude when a model does not support `xhigh`.</p>
         </div>
 
@@ -488,13 +483,14 @@ export function AgentRuntimeSettings({
           <Label>Max Concurrent Sub-Agents</Label>
           <Select
             value={String(settings.integrations.maxConcurrentSubAgents ?? 2)}
-            onChange={(e) => onUpdate({ maxConcurrentSubAgents: parseInt(e.target.value) })}
-          >
-            <option value="1">1 — Sequential (safest, slowest)</option>
-            <option value="2">2 — Recommended</option>
-            <option value="3">3 — Faster, higher rate limit risk</option>
-            <option value="5">5 — Aggressive (may hit API rate limits)</option>
-          </Select>
+            onValueChange={(v) => onUpdate({ maxConcurrentSubAgents: parseInt(v) })}
+            options={[
+              { value: "1", label: "1 — Sequential (safest, slowest)" },
+              { value: "2", label: "2 — Recommended" },
+              { value: "3", label: "3 — Faster, higher rate limit risk" },
+              { value: "5", label: "5 — Aggressive (may hit API rate limits)" },
+            ]}
+          />
           <p className="mt-1 text-[11px] text-fg/40">How many worksheet sub-agents the AI runs in parallel. Lower values avoid Anthropic API rate limit errors; higher values finish faster.</p>
         </div>
 

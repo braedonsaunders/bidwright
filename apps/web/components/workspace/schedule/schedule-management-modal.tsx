@@ -271,13 +271,17 @@ export function ScheduleManagementModal({
                       </div>
                       <div>
                         <Label>Kind</Label>
-                        <Select value={baselineKind} onChange={(event) => setBaselineKind(event.target.value as typeof baselineKind)}>
-                          <option value="snapshot">Snapshot</option>
-                          <option value="secondary">Secondary</option>
-                          <option value="tertiary">Tertiary</option>
-                          <option value="custom">Custom</option>
-                          <option value="primary">Primary</option>
-                        </Select>
+                        <Select
+                          value={baselineKind}
+                          onValueChange={(v) => setBaselineKind(v as typeof baselineKind)}
+                          options={[
+                            { value: "snapshot", label: "Snapshot" },
+                            { value: "secondary", label: "Secondary" },
+                            { value: "tertiary", label: "Tertiary" },
+                            { value: "custom", label: "Custom" },
+                            { value: "primary", label: "Primary" },
+                          ]}
+                        />
                       </div>
                       <div className="flex items-center justify-between rounded-lg border border-line bg-panel2/20 px-3 py-2">
                         <div>
@@ -463,24 +467,28 @@ export function ScheduleManagementModal({
                         </div>
                         <div>
                           <Label>Kind</Label>
-                          <Select value={resourceKind} onChange={(event) => setResourceKind(event.target.value as typeof resourceKind)}>
-                            <option value="labor">Labor</option>
-                            <option value="crew">Crew</option>
-                            <option value="equipment">Equipment</option>
-                            <option value="subcontractor">Subcontractor</option>
-                          </Select>
+                          <Select
+                            value={resourceKind}
+                            onValueChange={(v) => setResourceKind(v as typeof resourceKind)}
+                            options={[
+                              { value: "labor", label: "Labor" },
+                              { value: "crew", label: "Crew" },
+                              { value: "equipment", label: "Equipment" },
+                              { value: "subcontractor", label: "Subcontractor" },
+                            ]}
+                          />
                         </div>
                       </div>
                       <div>
                         <Label>Calendar</Label>
-                        <Select value={resourceCalendarId} onChange={(event) => setResourceCalendarId(event.target.value)}>
-                          <option value="">Use default</option>
-                          {calendars.map((calendar) => (
-                            <option key={calendar.id} value={calendar.id}>
-                              {calendar.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <Select
+                          value={resourceCalendarId || "__default__"}
+                          onValueChange={(v) => setResourceCalendarId(v === "__default__" ? "" : v)}
+                          options={[
+                            { value: "__default__", label: "Use default" },
+                            ...calendars.map((calendar) => ({ value: calendar.id, label: calendar.name })),
+                          ]}
+                        />
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <div>

@@ -2080,20 +2080,16 @@ function CreateBookModal({
           <div>
             <Label className="text-xs">Category</Label>
             <Select
-              className="mt-1 text-xs"
+              className="mt-1"
               value={category}
-              onChange={(e) =>
-                setCategory(
-                  e.target.value as KnowledgeBookRecord["category"]
-                )
+              onValueChange={(v) =>
+                setCategory(v as KnowledgeBookRecord["category"])
               }
-            >
-              {BOOK_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {categoryLabel(c)}
-                </option>
-              ))}
-            </Select>
+              options={BOOK_CATEGORIES.map((c) => ({
+                value: c,
+                label: categoryLabel(c),
+              }))}
+            />
           </div>
 
           {error && <p className="text-xs text-red-500">{error}</p>}
@@ -3024,19 +3020,17 @@ function AddRowForm({
             </Label>
             {col.type === "select" && col.options ? (
               <Select
-                className="mt-0.5 text-xs"
-                value={values[col.key] ?? ""}
-                onChange={(e) =>
-                  setValues({ ...values, [col.key]: e.target.value })
+                className="mt-0.5"
+                size="sm"
+                value={values[col.key] || "__select__"}
+                onValueChange={(v) =>
+                  setValues({ ...values, [col.key]: v === "__select__" ? "" : v })
                 }
-              >
-                <option value="">Select...</option>
-                {col.options.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </Select>
+                options={[
+                  { value: "__select__", label: "Select..." },
+                  ...col.options.map((opt) => ({ value: opt, label: opt })),
+                ]}
+              />
             ) : (
               <Input
                 className="mt-0.5 text-xs h-7"
@@ -3165,18 +3159,16 @@ function CreateDatasetModal({
           <div>
             <Label className="text-xs">Category</Label>
             <Select
-              className="mt-1 text-xs"
+              className="mt-1"
               value={category}
-              onChange={(e) =>
-                setCategory(e.target.value as DatasetRecord["category"])
+              onValueChange={(v) =>
+                setCategory(v as DatasetRecord["category"])
               }
-            >
-              {DATASET_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {categoryLabel(c)}
-                </option>
-              ))}
-            </Select>
+              options={DATASET_CATEGORIES.map((c) => ({
+                value: c,
+                label: categoryLabel(c),
+              }))}
+            />
           </div>
         </div>
 
@@ -3199,20 +3191,16 @@ function CreateDatasetModal({
                 onChange={(e) => updateColumn(idx, { name: e.target.value })}
               />
               <Select
-                className="text-xs h-7 w-28"
+                className="w-28"
+                size="xs"
                 value={col.type}
-                onChange={(e) =>
+                onValueChange={(v) =>
                   updateColumn(idx, {
-                    type: e.target.value as DatasetColumnRecord["type"],
+                    type: v as DatasetColumnRecord["type"],
                   })
                 }
-              >
-                {COLUMN_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </Select>
+                options={COLUMN_TYPES.map((t) => ({ value: t, label: t }))}
+              />
               <Input
                 className="text-xs h-7 w-20"
                 placeholder="Unit"

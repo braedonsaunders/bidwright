@@ -495,17 +495,12 @@ export function ImportBOMModal({
                         <td className="px-3 py-2">
                           <Select
                             value={mapping[header] ?? "(skip)"}
-                            onChange={(e) =>
-                              setMapping((prev) => ({ ...prev, [header]: e.target.value }))
+                            onValueChange={(v) =>
+                              setMapping((prev) => ({ ...prev, [header]: v }))
                             }
-                            className="h-7 text-xs"
-                          >
-                            {BOM_TARGET_COLUMNS.map((col) => (
-                              <option key={col} value={col}>
-                                {col}
-                              </option>
-                            ))}
-                          </Select>
+                            size="xs"
+                            options={BOM_TARGET_COLUMNS.map((col) => ({ value: col, label: col }))}
+                          />
                         </td>
                       </tr>
                     ))}
@@ -663,16 +658,13 @@ export function AIPhasesModal({
                 <Label htmlFor="aip-doc">Source Document</Label>
                 <Select
                   id="aip-doc"
-                  value={selectedDocId}
-                  onChange={(e) => setSelectedDocId(e.target.value)}
-                >
-                  <option value="">None (generic)</option>
-                  {documents.map((doc) => (
-                    <option key={doc.id} value={doc.id}>
-                      {doc.fileName}
-                    </option>
-                  ))}
-                </Select>
+                  value={selectedDocId || "__none__"}
+                  onValueChange={(v) => setSelectedDocId(v === "__none__" ? "" : v)}
+                  options={[
+                    { value: "__none__", label: "None (generic)" },
+                    ...documents.map((doc) => ({ value: doc.id, label: doc.fileName })),
+                  ]}
+                />
               </div>
             )}
             <div className="flex items-center justify-end gap-2">
@@ -956,13 +948,14 @@ export function PDFModal({
             <Select
               id="pdf-template"
               value={options.template}
-              onChange={(e) => setOptions((prev) => ({ ...prev, template: e.target.value }))}
-            >
-              <option value="standard">Standard</option>
-              <option value="detailed">Detailed</option>
-              <option value="summary">Summary Only</option>
-              <option value="client">Client Facing</option>
-            </Select>
+              onValueChange={(v) => setOptions((prev) => ({ ...prev, template: v }))}
+              options={[
+                { value: "standard", label: "Standard" },
+                { value: "detailed", label: "Detailed" },
+                { value: "summary", label: "Summary Only" },
+                { value: "client", label: "Client Facing" },
+              ]}
+            />
           </div>
 
           <div>
