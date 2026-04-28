@@ -1315,6 +1315,14 @@ export function TakeoffTab({
       return;
     }
 
+    /* Calibrate is its own first-class flow — straight to drawing mode
+       (with the magnifier loupe), then the dedicated calibration prompt
+       panel opens once both points are placed. No annotation config modal. */
+    if (tool === "calibrate") {
+      setActiveTool("calibrate");
+      return;
+    }
+
     /* Markup tools go straight to drawing mode */
     if (tool.startsWith("markup-")) {
       setActiveTool(tool);
