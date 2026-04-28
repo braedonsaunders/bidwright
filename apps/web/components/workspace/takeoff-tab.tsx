@@ -665,11 +665,20 @@ export function TakeoffTab({
   const [calibrationPoints, setCalibrationPoints] = useState<[Point, Point] | null>(null);
   const [calibrationInput, setCalibrationInput] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
+  const [calibrationApplyToAllPages, setCalibrationApplyToAllPages] = useState(false);
 
-  /* Persistent calibration cache: map of documentId → pageNumber → Calibration.
-     Loaded from WorkspaceState on mount, written back whenever the user
-     confirms a new calibration. */
-  const calibrationCacheRef = useRef<Record<string, Record<number, Calibration>>>({});
+  /* Persistent calibration cache. For each documentId we keep:
+     - numeric pageNumber keys for page-specific calibrations
+     - a special "__default" key for a document-wide default
+     The lookup falls back to the default when no page-specific value exists. */
+  type CalibrationDocCache = { [pageNumber: number]: Calibration } & { __default?: Calibration };
+  const calibrationCacheRef = useRef<Record<string, CalibrationDocCache>>({});
+
+  function lookupCalibrationFromCache(docId: string, pageNumber: number): Calibration | null {
+    const docCache = calibrationCacheRef.current[docId];
+    if (!docCache) return null;
+    return docCache[pageNumber] ?? docCache.__default ?? null;
+  }
 
   /* Drawing config (from modal or defaults) */
   const COLOR_CYCLE = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
@@ -1172,7 +1181,7 @@ export function TakeoffTab({
   // Whenever the user switches doc or page, restore the matching calibration.
   useEffect(() => {
     if (!selectedDocId) return;
-    const cached = calibrationCacheRef.current[selectedDocId]?.[page] ?? null;
+    const cached = lookupCalibrationFromCache(selectedDocId, page);
     setCalibration(cached);
   }, [selectedDocId, page]);
 
@@ -1727,6 +1736,7 @@ export function TakeoffTab({
   /* Calibration flow */
   function handleCalibrationRequest(points: [Point, Point]) {
     setCalibrationPoints(points);
+    setCalibrationApplyToAllPages(false);
     setCalibrationPromptOpen(true);
   }
 
@@ -1737,7 +1747,9 @@ export function TakeoffTab({
 
     const [a, b] = calibrationPoints;
     const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-    const pixelsPerUnit = pixelDist / knownDist;
+    // Normalise pixelsPerUnit to zoom 1 (paper-pixels per unit) so
+    // measurements stay correct at any later zoom level.
+    const pixelsPerUnit = (pixelDist / knownDist) / Math.max(zoom, 0.0001);
 
     const next: Calibration = { pixelsPerUnit, unit: calibrationUnit };
     setCalibration(next);
@@ -1749,7 +1761,15 @@ export function TakeoffTab({
     // syncs to other open tabs / devices.
     if (selectedDocId) {
       const cache = calibrationCacheRef.current;
-      cache[selectedDocId] = { ...(cache[selectedDocId] ?? {}), [page]: next };
+      const docCache = { ...(cache[selectedDocId] ?? {}) };
+      if (calibrationApplyToAllPages) {
+        // Mark this calibration as the document-wide default and clear any
+        // page-specific overrides so every page picks it up.
+        docCache.__default = next;
+      } else {
+        docCache[page] = next;
+      }
+      cache[selectedDocId] = docCache;
       void updateWorkspaceState(projectId, { takeoffCalibrations: cache }).catch(() => {});
     }
     setActiveTool("select");
@@ -2128,6 +2148,17 @@ export function TakeoffTab({
 
   /* Determine if special tools are active */
   const isAutoCountActive = activeTool === "auto-count";
+
+  function isMeasurementTool(tool: string | null): boolean {
+    if (!tool) return false;
+    return (
+      tool === "linear" ||
+      tool === "linear-polyline" ||
+      tool === "linear-drop" ||
+      tool === "count-by-distance" ||
+      tool.startsWith("area-")
+    );
+  }
   const isAskAiActive = activeTool === "ask-ai";
   const isRectSelectTool = isAutoCountActive || isAskAiActive;
 
@@ -2444,6 +2475,25 @@ export function TakeoffTab({
           <ExternalLink className="h-3.5 w-3.5" />
         </Button>
       </div>
+
+      {/* ─── No-Calibration Warning ─── */}
+      {!isCadDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
+        <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/5 px-4 py-2.5 shrink-0">
+          <Scaling className="h-4 w-4 text-amber-500 shrink-0 animate-pulse" />
+          <div className="flex-1">
+            <p className="text-xs font-medium text-fg/85">
+              Drawing scale isn't set — measurements will be in pixels until you calibrate.
+            </p>
+            <p className="text-[11px] text-fg/50 mt-0.5">
+              Click below to set the scale, or pick the Calibrate tool from the side palette.
+            </p>
+          </div>
+          <Button size="xs" variant="accent" onClick={() => handleToolSelect("calibrate")}>
+            <Scaling className="h-3 w-3" />
+            Set scale
+          </Button>
+        </div>
+      )}
 
       {/* ─── Auto-Count Banner ─── */}
       {!isCadDocument && (isAutoCountActive || autoCountRunning) && (
@@ -2787,6 +2837,7 @@ export function TakeoffTab({
                     }
                     onCalibrationRequest={handleCalibrationRequest}
                     pdfCanvas={pdfCanvasRef.current}
+                    zoom={zoom}
                   />
 
                   {/* Processing overlay */}
@@ -3221,12 +3272,30 @@ export function TakeoffTab({
                 >
                   {livePerUnit ? (
                     <>
-                      Resulting scale: <span className="font-semibold">1 {calibrationUnit} = {livePerUnit.toFixed(2)} px</span>
+                      Resulting scale:{" "}
+                      <span className="font-semibold">
+                        1 {calibrationUnit} = {(livePerUnit / Math.max(zoom, 0.0001)).toFixed(2)} px
+                      </span>
+                      <span className="text-fg/40 text-[10px] ml-2">(at 100% zoom)</span>
                     </>
                   ) : (
                     "Enter a distance to see the resulting scale"
                   )}
                 </div>
+
+                {/* Apply to all pages toggle */}
+                {totalPages > 1 && (
+                  <label className="flex items-center gap-2 text-xs text-fg/70 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={calibrationApplyToAllPages}
+                      onChange={(e) => setCalibrationApplyToAllPages(e.target.checked)}
+                      className="accent-amber-500"
+                    />
+                    Apply this scale to all {totalPages} pages of this drawing
+                    <span className="text-fg/35 text-[10px] ml-1">(individual pages can override later)</span>
+                  </label>
+                )}
 
                 <div className="flex justify-end gap-2 pt-1">
                   <Button
