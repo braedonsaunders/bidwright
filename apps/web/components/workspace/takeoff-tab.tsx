@@ -87,9 +87,11 @@ import {
   apiRequest,
   detectTitleBlockScale,
   extractLegendFromPage,
+  suggestLineItemsForAnnotation,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type LegendEntryRecord,
+  type LineItemSuggestionRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -1741,18 +1743,34 @@ export function TakeoffTab({
       };
       setAnnotations((prev) => [...prev, annotation]);
       try {
+        // The takeoff create endpoint expects API-contract field names
+        // (annotationType / pageNumber / lineThickness), not the local
+        // canvas field names (type / page / thickness). Spreading the
+        // raw annotation here previously dropped annotationType entirely
+        // and the server silently rejected each row, so accepted smart-
+        // count entries vanished on reload.
         const saved = await createTakeoffAnnotation(projectId, {
           documentId:
-            selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id,
-          page,
-          ...annotation,
-        } as any);
+            selectedDoc.source === "knowledge" && selectedDoc.bookId
+              ? selectedDoc.bookId
+              : selectedDoc.id,
+          pageNumber: page,
+          annotationType: annotation.type,
+          label: annotation.label,
+          color: annotation.color,
+          lineThickness: annotation.thickness,
+          visible: annotation.visible,
+          groupName: annotation.groupName ?? "",
+          points: annotation.points,
+          measurement: annotation.measurement ?? {},
+        });
         if (saved?.id) {
           setAnnotations((prev) =>
             prev.map((a) => (a.id === annotation.id ? { ...a, id: saved.id } : a)),
           );
         }
-      } catch {
+      } catch (err) {
+        console.error("[smart-count] Failed to persist annotation:", err);
         /* keep local */
       }
       placedOffset++;
@@ -2166,6 +2184,84 @@ export function TakeoffTab({
       notifyWorkspaceMutated();
     } catch (err) {
       console.error("[takeoff] Failed to send to estimate:", err);
+    }
+  }
+
+  /* ─── AI line-item suggestions for an annotation ─── */
+
+  async function handleSuggestLineItems(annotationId: string) {
+    return suggestLineItemsForAnnotation(projectId, annotationId);
+  }
+
+  /* Apply one of the AI's suggestions: create a worksheet item using the
+     suggestion's name/code/unit (instead of the raw annotation label) and
+     the annotation's measured quantity, then link the new line item back
+     to the annotation. Same shape as handleSendToEstimate, just sourced
+     from the catalog/rate-schedule match. */
+  async function handleApplySuggestion(
+    annotationId: string,
+    suggestion: LineItemSuggestionRecord,
+  ) {
+    const ann = annotations.find((a) => a.id === annotationId);
+    if (!ann?.measurement) return;
+    const targetWs = selectedWorksheet;
+    if (!targetWs) {
+      console.warn("[takeoff:suggest] No worksheet selected; cannot apply suggestion");
+      return;
+    }
+
+    const quantity =
+      suggestion.recommendedQuantity > 0
+        ? suggestion.recommendedQuantity
+        : ann.measurement.value ?? 0;
+    const uom = suggestion.unit || ann.measurement.unit || "EA";
+    const category = suggestion.kind === "rateScheduleItem" ? "Labour" : "Material";
+    const entityName = suggestion.code
+      ? `[${suggestion.code}] ${suggestion.name}`
+      : suggestion.name;
+
+    try {
+      // Forward the catalog or rate-schedule reference so server-side
+      // validation passes — rate-schedule-backed categories (Labour by
+      // default) require rateScheduleItemId, and catalog-backed
+      // categories require itemId. Without these the create-item
+      // endpoint rejects with 400 and the Add action silently fails.
+      const result = await createWorksheetItem(projectId, targetWs.id, {
+        category,
+        entityType: category,
+        entityName,
+        description: suggestion.reasoning ?? "",
+        quantity,
+        uom,
+        cost: 0,
+        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: 0,
+        unit1: 0,
+        unit2: 0,
+        unit3: 0,
+        sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
+        ...(suggestion.kind === "rateScheduleItem"
+          ? { rateScheduleItemId: suggestion.id }
+          : { itemId: suggestion.id }),
+      });
+
+      const newItems = result?.workspace?.worksheets
+        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
+      const newItem = newItems.find((i: { id: string }) =>
+        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id),
+      );
+
+      if (newItem) {
+        await createTakeoffLink(projectId, {
+          annotationId,
+          worksheetItemId: newItem.id,
+        });
+        await loadTakeoffLinks();
+        notifyTakeoffLinksMutated();
+      }
+      notifyWorkspaceMutated();
+    } catch (err) {
+      console.error("[takeoff:suggest] Failed to apply suggestion:", err);
     }
   }
 
@@ -3185,6 +3281,8 @@ export function TakeoffTab({
               takeoffLinks={takeoffLinks}
               onLinkToLineItem={handleLinkToLineItem}
               onSendToEstimate={handleSendToEstimate}
+              onSuggestLineItems={handleSuggestLineItems}
+              onApplySuggestion={handleApplySuggestion}
             />
           </div>
         ) : (

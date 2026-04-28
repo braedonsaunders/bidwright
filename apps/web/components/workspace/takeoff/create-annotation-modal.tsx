@@ -142,14 +142,9 @@ export function CreateAnnotationModal({
               <Select
                 id="ann-type"
                 value={type}
-                onChange={(e) => setType(e.target.value)}
-              >
-                {ANNOTATION_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </Select>
+                onValueChange={setType}
+                options={ANNOTATION_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+              />
               {selectedType && (
                 <p className="mt-1 text-[11px] text-fg/40">{selectedType.description}</p>
               )}

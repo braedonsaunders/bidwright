@@ -535,14 +535,28 @@ export function EstimateGrid({
   const [activeTab, setActiveTabState] = useState<WorksheetTabId>(
     activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
   );
+  const prevTabRef = useRef<WorksheetTabId>(activeTab);
+  const [tabSlideDir, setTabSlideDir] = useState<1 | -1>(1);
+
   const setActiveTab = useCallback((nextTab: WorksheetTabId) => {
-    setActiveTabState(nextTab);
+    setActiveTabState((prev) => {
+      // Resolve direction by tab order: "all" first, then worksheet array order.
+      const order: WorksheetTabId[] = ["all", ...(workspace.worksheets ?? []).map((w) => w.id)];
+      const prevIdx = order.indexOf(prev);
+      const nextIdx = order.indexOf(nextTab);
+      if (prevIdx >= 0 && nextIdx >= 0 && prevIdx !== nextIdx) {
+        setTabSlideDir(nextIdx > prevIdx ? 1 : -1);
+      }
+      prevTabRef.current = nextTab;
+      return nextTab;
+    });
     onActiveWorksheetChange?.(nextTab);
-  }, [onActiveWorksheetChange]);
+  }, [onActiveWorksheetChange, workspace.worksheets]);
 
   useEffect(() => {
     if (!activeWorksheetId || activeWorksheetId === activeTab) return;
     setActiveTabState(activeWorksheetId);
+    prevTabRef.current = activeWorksheetId;
   }, [activeTab, activeWorksheetId]);
 
   // Editing state
@@ -2012,52 +2026,53 @@ export function EstimateGrid({
         const validUoms = catDef?.validUoms ?? ["EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS"];
         return (
           <td className={cn("border-b border-line px-1 py-0.5", className)}>
-            <select
-              ref={(el) => { editInputRef.current = el; }}
-              className="h-7 w-full rounded border border-accent/50 bg-bg px-1 text-xs outline-none"
+            <Select
+              size="xs"
+              defaultOpen
               value={editValue}
-              onChange={(e) => {
-                setEditValue(e.target.value);
-                const val = e.target.value;
+              onValueChange={(val) => {
+                setEditValue(val);
                 setEditingCell(null);
                 commitItemPatch(row.id, { uom: val });
               }}
-              onBlur={commitEdit}
-              onKeyDown={handleCellKeyDown}
-            >
-              {validUoms.map((u) => (
-                <option key={u} value={u}>
-                  {u}
-                </option>
-              ))}
-            </select>
+              onOpenChange={(o) => {
+                if (!o && editingCell?.rowId === row.id && editingCell?.column === column) {
+                  setEditingCell(null);
+                }
+              }}
+              triggerClassName="border-accent/50 rounded bg-bg"
+              options={validUoms.map((u) => ({ value: u, label: u }))}
+            />
           </td>
         );
       }
 
       if (column === "phaseId") {
+        const phases = workspace.phases ?? [];
+        const PHASE_NONE = "__none__";
         return (
           <td className={cn("border-b border-line px-1 py-0.5", className)}>
-            <select
-              ref={(el) => { editInputRef.current = el; }}
-              className="h-7 w-full rounded border border-accent/50 bg-bg px-1 text-xs outline-none"
-              value={editValue}
-              onChange={(e) => {
-                setEditValue(e.target.value);
-                const val = e.target.value || null;
+            <Select
+              size="xs"
+              defaultOpen
+              value={editValue || PHASE_NONE}
+              onValueChange={(val) => {
+                const realVal = val === PHASE_NONE ? "" : val;
+                setEditValue(realVal);
                 setEditingCell(null);
-                commitItemPatch(row.id, { phaseId: val });
+                commitItemPatch(row.id, { phaseId: realVal || null });
               }}
-              onBlur={commitEdit}
-              onKeyDown={handleCellKeyDown}
-            >
-              <option value="">None</option>
-              {(workspace.phases ?? []).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.number} - {p.name}
-                </option>
-              ))}
-            </select>
+              onOpenChange={(o) => {
+                if (!o && editingCell?.rowId === row.id && editingCell?.column === column) {
+                  setEditingCell(null);
+                }
+              }}
+              triggerClassName="border-accent/50 rounded bg-bg"
+              options={[
+                { value: PHASE_NONE, label: "None" },
+                ...phases.map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+              ]}
+            />
           </td>
         );
       }
@@ -2331,13 +2346,20 @@ export function EstimateGrid({
           <button
             onClick={() => setActiveTab("all")}
             className={cn(
-              "px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
+              "relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
               activeTab === "all"
-                ? "border-accent text-accent bg-accent/5"
-                : "border-transparent text-fg/40 hover:text-fg/60"
+                ? "text-accent bg-accent/5"
+                : "text-fg/40 hover:text-fg/60"
             )}
           >
             All
+            {activeTab === "all" && (
+              <motion.span
+                layoutId="ws-tab-indicator"
+                className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
+                transition={{ type: "spring", stiffness: 500, damping: 35 }}
+              />
+            )}
           </button>
 
           {(workspace.worksheets ?? []).map((ws) => (
@@ -2350,10 +2372,10 @@ export function EstimateGrid({
               }}
               onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
               className={cn(
-                "group px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap border-b-2",
+                "group relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
                 activeTab === ws.id
-                  ? "border-accent text-accent bg-accent/5"
-                  : "border-transparent text-fg/40 hover:text-fg/60"
+                  ? "text-accent bg-accent/5"
+                  : "text-fg/40 hover:text-fg/60"
               )}
             >
               {inlineRenameWsId === ws.id ? (
@@ -2379,6 +2401,13 @@ export function EstimateGrid({
                   {ws.name}
                   <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
                 </>
+              )}
+              {activeTab === ws.id && (
+                <motion.span
+                  layoutId="ws-tab-indicator"
+                  className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
+                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                />
               )}
             </button>
           ))}
@@ -2520,32 +2549,30 @@ export function EstimateGrid({
 
           {/* Move to Worksheet dropdown */}
           <Select
-            className="w-36 h-7 text-[11px]"
+            size="xs"
+            className="w-36"
             value=""
-            onChange={(e) => {
-              if (e.target.value) handleBulkMoveToWorksheet(e.target.value);
+            placeholder="Move to..."
+            onValueChange={(v) => {
+              if (v) handleBulkMoveToWorksheet(v);
             }}
-          >
-            <option value="">Move to...</option>
-            {(workspace.worksheets ?? []).map((ws) => (
-              <option key={ws.id} value={ws.id}>{ws.name}</option>
-            ))}
-          </Select>
+            options={(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
+          />
 
           {/* Assign Phase dropdown */}
           <Select
-            className="w-36 h-7 text-[11px]"
+            size="xs"
+            className="w-36"
             value=""
-            onChange={(e) => {
-              handleBulkAssignPhase(e.target.value);
+            placeholder="Assign Phase..."
+            onValueChange={(v) => {
+              handleBulkAssignPhase(v === "__none__" ? "" : v);
             }}
-          >
-            <option value="">Assign Phase...</option>
-            <option value="">None</option>
-            {(workspace.phases ?? []).map((p) => (
-              <option key={p.id} value={p.id}>{p.number} - {p.name}</option>
-            ))}
-          </Select>
+            options={[
+              { value: "__none__", label: "None" },
+              ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+            ]}
+          />
 
           {/* Set Markup */}
           <div className="flex items-center gap-1">
@@ -2571,7 +2598,16 @@ export function EstimateGrid({
       )}
 
       {/* ─── Grid ─── */}
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 relative">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, x: tabSlideDir * 16 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -tabSlideDir * 16 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute inset-0 flex flex-col"
+          >
           {visibleRows.length === 0 ? (
             <EmptyState>
               No line items found.{" "}
@@ -2761,7 +2797,9 @@ export function EstimateGrid({
               </table>
             </div>
           )}
-        </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
 
       {/* ─── Context menu ─── */}
       {contextMenu && (

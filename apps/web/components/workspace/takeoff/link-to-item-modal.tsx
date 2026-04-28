@@ -108,17 +108,12 @@ export function LinkToLineItemModal({
               <Label>Worksheet</Label>
               <Select
                 value={selectedWsId}
-                onChange={(e) => {
-                  setSelectedWsId(e.target.value);
+                onValueChange={(v) => {
+                  setSelectedWsId(v);
                   setSelectedItemId("");
                 }}
-              >
-                {worksheets.map((ws) => (
-                  <option key={ws.id} value={ws.id}>
-                    {ws.name}
-                  </option>
-                ))}
-              </Select>
+                options={worksheets.map((ws) => ({ value: ws.id, label: ws.name }))}
+              />
             </div>
           )}
 
@@ -161,13 +156,11 @@ export function LinkToLineItemModal({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label>Measurement Field</Label>
-              <Select value={quantityField} onChange={(e) => setQuantityField(e.target.value)}>
-                {fields.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </Select>
+              <Select
+                value={quantityField}
+                onValueChange={setQuantityField}
+                options={fields.map((f) => ({ value: f.value, label: f.label }))}
+              />
             </div>
             <div>
               <Label>Waste / Safety Factor %</Label>

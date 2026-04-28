@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
   Label,
+  Select,
 } from "@/components/ui";
 import { ArrowRight, Edit3, Save, Search, Trash2, X } from "lucide-react";
 
@@ -116,16 +117,16 @@ export default function AllUsersPage() {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select
-          className="rounded-lg border border-line bg-panel px-3 py-1.5 text-xs text-fg"
+        <Select
+          size="sm"
+          className="w-56"
           value={filterOrg}
-          onChange={(e) => setFilterOrg(e.target.value)}
-        >
-          <option value="all">All Organizations</option>
-          {orgs.map((org) => (
-            <option key={org.id} value={org.id}>{org.name}</option>
-          ))}
-        </select>
+          onValueChange={setFilterOrg}
+          options={[
+            { value: "all", label: "All Organizations" },
+            ...orgs.map((org) => ({ value: org.id, label: org.name })),
+          ]}
+        />
         <span className="text-xs text-fg/40">{filteredUsers.length} users</span>
       </div>
 
@@ -164,15 +165,17 @@ export default function AllUsersPage() {
                     <td className="px-4 py-2">
                       {editingUser === u.id ? (
                         <div className="flex items-center gap-1">
-                          <select
-                            className="rounded border border-line bg-panel px-1.5 py-0.5 text-[10px] text-fg"
+                          <Select
+                            size="xs"
+                            className="w-28"
                             value={editRole}
-                            onChange={(e) => setEditRole(e.target.value)}
-                          >
-                            <option value="admin">admin</option>
-                            <option value="estimator">estimator</option>
-                            <option value="viewer">viewer</option>
-                          </select>
+                            onValueChange={setEditRole}
+                            options={[
+                              { value: "admin", label: "admin" },
+                              { value: "estimator", label: "estimator" },
+                              { value: "viewer", label: "viewer" },
+                            ]}
+                          />
                           <button onClick={() => handleRoleChange(u.id)} className="text-accent hover:text-accent/80">
                             <Save className="h-3 w-3" />
                           </button>
@@ -271,17 +274,15 @@ function MoveUserModal({
           </div>
           <div>
             <Label>Target Organization</Label>
-            <select
-              className="w-full rounded-lg border border-line bg-panel px-3 py-2 text-sm text-fg"
+            <Select
               value={targetOrgId}
-              onChange={(e) => setTargetOrgId(e.target.value)}
-              required
-            >
-              <option value="">Select organization...</option>
-              {availableOrgs.map((org) => (
-                <option key={org.id} value={org.id}>{org.name} ({org.slug})</option>
-              ))}
-            </select>
+              onValueChange={setTargetOrgId}
+              placeholder="Select organization..."
+              options={availableOrgs.map((org) => ({
+                value: org.id,
+                label: `${org.name} (${org.slug})`,
+              }))}
+            />
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>

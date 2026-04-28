@@ -12,7 +12,7 @@ import {
   CheckCircle2,
   Circle,
 } from "lucide-react";
-import { Button } from "@/components/ui";
+import { Button, Select } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -240,20 +240,19 @@ export function ChecklistEditor({ fileName, onSave, onClose }: ChecklistEditorPr
                       />
                       {/* Metadata row */}
                       <div className="flex items-center gap-2 flex-wrap">
-                        <select
-                          className="bg-transparent text-[10px] text-fg/40 outline-none cursor-pointer"
+                        <Select
+                          size="xs"
+                          className="w-24"
+                          triggerClassName={cn("border-transparent bg-transparent hover:bg-panel2/40", PRIORITY_COLORS[item.priority])}
                           value={item.priority}
-                          onChange={(e) =>
+                          onValueChange={(v) =>
                             updateItem(section.id, item.id, (i) => ({
                               ...i,
-                              priority: e.target.value as ChecklistItem["priority"],
+                              priority: v as ChecklistItem["priority"],
                             }))
                           }
-                        >
-                          {Object.entries(PRIORITY_LABELS).map(([k, v]) => (
-                            <option key={k} value={k}>{v}</option>
-                          ))}
-                        </select>
+                          options={Object.entries(PRIORITY_LABELS).map(([k, v]) => ({ value: k, label: v }))}
+                        />
                         <input
                           className="bg-transparent text-[10px] text-fg/40 outline-none placeholder:text-fg/20 w-20"
                           value={item.assignee}

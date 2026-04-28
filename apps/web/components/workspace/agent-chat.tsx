@@ -1844,17 +1844,14 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                       Estimator Persona
                     </label>
                     <Select
-                      className="h-8 text-xs"
-                      value={selectedPersonaId ?? ""}
-                      onChange={(e) => setSelectedPersonaId(e.target.value || null)}
-                    >
-                      <option value="">No persona (generic estimator)</option>
-                      {personas.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} - {p.trade}
-                        </option>
-                      ))}
-                    </Select>
+                      size="sm"
+                      value={selectedPersonaId ?? "__none__"}
+                      onValueChange={(v) => setSelectedPersonaId(v === "__none__" ? null : v)}
+                      options={[
+                        { value: "__none__", label: "No persona (generic estimator)" },
+                        ...personas.map((p) => ({ value: p.id, label: `${p.name} - ${p.trade}` })),
+                      ]}
+                    />
                     {selectedPersonaId && (
                       <div className="text-[10px] text-fg/30 leading-tight">
                         {personas.find(p => p.id === selectedPersonaId)?.description || "Custom estimation persona"}
@@ -1869,31 +1866,29 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                       Model
                     </label>
                     <Select
-                      className="h-8 text-xs"
+                      size="sm"
                       value={effectiveCliModel || defaultCliModel(cliRuntime)}
-                      onChange={(e) => setCliAgentModel(e.target.value)}
-                    >
-                      {(() => {
+                      onValueChange={(v) => setCliAgentModel(v)}
+                      options={(() => {
                         const runtimeModels = cliRuntime === "claude-code" ? cliModels.claude : cliModels.codex;
-                        const options = runtimeModels.filter((option, index) => runtimeModels.findIndex((candidate) => candidate.id === option.id) === index);
+                        const opts = runtimeModels.filter((option, index) => runtimeModels.findIndex((candidate) => candidate.id === option.id) === index);
                         const selectedModel = effectiveCliModel || defaultCliModel(cliRuntime);
-                        const displayOptions = options.some((option) => option.id === selectedModel)
-                          ? options
+                        const displayOptions = opts.some((option) => option.id === selectedModel)
+                          ? opts
                           : [
-                              ...options,
+                              ...opts,
                               {
                                 id: selectedModel,
                                 name: selectedModel,
                                 description: "Current configured model",
                               },
                             ];
-                        return displayOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.name} - {option.description}
-                          </option>
-                        ));
+                        return displayOptions.map((option) => ({
+                          value: option.id,
+                          label: `${option.name} - ${option.description}`,
+                        }));
                       })()}
-                    </Select>
+                    />
                   </div>
                 )}
                 <div className="space-y-1.5">

@@ -116,7 +116,11 @@ export async function extractLegendFromPage(
     for (const row of table.rows ?? []) {
       if (row.length < 2) continue;
       const left = String(row[0] ?? "").trim();
-      const right = String(row[symbolCol >= 0 && descCol >= 0 ? descCol : row.length - 1] ?? "").trim();
+      // Use the description column whenever OCR found one — even when the
+      // symbol header is missing. Falling back to row[length-1] in that case
+      // misreads 3+ column schedules where the last column is qty/notes.
+      const rightIdx = descCol >= 0 ? descCol : row.length - 1;
+      const right = String(row[rightIdx] ?? "").trim();
       const sym = symbolCol >= 0 ? String(row[symbolCol] ?? "").trim() : left;
       if (!sym || !right) continue;
       if (!isShortToken(sym)) continue;

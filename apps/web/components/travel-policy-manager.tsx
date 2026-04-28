@@ -268,12 +268,13 @@ export function TravelPolicyManager() {
                 <Label className="text-[10px]">Embed Mode</Label>
                 <Select
                   value={form.perDiemEmbedMode}
-                  onChange={(e) => updateField("perDiemEmbedMode", e.target.value as PerDiemEmbedMode)}
-                >
-                  <option value="separate">Separate Line</option>
-                  <option value="embed_hourly">Embed in Hourly Rate</option>
-                  <option value="embed_cost_only">Embed in Cost Only</option>
-                </Select>
+                  onValueChange={(v) => updateField("perDiemEmbedMode", v as PerDiemEmbedMode)}
+                  options={[
+                    { value: "separate", label: "Separate Line" },
+                    { value: "embed_hourly", label: "Embed in Hourly Rate" },
+                    { value: "embed_cost_only", label: "Embed in Cost Only" },
+                  ]}
+                />
               </div>
               <div>
                 <Label className="text-[10px]">Hours Per Day</Label>
@@ -346,12 +347,13 @@ export function TravelPolicyManager() {
                 <Label className="text-[10px]">Fuel Surcharge Applies To</Label>
                 <Select
                   value={form.fuelSurchargeAppliesTo}
-                  onChange={(e) => updateField("fuelSurchargeAppliesTo", e.target.value as FuelSurchargeAppliesTo)}
-                >
-                  <option value="none">None</option>
-                  <option value="labour">Labour Only</option>
-                  <option value="all">All Costs</option>
-                </Select>
+                  onValueChange={(v) => updateField("fuelSurchargeAppliesTo", v as FuelSurchargeAppliesTo)}
+                  options={[
+                    { value: "none", label: "None" },
+                    { value: "labour", label: "Labour Only" },
+                    { value: "all", label: "All Costs" },
+                  ]}
+                />
               </div>
             </FormSection>
 
