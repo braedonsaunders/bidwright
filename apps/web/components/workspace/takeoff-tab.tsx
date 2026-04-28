@@ -90,6 +90,7 @@ import {
   Card,
   EmptyState,
   Input,
+  Label,
   Select,
   Separator,
 } from "@/components/ui";
@@ -666,6 +667,13 @@ export function TakeoffTab({
   const [calibrationInput, setCalibrationInput] = useState("");
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
   const [calibrationApplyToAllPages, setCalibrationApplyToAllPages] = useState(false);
+
+  /* Verify-scale flow: when user clicks "Verify" they re-enter the calibrate
+     two-point flow but with verifyMode set, so the completion handler shows
+     a measurement-vs-expected panel instead of a calibration setter. */
+  const [verifyMode, setVerifyMode] = useState(false);
+  const [verifyPoints, setVerifyPoints] = useState<[Point, Point] | null>(null);
+  const [verifyExpected, setVerifyExpected] = useState("");
 
   /* Persistent calibration cache. For each documentId we keep:
      - numeric pageNumber keys for page-specific calibrations
@@ -1735,6 +1743,13 @@ export function TakeoffTab({
 
   /* Calibration flow */
   function handleCalibrationRequest(points: [Point, Point]) {
+    if (verifyMode) {
+      setVerifyPoints(points);
+      setVerifyExpected("");
+      setVerifyMode(false);
+      setActiveTool("select");
+      return;
+    }
     setCalibrationPoints(points);
     setCalibrationApplyToAllPages(false);
     setCalibrationPromptOpen(true);
@@ -2355,15 +2370,28 @@ export function TakeoffTab({
 
             {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (
-              <button
-                type="button"
-                onClick={() => handleToolSelect("calibrate")}
-                className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-500 hover:bg-emerald-500/20 transition-colors"
-                title="Click to recalibrate"
-              >
-                <Scaling className="h-3 w-3" />
-                1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
-              </button>
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleToolSelect("calibrate")}
+                  className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-500 hover:bg-emerald-500/20 transition-colors"
+                  title="Click to recalibrate"
+                >
+                  <Scaling className="h-3 w-3" />
+                  1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerifyMode(true);
+                    setActiveTool("calibrate");
+                  }}
+                  className="inline-flex items-center rounded-md border border-emerald-500/20 px-2 py-1 text-[11px] font-medium text-emerald-500/80 hover:bg-emerald-500/10 transition-colors"
+                  title="Draw a line of known length to verify the calibration"
+                >
+                  Verify
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -3121,6 +3149,121 @@ export function TakeoffTab({
       />
 
       {/* ─── Calibration Prompt ─── */}
+      {/* ─── Verify-scale Modal ─── */}
+      {verifyPoints && calibration && (() => {
+        const [va, vb] = verifyPoints;
+        const vPixelDist = Math.sqrt((vb.x - va.x) ** 2 + (vb.y - va.y) ** 2);
+        // Same math as live measurements: cal stored at zoom 1, multiply by current zoom.
+        const measured = vPixelDist / Math.max(calibration.pixelsPerUnit * zoom, 0.0001);
+        const expected = parseFloat(verifyExpected);
+        const errorPct =
+          expected > 0 && Number.isFinite(expected) ? ((measured - expected) / expected) * 100 : null;
+        const errorAbs = errorPct !== null ? Math.abs(errorPct) : null;
+        const errorTone =
+          errorAbs === null ? "neutral" :
+          errorAbs < 1 ? "good" :
+          errorAbs < 3 ? "warn" :
+          "bad";
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => {
+                setVerifyPoints(null);
+                setVerifyExpected("");
+              }}
+            />
+            <Card className="relative z-10 w-full max-w-md border-emerald-500/30 shadow-2xl">
+              <div className="border-b border-line px-5 py-4 flex items-center gap-3">
+                <div className="rounded-full bg-emerald-500/15 p-2">
+                  <Ruler className="h-4 w-4 text-emerald-500" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-semibold text-fg">Verify drawing scale</h3>
+                  <p className="mt-0.5 text-[11px] text-fg/55">
+                    Compare a measurement against a known dimension to spot calibration drift.
+                  </p>
+                </div>
+              </div>
+              <div className="px-5 py-4 space-y-3">
+                <div className="rounded-md border border-line bg-panel2/40 px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-wider text-fg/40">Measured length</div>
+                  <div className="text-base font-mono font-semibold text-fg">
+                    {measured.toFixed(3)} {calibration.unit}
+                  </div>
+                  <div className="text-[10px] text-fg/35 mt-0.5">{vPixelDist.toFixed(1)} px on canvas</div>
+                </div>
+
+                <div>
+                  <Label className="text-[10px]">Expected length (what should this be?)</Label>
+                  <div className="grid grid-cols-[1fr_80px] gap-2">
+                    <Input
+                      className="text-base h-10"
+                      type="number"
+                      min={0.001}
+                      step={0.001}
+                      placeholder="Enter known dimension"
+                      value={verifyExpected}
+                      onChange={(e) => setVerifyExpected(e.target.value)}
+                      autoFocus
+                    />
+                    <Select className="h-10" value={calibration.unit} disabled>
+                      <option value={calibration.unit}>{calibration.unit}</option>
+                    </Select>
+                  </div>
+                </div>
+
+                {errorPct !== null && (
+                  <div
+                    className={cn(
+                      "rounded-md px-3 py-2 text-xs",
+                      errorTone === "good" && "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+                      errorTone === "warn"  && "bg-amber-500/10  text-amber-400  border border-amber-500/20",
+                      errorTone === "bad"   && "bg-red-500/10    text-red-400    border border-red-500/20",
+                    )}
+                  >
+                    <div className="font-mono font-semibold">
+                      Error: {errorPct >= 0 ? "+" : ""}{errorPct.toFixed(2)}%
+                    </div>
+                    <div className="text-[11px] opacity-80 mt-0.5">
+                      {errorTone === "good" && "✓ Within ±1% — calibration looks accurate."}
+                      {errorTone === "warn" && "⚠ Within 3% — minor drift, usually acceptable for estimating."}
+                      {errorTone === "bad"  && "✗ More than 3% off — recalibrate before measuring further."}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-between gap-2 pt-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setVerifyPoints(null);
+                      setVerifyExpected("");
+                      handleToolSelect("calibrate");
+                    }}
+                    disabled={errorTone !== "bad"}
+                    className={cn(errorTone === "bad" ? "text-red-400" : "")}
+                  >
+                    Recalibrate
+                  </Button>
+                  <Button
+                    variant="accent"
+                    size="sm"
+                    onClick={() => {
+                      setVerifyPoints(null);
+                      setVerifyExpected("");
+                    }}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
+
       {calibrationPromptOpen && calibrationPoints && (() => {
         const [a, b] = calibrationPoints;
         const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
