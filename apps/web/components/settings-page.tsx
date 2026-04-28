@@ -776,13 +776,13 @@ export function SettingsPage({
         const created = await apiCreatePersona(merged);
         setPersonas((prev) => prev.map((p) => (p.id === persona.id ? created : p)));
         setPersonaEdits((prev) => { const n = { ...prev }; delete n[persona.id]; return n; });
-        setEditingPersonaId(created.id);
       } else {
         const updated = await apiUpdatePersona(persona.id, merged);
         setPersonas((prev) => prev.map((p) => (p.id === persona.id ? updated : p)));
         setPersonaEdits((prev) => { const n = { ...prev }; delete n[persona.id]; return n; });
       }
-    } catch { /* keep edits */ }
+      setEditingPersonaId(null);
+    } catch { /* keep edits, leave drawer open so user can retry */ }
   }, [personaEdits]);
 
   const deletePersonaById = useCallback(async (id: string) => {
