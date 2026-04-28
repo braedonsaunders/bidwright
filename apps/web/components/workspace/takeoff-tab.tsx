@@ -1743,18 +1743,34 @@ export function TakeoffTab({
       };
       setAnnotations((prev) => [...prev, annotation]);
       try {
+        // The takeoff create endpoint expects API-contract field names
+        // (annotationType / pageNumber / lineThickness), not the local
+        // canvas field names (type / page / thickness). Spreading the
+        // raw annotation here previously dropped annotationType entirely
+        // and the server silently rejected each row, so accepted smart-
+        // count entries vanished on reload.
         const saved = await createTakeoffAnnotation(projectId, {
           documentId:
-            selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id,
-          page,
-          ...annotation,
-        } as any);
+            selectedDoc.source === "knowledge" && selectedDoc.bookId
+              ? selectedDoc.bookId
+              : selectedDoc.id,
+          pageNumber: page,
+          annotationType: annotation.type,
+          label: annotation.label,
+          color: annotation.color,
+          lineThickness: annotation.thickness,
+          visible: annotation.visible,
+          groupName: annotation.groupName ?? "",
+          points: annotation.points,
+          measurement: annotation.measurement ?? {},
+        });
         if (saved?.id) {
           setAnnotations((prev) =>
             prev.map((a) => (a.id === annotation.id ? { ...a, id: saved.id } : a)),
           );
         }
-      } catch {
+      } catch (err) {
+        console.error("[smart-count] Failed to persist annotation:", err);
         /* keep local */
       }
       placedOffset++;
