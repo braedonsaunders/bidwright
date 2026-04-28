@@ -33,5 +33,9 @@ jobs:
         uses: braedonsaunders/codeflow/card@main
         with:
           theme: dark
+          style: compact
+          # Public README — show structure, not judgment.
+          show-grade: false
+          show-score: false
           # Flip to true to enable thermal-receipt PR comments on every merge.
           receipts: false
