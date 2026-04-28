@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import type { Point, Calibration } from "@/lib/takeoff-math";
 import { computeMeasurement } from "@/lib/takeoff-math";
 
@@ -32,7 +32,10 @@ interface AnnotationCanvasProps {
   height: number;
   annotations: TakeoffAnnotation[];
   activeTool: string | null;
+  /** Calibration's pixelsPerUnit is normalised to zoom 1 (paper-pixels per unit). */
   calibration: Calibration | null;
+  /** Current zoom level — multiplied into calibration so measurements stay correct at any zoom. */
+  zoom: number;
   activeColor: string;
   activeThickness: number;
   onAnnotationComplete: (data: Partial<TakeoffAnnotation>) => void;
@@ -309,12 +312,18 @@ export function AnnotationCanvas({
   annotations,
   activeTool,
   calibration,
+  zoom,
   activeColor,
   activeThickness,
   onAnnotationComplete,
   onCalibrationRequest,
   pdfCanvas,
 }: AnnotationCanvasProps) {
+  // Scale the stored (zoom-1) calibration by the current zoom for use in math.
+  const effectiveCalibration = useMemo<Calibration | null>(
+    () => (calibration ? { ...calibration, pixelsPerUnit: calibration.pixelsPerUnit * zoom } : null),
+    [calibration, zoom],
+  );
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loupeCanvasRef = useRef<HTMLCanvasElement>(null);
   const [drawingPoints, setDrawingPoints] = useState<Point[]>([]);
@@ -435,8 +444,8 @@ export function AnnotationCanvas({
       }
 
       /* Live measurement preview */
-      if (calibration && allPts.length >= 2) {
-        const m = computeMeasurement(activeTool, allPts, calibration);
+      if (effectiveCalibration && allPts.length >= 2) {
+        const m = computeMeasurement(activeTool, allPts, effectiveCalibration);
         if (m.value > 0) {
           const midX = allPts.reduce((s, p) => s + p.x, 0) / allPts.length;
           const midY = allPts.reduce((s, p) => s + p.y, 0) / allPts.length;
@@ -768,7 +777,7 @@ export function AnnotationCanvas({
   }
 
   function finishAnnotation(points: Point[]) {
-    const cal = calibration ?? { pixelsPerUnit: 1, unit: "px" };
+    const cal = effectiveCalibration ?? { pixelsPerUnit: 1, unit: "px" };
     const measurement = computeMeasurement(activeTool!, points, cal);
 
     onAnnotationComplete({
