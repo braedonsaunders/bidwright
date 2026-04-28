@@ -226,7 +226,7 @@ export function SettingsPage({
 
   // Personas
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
-  const [expandedPersonaId, setExpandedPersonaId] = useState<string | null>(null);
+  const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null);
   const [personaEdits, setPersonaEdits] = useState<Record<string, Partial<EstimatorPersona>>>({});
   const [personaDeleteConfirm, setPersonaDeleteConfirm] = useState<string | null>(null);
   const [knowledgeBooks, setKnowledgeBooks] = useState<KnowledgeBookRecord[]>([]);
@@ -728,7 +728,7 @@ export function SettingsPage({
       enabled: true, order: personas.length, createdAt: "", updatedAt: "",
     };
     setPersonas((prev) => [...prev, newPersona]);
-    setExpandedPersonaId(tempId);
+    setEditingPersonaId(tempId);
   };
 
   const parsePersonaJsonField = (value: unknown) => {
@@ -776,7 +776,7 @@ export function SettingsPage({
         const created = await apiCreatePersona(merged);
         setPersonas((prev) => prev.map((p) => (p.id === persona.id ? created : p)));
         setPersonaEdits((prev) => { const n = { ...prev }; delete n[persona.id]; return n; });
-        setExpandedPersonaId(created.id);
+        setEditingPersonaId(created.id);
       } else {
         const updated = await apiUpdatePersona(persona.id, merged);
         setPersonas((prev) => prev.map((p) => (p.id === persona.id ? updated : p)));
@@ -790,9 +790,9 @@ export function SettingsPage({
       if (!id.startsWith("new-")) await apiDeletePersona(id);
       setPersonas((prev) => prev.filter((p) => p.id !== id));
       setPersonaEdits((prev) => { const n = { ...prev }; delete n[id]; return n; });
-      if (expandedPersonaId === id) setExpandedPersonaId(null);
+      if (editingPersonaId === id) setEditingPersonaId(null);
     } catch { /* keep */ } finally { setPersonaDeleteConfirm(null); }
-  }, [expandedPersonaId]);
+  }, [editingPersonaId]);
 
   const togglePersonaEnabled = useCallback(async (persona: EstimatorPersona, enabled: boolean) => {
     setPersonas((prev) => prev.map((p) => (p.id === persona.id ? { ...p, enabled } : p)));
@@ -2367,22 +2367,19 @@ export function SettingsPage({
                 )}
                 {personas.map((persona) => {
                   const edited = getPersonaEdit(persona);
-                  const isExpanded = expandedPersonaId === persona.id;
-                  const defaultAssumptions = parsePersonaJsonField((edited as any).defaultAssumptions);
-                  const productivityGuidance = parsePersonaJsonField((edited as any).productivityGuidance);
-                  const commercialGuidance = parsePersonaJsonField((edited as any).commercialGuidance);
-                  const supervisionGuidance = parsePersonaJsonField(productivityGuidance.supervision);
-                  const packagingGuidance = parsePersonaJsonField(commercialGuidance.packaging);
+                  const isActive = editingPersonaId === persona.id;
                   return (
                     <div key={persona.id}>
                       <div
                         role="button"
                         tabIndex={0}
-                        onClick={() => setExpandedPersonaId(isExpanded ? null : persona.id)}
-                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedPersonaId(isExpanded ? null : persona.id); } }}
-                        className="flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer"
+                        onClick={() => setEditingPersonaId(persona.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditingPersonaId(persona.id); } }}
+                        className={cn(
+                          "flex w-full items-center gap-3 px-5 py-3 text-left text-sm transition-colors cursor-pointer",
+                          isActive ? "bg-panel2" : "hover:bg-panel2",
+                        )}
                       >
-                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-fg/40 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 text-fg/40 shrink-0" />}
                         <span className="font-medium text-fg truncate">{edited.name || "Untitled"}</span>
                         {edited.trade && (
                           <Badge className={cn("text-[10px] shrink-0", TRADE_COLORS[edited.trade] || "")}>
@@ -2396,8 +2393,82 @@ export function SettingsPage({
                           <Toggle checked={edited.enabled} onChange={(val) => togglePersonaEnabled(persona, val)} />
                         </span>
                       </div>
-                      {isExpanded && (
-                        <div className="border-t border-line bg-panel2/50 px-5 py-4 space-y-4">
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {/* ── Persona Edit Drawer ─────────────────────────────────── */}
+          {activeGroup === "organization" && orgSubTab === "personas" && typeof document !== "undefined" && createPortal(
+            <AnimatePresence>
+              {(() => {
+                const persona = editingPersonaId ? personas.find((p) => p.id === editingPersonaId) : null;
+                if (!persona) return null;
+                const edited = getPersonaEdit(persona);
+                const defaultAssumptions = parsePersonaJsonField((edited as any).defaultAssumptions);
+                const productivityGuidance = parsePersonaJsonField((edited as any).productivityGuidance);
+                const commercialGuidance = parsePersonaJsonField((edited as any).commercialGuidance);
+                const supervisionGuidance = parsePersonaJsonField(productivityGuidance.supervision);
+                const packagingGuidance = parsePersonaJsonField(commercialGuidance.packaging);
+                return (
+                  <>
+                    <motion.div
+                      key="persona-drawer-backdrop"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="fixed inset-0 z-40 bg-black/20"
+                      onClick={() => setEditingPersonaId(null)}
+                    />
+                    <motion.div
+                      key="persona-drawer"
+                      initial={{ x: "100%" }}
+                      animate={{ x: 0 }}
+                      exit={{ x: "100%" }}
+                      transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                      className="fixed inset-y-0 right-0 z-50 w-[640px] max-w-[100vw] bg-panel border-l border-line shadow-2xl flex flex-col"
+                    >
+                      {/* Header */}
+                      <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-line bg-panel2/40">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm font-semibold truncate">{edited.name || "Untitled persona"}</span>
+                          {edited.trade && (
+                            <Badge className={cn("text-[10px] shrink-0", TRADE_COLORS[edited.trade] || "")}>
+                              {edited.trade}
+                            </Badge>
+                          )}
+                          {edited.isDefault && <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400 shrink-0" />}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {personaDeleteConfirm === persona.id ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-danger">Delete?</span>
+                              <Button variant="danger" size="xs" onClick={() => deletePersonaById(persona.id)}>Confirm</Button>
+                              <Button variant="secondary" size="xs" onClick={() => setPersonaDeleteConfirm(null)}>Cancel</Button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setPersonaDeleteConfirm(persona.id)}
+                              className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
+                              title="Delete persona"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          <button
+                            className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
+                            onClick={() => setEditingPersonaId(null)}
+                            title="Close"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Body */}
+                      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Name</Label>
@@ -2631,49 +2702,38 @@ export function SettingsPage({
                               />
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                            <label className="flex items-center gap-2 text-sm text-fg">
-                              <input
-                                type="checkbox"
-                                checked={edited.isDefault}
-                                onChange={(e) => updatePersonaEdit(persona.id, { isDefault: e.target.checked })}
-                                className="rounded border-line"
-                              />
-                              Is Default
-                            </label>
-                            <div className="flex items-center gap-2">
-                              <Label className="mb-0">Enabled</Label>
-                              <Toggle checked={edited.enabled} onChange={(val) => updatePersonaEdit(persona.id, { enabled: val })} />
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 pt-2">
-                            <Button variant="accent" size="xs" onClick={() => savePersona(persona)}>
-                              Save
-                            </Button>
-                            {personaDeleteConfirm === persona.id ? (
-                              <div className="flex items-center gap-2 ml-2">
-                                <span className="text-xs text-danger">Delete this persona?</span>
-                                <Button variant="danger" size="xs" onClick={() => deletePersonaById(persona.id)}>Confirm</Button>
-                                <Button variant="secondary" size="xs" onClick={() => setPersonaDeleteConfirm(null)}>Cancel</Button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => setPersonaDeleteConfirm(persona.id)}
-                                className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors ml-2"
-                                title="Delete persona"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
+                        <div className="flex items-center gap-4">
+                          <label className="flex items-center gap-2 text-sm text-fg">
+                            <input
+                              type="checkbox"
+                              checked={edited.isDefault}
+                              onChange={(e) => updatePersonaEdit(persona.id, { isDefault: e.target.checked })}
+                              className="rounded border-line"
+                            />
+                            Is Default
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <Label className="mb-0">Enabled</Label>
+                            <Toggle checked={edited.enabled} onChange={(val) => updatePersonaEdit(persona.id, { enabled: val })} />
                           </div>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </Card>
+                      </div>
+
+                      {/* Footer */}
+                      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-panel2/40">
+                        <Button variant="secondary" size="sm" onClick={() => setEditingPersonaId(null)}>
+                          Cancel
+                        </Button>
+                        <Button variant="accent" size="sm" onClick={() => savePersona(persona)}>
+                          Save
+                        </Button>
+                      </div>
+                    </motion.div>
+                  </>
+                );
+              })()}
+            </AnimatePresence>,
+            document.body,
           )}
 
           {/* ── Items & Catalogs ─── */}
