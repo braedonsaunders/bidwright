@@ -5,6 +5,10 @@
 <h1 align="center">Bidwright</h1>
 
 <p align="center">
+  <a href="https://github.com/braedonsaunders/codeflow"><img src=".github/codeflow-card.svg" alt="Bidwright codebase stats — powered by codeflow" width="100%" /></a>
+</p>
+
+<p align="center">
   <strong>The estimating platform that runs the whole bid — intake, knowledge, takeoff, pricing, scheduling, review, and quote delivery — on top of an AI agent that actually has hands.</strong>
 </p>
 
@@ -13,10 +17,6 @@
 </p>
 
 > Bidwright is under active development. This README is written around capabilities already present in the repo today. Where something is foundational rather than fully shipped, it's called out.
-
-<p align="center">
-  <a href="https://github.com/braedonsaunders/codeflow"><img src=".github/codeflow-card.svg" alt="Bidwright codebase stats — powered by codeflow" width="100%" /></a>
-</p>
 
 ## Why estimators care
 
