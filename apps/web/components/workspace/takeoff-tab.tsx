@@ -31,6 +31,7 @@ import {
   Crosshair,
   RotateCcw,
   BrainCircuit,
+  Wand2,
   FileJson,
   Search,
   AlertCircle,
@@ -159,7 +160,8 @@ type ToolId =
   | "markup-cloud"
   | "markup-arrow"
   | "markup-highlight"
-  | "ask-ai";
+  | "ask-ai"
+  | "smart-count";
 
 interface ToolDef {
   id: ToolId;
@@ -194,6 +196,7 @@ const TOOLS: ToolDef[] = [
   { id: "markup-highlight",   label: "Highlight",         icon: Highlighter,      group: "markup" },
   /* AI */
   { id: "ask-ai",             label: "Ask AI",            icon: BrainCircuit,     group: "ai" },
+  { id: "smart-count",        label: "Smart Count",       icon: Wand2,            group: "ai" },
 ];
 
 const TOOL_GROUPS = [
@@ -227,6 +230,7 @@ const TOOL_STATUS_TEXT: Record<string, string> = {
   "markup-arrow": "Click and drag to draw an arrow.",
   "markup-highlight": "Click and drag to highlight a region.",
   "ask-ai": "Draw a rectangle to select a region for AI analysis.",
+  "smart-count": "Draw a rectangle around a room or zone — AI counts every distinct symbol inside.",
 };
 
 /* ─── Unified document entry for the takeoff selector ─── */
@@ -737,6 +741,21 @@ export function TakeoffTab({
   const [askAiCountRunning, setAskAiCountRunning] = useState(false);
   const [askAiResponse, setAskAiResponse] = useState<string | null>(null);
   const askAiStreamRef = useRef<EventSource | null>(null);
+
+  /* Smart count-by-region state */
+  interface SmartCountItem {
+    label: string;
+    count: number;
+    confidence: "high" | "medium" | "low";
+    notes?: string;
+  }
+  const [smartCountRunning, setSmartCountRunning] = useState(false);
+  const [smartCountModalOpen, setSmartCountModalOpen] = useState(false);
+  const [smartCountBbox, setSmartCountBbox] = useState<VisionBoundingBox | null>(null);
+  const [smartCountCropImage, setSmartCountCropImage] = useState<string | null>(null);
+  const [smartCountItems, setSmartCountItems] = useState<SmartCountItem[] | null>(null);
+  const [smartCountIncluded, setSmartCountIncluded] = useState<boolean[]>([]);
+  const [smartCountError, setSmartCountError] = useState<string | null>(null);
 
   /* Cross-page / cross-document search state */
   const [crossPageRunning, setCrossPageRunning] = useState(false);
@@ -1348,6 +1367,11 @@ export function TakeoffTab({
       return;
     }
 
+    if (tool === "smart-count") {
+      setActiveTool("smart-count");
+      return;
+    }
+
     /* Calibrate is its own first-class flow — straight to drawing mode
        (with the magnifier loupe), then the dedicated calibration prompt
        panel opens once both points are placed. No annotation config modal. */
@@ -1576,6 +1600,169 @@ export function TakeoffTab({
     } finally {
       setAskAiRunning(false);
     }
+  }
+
+  /* ─── Smart count: AI-driven region inventory ─── */
+
+  async function handleSmartCountSelection(data: Partial<TakeoffAnnotation>) {
+    if (!selectedDoc || !data.points || data.points.length < 2) return;
+    const [p1, p2] = data.points;
+    const bbox: VisionBoundingBox = {
+      x: Math.min(p1.x, p2.x),
+      y: Math.min(p1.y, p2.y),
+      width: Math.abs(p2.x - p1.x),
+      height: Math.abs(p2.y - p1.y),
+      imageWidth: canvasSize.width,
+      imageHeight: canvasSize.height,
+    };
+    if (bbox.width < 20 || bbox.height < 20) {
+      setToastMessage("Drag a larger region — Smart Count needs enough drawing to analyze.");
+      setToastType("error");
+      return;
+    }
+
+    const realDocId = selectedDoc.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDoc.id;
+
+    setSmartCountRunning(true);
+    setSmartCountBbox(bbox);
+    setSmartCountItems(null);
+    setSmartCountError(null);
+    setSmartCountModalOpen(true);
+
+    try {
+      const cropResult = await runVisionCropRegion({
+        projectId,
+        documentId: realDocId,
+        pageNumber: page,
+        boundingBox: bbox,
+      });
+      if (!cropResult.image) {
+        setSmartCountError("Could not crop the selected region.");
+        return;
+      }
+      setSmartCountCropImage(cropResult.image);
+
+      const saved = await saveVisionCrop({ projectId, image: cropResult.image });
+      if (!saved.success) {
+        setSmartCountError("Failed to save the cropped image for AI analysis.");
+        return;
+      }
+
+      const docName = selectedDoc?.fileName ?? "the drawing";
+      const prompt =
+        `This is a cropped region from "${docName}" (page ${page}). ` +
+        `Identify and count every distinct construction symbol, fixture, or component visible in this region. ` +
+        `Return ONLY a JSON object with this exact shape — no prose, no markdown fence:\n` +
+        `{ "items": [ { "label": "<short symbol name>", "count": <integer>, "confidence": "high|medium|low", "notes": "<optional 1-line note>" } ] }\n` +
+        `Group similar symbols under one label. Use plain trade names (e.g. "duplex receptacle", "ceiling light", "door"). ` +
+        `If the region is unclear or empty, return { "items": [] }.`;
+
+      const result = await askAi(projectId, prompt, saved.filePath);
+      const text = result.response ?? "";
+      let parsed: { items?: SmartCountItem[] } | null = null;
+      try {
+        const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+        const jsonText = codeBlock ? codeBlock[1] : text;
+        parsed = JSON.parse(jsonText.trim());
+      } catch {
+        // Fall back: try to find a JSON object anywhere in the text.
+        const m = text.match(/\{[\s\S]*"items"[\s\S]*\}/);
+        if (m) {
+          try { parsed = JSON.parse(m[0]); } catch { /* give up */ }
+        }
+      }
+      if (!parsed || !Array.isArray(parsed.items)) {
+        setSmartCountError("AI returned an unrecognized response. Try a tighter region or check the API key.");
+        return;
+      }
+      const cleanItems = parsed.items
+        .filter((i) => i && typeof i.label === "string" && Number.isFinite(i.count) && i.count > 0)
+        .map((i) => ({
+          label: i.label.trim(),
+          count: Math.round(i.count),
+          confidence: (i.confidence as SmartCountItem["confidence"]) ?? "medium",
+          notes: typeof i.notes === "string" ? i.notes : undefined,
+        }));
+      setSmartCountItems(cleanItems);
+      setSmartCountIncluded(cleanItems.map(() => true));
+      if (cleanItems.length === 0) {
+        setSmartCountError("AI didn't find any countable items in this region.");
+      }
+    } catch (err) {
+      console.error("Smart count failed:", err);
+      setSmartCountError(err instanceof Error ? err.message : "Smart count failed.");
+    } finally {
+      setSmartCountRunning(false);
+    }
+  }
+
+  async function handleAcceptSmartCount() {
+    if (!smartCountItems || !smartCountBbox || !selectedDoc) return;
+    const center: Point = {
+      x: smartCountBbox.x + smartCountBbox.width / 2,
+      y: smartCountBbox.y + smartCountBbox.height / 2,
+    };
+    let placedOffset = 0;
+    for (let i = 0; i < smartCountItems.length; i++) {
+      if (!smartCountIncluded[i]) continue;
+      const item = smartCountItems[i]!;
+      const color = COLOR_CYCLE[(colorIndexRef.current + i) % COLOR_CYCLE.length];
+      // Stagger the visual marker around the bbox centre so multiple
+      // smart-count summaries don't overlap perfectly.
+      const offsetPoint: Point = {
+        x: center.x + (placedOffset % 4) * 18 - 27,
+        y: center.y + Math.floor(placedOffset / 4) * 18 - 18,
+      };
+      const annotation: TakeoffAnnotation = {
+        id: crypto.randomUUID(),
+        type: "count",
+        label: `${item.label} (×${item.count})`,
+        color,
+        thickness: 5,
+        points: [offsetPoint],
+        visible: true,
+        groupName: "Smart Count",
+        canvasWidth: canvasSize.width,
+        canvasHeight: canvasSize.height,
+        measurement: { value: item.count, unit: "count" },
+      };
+      setAnnotations((prev) => [...prev, annotation]);
+      try {
+        const saved = await createTakeoffAnnotation(projectId, {
+          documentId:
+            selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id,
+          page,
+          ...annotation,
+        } as any);
+        if (saved?.id) {
+          setAnnotations((prev) =>
+            prev.map((a) => (a.id === annotation.id ? { ...a, id: saved.id } : a)),
+          );
+        }
+      } catch {
+        /* keep local */
+      }
+      placedOffset++;
+    }
+    colorIndexRef.current += smartCountItems.length;
+    notifyAnnotationsMutated();
+    setSmartCountModalOpen(false);
+    setSmartCountItems(null);
+    setSmartCountBbox(null);
+    setSmartCountCropImage(null);
+    setActiveTool("select");
+    setToastMessage(`Added ${placedOffset} smart-count entries to "Smart Count" group.`);
+    setToastType("success");
+  }
+
+  function handleRejectSmartCount() {
+    setSmartCountModalOpen(false);
+    setSmartCountItems(null);
+    setSmartCountBbox(null);
+    setSmartCountCropImage(null);
+    setSmartCountError(null);
   }
 
   /* ─── Ask AI: send cropped image to Claude API for analysis ─── */
@@ -2213,7 +2400,8 @@ export function TakeoffTab({
     );
   }
   const isAskAiActive = activeTool === "ask-ai";
-  const isRectSelectTool = isAutoCountActive || isAskAiActive;
+  const isSmartCountActive = activeTool === "smart-count";
+  const isRectSelectTool = isAutoCountActive || isAskAiActive || isSmartCountActive;
 
   /* ─── Render ─── */
 
@@ -2891,6 +3079,7 @@ export function TakeoffTab({
                     activeColor={
                       isAutoCountActive ? "#f59e0b"
                         : isAskAiActive ? "#8b5cf6"
+                        : isSmartCountActive ? "#10b981"
                         : activeColor
                     }
                     activeThickness={isRectSelectTool ? 2 : activeThickness}
@@ -2899,7 +3088,9 @@ export function TakeoffTab({
                         ? handleAutoCountSelection
                         : isAskAiActive
                           ? handleAskAiSelection
-                          : handleAnnotationComplete
+                          : isSmartCountActive
+                            ? handleSmartCountSelection
+                            : handleAnnotationComplete
                     }
                     onCalibrationRequest={handleCalibrationRequest}
                     pdfCanvas={pdfCanvasRef.current}
@@ -3696,6 +3887,131 @@ export function TakeoffTab({
                 </Button>
               </div>
             </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ─── Smart Count Results Modal ─── */}
+      {smartCountModalOpen && (
+        <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
+          <Card className="border border-emerald-400/30 shadow-xl max-h-[55vh] flex flex-col">
+            <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
+              <Wand2 className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span className="text-xs font-semibold text-fg flex-1">
+                Smart Count
+                {smartCountItems && smartCountItems.length > 0 && (
+                  <span className="ml-2 text-fg/45 font-normal">
+                    {smartCountIncluded.filter(Boolean).length} of {smartCountItems.length} selected
+                  </span>
+                )}
+              </span>
+              {smartCountItems && smartCountItems.length > 0 && (
+                <button
+                  onClick={() => {
+                    const allOn = smartCountIncluded.every(Boolean);
+                    setSmartCountIncluded(smartCountItems.map(() => !allOn));
+                  }}
+                  className="text-[10px] text-accent hover:underline mr-2"
+                >
+                  {smartCountIncluded.every(Boolean) ? "Deselect All" : "Select All"}
+                </button>
+              )}
+              <button onClick={handleRejectSmartCount} className="text-fg/30 hover:text-fg/60 transition-colors">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="flex gap-3 p-4 overflow-y-auto flex-1 min-h-0">
+              {smartCountCropImage && (
+                <div className="shrink-0 flex items-start">
+                  <div className="rounded-md border border-line bg-white p-1.5">
+                    <img src={smartCountCropImage} alt="Region" className="h-32 w-32 object-contain" />
+                  </div>
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                {smartCountRunning && (
+                  <div className="flex items-center gap-2 py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500 shrink-0" />
+                    <span className="text-xs text-fg/60">Counting symbols in the region…</span>
+                  </div>
+                )}
+                {smartCountError && !smartCountRunning && (
+                  <div className="text-[11px] text-red-400 bg-red-500/5 border border-red-500/20 rounded-md px-2.5 py-1.5">
+                    {smartCountError}
+                  </div>
+                )}
+                {smartCountItems && smartCountItems.length > 0 && (
+                  <div className="space-y-1">
+                    {smartCountItems.map((item, i) => (
+                      <div
+                        key={i}
+                        onClick={() => {
+                          const next = [...smartCountIncluded];
+                          next[i] = !next[i];
+                          setSmartCountIncluded(next);
+                        }}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors",
+                          smartCountIncluded[i]
+                            ? "bg-emerald-500/8 border border-emerald-500/20"
+                            : "bg-panel2/30 border border-line opacity-60",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={smartCountIncluded[i]}
+                          onChange={() => {}}
+                          className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-medium text-fg truncate">{item.label}</div>
+                          {item.notes && (
+                            <div className="text-[10px] text-fg/45 truncate">{item.notes}</div>
+                          )}
+                        </div>
+                        <Badge
+                          tone={item.confidence === "high" ? "success" : item.confidence === "medium" ? "warning" : "default"}
+                          className="text-[9px] shrink-0"
+                        >
+                          {item.confidence}
+                        </Badge>
+                        <span className="text-base font-mono font-semibold text-emerald-500 tabular-nums shrink-0">
+                          ×{item.count}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {smartCountItems && smartCountItems.length > 0 && (
+              <div className="flex items-center justify-between px-4 py-2.5 border-t border-line shrink-0">
+                <span className="text-[10px] text-fg/40">
+                  Total selected:{" "}
+                  <span className="font-mono text-fg/70">
+                    {smartCountItems.reduce(
+                      (s, it, i) => s + (smartCountIncluded[i] ? it.count : 0),
+                      0,
+                    )}
+                  </span>
+                </span>
+                <div className="flex gap-2">
+                  <Button size="xs" variant="secondary" onClick={handleRejectSmartCount}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="accent"
+                    onClick={handleAcceptSmartCount}
+                    disabled={!smartCountIncluded.some(Boolean)}
+                  >
+                    Add to drawing
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         </div>
       )}
