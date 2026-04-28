@@ -163,6 +163,34 @@ function drawCloudPolygon(ctx: CanvasRenderingContext2D, points: Point[]) {
   ctx.stroke();
 }
 
+// Reusable diagonal-hatch pattern keyed by color so area annotations are
+// visually distinguishable from solid markup highlights at a glance.
+const hatchPatternCache = new Map<string, CanvasPattern>();
+
+function getHatchPattern(ctx: CanvasRenderingContext2D, color: string): CanvasPattern | string {
+  const cached = hatchPatternCache.get(color);
+  if (cached) return cached;
+  const tile = document.createElement("canvas");
+  tile.width = 10;
+  tile.height = 10;
+  const tctx = tile.getContext("2d");
+  if (!tctx) return color + "40";
+  tctx.fillStyle = color + "18";
+  tctx.fillRect(0, 0, 10, 10);
+  tctx.strokeStyle = color + "70";
+  tctx.lineWidth = 1.25;
+  tctx.lineCap = "square";
+  tctx.beginPath();
+  tctx.moveTo(-2, 12);
+  tctx.lineTo(12, -2);
+  tctx.moveTo(-2, 22);
+  tctx.lineTo(22, -2);
+  tctx.stroke();
+  const pattern = ctx.createPattern(tile, "repeat");
+  if (pattern) hatchPatternCache.set(color, pattern);
+  return pattern ?? color + "40";
+}
+
 function drawCountMarker(ctx: CanvasRenderingContext2D, p: Point, color: string, radius: number) {
   ctx.beginPath();
   ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
@@ -240,17 +268,37 @@ function renderAnnotation(
       for (const p of points) drawCountMarker(ctx, p, color, ann.thickness + 4);
       break;
     case "area-rectangle":
-      if (points.length >= 2) drawRect(ctx, points[0], points[1], true);
+      if (points.length >= 2) {
+        ctx.save();
+        ctx.fillStyle = getHatchPattern(ctx, color);
+        drawRect(ctx, points[0], points[1], true);
+        ctx.restore();
+      }
       break;
     case "area-polygon":
     case "area-vertical-wall":
-      if (points.length >= 3) drawPolygon(ctx, points, true);
+      if (points.length >= 3) {
+        ctx.save();
+        ctx.fillStyle = getHatchPattern(ctx, color);
+        drawPolygon(ctx, points, true);
+        ctx.restore();
+      }
       break;
     case "area-triangle":
-      if (points.length >= 3) drawPolygon(ctx, points.slice(0, 3), true);
+      if (points.length >= 3) {
+        ctx.save();
+        ctx.fillStyle = getHatchPattern(ctx, color);
+        drawPolygon(ctx, points.slice(0, 3), true);
+        ctx.restore();
+      }
       break;
     case "area-ellipse":
-      if (points.length >= 2) drawEllipse(ctx, points[0], points[1], true);
+      if (points.length >= 2) {
+        ctx.save();
+        ctx.fillStyle = getHatchPattern(ctx, color);
+        drawEllipse(ctx, points[0], points[1], true);
+        ctx.restore();
+      }
       break;
     case "calibrate":
       if (points.length >= 2) {
@@ -336,6 +384,15 @@ export function AnnotationCanvas({
   useEffect(() => {
     snapPointRef.current = snapPoint;
   }, [snapPoint]);
+
+  // Whenever the active tool changes (or calibrate is exited), clear any
+  // stale snap target so it can't be honoured by a later click.
+  useEffect(() => {
+    if (activeTool !== "calibrate") {
+      setSnapPoint(null);
+      snapPointRef.current = null;
+    }
+  }, [activeTool]);
 
   /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
      even if React hasn't re-rendered yet (stale closure problem). */
@@ -828,8 +885,15 @@ export function AnnotationCanvas({
 
     if (isTwoPointTool(activeTool)) {
       // Honour any active snap target — if the loupe is suggesting a snap
-      // point, commit at the snap location instead of the raw cursor.
-      const commitPoint = activeTool === "calibrate" && snapPointRef.current ? snapPointRef.current : pt;
+      // point AND it's close to the click (so we don't commit a stale
+      // snap from a previous mouse position or session), use the snap.
+      const SNAP_DISTANCE_LIMIT = 14;
+      let commitPoint = pt;
+      if (activeTool === "calibrate" && snapPointRef.current) {
+        const sp = snapPointRef.current;
+        const d = Math.hypot(sp.x - pt.x, sp.y - pt.y);
+        if (d <= SNAP_DISTANCE_LIMIT) commitPoint = sp;
+      }
       if (drawingPoints.length === 0) {
         setDrawingPoints([commitPoint]);
       } else {
