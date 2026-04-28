@@ -23,6 +23,7 @@ import {
   Triangle,
   Spline,
   Scaling,
+  Sparkles,
   ArrowDownToLine,
   ScanSearch,
   Loader2,
@@ -82,6 +83,8 @@ import {
   updateWorksheetItem,
   updateWorkspaceState,
   apiRequest,
+  detectTitleBlockScale,
+  type DetectedScaleRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -668,12 +671,25 @@ export function TakeoffTab({
   const [calibrationUnit, setCalibrationUnit] = useState("ft");
   const [calibrationApplyToAllPages, setCalibrationApplyToAllPages] = useState(false);
 
+  /* Title-block OCR scale detection */
+  const [detectingScale, setDetectingScale] = useState(false);
+  const [detectedScales, setDetectedScales] = useState<DetectedScaleRecord[] | null>(null);
+
   /* Verify-scale flow: when user clicks "Verify" they re-enter the calibrate
      two-point flow but with verifyMode set, so the completion handler shows
      a measurement-vs-expected panel instead of a calibration setter. */
   const [verifyMode, setVerifyMode] = useState(false);
   const [verifyPoints, setVerifyPoints] = useState<[Point, Point] | null>(null);
   const [verifyExpected, setVerifyExpected] = useState("");
+
+  // Clear verifyMode the moment the user leaves calibrate (cancel via tool
+  // switch, Escape key, etc) so the next time they pick Calibrate they get
+  // the normal Set drawing scale prompt — not a stale verify routing.
+  useEffect(() => {
+    if (activeTool !== "calibrate" && verifyMode) {
+      setVerifyMode(false);
+    }
+  }, [activeTool, verifyMode]);
 
   /* Persistent calibration cache. For each documentId we keep:
      - numeric pageNumber keys for page-specific calibrations
@@ -1752,7 +1768,29 @@ export function TakeoffTab({
     }
     setCalibrationPoints(points);
     setCalibrationApplyToAllPages(false);
+    setDetectedScales(null);
     setCalibrationPromptOpen(true);
+  }
+
+  async function handleDetectScale() {
+    if (!selectedDoc) return;
+    const docId = selectedDoc.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDoc.id;
+    setDetectingScale(true);
+    try {
+      const result = await detectTitleBlockScale(projectId, docId, page);
+      setDetectedScales(result.detectedScales);
+      if (result.detectedScales.length === 0 && result.warnings.length > 0) {
+        setToastMessage(result.warnings[0]);
+        setToastType("error");
+      }
+    } catch (err) {
+      setToastMessage(err instanceof Error ? err.message : "Detect failed");
+      setToastType("error");
+    } finally {
+      setDetectingScale(false);
+    }
   }
 
   function handleCalibrationConfirm() {
@@ -3365,6 +3403,51 @@ export function TakeoffTab({
                     <option value="mm">mm</option>
                     <option value="yd">yd</option>
                   </Select>
+                </div>
+
+                {/* Auto-detected scales from OCR'ing the title block */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-fg/40">Detected from drawing</div>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={handleDetectScale}
+                      disabled={detectingScale}
+                      className="text-xs"
+                      title="Run OCR on the title block to find a scale notation"
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      {detectingScale ? "Reading title block…" : detectedScales ? "Re-detect" : "Auto-detect"}
+                    </Button>
+                  </div>
+                  {detectedScales && detectedScales.length === 0 && (
+                    <div className="text-[11px] text-fg/40">
+                      No scale notation found on this page. Use the manual presets below.
+                    </div>
+                  )}
+                  {detectedScales && detectedScales.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {detectedScales.map((s, i) => {
+                        const realValue = paperInches * s.multiplier;
+                        return (
+                          <button
+                            key={`${s.label}-${i}`}
+                            onClick={() => {
+                              setCalibrationInput(realValue.toFixed(s.unit === "ft" ? 2 : 3));
+                              setCalibrationUnit(s.unit);
+                            }}
+                            title={`From "${s.raw}" — at ${s.label}, this line ≈ ${realValue.toFixed(2)} ${s.unit} (confidence ${(s.confidence * 100).toFixed(0)}%)`}
+                            className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                          >
+                            <Sparkles className="inline h-2.5 w-2.5 mr-1" />
+                            {s.label}
+                            {s.confidence >= 0.9 && <span className="ml-1 text-[9px] opacity-60">SCALE:</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Drawing scale presets — auto-fill the input from the line's

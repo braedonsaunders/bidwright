@@ -4506,6 +4506,38 @@ export async function applyRevisionRetakeoff(
   });
 }
 
+// ─── Title-block scale detection (OCR) ─────────────────────────────────
+
+export interface DetectedScaleRecord {
+  raw: string;
+  kind: "metric" | "imperial";
+  label: string;
+  multiplier: number;
+  unit: "m" | "ft";
+  confidence: number;
+}
+
+export interface DetectScaleResultRecord {
+  ocrText: string;
+  detectedScales: DetectedScaleRecord[];
+  warnings: string[];
+}
+
+export async function detectTitleBlockScale(
+  projectId: string,
+  documentId: string,
+  pageNumber: number,
+): Promise<DetectScaleResultRecord> {
+  return apiRequest<DetectScaleResultRecord>(
+    `/api/takeoff/${projectId}/documents/${documentId}/detect-scale`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageNumber }),
+    },
+  );
+}
+
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
   return apiRequest<{ deleted: boolean }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/${linkId}`, {
     method: "DELETE",
