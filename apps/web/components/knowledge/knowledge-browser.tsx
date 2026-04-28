@@ -572,18 +572,18 @@ export function KnowledgeBrowser({
           </CardHeader>
           <CardBody className="space-y-4">
             <Select
-              value={moveTargetFolderId ?? ""}
-              onChange={(e) =>
-                setMoveTargetFolderId(e.target.value || null)
+              value={moveTargetFolderId ?? "__root__"}
+              onValueChange={(v) =>
+                setMoveTargetFolderId(v === "__root__" ? null : v)
               }
-            >
-              <option value="">(Root - no folder)</option>
-              {folderList.map((f) => (
-                <option key={f.id} value={FOLDER_PREFIX + f.id}>
-                  {f.name}
-                </option>
-              ))}
-            </Select>
+              options={[
+                { value: "__root__", label: "(Root - no folder)" },
+                ...folderList.map((f) => ({
+                  value: FOLDER_PREFIX + f.id,
+                  label: f.name,
+                })),
+              ]}
+            />
             <div className="flex justify-end gap-2">
               <Button
                 variant="ghost"

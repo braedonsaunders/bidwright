@@ -27,38 +27,40 @@ export function ScheduleFiltersBar({ filters, onChange, phases, assignees }: Sch
       <div className="flex items-center gap-1.5">
         <label className="text-xs text-fg/40">Phase</label>
         <Select
-          value={filters.phaseIds[0] ?? ""}
-          onChange={(e) => {
-            const val = e.target.value;
-            onChange({ ...filters, phaseIds: val ? [val] : [] });
+          value={filters.phaseIds[0] ?? "__all__"}
+          onValueChange={(v) => {
+            onChange({ ...filters, phaseIds: v === "__all__" ? [] : [v] });
           }}
-          className="h-7 text-xs w-32"
-        >
-          <option value="">All</option>
-          {phases.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.number ? `${p.number}. ` : ""}{p.name}
-            </option>
-          ))}
-        </Select>
+          className="w-32"
+          size="xs"
+          options={[
+            { value: "__all__", label: "All" },
+            ...phases.map((p) => ({
+              value: p.id,
+              label: `${p.number ? `${p.number}. ` : ""}${p.name}`,
+            })),
+          ]}
+        />
       </div>
 
       {/* Status filter */}
       <div className="flex items-center gap-1.5">
         <label className="text-xs text-fg/40">Status</label>
         <Select
-          value={filters.statuses[0] ?? ""}
-          onChange={(e) => {
-            const val = e.target.value as ScheduleTaskStatus | "";
-            onChange({ ...filters, statuses: val ? [val] : [] });
+          value={filters.statuses[0] ?? "__all__"}
+          onValueChange={(v) => {
+            onChange({ ...filters, statuses: v === "__all__" ? [] : [v as ScheduleTaskStatus] });
           }}
-          className="h-7 text-xs w-32"
-        >
-          <option value="">All</option>
-          {(Object.entries(STATUS_LABELS) as [ScheduleTaskStatus, string][]).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
-          ))}
-        </Select>
+          className="w-32"
+          size="xs"
+          options={[
+            { value: "__all__", label: "All" },
+            ...(Object.entries(STATUS_LABELS) as [ScheduleTaskStatus, string][]).map(([k, v]) => ({
+              value: k,
+              label: v,
+            })),
+          ]}
+        />
       </div>
 
       {/* Assignee filter */}
@@ -66,18 +68,17 @@ export function ScheduleFiltersBar({ filters, onChange, phases, assignees }: Sch
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-fg/40">Assignee</label>
           <Select
-            value={filters.assignees[0] ?? ""}
-            onChange={(e) => {
-              const val = e.target.value;
-              onChange({ ...filters, assignees: val ? [val] : [] });
+            value={filters.assignees[0] ?? "__all__"}
+            onValueChange={(v) => {
+              onChange({ ...filters, assignees: v === "__all__" ? [] : [v] });
             }}
-            className="h-7 text-xs w-32"
-          >
-            <option value="">All</option>
-            {assignees.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
-          </Select>
+            className="w-32"
+            size="xs"
+            options={[
+              { value: "__all__", label: "All" },
+              ...assignees.map((a) => ({ value: a, label: a })),
+            ]}
+          />
         </div>
       )}
 

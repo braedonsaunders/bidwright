@@ -221,14 +221,13 @@ function CatalogItemDrawer({
             </label>
             <Select
               className="mt-1"
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-            >
-              <option value="">None</option>
-              {ITEM_CATEGORIES.map((cat) => (
-                <option key={cat} value={cat}>{cat}</option>
-              ))}
-            </Select>
+              value={form.category || "__none__"}
+              onValueChange={(v) => setForm({ ...form, category: v === "__none__" ? "" : v })}
+              options={[
+                { value: "__none__", label: "None" },
+                ...ITEM_CATEGORIES.map((cat) => ({ value: cat, label: cat })),
+              ]}
+            />
           </div>
 
           <div>
@@ -238,12 +237,9 @@ function CatalogItemDrawer({
             <Select
               className="mt-1"
               value={form.unit}
-              onChange={(e) => setForm({ ...form, unit: e.target.value })}
-            >
-              {ITEM_UNITS.map((u) => (
-                <option key={u} value={u}>{u}</option>
-              ))}
-            </Select>
+              onValueChange={(v) => setForm({ ...form, unit: v })}
+              options={ITEM_UNITS.map((u) => ({ value: u, label: u }))}
+            />
           </div>
         </div>
 
@@ -633,31 +629,23 @@ export function ItemsManager({
                     />
                     <div className="flex gap-1">
                       <Select
-                        className="h-7 text-xs flex-1"
+                        className="flex-1"
+                        size="xs"
                         value={newCatalog.kind}
-                        onChange={(e) =>
-                          setNewCatalog((p) => ({ ...p, kind: e.target.value }))
+                        onValueChange={(v) =>
+                          setNewCatalog((p) => ({ ...p, kind: v }))
                         }
-                      >
-                        {CATALOG_KINDS.map((k) => (
-                          <option key={k.value} value={k.value}>
-                            {k.label}
-                          </option>
-                        ))}
-                      </Select>
+                        options={CATALOG_KINDS.map((k) => ({ value: k.value, label: k.label }))}
+                      />
                       <Select
-                        className="h-7 text-xs w-20"
+                        className="w-20"
+                        size="xs"
                         value={newCatalog.scope}
-                        onChange={(e) =>
-                          setNewCatalog((p) => ({ ...p, scope: e.target.value }))
+                        onValueChange={(v) =>
+                          setNewCatalog((p) => ({ ...p, scope: v }))
                         }
-                      >
-                        {CATALOG_SCOPES.map((s) => (
-                          <option key={s.value} value={s.value}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </Select>
+                        options={CATALOG_SCOPES.map((s) => ({ value: s.value, label: s.label }))}
+                      />
                     </div>
                     <div className="flex justify-end gap-1">
                       <button

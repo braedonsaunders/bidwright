@@ -408,9 +408,12 @@ export function RateScheduleManager({
                   </div>
                   <div>
                     <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                    <Select className="mt-1" value={newForm.category} onChange={(e) => setNewForm({ ...newForm, category: e.target.value })}>
-                      {CATEGORIES.map((c) => (<option key={c.value} value={c.value}>{c.label}</option>))}
-                    </Select>
+                    <Select
+                      className="mt-1"
+                      value={newForm.category}
+                      onValueChange={(v) => setNewForm({ ...newForm, category: v })}
+                      options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
+                    />
                   </div>
                 </div>
                 <div>
@@ -514,9 +517,12 @@ export function RateScheduleManager({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                      <Select className="mt-1" value={headerForm.category} onChange={(e) => setHeaderForm({ ...headerForm, category: e.target.value })}>
-                        {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-                      </Select>
+                      <Select
+                        className="mt-1"
+                        value={headerForm.category}
+                        onValueChange={(v) => setHeaderForm({ ...headerForm, category: v })}
+                        options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
+                      />
                     </div>
                     <div>
                       <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Default Markup %</label>
@@ -711,9 +717,13 @@ export function RateScheduleManager({
                             </div>
                             <div className="w-16">
                               <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
-                              <Select className="mt-1 h-8 text-xs" value={newItemForm.unit} onChange={(e) => setNewItemForm({ ...newItemForm, unit: e.target.value })}>
-                                {["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => (<option key={u} value={u}>{u}</option>))}
-                              </Select>
+                              <Select
+                                className="mt-1 h-8 text-xs"
+                                size="sm"
+                                value={newItemForm.unit}
+                                onValueChange={(v) => setNewItemForm({ ...newItemForm, unit: v })}
+                                options={["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => ({ value: u, label: u }))}
+                              />
                             </div>
                             <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
                             <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>

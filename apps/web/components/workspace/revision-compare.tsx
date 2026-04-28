@@ -126,15 +126,14 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
           <div>
             <label className="mb-1 block text-xs font-medium text-fg/50">Revision B (Compare To)</label>
             <Select
-              value={selectedRevisionB}
-              onChange={(e) => setSelectedRevisionB(e.target.value)}
-            >
-              <option value="">Select a revision...</option>
-              {/* In a full implementation, this would list all available revisions */}
-              <option value="placeholder" disabled>
-                (Load revisions from API)
-              </option>
-            </Select>
+              value={selectedRevisionB || "__select__"}
+              onValueChange={(v) => setSelectedRevisionB(v === "__select__" ? "" : v)}
+              options={[
+                { value: "__select__", label: "Select a revision..." },
+                /* In a full implementation, this would list all available revisions */
+                { value: "placeholder", label: "(Load revisions from API)", disabled: true },
+              ]}
+            />
           </div>
         </div>
 

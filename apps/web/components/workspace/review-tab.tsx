@@ -443,14 +443,15 @@ function CoverageSubTab({
                     {editable ? (
                       <Select
                         value={item.status}
-                        onChange={(event) => onChange(updateAtIndex(items, index, { status: event.target.value as ReviewCoverageItem["status"] }))}
+                        onValueChange={(v) => onChange(updateAtIndex(items, index, { status: v as ReviewCoverageItem["status"] }))}
                         disabled={busy}
-                        className="h-8 text-xs"
-                      >
-                        <option value="YES">Covered</option>
-                        <option value="VERIFY">Verify</option>
-                        <option value="NO">Missing</option>
-                      </Select>
+                        size="sm"
+                        options={[
+                          { value: "YES", label: "Covered" },
+                          { value: "VERIFY", label: "Verify" },
+                          { value: "NO", label: "Missing" },
+                        ]}
+                      />
                     ) : (
                       <Badge tone={coverageTone(item.status)} className="text-[10px]">{item.status}</Badge>
                     )}
@@ -607,27 +608,29 @@ function GapsRisksSubTab({
                             <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Severity</div>
                             <Select
                               value={finding.severity}
-                              onChange={(event) => onChange(updateAtIndex(findings, sourceIndex, { severity: event.target.value as ReviewFinding["severity"] }))}
+                              onValueChange={(v) => onChange(updateAtIndex(findings, sourceIndex, { severity: v as ReviewFinding["severity"] }))}
                               disabled={busy}
-                              className="h-8 text-xs"
-                            >
-                              <option value="CRITICAL">Critical</option>
-                              <option value="WARNING">Warning</option>
-                              <option value="INFO">Info</option>
-                            </Select>
+                              size="sm"
+                              options={[
+                                { value: "CRITICAL", label: "Critical" },
+                                { value: "WARNING", label: "Warning" },
+                                { value: "INFO", label: "Info" },
+                              ]}
+                            />
                           </div>
                           <div>
                             <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">State</div>
                             <Select
                               value={state}
-                              onChange={(event) => onChange(updateAtIndex(findings, sourceIndex, { status: event.target.value as ReviewItemState }))}
+                              onValueChange={(v) => onChange(updateAtIndex(findings, sourceIndex, { status: v as ReviewItemState }))}
                               disabled={busy}
-                              className="h-8 text-xs"
-                            >
-                              <option value="open">Open</option>
-                              <option value="resolved">Resolved</option>
-                              <option value="dismissed">Dismissed</option>
-                            </Select>
+                              size="sm"
+                              options={[
+                                { value: "open", label: "Open" },
+                                { value: "resolved", label: "Resolved" },
+                                { value: "dismissed", label: "Dismissed" },
+                              ]}
+                            />
                           </div>
                           <div>
                             <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Spec Ref</div>
@@ -776,14 +779,15 @@ function CompetitivenessSubTab({
                       {editable ? (
                         <Select
                           value={entry.impact}
-                          onChange={(event) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { impact: event.target.value as typeof entry.impact }) })}
+                          onValueChange={(v) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { impact: v as typeof entry.impact }) })}
                           disabled={busy}
-                          className="h-8 text-xs"
-                        >
-                          <option value="HIGH">High</option>
-                          <option value="MEDIUM">Medium</option>
-                          <option value="LOW">Low</option>
-                        </Select>
+                          size="sm"
+                          options={[
+                            { value: "HIGH", label: "High" },
+                            { value: "MEDIUM", label: "Medium" },
+                            { value: "LOW", label: "Low" },
+                          ]}
+                        />
                       ) : (
                         <Badge tone={priorityTone(entry.impact)} className="text-[9px]">{entry.impact}</Badge>
                       )}
@@ -792,14 +796,15 @@ function CompetitivenessSubTab({
                       {editable ? (
                         <Select
                           value={entry.status || "open"}
-                          onChange={(event) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { status: event.target.value as ReviewItemState }) })}
+                          onValueChange={(v) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { status: v as ReviewItemState }) })}
                           disabled={busy}
-                          className="h-8 text-xs"
-                        >
-                          <option value="open">Open</option>
-                          <option value="resolved">Resolved</option>
-                          <option value="dismissed">Dismissed</option>
-                        </Select>
+                          size="sm"
+                          options={[
+                            { value: "open", label: "Open" },
+                            { value: "resolved", label: "Resolved" },
+                            { value: "dismissed", label: "Dismissed" },
+                          ]}
+                        />
                       ) : (
                         <Badge tone={itemStateTone(entry.status)} className="text-[9px] capitalize">{entry.status || "open"}</Badge>
                       )}
@@ -878,14 +883,15 @@ function CompetitivenessSubTab({
                       {editable ? (
                         <Select
                           value={entry.impact}
-                          onChange={(event) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { impact: event.target.value as typeof entry.impact }) })}
+                          onValueChange={(v) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { impact: v as typeof entry.impact }) })}
                           disabled={busy}
-                          className="h-8 text-xs"
-                        >
-                          <option value="HIGH">High</option>
-                          <option value="MEDIUM">Medium</option>
-                          <option value="LOW">Low</option>
-                        </Select>
+                          size="sm"
+                          options={[
+                            { value: "HIGH", label: "High" },
+                            { value: "MEDIUM", label: "Medium" },
+                            { value: "LOW", label: "Low" },
+                          ]}
+                        />
                       ) : (
                         <Badge tone={priorityTone(entry.impact)} className="text-[9px]">{entry.impact}</Badge>
                       )}
@@ -894,14 +900,15 @@ function CompetitivenessSubTab({
                       {editable ? (
                         <Select
                           value={entry.status || "open"}
-                          onChange={(event) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { status: event.target.value as ReviewItemState }) })}
+                          onValueChange={(v) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { status: v as ReviewItemState }) })}
                           disabled={busy}
-                          className="h-8 text-xs"
-                        >
-                          <option value="open">Open</option>
-                          <option value="resolved">Resolved</option>
-                          <option value="dismissed">Dismissed</option>
-                        </Select>
+                          size="sm"
+                          options={[
+                            { value: "open", label: "Open" },
+                            { value: "resolved", label: "Resolved" },
+                            { value: "dismissed", label: "Dismissed" },
+                          ]}
+                        />
                       ) : (
                         <Badge tone={itemStateTone(entry.status)} className="text-[9px] capitalize">{entry.status || "open"}</Badge>
                       )}
@@ -1185,19 +1192,33 @@ function RecommendationsSubTab({
                 <div className="grid gap-3 md:grid-cols-[140px_140px_180px_minmax(0,1fr)]">
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Priority</div>
-                    <Select value={recommendation.priority} onChange={(event) => onChange(updateAtIndex(recommendations, index, { priority: event.target.value as ReviewRecommendation["priority"] }))} disabled={busy || isPending} className="h-8 text-xs">
-                      <option value="HIGH">High</option>
-                      <option value="MEDIUM">Medium</option>
-                      <option value="LOW">Low</option>
-                    </Select>
+                    <Select
+                      value={recommendation.priority}
+                      onValueChange={(v) => onChange(updateAtIndex(recommendations, index, { priority: v as ReviewRecommendation["priority"] }))}
+                      disabled={busy || isPending}
+                      className="h-8 text-xs"
+                      size="sm"
+                      options={[
+                        { value: "HIGH", label: "High" },
+                        { value: "MEDIUM", label: "Medium" },
+                        { value: "LOW", label: "Low" },
+                      ]}
+                    />
                   </div>
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">State</div>
-                    <Select value={status} onChange={(event) => onChange(updateAtIndex(recommendations, index, { status: event.target.value as ReviewItemState }))} disabled={busy || isPending} className="h-8 text-xs">
-                      <option value="open">Open</option>
-                      <option value="resolved">Resolved</option>
-                      <option value="dismissed">Dismissed</option>
-                    </Select>
+                    <Select
+                      value={status}
+                      onValueChange={(v) => onChange(updateAtIndex(recommendations, index, { status: v as ReviewItemState }))}
+                      disabled={busy || isPending}
+                      className="h-8 text-xs"
+                      size="sm"
+                      options={[
+                        { value: "open", label: "Open" },
+                        { value: "resolved", label: "Resolved" },
+                        { value: "dismissed", label: "Dismissed" },
+                      ]}
+                    />
                   </div>
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Category</div>
