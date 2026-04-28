@@ -3245,9 +3245,13 @@ export function TakeoffTab({
                       onChange={(e) => setVerifyExpected(e.target.value)}
                       autoFocus
                     />
-                    <Select className="h-10" value={calibration.unit} disabled>
-                      <option value={calibration.unit}>{calibration.unit}</option>
-                    </Select>
+                    <Select
+                      className="h-10"
+                      value={calibration.unit}
+                      onValueChange={() => {}}
+                      options={[{ value: calibration.unit, label: calibration.unit }]}
+                      disabled
+                    />
                   </div>
                 </div>
 
@@ -3394,15 +3398,16 @@ export function TakeoffTab({
                   <Select
                     className="h-10"
                     value={calibrationUnit}
-                    onChange={(e) => setCalibrationUnit(e.target.value)}
-                  >
-                    <option value="ft">ft</option>
-                    <option value="in">in</option>
-                    <option value="m">m</option>
-                    <option value="cm">cm</option>
-                    <option value="mm">mm</option>
-                    <option value="yd">yd</option>
-                  </Select>
+                    onValueChange={setCalibrationUnit}
+                    options={[
+                      { value: "ft", label: "ft" },
+                      { value: "in", label: "in" },
+                      { value: "m",  label: "m"  },
+                      { value: "cm", label: "cm" },
+                      { value: "mm", label: "mm" },
+                      { value: "yd", label: "yd" },
+                    ]}
+                  />
                 </div>
 
                 {/* Auto-detected scales from OCR'ing the title block */}

@@ -38,7 +38,11 @@ export interface DetectScaleResult {
 
 const METRIC_RE = /\b1\s*[:：]\s*(\d{1,5})\b/g;
 const IMPERIAL_FRAC_RE = /(\d+)\s*\/\s*(\d+)\s*[”"]\s*=\s*(\d+)\s*['′]/g;
-const IMPERIAL_WHOLE_RE = /(\d+)\s*[”"]\s*=\s*(\d+)\s*['′]/g;
+// Negative lookbehind prevents matching the "4\"" inside fractional notations
+// like "1/4\"=1'-0\"". Without it, that text would also produce a false-positive
+// "4\"=1'" detection (multiplier 0.25), which a user could click and apply a
+// wildly wrong scale.
+const IMPERIAL_WHOLE_RE = /(?<![\/\d])(\d+)\s*[”"]\s*=\s*(\d+)\s*['′]/g;
 const SCALE_KEYWORD_RE = /\bSCALE\s*[:=]?/i;
 
 function detectionConfidence(near: string, full: string, idx: number): number {
