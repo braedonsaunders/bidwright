@@ -32,7 +32,9 @@ jobs:
       - name: Render CodeFlow Card
         uses: braedonsaunders/codeflow/card@v1
         with:
-          theme: dark
+          # Single SVG that adapts to the viewer's system theme via
+          # prefers-color-scheme — looks native on light and dark READMEs.
+          theme: auto
           style: compact
           # Public README — show structure, not judgment.
           show-grade: false
