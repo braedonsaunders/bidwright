@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 1
 
       - name: Render CodeFlow Card
-        uses: braedonsaunders/codeflow/card@main
+        uses: braedonsaunders/codeflow/card@v1
         with:
           theme: dark
           style: compact
