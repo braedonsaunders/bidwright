@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
+import * as RadixSelect from "@radix-ui/react-select";
 import {
   ArrowUpDown,
   Bot,
+  Check,
   ChevronDown,
   FileText,
   Loader2,
@@ -18,7 +20,15 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent, formatDate } from "@/lib/format";
-import { createProject, type ProjectListItem, type OrgUser, type OrgDepartment } from "@/lib/api";
+import {
+  createCustomer,
+  createProject,
+  getCustomers,
+  type Customer,
+  type ProjectListItem,
+  type OrgUser,
+  type OrgDepartment,
+} from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
   Badge,
@@ -27,7 +37,6 @@ import {
   FadeIn,
   Input,
   ModalBackdrop,
-  Textarea,
 } from "@/components/ui";
 import { getClientDisplayName } from "@/lib/client-display";
 
@@ -56,6 +65,62 @@ const STATUS_OPTIONS = [
 
 function statusTone(status: string) {
   return STATUS_OPTIONS.find((s) => s.value === status)?.tone ?? ("default" as const);
+}
+
+/* ─── Radix single-select ─── */
+
+function StyledSelect({
+  value,
+  onValueChange,
+  placeholder,
+  disabled,
+  children,
+}: {
+  value: string;
+  onValueChange: (val: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <RadixSelect.Root value={value || undefined} onValueChange={onValueChange} disabled={disabled}>
+      <RadixSelect.Trigger
+        className={cn(
+          "inline-flex w-full items-center justify-between gap-1.5 h-9 rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none transition-colors",
+          "hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20",
+          "disabled:opacity-50 disabled:pointer-events-none",
+        )}
+      >
+        <RadixSelect.Value placeholder={placeholder ?? "Select..."} />
+        <RadixSelect.Icon className="shrink-0">
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </RadixSelect.Icon>
+      </RadixSelect.Trigger>
+      <RadixSelect.Portal>
+        <RadixSelect.Content
+          className="z-[300] min-w-[var(--radix-select-trigger-width)] max-h-[300px] rounded-lg border border-line bg-panel shadow-xl"
+          position="popper"
+          sideOffset={4}
+        >
+          <RadixSelect.Viewport className="p-1">{children}</RadixSelect.Viewport>
+        </RadixSelect.Content>
+      </RadixSelect.Portal>
+    </RadixSelect.Root>
+  );
+}
+
+function StyledSelectItem({ value, children }: { value: string; children: React.ReactNode }) {
+  return (
+    <RadixSelect.Item
+      value={value}
+      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent"
+    >
+      <RadixSelect.ItemIndicator className="w-3 shrink-0">
+        <Check className="h-3 w-3" />
+      </RadixSelect.ItemIndicator>
+      <RadixSelect.ItemText>{children}</RadixSelect.ItemText>
+    </RadixSelect.Item>
+  );
 }
 
 /* ─── Filter Dropdown ─── */
@@ -185,11 +250,28 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   const [newQuoteMenuOpen, setNewQuoteMenuOpen] = useState(false);
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
-  const [manualClient, setManualClient] = useState("");
+  const [manualCustomerId, setManualCustomerId] = useState("");
+  const [manualCustomerOptions, setManualCustomerOptions] = useState<Customer[]>([]);
   const [manualLocation, setManualLocation] = useState("");
-  const [manualScope, setManualScope] = useState("");
   const [manualError, setManualError] = useState("");
   const [manualSaving, setManualSaving] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
+  const [quickAddName, setQuickAddName] = useState("");
+  const [quickAddSaving, setQuickAddSaving] = useState(false);
+
+  useEffect(() => {
+    if (!manualModalOpen) return;
+    let cancelled = false;
+    getCustomers()
+      .then((customers) => {
+        if (cancelled) return;
+        setManualCustomerOptions(customers);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [manualModalOpen]);
 
   // Only include projects that have a quote
   const projectsWithQuotes = useMemo(
@@ -243,6 +325,29 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     if (manualSaving) return;
     setManualModalOpen(false);
     setManualError("");
+    setQuickAddOpen(false);
+    setQuickAddName("");
+  }
+
+  async function handleQuickAddCustomer() {
+    const name = quickAddName.trim();
+    if (!name) return;
+    setQuickAddSaving(true);
+    setManualError("");
+    try {
+      const created = await createCustomer({ name, active: true });
+      setManualCustomerOptions((prev) => {
+        if (prev.some((c) => c.id === created.id)) return prev;
+        return [...prev, created];
+      });
+      setManualCustomerId(created.id);
+      setQuickAddName("");
+      setQuickAddOpen(false);
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : "Failed to create client.");
+    } finally {
+      setQuickAddSaving(false);
+    }
   }
 
   async function handleManualQuoteSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -256,17 +361,16 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     setManualSaving(true);
     setManualError("");
     try {
-      const clientName = manualClient.trim() || "Unassigned Client";
+      const selectedCustomer = manualCustomerOptions.find((c) => c.id === manualCustomerId) ?? null;
+      const clientName = selectedCustomer?.name || "Unassigned Client";
       const location = manualLocation.trim() || "TBD";
-      const scope = manualScope.trim();
       const result = await createProject({
         name: title,
         clientName,
+        customerId: selectedCustomer?.id ?? null,
         location,
-        scope: scope || undefined,
         creationMode: "manual",
         packageName: `${title} Manual Quote`,
-        summary: scope || "Manual quote created from scratch.",
       });
 
       router.push(`/projects/${result.project.id}?tab=estimate`);
@@ -352,11 +456,6 @@ export function QuotesList({ projects, users = [], departments = [] }: {
 
     return list;
   }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir, userMap]);
-
-  const totalValue = projectsWithQuotes.reduce((sum, p) => sum + (p.latestRevision?.subtotal ?? 0), 0);
-  const avgMargin = projectsWithQuotes.length > 0
-    ? projectsWithQuotes.reduce((sum, p) => sum + (p.latestRevision?.estimatedMargin ?? 0), 0) / projectsWithQuotes.length
-    : 0;
 
   const headers: { key: SortKey; label: string; className?: string }[] = [
     { key: "quoteNumber", label: "Quote #", className: "w-28" },
@@ -449,15 +548,77 @@ export function QuotesList({ projects, users = [], departments = [] }: {
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block space-y-1.5">
+              <div className="space-y-1.5">
                 <span className="text-xs font-medium text-fg/65">Client</span>
-                <Input
-                  value={manualClient}
-                  onChange={(event) => setManualClient(event.target.value)}
-                  placeholder="Unassigned Client"
-                  disabled={manualSaving}
-                />
-              </label>
+                {quickAddOpen ? (
+                  <div className="flex gap-1.5">
+                    <Input
+                      value={quickAddName}
+                      onChange={(event) => setQuickAddName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleQuickAddCustomer();
+                        }
+                      }}
+                      placeholder="New client name"
+                      autoFocus
+                      disabled={quickAddSaving}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="accent"
+                      onClick={handleQuickAddCustomer}
+                      disabled={quickAddSaving || !quickAddName.trim()}
+                    >
+                      {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setQuickAddOpen(false);
+                        setQuickAddName("");
+                      }}
+                      disabled={quickAddSaving}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-1.5">
+                    <div className="flex-1">
+                      <StyledSelect
+                        value={manualCustomerId}
+                        onValueChange={setManualCustomerId}
+                        placeholder="Select client..."
+                        disabled={manualSaving}
+                      >
+                        {manualCustomerOptions
+                          .filter((c) => c.active)
+                          .map((c) => (
+                            <StyledSelectItem key={c.id} value={c.id}>
+                              {c.name}
+                              {c.shortName ? ` (${c.shortName})` : ""}
+                            </StyledSelectItem>
+                          ))}
+                      </StyledSelect>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setQuickAddOpen(true)}
+                      disabled={manualSaving}
+                      title="Add new client"
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
+                )}
+              </div>
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-fg/65">Location</span>
                 <Input
@@ -468,16 +629,6 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                 />
               </label>
             </div>
-            <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-fg/65">Scope notes</span>
-              <Textarea
-                value={manualScope}
-                onChange={(event) => setManualScope(event.target.value)}
-                placeholder="Optional starting scope, assumptions, or bid notes..."
-                disabled={manualSaving}
-                className="min-h-24"
-              />
-            </label>
             {manualError && (
               <div className="rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
                 {manualError}
@@ -495,30 +646,6 @@ export function QuotesList({ projects, users = [], departments = [] }: {
           </div>
         </form>
       </ModalBackdrop>
-
-      {/* Summary stats */}
-      <FadeIn delay={0.05}>
-        <div className="grid grid-cols-3 gap-4">
-          <Card>
-            <div className="px-5 py-4">
-              <p className="text-xs text-fg/50">Total Quotes</p>
-              <p className="mt-1 text-xl font-semibold text-fg">{projectsWithQuotes.length}</p>
-            </div>
-          </Card>
-          <Card>
-            <div className="px-5 py-4">
-              <p className="text-xs text-fg/50">Total Value</p>
-              <p className="mt-1 text-xl font-semibold text-fg">{formatMoney(totalValue)}</p>
-            </div>
-          </Card>
-          <Card>
-            <div className="px-5 py-4">
-              <p className="text-xs text-fg/50">Avg Margin</p>
-              <p className="mt-1 text-xl font-semibold text-fg">{formatPercent(avgMargin)}</p>
-            </div>
-          </Card>
-        </div>
-      </FadeIn>
 
       {/* Filter bar */}
       <FadeIn delay={0.1}>
