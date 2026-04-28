@@ -37,7 +37,9 @@ jobs:
           theme: auto
           style: compact
           # Public README — show structure, not judgment.
-          show-grade: false
-          show-score: false
-          # Flip to true to enable thermal-receipt PR comments on every merge.
-          receipts: false
+          # Booleans are quoted: GitHub Actions silently drops bare YAML
+          # `false` for inputs with a string default in action.yml.
+          show-grade: 'false'
+          show-score: 'false'
+          # Flip to 'true' to enable thermal-receipt PR comments on every merge.
+          receipts: 'false'
