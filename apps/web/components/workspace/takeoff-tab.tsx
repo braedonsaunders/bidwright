@@ -2221,6 +2221,11 @@ export function TakeoffTab({
       : suggestion.name;
 
     try {
+      // Forward the catalog or rate-schedule reference so server-side
+      // validation passes — rate-schedule-backed categories (Labour by
+      // default) require rateScheduleItemId, and catalog-backed
+      // categories require itemId. Without these the create-item
+      // endpoint rejects with 400 and the Add action silently fails.
       const result = await createWorksheetItem(projectId, targetWs.id, {
         category,
         entityType: category,
@@ -2235,6 +2240,9 @@ export function TakeoffTab({
         unit2: 0,
         unit3: 0,
         sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
+        ...(suggestion.kind === "rateScheduleItem"
+          ? { rateScheduleItemId: suggestion.id }
+          : { itemId: suggestion.id }),
       });
 
       const newItems = result?.workspace?.worksheets
