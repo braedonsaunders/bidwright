@@ -1087,10 +1087,9 @@ function SummarySourceRow({
       </td>
       <td className="px-3 py-2">
         <div className="font-medium text-fg/80">{source?.label ?? "Missing source"}</div>
-        <div className="mt-1 text-[11px] text-fg/45">{DIMENSION_LABELS[dimension]} total</div>
-      </td>
-      <td className="px-3 py-2 text-[11px] text-fg/55">
-        Auto-linked to the current {DIMENSION_LABELS[dimension].toLowerCase()} structure so it stays in sync as the estimate changes.
+        <div className="mt-1 text-[11px] text-fg/45">
+          Auto-linked to the current {DIMENSION_LABELS[dimension].toLowerCase()} structure
+        </div>
       </td>
       <MetricCell value={formatMoney(source?.value ?? 0)} />
       <MetricCell value={formatMoney(source?.cost ?? 0)} />
@@ -1098,7 +1097,6 @@ function SummarySourceRow({
       <td className="px-3 py-2 text-right">
         <IconToggleButton active={row.visible} onClick={() => onUpdateRow(row.key, { visible: !row.visible })} disabled={busy} />
       </td>
-      <td className="px-3 py-2" />
     </tr>
   );
 }

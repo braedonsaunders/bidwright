@@ -565,6 +565,9 @@ export function EstimateGrid({
   const [editValue, setEditValue] = useState("");
   const editInputRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null>(null);
 
+  // Selected cell (for keyboard navigation when not editing)
+  const [selectedCell, setSelectedCell] = useState<{ rowId: string; column: EditableColumn } | null>(null);
+
   // Entity dropdown state
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
@@ -1140,6 +1143,8 @@ export function EstimateGrid({
     if (column === "entityName") {
       setEntityDropdownRowId(rowId);
       setEntitySearchTerm("");
+      setSelectedCell({ rowId, column });
+      setSelectedRowId(rowId);
       return;
     }
 
@@ -1151,6 +1156,7 @@ export function EstimateGrid({
     }
 
     setEditingCell({ rowId, column });
+    setSelectedCell({ rowId, column });
     setEditValue(val);
     setSelectedRowId(rowId);
 
@@ -1302,45 +1308,130 @@ export function EstimateGrid({
     }
   }
 
+  // ─── Selected-cell movement (no edit mode) ───
+  function moveSelectedCell(dir: "up" | "down" | "left" | "right") {
+    if (!selectedCell) return;
+    const { rowId, column } = selectedCell;
+    const row = visibleRows.find((r) => r.id === rowId);
+    if (!row) return;
+    const catDef = findCategoryForRow(row, entityCategories);
+
+    if (dir === "left" || dir === "right") {
+      const colIdx = EDITABLE_COLUMNS_ORDER.indexOf(column);
+      const step = dir === "right" ? 1 : -1;
+      for (let i = colIdx + step; i >= 0 && i < EDITABLE_COLUMNS_ORDER.length; i += step) {
+        const c = EDITABLE_COLUMNS_ORDER[i];
+        if (!isCellDisabledByCategory(catDef, c)) {
+          setSelectedCell({ rowId, column: c });
+          return;
+        }
+      }
+      return;
+    }
+
+    // up / down: same column, prev/next visible row whose column is editable
+    const rowIdx = visibleRows.indexOf(row);
+    const step = dir === "down" ? 1 : -1;
+    for (let i = rowIdx + step; i >= 0 && i < visibleRows.length; i += step) {
+      const candidate = visibleRows[i];
+      const candCat = findCategoryForRow(candidate, entityCategories);
+      if (!isCellDisabledByCategory(candCat, column)) {
+        setSelectedCell({ rowId: candidate.id, column });
+        setSelectedRowId(candidate.id);
+        return;
+      }
+    }
+  }
+
+  // ─── Document-level keyboard nav when a cell is selected but not editing ───
+  useEffect(() => {
+    if (!selectedCell || editingCell) return;
+    if (entityDropdownRowId) return; // entity picker handles its own keys
+    const handler = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // Don't intercept when the user is typing in any editable surface
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+        return;
+      }
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          moveSelectedCell("down");
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          moveSelectedCell("up");
+          return;
+        case "ArrowLeft":
+          e.preventDefault();
+          moveSelectedCell("left");
+          return;
+        case "ArrowRight":
+        case "Tab":
+          e.preventDefault();
+          moveSelectedCell(e.shiftKey ? "left" : "right");
+          return;
+        case "Enter":
+        case "F2": {
+          e.preventDefault();
+          const row = visibleRows.find((r) => r.id === selectedCell.rowId);
+          if (!row) return;
+          const rawVal = getEditableValue(row, selectedCell.column);
+          startEditing(selectedCell.rowId, selectedCell.column, rawVal as string | number);
+          return;
+        }
+        case "Escape":
+          e.preventDefault();
+          setSelectedCell(null);
+          return;
+      }
+      // Printable single char → enter edit mode and let the input replace value
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const row = visibleRows.find((r) => r.id === selectedCell.rowId);
+        if (!row) return;
+        const rawVal = getEditableValue(row, selectedCell.column);
+        startEditing(selectedCell.rowId, selectedCell.column, rawVal as string | number);
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [selectedCell, editingCell, entityDropdownRowId, visibleRows, entityCategories]);
+
+  // Scroll the selected cell into view when it changes (without editing)
+  useEffect(() => {
+    if (!selectedCell || editingCell) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-cell-row="${selectedCell.rowId}"][data-cell-col="${selectedCell.column}"]`,
+    );
+    el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [selectedCell, editingCell]);
+
+  // Clear selection if its row disappears
+  useEffect(() => {
+    if (!selectedCell) return;
+    if (!visibleRows.some((r) => r.id === selectedCell.rowId)) setSelectedCell(null);
+  }, [visibleRows, selectedCell]);
+
   function handleCellKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (!editingCell) return;
+    if (e.key === "Enter") {
+      // Commit and keep this cell selected (no auto-advance) — Tab moves on
       e.preventDefault();
-      if (editingCell) {
-        const { rowId, column } = editingCell;
-        commitEdit();
-        // Move down to same column in next row
-        const rowIdx = visibleRows.findIndex((r) => r.id === rowId);
-        if (rowIdx >= 0 && rowIdx < visibleRows.length - 1) {
-          const nextRow = visibleRows[rowIdx + 1];
-          const rawVal = getEditableValue(nextRow, column);
-          setTimeout(() => startEditing(nextRow.id, column, rawVal as string | number), 0);
-        }
-      }
-    } else if (e.key === "Enter" && e.shiftKey) {
-      e.preventDefault();
-      if (editingCell) {
-        const { rowId, column } = editingCell;
-        commitEdit();
-        // Move up to same column in previous row
-        const rowIdx = visibleRows.findIndex((r) => r.id === rowId);
-        if (rowIdx > 0) {
-          const prevRow = visibleRows[rowIdx - 1];
-          const rawVal = getEditableValue(prevRow, column);
-          setTimeout(() => startEditing(prevRow.id, column, rawVal as string | number), 0);
-        }
-      }
+      const { rowId, column } = editingCell;
+      commitEdit();
+      setSelectedCell({ rowId, column });
     } else if (e.key === "Escape") {
+      const { rowId, column } = editingCell;
       cancelEdit();
+      setSelectedCell({ rowId, column });
     } else if (e.key === "Tab") {
       e.preventDefault();
-      if (editingCell) {
-        const { rowId, column } = editingCell;
-        commitEdit();
-        if (e.shiftKey) {
-          setTimeout(() => retreatToPrevCell(rowId, column), 0);
-        } else {
-          setTimeout(() => advanceToNextCell(rowId, column), 0);
-        }
+      const { rowId, column } = editingCell;
+      commitEdit();
+      if (e.shiftKey) {
+        setTimeout(() => retreatToPrevCell(rowId, column), 0);
+      } else {
+        setTimeout(() => advanceToNextCell(rowId, column), 0);
       }
     }
   }
@@ -2179,16 +2270,21 @@ export function EstimateGrid({
     // Entity name cell - show dropdown trigger
     if (column === "entityName") {
       const isDropdownOpen = entityDropdownRowId === row.id;
+      const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === "entityName";
       return (
         <td
           ref={isDropdownOpen ? entityCellRef : undefined}
+          data-cell-row={row.id}
+          data-cell-col="entityName"
           className={cn(
             "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors",
             "hover:bg-accent/5",
+            isSelected && !isDropdownOpen && "ring-1 ring-inset ring-accent/60 bg-accent/5",
             className
           )}
           onClick={(e) => {
             e.stopPropagation();
+            setSelectedCell({ rowId: row.id, column: "entityName" });
             if (isDropdownOpen) {
               setEntityDropdownRowId(null);
               setEntityDropdownPos(null);
@@ -2307,10 +2403,21 @@ export function EstimateGrid({
                       } else if (e.key === "End") {
                         e.preventDefault();
                         if (len > 0) setEntityHighlightIdx(len - 1);
-                      } else if (e.key === "Enter" || e.key === "Tab") {
+                      } else if (e.key === "Enter") {
                         if (len === 0) return;
                         e.preventDefault();
                         selectFlatItem(entityHighlightIdx);
+                      } else if (e.key === "Tab") {
+                        if (len === 0) return;
+                        e.preventDefault();
+                        const advancing = !e.shiftKey;
+                        const targetRowId = row.id;
+                        selectFlatItem(entityHighlightIdx);
+                        // After selecting, hop to the next/prev editable cell
+                        setTimeout(() => {
+                          if (advancing) advanceToNextCell(targetRowId, "entityName");
+                          else retreatToPrevCell(targetRowId, "entityName");
+                        }, 0);
                       }
                     }}
                   />
@@ -2368,17 +2475,22 @@ export function EstimateGrid({
       );
     }
 
+    const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === column;
     return (
       <td
+        data-cell-row={row.id}
+        data-cell-col={column}
         className={cn(
-          "border-b border-line px-2 py-2 text-xs transition-colors",
+          "border-b border-line px-2 py-2 text-xs transition-colors relative",
           disabled
             ? "bg-surface/50 cursor-not-allowed"
             : "cursor-pointer hover:bg-accent/5",
+          isSelected && !disabled && "ring-1 ring-inset ring-accent/60 bg-accent/5",
           className
         )}
         onClick={(e) => {
           e.stopPropagation();
+          setSelectedCell({ rowId: row.id, column });
           if (!disabled) {
             const raw = getEditableValue(row, column);
             startEditing(row.id, column, raw as string | number);
