@@ -1990,8 +1990,10 @@ export async function deleteRateScheduleTier(scheduleId: string, tierId: string)
 }
 
 export async function addRateScheduleItem(scheduleId: string, input: {
-  name: string; code?: string; unit?: string; rates?: Record<string, number>;
-  costRates?: Record<string, number>; catalogItemId?: string; sortOrder?: number;
+  catalogItemId: string;
+  rates?: Record<string, number>;
+  costRates?: Record<string, number>;
+  sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items`, {
     method: "POST",
@@ -2001,8 +2003,8 @@ export async function addRateScheduleItem(scheduleId: string, input: {
 }
 
 export async function updateRateScheduleItem(scheduleId: string, itemId: string, patch: {
-  name?: string; code?: string; unit?: string; rates?: Record<string, number>;
-  sortOrder?: number; travelPolicyId?: string;
+  rates?: Record<string, number>;
+  sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items/${itemId}`, {
     method: "PATCH",

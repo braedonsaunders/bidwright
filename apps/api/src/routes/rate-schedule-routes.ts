@@ -95,11 +95,22 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { id } = request.params as { id: string };
       const body = request.body as {
-        name: string; code?: string; unit?: string;
+        catalogItemId?: string;
         rates?: Record<string, number>; costRates?: Record<string, number>;
-        burden?: number; perDiem?: number; catalogItemId?: string; sortOrder?: number;
+        burden?: number; perDiem?: number; sortOrder?: number;
       };
-      return await request.store!.createRateScheduleItem(id, body);
+      if (!body.catalogItemId) {
+        reply.code(400);
+        return { error: "catalogItemId is required — items must be linked to a catalog item." };
+      }
+      return await request.store!.createRateScheduleItem(id, {
+        catalogItemId: body.catalogItemId,
+        rates: body.rates,
+        costRates: body.costRates,
+        burden: body.burden,
+        perDiem: body.perDiem,
+        sortOrder: body.sortOrder,
+      });
     } catch (e: any) {
       reply.code(e.message?.includes("not found") ? 404 : 500);
       return { error: e.message ?? "Internal error" };

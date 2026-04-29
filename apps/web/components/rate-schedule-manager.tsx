@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
-import type { RateSchedule, CatalogSummary } from "@/lib/api";
+import type { RateSchedule, CatalogSummary, EntityCategory } from "@/lib/api";
 import {
   createRateSchedule,
   deleteRateSchedule,
@@ -32,6 +32,7 @@ import {
   deleteRateScheduleItem,
   autoCalculateRateSchedule,
   getCatalogs,
+  getEntityCategories,
   listCatalogItems,
 } from "@/lib/api";
 import {
@@ -49,19 +50,31 @@ import { CatalogItemPicker, type CatalogPickerItem } from "@/components/shared/c
 
 /* ─── Constants ─── */
 
-const CATEGORIES = [
-  { value: "labour", label: "Labour" },
-  { value: "equipment", label: "Equipment" },
-  { value: "materials", label: "Materials" },
-  { value: "general", label: "General" },
-] as const;
+type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
 
-const CATEGORY_BADGE: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
+const FALLBACK_TONES: Record<string, BadgeTone> = {
   labour: "info",
   equipment: "warning",
   materials: "success",
   general: "default",
 };
+
+function categoryBadgeProps(
+  category: string,
+  categories: EntityCategory[],
+): { style?: React.CSSProperties; tone?: BadgeTone } {
+  const ec = categories.find((c) => c.name.toLowerCase() === category.toLowerCase());
+  if (ec?.color) {
+    return {
+      style: {
+        borderColor: ec.color,
+        backgroundColor: `${ec.color}1A`,
+        color: ec.color,
+      },
+    };
+  }
+  return { tone: FALLBACK_TONES[category.toLowerCase()] ?? "default" };
+}
 
 /* ─── Types ─── */
 
@@ -126,9 +139,25 @@ export function RateScheduleManager({
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
 
-  // New schedule form
-  const [showCreate, setShowCreate] = useState(false);
-  const [newForm, setNewForm] = useState({ name: "", category: "labour", description: "" });
+  // Entity categories (dynamic)
+  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
+  useEffect(() => {
+    getEntityCategories()
+      .then((cats) => setEntityCategories(cats))
+      .catch(() => {});
+  }, []);
+  const categoryOptions = useMemo(
+    () =>
+      entityCategories
+        .filter((c) => c.enabled)
+        .sort((a, b) => a.order - b.order)
+        .map((c) => ({ value: c.name, label: c.name })),
+    [entityCategories],
+  );
+
+  // Create-new mode (uses the same drawer as edit)
+  const [isCreating, setIsCreating] = useState(false);
+  const [creatingSaving, setCreatingSaving] = useState(false);
 
   // Inline editing
   const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string } | null>(null);
@@ -172,6 +201,7 @@ export function RateScheduleManager({
     setShowAddTier(false);
     setShowAddItem(false);
     setEditingHeader(false);
+    setIsCreating(false);
     try {
       const full = await getRateSchedule(id);
       setDetail(full);
@@ -184,22 +214,41 @@ export function RateScheduleManager({
 
   /* ─── Schedule CRUD ─── */
 
+  const startCreate = useCallback(() => {
+    const fallbackCategory = categoryOptions[0]?.value ?? "";
+    setSelectedId(null);
+    setDetail(null);
+    setIsCreating(true);
+    setEditingHeader(true);
+    setHeaderForm({
+      name: "",
+      description: "",
+      category: fallbackCategory,
+      defaultMarkup: 0,
+    });
+  }, [categoryOptions]);
+
   const handleCreate = useCallback(async () => {
-    if (!newForm.name.trim()) return;
+    const name = headerForm.name.trim();
+    if (!name) return;
+    setCreatingSaving(true);
     try {
       const created = await createRateSchedule({
-        name: newForm.name.trim(),
-        category: newForm.category,
-        description: newForm.description,
+        name,
+        category: headerForm.category,
+        description: headerForm.description,
+        defaultMarkup: headerForm.defaultMarkup,
       });
       setSchedules((prev) => [...prev, created]);
-      setNewForm({ name: "", category: "labour", description: "" });
-      setShowCreate(false);
+      setIsCreating(false);
+      setEditingHeader(false);
       loadDetail(created.id);
     } catch (err) {
       console.error("Failed to create schedule:", err);
+    } finally {
+      setCreatingSaving(false);
     }
-  }, [newForm, setSchedules, loadDetail]);
+  }, [headerForm, setSchedules, loadDetail]);
 
   const handleDelete = useCallback(
     async (id: string) => {
@@ -300,13 +349,10 @@ export function RateScheduleManager({
   /* ─── Item CRUD ─── */
 
   const handleAddItem = useCallback(async () => {
-    if (!detail || !newItemForm.name.trim()) return;
+    if (!detail || !newItemForm.catalogItemId) return;
     try {
       const updated = await addRateScheduleItem(detail.id, {
-        name: newItemForm.name.trim(),
-        code: newItemForm.code.trim(),
-        unit: newItemForm.unit,
-        catalogItemId: newItemForm.catalogItemId ?? undefined,
+        catalogItemId: newItemForm.catalogItemId,
       });
       setDetail(updated);
       setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null });
@@ -386,7 +432,7 @@ export function RateScheduleManager({
                                                Manage your organization's master rate library. Import these into projects.
               </p>
             </div>
-            <Button variant="accent" size="xs" onClick={() => setShowCreate(true)}>
+            <Button variant="accent" size="xs" onClick={startCreate}>
               <Plus className="h-3.5 w-3.5" />
               New Schedule
             </Button>
@@ -394,52 +440,16 @@ export function RateScheduleManager({
         </Card>
       </FadeIn>
 
-      {/* Create form */}
-      <AnimatePresence>
-        {showCreate && (
-          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-            <Card>
-              <CardHeader><CardTitle>New Rate Schedule</CardTitle></CardHeader>
-              <div className="px-5 pb-5 space-y-3">
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="col-span-2">
-                    <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
-                    <Input className="mt-1" value={newForm.name} onChange={(e) => setNewForm({ ...newForm, name: e.target.value })} placeholder="e.g. Mechanical Labour Rates" onKeyDown={(e) => e.key === "Enter" && handleCreate()} />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                    <Select
-                      className="mt-1"
-                      value={newForm.category}
-                      onValueChange={(v) => setNewForm({ ...newForm, category: v })}
-                      options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Description</label>
-                  <Input className="mt-1" value={newForm.description} onChange={(e) => setNewForm({ ...newForm, description: e.target.value })} placeholder="Optional description" />
-                </div>
-                <div className="flex gap-2 justify-end">
-                  <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-                  <Button size="sm" onClick={handleCreate} disabled={!newForm.name.trim()}>Create</Button>
-                </div>
-              </div>
-            </Card>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Toolbar: search + filter */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1 max-w-xs">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
           <Input className="pl-8 text-xs h-8" placeholder="Search schedules..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <div className="flex items-center gap-1">
-          {[{ value: "", label: "All" }, ...CATEGORIES].map((c) => (
+        <div className="flex items-center gap-1 flex-wrap">
+          {[{ value: "", label: "All" }, ...categoryOptions].map((c) => (
             <button
-              key={c.value}
+              key={c.value || "__all__"}
               onClick={() => setCategoryFilter(c.value === categoryFilter ? "" : c.value)}
               className={cn(
                 "px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors",
@@ -473,7 +483,7 @@ export function RateScheduleManager({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-fg truncate">{schedule.name}</span>
-                    <Badge tone={CATEGORY_BADGE[schedule.category] ?? "default"} className="text-[10px] shrink-0">{schedule.category}</Badge>
+                    <Badge {...categoryBadgeProps(schedule.category, entityCategories)} className="text-[10px] shrink-0">{schedule.category}</Badge>
                   </div>
                   {schedule.description && <p className="text-xs text-fg/40 mt-0.5 truncate">{schedule.description}</p>}
                 </div>
@@ -494,10 +504,10 @@ export function RateScheduleManager({
         )}
       </Card>
 
-      {/* ── Edit Drawer (portalled to body to escape FadeIn transform) ── */}
+      {/* ── Edit / Create Drawer (portalled to body to escape FadeIn transform) ── */}
       {typeof document !== "undefined" && ReactDOM.createPortal(
       <AnimatePresence>
-        {selectedId && detail && (
+        {(isCreating || (selectedId && detail)) && (
           <motion.div
             key="rate-schedule-drawer"
             initial={{ x: 560 }}
@@ -507,12 +517,26 @@ export function RateScheduleManager({
             className="fixed inset-y-0 right-0 z-40 w-[560px] bg-panel border-l border-line shadow-2xl flex flex-col"
           >
             {/* Drawer header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-line bg-panel2/40">
               {editingHeader ? (
                 <div className="flex-1 space-y-3">
+                  {isCreating && (
+                    <p className="text-[11px] font-semibold text-fg/55 uppercase tracking-wider">New Rate Schedule</p>
+                  )}
                   <div>
                     <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
-                    <Input className="mt-1 text-sm font-medium" value={headerForm.name} onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })} />
+                    <Input
+                      className="mt-1 text-sm font-medium"
+                      autoFocus={isCreating}
+                      value={headerForm.name}
+                      onChange={(e) => setHeaderForm({ ...headerForm, name: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && headerForm.name.trim()) {
+                          isCreating ? handleCreate() : handleUpdateHeader();
+                        }
+                      }}
+                      placeholder="e.g. Mechanical Labour Rates"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -521,7 +545,11 @@ export function RateScheduleManager({
                         className="mt-1"
                         value={headerForm.category}
                         onValueChange={(v) => setHeaderForm({ ...headerForm, category: v })}
-                        options={CATEGORIES.map((c) => ({ value: c.value, label: c.label }))}
+                        options={
+                          categoryOptions.length > 0
+                            ? categoryOptions
+                            : [{ value: headerForm.category, label: headerForm.category || "—" }]
+                        }
                       />
                     </div>
                     <div>
@@ -534,22 +562,42 @@ export function RateScheduleManager({
                     <Input className="mt-1 text-xs" value={headerForm.description} onChange={(e) => setHeaderForm({ ...headerForm, description: e.target.value })} placeholder="Optional description" />
                   </div>
                   <div className="flex gap-2 justify-end pt-1">
-                    <Button size="xs" variant="ghost" onClick={() => setEditingHeader(false)}>Cancel</Button>
-                    <Button size="xs" onClick={handleUpdateHeader}>Save</Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => {
+                        if (isCreating) {
+                          setIsCreating(false);
+                          setEditingHeader(false);
+                        } else {
+                          setEditingHeader(false);
+                        }
+                      }}
+                      disabled={creatingSaving}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="xs"
+                      onClick={isCreating ? handleCreate : handleUpdateHeader}
+                      disabled={!headerForm.name.trim() || creatingSaving}
+                    >
+                      {isCreating ? (creatingSaving ? "Creating…" : "Create") : "Save"}
+                    </Button>
                   </div>
                 </div>
               ) : (
                 <>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-semibold text-fg truncate">{detail.name}</h2>
-                      <Badge tone={CATEGORY_BADGE[detail.category] ?? "default"} className="text-[10px]">{detail.category}</Badge>
+                      <h2 className="text-sm font-semibold text-fg truncate">{detail!.name}</h2>
+                      <Badge {...categoryBadgeProps(detail!.category, entityCategories)} className="text-[10px]">{detail!.category}</Badge>
                     </div>
-                    {detail.description && <p className="text-xs text-fg/40 mt-0.5">{detail.description}</p>}
-                    <p className="text-[10px] text-fg/30 mt-0.5">Markup: {detail.defaultMarkup}%</p>
+                    {detail!.description && <p className="text-xs text-fg/40 mt-0.5">{detail!.description}</p>}
+                    <p className="text-[10px] text-fg/30 mt-0.5">Markup: {detail!.defaultMarkup}%</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setHeaderForm({ name: detail.name, description: detail.description ?? "", category: detail.category, defaultMarkup: detail.defaultMarkup }); setEditingHeader(true); }} title="Edit">
+                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setHeaderForm({ name: detail!.name, description: detail!.description ?? "", category: detail!.category, defaultMarkup: detail!.defaultMarkup }); setEditingHeader(true); }} title="Edit">
                       <Edit3 className="h-3.5 w-3.5" />
                     </button>
                     <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setSelectedId(null); setDetail(null); }} title="Close">
@@ -562,7 +610,11 @@ export function RateScheduleManager({
 
             {/* Drawer body */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              {loadingDetail ? (
+              {isCreating ? (
+                <div className="flex items-center justify-center py-12 text-center text-xs text-fg/40">
+                  Save the schedule to start adding tiers and items.
+                </div>
+              ) : loadingDetail || !detail ? (
                 <div className="flex items-center justify-center py-12 text-xs text-fg/30">Loading...</div>
               ) : (
                 <>
@@ -702,30 +754,27 @@ export function RateScheduleManager({
                         <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
                           <div className="flex items-end gap-2 mt-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
                             <div className="flex-1 min-w-0">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Item</label>
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Catalog item</label>
                               <div className="mt-1">
                                 {loadedCatalogs.length > 0 ? (
-                                  <CatalogItemPicker catalogs={loadedCatalogs} value={newItemForm.catalogItemId} onSelect={handlePickerSelect} allowFreeText freeTextValue={newItemForm.catalogItemId ? "" : newItemForm.name} onFreeTextChange={(val) => setNewItemForm({ ...newItemForm, name: val, catalogItemId: null })} placeholder="Search catalog items or type to add..." />
+                                  <CatalogItemPicker
+                                    catalogs={loadedCatalogs}
+                                    value={newItemForm.catalogItemId}
+                                    onSelect={handlePickerSelect}
+                                    placeholder="Search catalog items..."
+                                  />
                                 ) : (
-                                  <Input className="h-8 text-xs" value={newItemForm.name} onChange={(e) => setNewItemForm({ ...newItemForm, name: e.target.value })} placeholder="e.g. Journeyman Pipefitter" onKeyDown={(e) => e.key === "Enter" && handleAddItem()} />
+                                  <p className="text-[11px] text-fg/40">No catalog items loaded — add items to a catalog first.</p>
                                 )}
                               </div>
+                              {newItemForm.catalogItemId && (
+                                <p className="mt-1 text-[10px] text-fg/40">
+                                  {newItemForm.code && <span className="font-mono mr-1">{newItemForm.code}</span>}
+                                  {newItemForm.name} · {newItemForm.unit}
+                                </p>
+                              )}
                             </div>
-                            <div className="w-20">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Code</label>
-                              <Input className="mt-1 h-8 text-xs" value={newItemForm.code} onChange={(e) => setNewItemForm({ ...newItemForm, code: e.target.value })} placeholder="JP-01" />
-                            </div>
-                            <div className="w-16">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Unit</label>
-                              <Select
-                                className="mt-1 h-8 text-xs"
-                                size="sm"
-                                value={newItemForm.unit}
-                                onValueChange={(v) => setNewItemForm({ ...newItemForm, unit: v })}
-                                options={["HR", "DAY", "WK", "MO", "EA", "LF", "FT", "SF", "SY", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG"].map((u) => ({ value: u, label: u }))}
-                              />
-                            </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.name.trim()}>Add</Button>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
                             <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
                           </div>
                         </motion.div>

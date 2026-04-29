@@ -642,7 +642,7 @@ export interface RateScheduleTier {
 export interface RateScheduleItem {
   id: string;
   scheduleId: string;
-  catalogItemId: string | null;
+  catalogItemId: string;
   code: string;
   name: string;
   unit: string;

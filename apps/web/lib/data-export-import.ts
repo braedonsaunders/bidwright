@@ -934,6 +934,28 @@ export async function importAllDataManagement(
       existingByName = new Map(existing.filter((s) => (s as any).scope === "global" || !(s as any).scope).map((s) => [s.name, s]));
     }
 
+    // Build catalog item name → id lookup. Items must be linked to a catalog row.
+    const catalogItemNameToId = new Map<string, string>();
+    try {
+      const allCatalogs = await getCatalogs();
+      for (const cat of allCatalogs) {
+        const catItems = await listCatalogItems(cat.id);
+        for (const ci of catItems) {
+          if (ci.name) catalogItemNameToId.set(ci.name, ci.id);
+        }
+      }
+    } catch (e: any) {
+      errors.push(`Could not load catalogs for rate-schedule item linking: ${e.message}`);
+    }
+    function resolveCatalogId(itemName: string, scheduleName: string): string | null {
+      const id = catalogItemNameToId.get(itemName);
+      if (!id) {
+        errors.push(`Rate Item "${itemName}" in "${scheduleName}": no matching catalog item — skipped.`);
+        return null;
+      }
+      return id;
+    }
+
     for (const rs of data.rateSchedules ?? []) {
       try {
         const { tiers, items, travelPolicyName, ...rsData } = rs;
@@ -1010,7 +1032,10 @@ export async function importAllDataManagement(
             try {
               const mappedRates = remapRates(item.rates ?? {}, tierNameToId);
               const mappedCostRates = remapRates(item.costRates ?? item.rates ?? {}, tierNameToId);
-              await addRateScheduleItem(match.id, { code: item.code, name: item.name, unit: item.unit, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+              const catId = resolveCatalogId(item.name, rs.name);
+              if (catId) {
+                await addRateScheduleItem(match.id, { catalogItemId: catId, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+              }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
           }
           if (travelPolicyId) {
@@ -1037,7 +1062,10 @@ export async function importAllDataManagement(
             try {
               const mappedRates = remapRates(item.rates ?? {}, tierNameToId);
               const mappedCostRates = remapRates(item.costRates ?? item.rates ?? {}, tierNameToId);
-              await addRateScheduleItem(result.id, { code: item.code, name: item.name, unit: item.unit, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+              const catId = resolveCatalogId(item.name, rs.name);
+              if (catId) {
+                await addRateScheduleItem(result.id, { catalogItemId: catId, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+              }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
           }
           if (travelPolicyId) {
