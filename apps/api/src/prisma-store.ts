@@ -1803,23 +1803,10 @@ export class PrismaApiStore {
   }
 
   private normalizeEstimateCategory(value: string | null | undefined, entityType?: string | null | undefined) {
+    // Categories are dynamically configured per organization. Trim and fall back
+    // to entityType, then "Uncategorized" if both are blank.
     const trimmed = typeof value === "string" ? value.trim() : "";
     const trimmedEntityType = typeof entityType === "string" ? entityType.trim() : "";
-    const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
-
-    if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
-      return "Material";
-    }
-    if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
-      return "Labour";
-    }
-    if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
-      return "Subcontractors";
-    }
-    if (candidates.some((candidate) => candidate === "rental equipment")) {
-      return "Rental Equipment";
-    }
-
     return trimmed || trimmedEntityType || "Uncategorized";
   }
 
@@ -1831,9 +1818,13 @@ export class PrismaApiStore {
     unit2?: number | null;
     unit3?: number | null;
     tierUnits?: Record<string, number> | null;
+    rateScheduleItemId?: string | null;
   }) {
-    const category = this.normalizeEstimateCategory(item.category, item.entityType);
-    if (category !== "Labour") {
+    // Hours roll up only from rate-schedule-linked items (tier unit breakdown);
+    // any other category contributes zero hours.
+    const hasTierUnits = !!item.tierUnits && Object.keys(item.tierUnits).length > 0;
+    const linkedToSchedule = !!item.rateScheduleItemId;
+    if (!hasTierUnits && !linkedToSchedule) {
       return 0;
     }
 

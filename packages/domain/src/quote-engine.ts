@@ -140,9 +140,13 @@ export function computeItemCost(item: WorksheetItem) {
 }
 
 function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
-  const category = normalizeCategoryName(item.category, item.entityType);
-
-  if (category !== "Labour") {
+  // Items contribute to the labour-hours rollup only when their rate-schedule
+  // tier breakdown is populated. Material / Subcontractor / Equipment etc.
+  // never have tierUnits, so they short-circuit to zero — no hardcoded
+  // category-name check required.
+  const hasTierUnits = !!item.tierUnits && Object.keys(item.tierUnits).length > 0;
+  const linkedToSchedule = !!item.rateScheduleItemId;
+  if (!hasTierUnits && !linkedToSchedule) {
     return {
       unit1: 0,
       unit2: 0,

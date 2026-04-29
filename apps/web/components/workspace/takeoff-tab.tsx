@@ -78,6 +78,7 @@ import {
   deleteModelTakeoffLink,
   deleteWorksheetItem,
   createWorksheetItem,
+  getEntityCategories,
   listModelTakeoffLinks,
   queryModelElements,
   listModelAssets,
@@ -90,6 +91,7 @@ import {
   suggestLineItemsForAnnotation,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
+  type EntityCategory,
   type LegendEntryRecord,
   type LineItemSuggestionRecord,
   type WorkspaceStateRecord,
@@ -607,6 +609,24 @@ export function TakeoffTab({
     workspace.worksheets[0] ??
     null;
   const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
+
+  // Org-configured categories. Used to pick a sensible default when creating
+  // line items from takeoff annotations / agent suggestions, instead of
+  // hardcoding "Material" or "Labour" — those names belong to the org.
+  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getEntityCategories()
+      .then((cats) => { if (!cancelled) setEntityCategories(cats); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const defaultCategory = useMemo(() => {
+    return entityCategories.filter((c) => c.enabled).slice().sort((a, b) => a.order - b.order)[0];
+  }, [entityCategories]);
+  const rateScheduleCategory = useMemo(() => {
+    return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
+  }, [entityCategories]);
 
   /* Project source documents that are PDFs or CAD files */
   const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
@@ -2150,9 +2170,14 @@ export function TakeoffTab({
       const uom = uomMap[unit] ?? unit;
 
       const qty = ann.measurement.value ?? 0;
+      if (!defaultCategory) {
+        setToastType("error");
+        setToastMessage("Configure at least one entity category in Settings before adding takeoff lines.");
+        return;
+      }
       const result = await createWorksheetItem(projectId, targetWs.id, {
-        category: "Material",
-        entityType: "Material",
+        category: defaultCategory.name,
+        entityType: defaultCategory.entityType,
         entityName: ann.label || `${ann.type} Measurement`,
         description: "",
         quantity: qty,
@@ -2215,7 +2240,16 @@ export function TakeoffTab({
         ? suggestion.recommendedQuantity
         : ann.measurement.value ?? 0;
     const uom = suggestion.unit || ann.measurement.unit || "EA";
-    const category = suggestion.kind === "rateScheduleItem" ? "Labour" : "Material";
+    // Suggestions tagged "rateScheduleItem" map to whichever org category sources from rate schedules; everything else falls through to the first enabled category.
+    const targetCat = suggestion.kind === "rateScheduleItem"
+      ? rateScheduleCategory ?? defaultCategory
+      : defaultCategory;
+    if (!targetCat) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before adding suggestions.");
+      return;
+    }
+    const category = targetCat.name;
     const entityName = suggestion.code
       ? `[${suggestion.code}] ${suggestion.name}`
       : suggestion.name;
@@ -2228,7 +2262,7 @@ export function TakeoffTab({
       // endpoint rejects with 400 and the Add action silently fails.
       const result = await createWorksheetItem(projectId, targetWs.id, {
         category,
-        entityType: category,
+        entityType: targetCat.entityType,
         entityName,
         description: suggestion.reasoning ?? "",
         quantity,

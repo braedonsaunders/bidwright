@@ -74,30 +74,20 @@ export function EntitySelector({
   const groups = useMemo(() => {
     const result: EntityOptionGroup[] = [];
 
+    // Source items per category from its configured itemSource:
+    //   "catalog"      → pull from cat.catalogId (or all catalogs sharing kind ↔ entityType)
+    //   "rate_schedule" / "freeform" → caller-side wiring; we just expose the category name
     for (const cat of categories) {
       const items: EntityOptionItem[] = [];
 
-      if (cat.name === "Labour") {
-        for (const catalog of catalogs) {
-          if (catalog.kind === "labor") {
-            for (const ci of catalog.items ?? []) {
-              if (!items.some((i) => i.value === ci.name)) {
-                items.push({
-                  label: ci.name,
-                  value: ci.name,
-                  unitCost: ci.unitCost,
-                  unitPrice: ci.unitPrice,
-                  unit: ci.unit,
-                });
-              }
-            }
-          }
-        }
-        if (items.length === 0) items.push({ label: "Labour", value: "Labour" });
-      } else if (cat.name === "Equipment") {
-        for (const catalog of catalogs) {
-          if (catalog.kind === "equipment") {
-            for (const ci of catalog.items ?? []) {
+      if (cat.itemSource === "catalog") {
+        const linked = catalogs.filter((catalog) => {
+          if (cat.catalogId) return catalog.id === cat.catalogId;
+          return catalog.kind.toLowerCase() === cat.entityType.toLowerCase();
+        });
+        for (const catalog of linked) {
+          for (const ci of catalog.items ?? []) {
+            if (!items.some((i) => i.value === ci.name)) {
               items.push({
                 label: ci.name,
                 value: ci.name,
@@ -108,25 +98,9 @@ export function EntitySelector({
             }
           }
         }
-        if (items.length === 0) items.push({ label: "Equipment", value: "Equipment" });
-      } else if (cat.name === "Stock Items" || cat.name === "Consumables") {
-        for (const catalog of catalogs) {
-          if (catalog.kind === "materials") {
-            for (const ci of catalog.items ?? []) {
-              items.push({
-                label: ci.name,
-                value: ci.name,
-                unitCost: ci.unitCost,
-                unitPrice: ci.unitPrice,
-                unit: ci.unit,
-              });
-            }
-          }
-        }
-        if (items.length === 0) items.push({ label: cat.name, value: cat.name });
-      } else {
-        items.push({ label: cat.name, value: cat.name });
       }
+
+      if (items.length === 0) items.push({ label: cat.name, value: cat.name });
 
       result.push({
         categoryName: cat.name,
