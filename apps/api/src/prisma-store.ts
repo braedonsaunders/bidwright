@@ -6705,17 +6705,25 @@ export class PrismaApiStore {
   }
 
   async createRateScheduleItem(scheduleId: string, input: {
-    catalogItemId?: string; code?: string; name: string; unit?: string;
+    catalogItemId: string;
     rates?: Record<string, number>; costRates?: Record<string, number>;
     burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
   }): Promise<RateScheduleWithChildren> {
+    if (!input.catalogItemId) {
+      throw new Error("catalogItemId is required — rate schedule items must be linked to a catalog item.");
+    }
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
+    const catalogItem = await this.db.catalogItem.findUnique({ where: { id: input.catalogItemId } });
+    if (!catalogItem) throw new Error(`Catalog item ${input.catalogItemId} not found`);
     const maxOrder = await this.db.rateScheduleItem.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
     await this.db.rateScheduleItem.create({
       data: {
-        id: createId("rsi"), scheduleId, catalogItemId: input.catalogItemId ?? null,
-        code: input.code ?? "", name: input.name, unit: input.unit ?? "HR",
+        id: createId("rsi"), scheduleId,
+        catalogItemId: catalogItem.id,
+        code: catalogItem.code,
+        name: catalogItem.name,
+        unit: catalogItem.unit || "HR",
         rates: (input.rates ?? {}) as any, costRates: (input.costRates ?? {}) as any,
         burden: input.burden ?? 0, perDiem: input.perDiem ?? 0,
         metadata: (input.metadata ?? {}) as any,
@@ -6729,7 +6737,6 @@ export class PrismaApiStore {
   }
 
   async updateRateScheduleItem(itemId: string, patch: {
-    code?: string; name?: string; unit?: string;
     rates?: Record<string, number>; costRates?: Record<string, number>;
     burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
   }): Promise<RateScheduleWithChildren> {
@@ -6738,9 +6745,6 @@ export class PrismaApiStore {
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
     const data: any = {};
-    if (patch.code !== undefined) data.code = patch.code;
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.unit !== undefined) data.unit = patch.unit;
     if (patch.rates !== undefined) data.rates = patch.rates;
     if (patch.costRates !== undefined) data.costRates = patch.costRates;
     if (patch.burden !== undefined) data.burden = patch.burden;

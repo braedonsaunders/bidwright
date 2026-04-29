@@ -665,7 +665,8 @@ model RateScheduleItem {
   id            String       @id @default(cuid())
   scheduleId    String
   schedule      RateSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  catalogItemId String?
+  catalogItemId String
+  catalogItem   CatalogItem  @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
   code          String       @default("")
   name          String       @default("")
   unit          String       @default("HR")
@@ -679,6 +680,7 @@ model RateScheduleItem {
   assemblyComponents AssemblyComponent[]
 
   @@index([scheduleId])
+  @@index([catalogItemId])
 }
 
 // ── Labour Cost & Burden ─────────────────────────────────────────────────
@@ -1221,6 +1223,7 @@ model CatalogItem {
   updatedAt DateTime @updatedAt
 
   assemblyComponents AssemblyComponent[]
+  rateScheduleItems  RateScheduleItem[]
 
   @@index([catalogId])
 }

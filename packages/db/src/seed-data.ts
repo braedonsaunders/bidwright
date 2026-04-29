@@ -243,9 +243,11 @@ export async function seedRateSchedules(prisma: PrismaClient, store: BidwrightSt
           create: (store.rateScheduleItems ?? [])
             .filter((i) => i.scheduleId === schedule.id)
             .map((i) => ({
-              id: i.id, catalogItemId: i.catalogItemId, code: i.code, name: i.name,
-              unit: i.unit, rates: i.rates, costRates: i.costRates, burden: i.burden,
-              perDiem: i.perDiem, metadata: i.metadata, sortOrder: i.sortOrder,
+              id: i.id,
+              catalogItem: { connect: { id: i.catalogItemId } },
+              code: i.code, name: i.name,
+              unit: i.unit, rates: i.rates as any, costRates: i.costRates as any, burden: i.burden,
+              perDiem: i.perDiem, metadata: i.metadata as any, sortOrder: i.sortOrder,
             })),
         },
       },
