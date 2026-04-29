@@ -157,43 +157,49 @@ type ColumnId =
 
 /* ─── Constants ─── */
 
-/** Fallback badge tones when no dynamic category color is available */
-const CATEGORY_COLORS_FALLBACK: Record<string, string> = {
-  Labour: "info",
-  Equipment: "warning",
-  Material: "success",
-  Consumables: "default",
-  "Stock Items": "default",
-  "Other Charges": "danger",
-  "Travel & Per Diem": "warning",
-  Subcontractors: "info",
-  "Rental Equipment": "warning",
-};
-
-/** Resolve badge tone from entity categories state, falling back to hardcoded map */
-function getCategoryBadgeTone(
+/**
+ * Badge styling props for a category. Drives the chip from the org-configured
+ * EntityCategory.color (hex) directly — no hardcoded category-name → tone map.
+ * Falls back to the neutral "default" tone when the category isn't configured.
+ */
+function getCategoryBadgeProps(
   categoryName: string,
-  entityCategories: EntityCategory[]
-): "default" | "success" | "warning" | "danger" | "info" {
+  entityCategories: EntityCategory[],
+): { style?: React.CSSProperties; tone?: "default" | "success" | "warning" | "danger" | "info" } {
   const catDef = entityCategories.find((c) => c.name === categoryName);
   if (catDef?.color) {
-    // Map common hex colors to badge tones
-    const hex = catDef.color.toLowerCase();
-    if (hex.includes("22c55e") || hex.includes("10b981") || hex.includes("16a34a")) return "success";
-    if (hex.includes("f59e0b") || hex.includes("eab308") || hex.includes("d97706")) return "warning";
-    if (hex.includes("ef4444") || hex.includes("dc2626") || hex.includes("f43f5e")) return "danger";
-    if (hex.includes("3b82f6") || hex.includes("6366f1") || hex.includes("0ea5e9")) return "info";
+    return {
+      style: {
+        borderColor: catDef.color,
+        backgroundColor: `${catDef.color}1A`,
+        color: catDef.color,
+      },
+    };
   }
-  return (CATEGORY_COLORS_FALLBACK[categoryName] ?? "default") as "default" | "success" | "warning" | "danger" | "info";
+  return { tone: "default" };
 }
 
-/** Get the hex color for a category (for inline style borders) */
+const DEFAULT_CATEGORY_HEX = "#6b7280";
+
+/**
+ * The category to use when adding a row without an explicit choice — falls back
+ * to the lowest-order enabled EntityCategory the org has configured. Returns
+ * undefined only if the org has no enabled categories at all.
+ */
+function firstEnabledCategory(entityCategories: EntityCategory[]): EntityCategory | undefined {
+  return entityCategories
+    .filter((c) => c.enabled)
+    .slice()
+    .sort((a, b) => a.order - b.order)[0];
+}
+
+/** Get the hex color for a category (for inline style borders); defaults to neutral grey. */
 function getCategoryHexColor(
   categoryName: string,
   entityCategories: EntityCategory[]
 ): string {
   const catDef = entityCategories.find((c) => c.name === categoryName);
-  return catDef?.color ?? "#6b7280";
+  return catDef?.color ?? DEFAULT_CATEGORY_HEX;
 }
 
 const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
@@ -502,18 +508,17 @@ function groupRowsByCategory(
   return result;
 }
 
-/** Map catalog kind to category name */
-function catalogKindToCategory(kind: string): string {
-  switch (kind) {
-    case "labor":
-      return "Labour";
-    case "equipment":
-      return "Equipment";
-    case "materials":
-      return "Material";
-    default:
-      return "Material";
-  }
+/**
+ * Resolve catalog kind to an EntityCategory by matching kind to the category's
+ * entityType (case-insensitive) — used only for badge tone alignment in the
+ * catalog picker. Returns the category name or the raw kind if nothing matches.
+ */
+function catalogKindToCategoryName(kind: string, entityCategories: EntityCategory[]): string {
+  const lk = kind.toLowerCase();
+  const match = entityCategories.find(
+    (c) => c.entityType.toLowerCase() === lk || c.name.toLowerCase() === lk,
+  );
+  return match?.name ?? kind;
 }
 
 /* ─── Component ─── */
@@ -1530,16 +1535,21 @@ export function EstimateGrid({
     const ws = findWs(workspace, wsId);
     if (!ws) return;
 
-    const catName = categoryOverride ?? "Material";
-    const catDef = entityCategories.find((c) => c.name === catName);
+    const fallbackCat = firstEnabledCategory(entityCategories);
+    const catName = categoryOverride ?? fallbackCat?.name ?? "";
+    const catDef = entityCategories.find((c) => c.name === catName) ?? fallbackCat;
+    if (!catDef) {
+      onError("Configure at least one entity category in Settings before adding items.");
+      return;
+    }
 
     const payload: CreateWorksheetItemInput = {
-      category: catName,
-      entityType: catDef?.entityType ?? "Material",
-      entityName: catName,
+      category: catDef.name,
+      entityType: catDef.entityType,
+      entityName: catDef.name,
       description: "",
       quantity: 1,
-      uom: catDef?.defaultUom ?? "EA",
+      uom: catDef.defaultUom || "EA",
       cost: 0,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: 0,
@@ -1771,12 +1781,13 @@ export function EstimateGrid({
       try {
         let last: WorkspaceResponse | null = null;
         for (const ci of selected) {
-          const catName = catalogKindToCategory(ci.catalogKind);
+          const catName = catalogKindToCategoryName(ci.catalogKind, entityCategories);
           const catDef = entityCategories.find((c) => c.name === catName);
+          const fallbackCat = firstEnabledCategory(entityCategories);
 
           const payload: CreateWorksheetItemInput = {
             category: catName,
-            entityType: catDef?.entityType ?? "Material",
+            entityType: catDef?.entityType ?? fallbackCat?.entityType ?? "",
             entityName: ci.name,
             description: "",
             quantity: 1,
@@ -2305,7 +2316,7 @@ export function EstimateGrid({
         >
           <div className="flex items-center gap-1">
             <Badge
-              tone={getCategoryBadgeTone(row.category, entityCategories)}
+              {...getCategoryBadgeProps(row.category, entityCategories)}
               className="text-[9px] px-1 py-0"
             >
               {findCategoryForRow(row, entityCategories)?.shortform ?? row.category.charAt(0)}
@@ -3373,7 +3384,7 @@ export function EstimateGrid({
                           <td className="border-b border-line px-2 py-1.5 font-medium">{ci.name}</td>
                           <td className="border-b border-line px-2 py-1.5">
                             <Badge
-                              tone={getCategoryBadgeTone(catalogKindToCategory(ci.catalogKind), entityCategories)}
+                              {...getCategoryBadgeProps(catalogKindToCategoryName(ci.catalogKind, entityCategories), entityCategories)}
                               className="text-[9px]"
                             >
                               {ci.catalogKind}
@@ -3525,7 +3536,7 @@ function GroupRows({
               <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
             )}
             <Badge
-              tone={getCategoryBadgeTone(group.category, entityCategories)}
+              {...getCategoryBadgeProps(group.category, entityCategories)}
             >
               {group.category}
             </Badge>

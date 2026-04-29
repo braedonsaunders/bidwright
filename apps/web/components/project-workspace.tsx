@@ -22,6 +22,7 @@ import {
 import type {
   CreateWorksheetItemInput,
   ModelTakeoffLinkRecord,
+  EntityCategory,
   PackageRecord,
   ProjectWorkspaceData,
   RevisionPatchInput,
@@ -57,6 +58,7 @@ import {
   updateRevision,
   updateWorksheet,
   getProjectWorkspace,
+  getEntityCategories,
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   listModelTakeoffLinks,
@@ -190,11 +192,19 @@ const estimateSubTabs = ["worksheets", "phases", "takeoff", "schedule"] as const
 
 /* ─── Utilities ─── */
 
-function buildItemDraft(ws: WorkspaceWorksheet, item?: WorkspaceWorksheetItem): ItemDraft {
+function buildItemDraft(
+  ws: WorkspaceWorksheet,
+  item?: WorkspaceWorksheetItem,
+  entityCategories: EntityCategory[] = [],
+): ItemDraft {
+  const fallbackCat = entityCategories
+    .filter((c) => c.enabled)
+    .slice()
+    .sort((a, b) => a.order - b.order)[0];
   return {
     mode: item ? "edit" : "create", worksheetId: ws.id, itemId: item?.id,
-    phaseId: item?.phaseId ?? "", category: item?.category ?? "Labour",
-    entityType: item?.entityType ?? "LaborClass", entityName: item?.entityName ?? "",
+    phaseId: item?.phaseId ?? "", category: item?.category ?? fallbackCat?.name ?? "",
+    entityType: item?.entityType ?? fallbackCat?.entityType ?? "", entityName: item?.entityName ?? "",
     vendor: item?.vendor ?? "", description: item?.description ?? "",
     quantity: item?.quantity ?? 1, uom: item?.uom ?? "EA",
     cost: item?.cost ?? 0, markup: item?.markup ?? 0.2, price: item?.price ?? 0,
@@ -537,6 +547,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [wsNameDraft, setWsNameDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showActions, setShowActions] = useState(false);
+  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    getEntityCategories()
+      .then((cats) => { if (!cancelled) setEntityCategories(cats); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [modal, setModal] = useState<ModalState>(null);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
@@ -974,8 +992,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // ─── Worksheet/Item operations (same as before) ───
 
-  function openItemEditor(ws: WorkspaceWorksheet, item: WorkspaceWorksheetItem) { setItemDraft(buildItemDraft(ws, item)); setError(null); }
-  function openCreateItem(ws: WorkspaceWorksheet) { setSelectedWsId(ws.id); setItemDraft(buildItemDraft(ws)); setError(null); }
+  function openItemEditor(ws: WorkspaceWorksheet, item: WorkspaceWorksheetItem) { setItemDraft(buildItemDraft(ws, item, entityCategories)); setError(null); }
+  function openCreateItem(ws: WorkspaceWorksheet) { setSelectedWsId(ws.id); setItemDraft(buildItemDraft(ws, undefined, entityCategories)); setError(null); }
 
   function saveItem() {
     if (!itemDraft) return;
@@ -995,7 +1013,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         const nws = findWs(next.workspace, itemDraft.worksheetId);
         if (nws) {
           const ni = nws.items.find((i) => i.id === itemDraft.itemId) ?? nws.items.filter((i) => i.entityName === itemDraft.entityName).sort((a, b) => b.lineOrder - a.lineOrder)[0];
-          setItemDraft(ni ? buildItemDraft(nws, ni) : null);
+          setItemDraft(ni ? buildItemDraft(nws, ni, entityCategories) : null);
         } else setItemDraft(null);
       } catch (e) { setError(e instanceof Error ? e.message : "Save failed."); }
     });
@@ -1626,191 +1644,6 @@ function PhaseRow({ phase, onSave, onDelete, isPending }: {
         </Button>
       </td>
     </tr>
-  );
-}
-
-/* ─── Estimate Tab ─── */
-
-function EstimateTab({
-  workspace, selectedWsId, setSelectedWsId, visibleRows, searchTerm, setSearchTerm,
-  itemDraft, setItemDraft, openItemEditor, openCreateItem, wsNameDraft, setWsNameDraft,
-  onCreateWs, onRenameWs, onDeleteWs,
-  saveItem, deleteItem, duplicateItem, isPending,
-}: {
-  workspace: ProjectWorkspaceData; selectedWsId: string; setSelectedWsId: (v: string) => void;
-  visibleRows: WorkspaceWorksheetItem[]; searchTerm: string; setSearchTerm: (v: string) => void;
-  itemDraft: ItemDraft | null; setItemDraft: (v: ItemDraft | null | ((c: ItemDraft | null) => ItemDraft | null)) => void;
-  openItemEditor: (ws: WorkspaceWorksheet, item: WorkspaceWorksheetItem) => void;
-  openCreateItem: (ws: WorkspaceWorksheet) => void;
-  wsNameDraft: string; setWsNameDraft: (v: string) => void;
-  onCreateWs: () => void; onRenameWs: () => void; onDeleteWs: () => void;
-  saveItem: () => void; deleteItem: () => void; duplicateItem: () => void; isPending: boolean;
-}) {
-  const breakout = workspace.estimate.totals.breakout;
-  const currentWs = selectedWsId === "all" ? null : findWs(workspace, selectedWsId);
-
-  return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Select
-            className="w-48"
-            value={selectedWsId}
-            onValueChange={setSelectedWsId}
-            options={[
-              { value: "all", label: "All worksheets" },
-              ...(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: `${ws.name} (${ws.items.length})` })),
-            ]}
-          />
-          <Input className="flex-1 min-w-[200px]" placeholder="Filter..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
-          <Button size="sm" variant="secondary" onClick={onCreateWs}><Plus className="h-3 w-3" /> Worksheet</Button>
-          {currentWs && (
-            <>
-              <Button size="xs" variant="ghost" onClick={onRenameWs}>Rename</Button>
-              <Button size="xs" variant="ghost" className="text-danger" onClick={onDeleteWs} disabled={(workspace.worksheets ?? []).length <= 1}>Delete</Button>
-              <Button size="sm" onClick={() => openCreateItem(currentWs)}><Plus className="h-3 w-3" /> Line item</Button>
-            </>
-          )}
-        </div>
-
-        <div className="overflow-x-auto rounded-lg border border-line">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2/60 text-[11px] font-medium uppercase text-fg/35">
-              <tr>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-left">#</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-left">Item</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-left">Category</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-right">Qty</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-right">Cost</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-right">Markup</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-right">Price</th>
-                <th className="whitespace-nowrap border-b border-line px-3 py-2 text-right">Hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row) => {
-                const ws = (workspace.worksheets ?? []).find((w) => w.id === row.worksheetId)!;
-                const active = itemDraft?.itemId === row.id;
-                return (
-                  <tr key={row.id} className={cn("cursor-pointer transition-colors hover:bg-panel2/40", active && "bg-accent/8")} onClick={() => openItemEditor(ws, row)}>
-                    <td className="border-b border-line px-3 py-2.5 text-fg/40">{row.lineOrder}</td>
-                    <td className="border-b border-line px-3 py-2.5">
-                      <div className="font-medium">{row.entityName}</div>
-                      {row.description && <div className="mt-0.5 text-[11px] text-fg/40 line-clamp-1">{row.description}</div>}
-                      {selectedWsId === "all" && <div className="mt-0.5 text-[10px] text-fg/25">{ws.name}</div>}
-                    </td>
-                    <td className="border-b border-line px-3 py-2.5"><Badge>{row.category}</Badge></td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{row.quantity.toLocaleString()}</td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{formatMoney(row.cost)}</td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{formatPercent(row.markup, 1)}</td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums font-medium">{formatMoney(row.price)}</td>
-                    <td className="border-b border-line px-3 py-2.5 text-right tabular-nums">{(row.unit1 + row.unit2 + row.unit3).toLocaleString()}</td>
-                  </tr>
-                );
-              })}
-              {visibleRows.length === 0 && <tr><td colSpan={8} className="px-3 py-6 text-center text-xs text-fg/30">No line items</td></tr>}
-            </tbody>
-            <tfoot className="bg-panel2/40 text-xs font-medium">
-              <tr>
-                <td colSpan={4} className="border-t border-line px-3 py-2 text-fg/50">{visibleRows.length} items</td>
-                <td className="border-t border-line px-3 py-2 text-right tabular-nums">{formatMoney(workspace.estimate.totals.cost)}</td>
-                <td className="border-t border-line px-3 py-2 text-right tabular-nums">{formatPercent(workspace.estimate.totals.estimatedMargin, 1)}</td>
-                <td className="border-t border-line px-3 py-2 text-right tabular-nums">{formatMoney(workspace.estimate.totals.subtotal)}</td>
-                <td className="border-t border-line px-3 py-2 text-right tabular-nums">{workspace.estimate.totals.totalHours.toLocaleString()}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        {breakout.length > 0 && (
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {breakout.map((b) => (
-              <div key={`${b.name}-${b.type ?? ""}`} className="rounded-lg border border-line bg-panel2/30 p-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-fg/40">{b.name}</span>
-                  <span className="text-[11px] text-fg/30">{formatPercent(b.margin, 0)}</span>
-                </div>
-                <div className="mt-1 text-sm font-medium">{formatMoney(b.value)}</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Line item editor sidebar */}
-      <Card className="h-fit">
-        <CardHeader>
-          <CardTitle>{itemDraft?.mode === "create" ? "New line item" : itemDraft ? "Edit line item" : "Line item editor"}</CardTitle>
-        </CardHeader>
-        <CardBody className="space-y-3">
-          {itemDraft ? (
-            <>
-              <div className="grid gap-3 grid-cols-2">
-                <div><Label>Worksheet</Label><Select
-                  value={itemDraft.worksheetId}
-                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, worksheetId: v } : c)}
-                  options={(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
-                /></div>
-                <div><Label>Phase</Label><Select
-                  value={itemDraft.phaseId || "__none__"}
-                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, phaseId: v === "__none__" ? "" : v } : c)}
-                  options={[
-                    { value: "__none__", label: "None" },
-                    ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} – ${p.name}` })),
-                  ]}
-                /></div>
-              </div>
-              <div><Label>Name</Label><Input value={itemDraft.entityName} onChange={(e) => setItemDraft((c) => c ? { ...c, entityName: e.target.value } : c)} /></div>
-              <div><Label>Description</Label><Textarea value={itemDraft.description} onChange={(e) => setItemDraft((c) => c ? { ...c, description: e.target.value } : c)} className="min-h-14" /></div>
-              <div className="grid gap-3 grid-cols-2">
-                <div><Label>Category</Label><Select
-                  value={itemDraft.category}
-                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, category: v } : c)}
-                  options={["Labour","Equipment","Stock Items","Material","Consumables","Other Charges","Travel & Per Diem","Subcontractors","Rental Equipment"].map((cat) => ({ value: cat, label: cat }))}
-                /></div>
-                <div><Label>Entity type</Label><Input value={itemDraft.entityType} onChange={(e) => setItemDraft((c) => c ? { ...c, entityType: e.target.value } : c)} /></div>
-              </div>
-              <div className="grid gap-3 grid-cols-2">
-                <div><Label>Vendor</Label><Input value={itemDraft.vendor} onChange={(e) => setItemDraft((c) => c ? { ...c, vendor: e.target.value } : c)} /></div>
-                <div><Label>UOM</Label><Select
-                  value={itemDraft.uom}
-                  onValueChange={(v) => setItemDraft((c) => c ? { ...c, uom: v } : c)}
-                  options={["EA","LF","FT","SF","HR","DAY","WK","MO","LS","CY","LB","TON","GAL","SET","LOT","IN","M","CM"].map((u) => ({ value: u, label: u }))}
-                /></div>
-              </div>
-              <Separator />
-              <div className="grid gap-3 grid-cols-3">
-                <div><Label>Quantity</Label><Input type="number" step="0.01" value={String(itemDraft.quantity)} onChange={(e) => setItemDraft((c) => c ? { ...c, quantity: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Cost</Label><Input type="number" step="0.01" value={String(itemDraft.cost)} onChange={(e) => setItemDraft((c) => c ? { ...c, cost: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Price</Label><Input type="number" step="0.01" value={String(itemDraft.price)} onChange={(e) => setItemDraft((c) => c ? { ...c, price: parseNum(e.target.value) } : c)} /></div>
-              </div>
-              <div className="grid gap-3 grid-cols-2">
-                <div><Label>Markup %</Label><Input type="number" step="0.1" value={fmtPct(itemDraft.markup)} onChange={(e) => setItemDraft((c) => c ? { ...c, markup: parseNum(e.target.value) / 100 } : c)} /></div>
-                <div><Label>Line order</Label><Input type="number" step="1" value={String(itemDraft.lineOrder)} onChange={(e) => setItemDraft((c) => c ? { ...c, lineOrder: Math.max(1, Math.round(parseNum(e.target.value))) } : c)} /></div>
-              </div>
-              <div className="grid gap-3 grid-cols-3">
-                <div><Label>Unit 1</Label><Input type="number" step="0.01" value={String(itemDraft.unit1)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit1: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Unit 2</Label><Input type="number" step="0.01" value={String(itemDraft.unit2)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit2: parseNum(e.target.value) } : c)} /></div>
-                <div><Label>Unit 3</Label><Input type="number" step="0.01" value={String(itemDraft.unit3)} onChange={(e) => setItemDraft((c) => c ? { ...c, unit3: parseNum(e.target.value) } : c)} /></div>
-              </div>
-              <Separator />
-              <div className="flex gap-2">
-                <Button size="sm" onClick={saveItem} disabled={isPending} className="flex-1"><Save className="h-3 w-3" /> {itemDraft.mode === "create" ? "Create" : "Save"}</Button>
-                {itemDraft.mode === "edit" && (
-                  <>
-                    <Button size="sm" variant="secondary" onClick={duplicateItem} disabled={isPending}><Copy className="h-3 w-3" /></Button>
-                    <Button size="sm" variant="danger" onClick={deleteItem} disabled={isPending}><Trash2 className="h-3 w-3" /></Button>
-                  </>
-                )}
-                <Button size="sm" variant="ghost" onClick={() => setItemDraft(null)}>Cancel</Button>
-              </div>
-            </>
-          ) : (
-            <EmptyState>Select a row to edit</EmptyState>
-          )}
-        </CardBody>
-      </Card>
-    </div>
   );
 }
 
