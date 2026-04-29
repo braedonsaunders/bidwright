@@ -2498,7 +2498,14 @@ export function EstimateGrid({
             <Button size="xs" variant="ghost" onClick={exportTableAsCsv} title="Export as CSV">
               <Download className="h-3 w-3" />
             </Button>
-            <Button size="xs" onClick={() => addNewItem()} disabled={isPending}><Plus className="h-3 w-3" /> Item</Button>
+            <Button
+              size="xs"
+              onClick={() => addNewItem()}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : undefined}
+            >
+              <Plus className="h-3 w-3" /> Item
+            </Button>
 
             <Button
               size="xs"
@@ -2508,7 +2515,8 @@ export function EstimateGrid({
                 setCatalogSearchTerm("");
                 setSelectedCatalogItemIds(new Set());
               }}
-              disabled={isPending}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : undefined}
             >
               <Package className="h-3 w-3" /> Catalog
             </Button>
@@ -2516,8 +2524,8 @@ export function EstimateGrid({
               size="xs"
               variant="ghost"
               onClick={() => setShowAssemblyPicker(true)}
-              disabled={isPending}
-              title="Insert, author, or manage assembly groups in this worksheet"
+              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Insert, author, or manage assembly groups in this worksheet"}
             >
               <Layers className="h-3 w-3" /> Assembly
             </Button>
@@ -2610,10 +2618,28 @@ export function EstimateGrid({
           >
           {visibleRows.length === 0 ? (
             <EmptyState>
-              No line items found.{" "}
-              <button className="text-accent hover:underline" onClick={() => addNewItem()}>
-                Add one
-              </button>
+              {(workspace.worksheets ?? []).length === 0 ? (
+                <>
+                  No worksheets yet.{" "}
+                  <button
+                    className="text-accent hover:underline"
+                    onClick={() => {
+                      setNewWsName("");
+                      setShowNewWsModal(true);
+                    }}
+                  >
+                    Create a worksheet first
+                  </button>
+                  .
+                </>
+              ) : (
+                <>
+                  No line items found.{" "}
+                  <button className="text-accent hover:underline" onClick={() => addNewItem()}>
+                    Add one
+                  </button>
+                </>
+              )}
             </EmptyState>
           ) : (
             <div className="overflow-auto rounded-lg border border-line h-full">
@@ -2908,24 +2934,44 @@ export function EstimateGrid({
 
       {/* ─── New Worksheet modal ─── */}
       {showNewWsModal && (
-        <ModalBackdrop open={showNewWsModal} onClose={() => setShowNewWsModal(false)}>
-          <div className="w-80">
-            <h4 className="text-sm font-semibold mb-3">New Worksheet</h4>
-            <Input
-              autoFocus
-              className="mb-3"
-              placeholder="Worksheet name..."
-              value={newWsName}
-              onChange={(e) => setNewWsName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreateWorksheet();
-              }}
-            />
-            <div className="flex justify-end gap-2">
+        <ModalBackdrop open={showNewWsModal} onClose={() => setShowNewWsModal(false)} size="sm">
+          <div className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">New worksheet</h2>
+                <p className="mt-0.5 text-xs text-fg/50">Group related line items into their own tab.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewWsModal(false)}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-1.5 px-5 py-4">
+              <span className="text-xs font-medium text-fg/65">Worksheet name</span>
+              <Input
+                autoFocus
+                placeholder="e.g. Mechanical pipe rack"
+                value={newWsName}
+                onChange={(e) => setNewWsName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreateWorksheet();
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
               <Button size="sm" variant="ghost" onClick={() => setShowNewWsModal(false)}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleCreateWorksheet} disabled={!newWsName.trim() || isPending}>
+              <Button
+                size="sm"
+                variant="accent"
+                onClick={handleCreateWorksheet}
+                disabled={!newWsName.trim() || isPending}
+              >
                 Create
               </Button>
             </div>
