@@ -600,6 +600,7 @@ export function EstimateGrid({
   const [newWsName, setNewWsName] = useState("");
   const [renameWsId, setRenameWsId] = useState<string | null>(null);
   const [renameWsName, setRenameWsName] = useState("");
+  const [deleteWsTarget, setDeleteWsTarget] = useState<{ wsId: string; name: string; itemCount: number } | null>(null);
 
 
   // Selected row
@@ -1771,12 +1772,12 @@ export function EstimateGrid({
   }
 
   function handleDeleteWorksheet(wsId: string) {
-    if (workspace.worksheets.length <= 1) return;
     startTransition(async () => {
       try {
         const next = await deleteWorksheet(workspace.project.id, wsId);
         onApply(next);
         setActiveTab(next.workspace.worksheets[0]?.id ?? "all");
+        setDeleteWsTarget(null);
       } catch (e) {
         onError(e instanceof Error ? e.message : "Delete failed.");
       }
@@ -2922,14 +2923,62 @@ export function EstimateGrid({
           <button
             className="w-full text-left px-3 py-1.5 hover:bg-danger/10 text-danger"
             onClick={() => {
-              handleDeleteWorksheet(tabMenu.wsId);
+              const ws = findWs(workspace, tabMenu.wsId);
+              if (ws) {
+                setDeleteWsTarget({ wsId: ws.id, name: ws.name, itemCount: ws.items.length });
+              }
               setTabMenu(null);
             }}
-            disabled={workspace.worksheets.length <= 1}
           >
             Delete
           </button>
         </div>
+      )}
+
+      {/* ─── Delete worksheet confirmation modal ─── */}
+      {deleteWsTarget && (
+        <ModalBackdrop open={true} onClose={() => setDeleteWsTarget(null)} size="sm">
+          <div className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">Delete worksheet?</h2>
+                <p className="mt-0.5 text-xs text-fg/50">This cannot be undone.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteWsTarget(null)}
+                disabled={isPending}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 text-xs text-fg/75 space-y-2">
+              <p>
+                Delete worksheet <span className="font-medium text-fg">&ldquo;{deleteWsTarget.name}&rdquo;</span>?
+              </p>
+              <p className="text-fg/55">
+                {deleteWsTarget.itemCount === 0
+                  ? "This worksheet has no line items."
+                  : `All ${deleteWsTarget.itemCount} line item${deleteWsTarget.itemCount === 1 ? "" : "s"} on it will be permanently deleted.`}
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+              <Button size="sm" variant="ghost" onClick={() => setDeleteWsTarget(null)} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => handleDeleteWorksheet(deleteWsTarget.wsId)}
+                disabled={isPending}
+              >
+                {isPending ? "Deleting…" : "Delete worksheet"}
+              </Button>
+            </div>
+          </div>
+        </ModalBackdrop>
       )}
 
       {/* ─── New Worksheet modal ─── */}
