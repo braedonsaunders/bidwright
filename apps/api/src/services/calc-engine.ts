@@ -70,10 +70,42 @@ export interface CalcResult {
   markup?: number;
 }
 
+// ── Storage convention ────────────────────────────────────────────────────
+//
+// `WorksheetItem.cost`  — PER-UNIT cost.  The UI computes extCost = cost × qty.
+// `WorksheetItem.price` — LINE TOTAL sell price.  No further × qty in the UI.
+// `WorksheetItem.markup`— markup ratio. For "manual" / "unit_markup" /
+//                         "quantity_markup" categories this is user-driven and
+//                         drives price (price = qty × cost × (1 + markup)).
+//                         For engine-driven categories (tiered_rate,
+//                         duration_rate, formula) markup is DERIVED from the
+//                         actual price vs ext-cost so the UI's Markup column
+//                         is truthful, not stale user input.
+//
+// Every calc strategy in this file MUST obey the cost convention so the UI's
+// `extCost = cost × qty` math gives the real line cost.
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function round(v: number): number {
   return Math.round(v * 100) / 100;
+}
+
+/** Round a markup ratio to 4dp (0.01% precision). */
+function roundRatio(v: number): number {
+  return Math.round(v * 10000) / 10000;
+}
+
+/** price - extCost / extCost; safe-guards 0 / negative cost. */
+function deriveMarkup(totalPrice: number, totalCost: number): number {
+  if (totalCost <= 0) return 0;
+  return roundRatio((totalPrice - totalCost) / totalCost);
+}
+
+/** Convert a line-total cost back to per-unit so it matches the storage convention. */
+function toUnitCost(totalCost: number, quantity: number): number {
+  const qty = quantity || 1;
+  return round(totalCost / qty);
 }
 
 /**
@@ -276,14 +308,16 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
     // "separate" mode: travel shows as its own line item, handled outside calc engine
   }
 
-  // Convention: `cost` is stored per-unit (UI computes extCost = cost × qty);
-  // `price` is stored as the line total. Up to here totalCost has been
-  // accumulated as the line total (× quantity, with burden / per-diem / etc.
-  // applied to that total), so divide back to per-unit before returning.
-  const qty = item.quantity || 1;
+  // totalCost has been accumulated as the line total (× quantity, with burden,
+  // per-diem, fuel surcharge applied). `cost` is stored per-unit per the
+  // storage convention at the top of this file; markup is derived so the
+  // displayed Markup column reflects the actual margin instead of stale user
+  // input (Labour categories disable manual markup edits via
+  // editableFields.markup = false anyway).
   return {
     price: round(totalPrice),
-    cost: round(totalCost / qty),
+    cost: toUnitCost(totalCost, item.quantity),
+    markup: deriveMarkup(totalPrice, totalCost),
   };
 }
 
@@ -315,13 +349,20 @@ function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
     const weeklyRate = Number(catItem.metadata.weeklyRate) || 0;
     const dailyCatRate = catItem.unitCost || dailyRate;
 
-    // Smart rate rollup: pick cheapest aggregate
+    // Smart rate rollup: pick cheapest aggregate.
+    // `monthlyTotal` / `weeklyTotal` here are PER-UNIT totals; price = total × quantity.
     if (monthlyRate > 0 && duration >= 20) {
       const months = Math.ceil(duration / 22); // ~22 working days/month
       const monthlyTotal = monthlyRate * months;
       const dailyTotal = dailyCatRate * duration;
       if (monthlyTotal < dailyTotal) {
-        return { price: round(monthlyTotal * item.quantity), cost: round(monthlyTotal) };
+        const totalPrice = monthlyTotal * item.quantity;
+        const totalCost = monthlyTotal * item.quantity;
+        return {
+          price: round(totalPrice),
+          cost: toUnitCost(totalCost, item.quantity),
+          markup: deriveMarkup(totalPrice, totalCost),
+        };
       }
     }
 
@@ -330,16 +371,27 @@ function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
       const weeklyTotal = weeklyRate * weeks;
       const dailyTotal = dailyCatRate * duration;
       if (weeklyTotal < dailyTotal) {
-        return { price: round(weeklyTotal * item.quantity), cost: round(weeklyTotal) };
+        const totalPrice = weeklyTotal * item.quantity;
+        const totalCost = weeklyTotal * item.quantity;
+        return {
+          price: round(totalPrice),
+          cost: toUnitCost(totalCost, item.quantity),
+          markup: deriveMarkup(totalPrice, totalCost),
+        };
       }
     }
 
     dailyRate = dailyCatRate || dailyRate;
   }
 
-  // cost is stored per-unit; price is stored as line total (UI multiplies cost × qty for extCost)
-  const perUnit = round(dailyRate * duration);
-  return { price: round(perUnit * item.quantity), cost: perUnit };
+  const perUnit = dailyRate * duration;
+  const totalPrice = perUnit * item.quantity;
+  const totalCost = perUnit * item.quantity;
+  return {
+    price: round(totalPrice),
+    cost: toUnitCost(totalCost, item.quantity),
+    markup: deriveMarkup(totalPrice, totalCost),
+  };
 }
 
 function calcQuantityMarkup(item: WorksheetItem): CalcResult {
