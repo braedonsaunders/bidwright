@@ -7,6 +7,7 @@ import * as RadixSelect from "@radix-ui/react-select";
 import type { Customer, PackageIngestFile, ProjectListItem } from "@/lib/api";
 import { submitPackageIngest, getCustomers, createCustomer } from "@/lib/api";
 import { Badge, Button, Card, CardBody, Input, Label, Textarea } from "@/components/ui";
+import { SearchablePicker } from "@/components/shared/searchable-picker";
 import { cn } from "@/lib/utils";
 
 /* ── Radix styled select ── */
@@ -914,11 +915,20 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               ) : (
                 <div className="flex gap-1.5">
                   <div className="flex-1">
-                    <StyledSelect value={customerId} onValueChange={setCustomerId} placeholder="Select client...">
-                      {customerOptions.filter((c) => c.active).map((c) => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}{c.shortName ? ` (${c.shortName})` : ""}</SelectItem>
-                      ))}
-                    </StyledSelect>
+                    <SearchablePicker
+                      value={customerId || null}
+                      onSelect={setCustomerId}
+                      options={customerOptions
+                        .filter((c) => c.active)
+                        .map((c) => ({
+                          id: c.id,
+                          label: c.name,
+                          secondary: c.shortName || undefined,
+                        }))}
+                      placeholder="Select client..."
+                      searchPlaceholder="Search clients..."
+                      triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
+                    />
                   </div>
                   <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
                     <Plus className="h-3 w-3" />
