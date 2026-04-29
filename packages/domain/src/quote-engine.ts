@@ -17,13 +17,6 @@ import type {
 import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder";
 import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours";
 
-const directCostCategories = new Set([
-  "Material",
-  "Materials",
-  "Rental Equipment",
-  "Travel & Per Diem",
-  "Subcontractors",
-]);
 
 const standalonePricingModes = new Set<AdjustmentPricingMode>([
   "option_standalone",
@@ -145,14 +138,13 @@ function getQuoteByProjectId(store: BidwrightStore, projectId: string) {
   return store.quotes.find((quote) => quote.projectId === projectId);
 }
 
-function computeItemCost(item: WorksheetItem) {
-  const category = normalizeCategoryName(item.category, item.entityType);
-
-  if (directCostCategories.has(category)) {
-    return item.quantity * item.cost;
-  }
-
-  return item.cost;
+/**
+ * The line's extended cost. `WorksheetItem.cost` is always per-unit (see the
+ * storage convention block at the top of apps/api/src/services/calc-engine.ts);
+ * the line's true cost is qty × cost regardless of category.
+ */
+export function computeItemCost(item: WorksheetItem) {
+  return item.quantity * item.cost;
 }
 
 function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
