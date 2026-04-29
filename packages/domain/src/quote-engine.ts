@@ -28,22 +28,14 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * Categories are dynamically configured per organization (see EntityCategory).
+ * WorksheetItem.category is expected to match an EntityCategory.name verbatim;
+ * this just trims whitespace and falls back to entityType when category is empty.
+ */
 function normalizeCategoryName(value: string, entityType?: string | null) {
   const trimmed = value.trim();
-  const trimmedEntityType = entityType?.trim() ?? "";
-  const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
-
-  if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
-    return "Material";
-  }
-  if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
-    return "Labour";
-  }
-  if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
-    return "Subcontractors";
-  }
-
-  return trimmed || trimmedEntityType;
+  return trimmed || entityType?.trim() || "";
 }
 
 function categoryIdForName(value: string) {

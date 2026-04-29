@@ -287,22 +287,14 @@ function resolveTierUnitKeys(
   return resolved;
 }
 
+/**
+ * Categories are dynamically configured per organization. WorksheetItem.category
+ * is expected to match EntityCategory.name verbatim; trim and fall back to
+ * entityType, then "Uncategorized" if both are blank.
+ */
 function normalizeEstimateCategoryName(value: string, entityType?: string | null) {
   const trimmed = value.trim();
-  const trimmedEntityType = entityType?.trim() ?? "";
-  const candidates = [trimmed.toLowerCase(), trimmedEntityType.toLowerCase()].filter(Boolean);
-
-  if (candidates.some((candidate) => candidate === "material" || candidate === "materials")) {
-    return "Material";
-  }
-  if (candidates.some((candidate) => candidate === "labour" || candidate === "labor")) {
-    return "Labour";
-  }
-  if (candidates.some((candidate) => candidate === "subcontractor" || candidate === "subcontractors")) {
-    return "Subcontractors";
-  }
-
-  return trimmed || trimmedEntityType || "Uncategorized";
+  return trimmed || entityType?.trim() || "Uncategorized";
 }
 
 function synchronizeWorksheetItemHourBreakdown(
