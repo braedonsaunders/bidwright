@@ -204,14 +204,6 @@ const NON_REVERTIBLE_ACTIVITY_TYPES = new Set([
   "quote_updated", "worksheet_created", "worksheet_updated", "worksheet_deleted",
 ]);
 
-const DIRECT_COST_ESTIMATE_CATEGORIES = new Set([
-  "Material",
-  "Materials",
-  "Rental Equipment",
-  "Travel & Per Diem",
-  "Subcontractors",
-]);
-
 const DEFAULT_SCHEDULE_WORKING_DAYS: Record<string, boolean> = {
   monday: true,
   tuesday: true,
@@ -1229,39 +1221,19 @@ export class PrismaApiStore {
   }
 
   private async getRevisionItemAggregateRows(revisionId: string): Promise<RevisionItemAggregateRow[]> {
-    const directCostCategories = Array.from(DIRECT_COST_ESTIMATE_CATEGORIES);
-    const categoryPlaceholders = directCostCategories.map((_, index) => `$${index + 1}`).join(", ");
-    const entityTypePlaceholders = directCostCategories
-      .map((_, index) => `$${directCostCategories.length + index + 1}`)
-      .join(", ");
-    const revisionPlaceholder = `$${directCostCategories.length * 2 + 1}`;
-
-    return this.db.$queryRawUnsafe<RevisionItemAggregateRow[]>(
-      `
+    // wi.cost is always per-unit (see calc-engine storage convention); the line's
+    // extended cost is qty × cost regardless of category. wi.price is the line total.
+    return this.db.$queryRaw<RevisionItemAggregateRow[]>`
       SELECT
         wi."phaseId" AS "phaseId",
         wi."category" AS "category",
         COALESCE(SUM(wi."price"), 0)::double precision AS "priceTotal",
-        COALESCE(
-          SUM(
-            CASE
-              WHEN wi."category" IN (${categoryPlaceholders})
-                OR wi."entityType" IN (${entityTypePlaceholders})
-                THEN wi."quantity" * wi."cost"
-              ELSE wi."cost"
-            END
-          ),
-          0
-        )::double precision AS "costTotal"
+        COALESCE(SUM(wi."quantity" * wi."cost"), 0)::double precision AS "costTotal"
       FROM "WorksheetItem" wi
       INNER JOIN "Worksheet" w ON w."id" = wi."worksheetId"
-      WHERE w."revisionId" = ${revisionPlaceholder}
+      WHERE w."revisionId" = ${revisionId}
       GROUP BY wi."phaseId", wi."category"
-    `,
-      ...directCostCategories,
-      ...directCostCategories,
-      revisionId,
-    );
+    `;
   }
 
   private async syncProjectEstimateForWorksheetItemMutation(
@@ -1882,10 +1854,10 @@ export class PrismaApiStore {
     quantity?: number | null;
     cost?: number | null;
   }) {
-    const category = this.normalizeEstimateCategory(item.category, item.entityType);
+    // wi.cost is always per-unit (see calc-engine storage convention).
     const quantity = Number(item.quantity ?? 1);
     const cost = Number(item.cost ?? 0);
-    return DIRECT_COST_ESTIMATE_CATEGORIES.has(category) ? quantity * cost : cost;
+    return quantity * cost;
   }
 
   private categoryShareMetrics(items: Array<{ category?: string | null; entityType?: string | null; quantity?: number | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
