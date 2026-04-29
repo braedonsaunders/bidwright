@@ -5,7 +5,6 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
-  Calculator,
   Check,
   ChevronDown,
   ChevronRight,
@@ -29,7 +28,6 @@ import type {
   WorkspaceResponse,
 } from "@/lib/api";
 import {
-  autoCalculateProjectRateSchedule,
   createCondition,
   createConditionLibraryEntry,
   createCustomer,
@@ -41,8 +39,6 @@ import {
   getCustomers,
   getCustomer,
   getDepartments,
-  importRateSchedule,
-  listRateSchedules,
   reorderConditions,
   updateCondition,
   updateProjectRateScheduleItem,
@@ -60,12 +56,12 @@ import {
   EmptyState,
   Input,
   Label,
-  Select,
   Separator,
   Textarea,
   Toggle,
 } from "@/components/ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
+import { ImportRateSchedulesModal } from "@/components/workspace/import-rate-schedules-modal";
 import { cn } from "@/lib/utils";
 import * as RadixSelect from "@radix-ui/react-select";
 import { useAuth } from "@/components/auth-provider";
@@ -1046,9 +1042,6 @@ function RatesSubTab({
   /* ─── Rate Schedule state ─── */
 
   const [showImportPicker, setShowImportPicker] = useState(false);
-  const [masterSchedules, setMasterSchedules] = useState<RateSchedule[]>([]);
-  const [selectedImportId, setSelectedImportId] = useState<string>("");
-  const [loadingMasters, setLoadingMasters] = useState(false);
 
   const [editingCell, setEditingCell] = useState<{ scheduleId: string; itemId: string; tierId: string } | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -1065,30 +1058,8 @@ function RatesSubTab({
     });
   }
 
-  async function handleOpenImportPicker() {
+  function handleOpenImportPicker() {
     setShowImportPicker(true);
-    setLoadingMasters(true);
-    try {
-      const schedules = await listRateSchedules();
-      setMasterSchedules(schedules);
-    } catch {
-      onError("Failed to load rate schedule library.");
-    } finally {
-      setLoadingMasters(false);
-    }
-  }
-
-  function handleImportSchedule() {
-    if (!selectedImportId) return;
-    startTransition(async () => {
-      try {
-        onApply(await importRateSchedule(workspace.project.id, selectedImportId));
-        setShowImportPicker(false);
-        setSelectedImportId("");
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Import failed.");
-      }
-    });
   }
 
   function handleDeleteSchedule(scheduleId: string) {
@@ -1097,16 +1068,6 @@ function RatesSubTab({
         onApply(await deleteProjectRateSchedule(workspace.project.id, scheduleId));
       } catch (e) {
         onError(e instanceof Error ? e.message : "Delete failed.");
-      }
-    });
-  }
-
-  function handleAutoCalculate(scheduleId: string) {
-    startTransition(async () => {
-      try {
-        onApply(await autoCalculateProjectRateSchedule(workspace.project.id, scheduleId));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Auto-calculate failed.");
       }
     });
   }
@@ -1162,43 +1123,14 @@ function RatesSubTab({
           </Button>
         </CardHeader>
         <CardBody className="space-y-4 flex-1 min-h-0 overflow-y-auto">
-          {/* Import picker */}
-          {showImportPicker && (
-            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 p-3">
-              {loadingMasters ? (
-                <span className="text-sm text-fg/50">Loading schedules...</span>
-              ) : (
-                <>
-                  <Select
-                    className="flex-1"
-                    value={selectedImportId || "__choose__"}
-                    onValueChange={(v) => setSelectedImportId(v === "__choose__" ? "" : v)}
-                    options={[
-                      { value: "__choose__", label: "Select a rate schedule..." },
-                      ...masterSchedules.map((s) => ({ value: s.id, label: `${s.name} (${s.category})` })),
-                    ]}
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleImportSchedule}
-                    disabled={busy || !selectedImportId}
-                  >
-                    Import
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setShowImportPicker(false);
-                      setSelectedImportId("");
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                </>
-              )}
-            </div>
-          )}
+          <ImportRateSchedulesModal
+            open={showImportPicker}
+            onClose={() => setShowImportPicker(false)}
+            projectId={workspace.project.id}
+            existingScheduleIds={workspace.rateSchedules.map((s) => s.id)}
+            onImported={onApply}
+            onError={onError}
+          />
 
           {/* Schedule list or empty state */}
           {workspace.rateSchedules.length === 0 ? (
@@ -1238,17 +1170,6 @@ function RatesSubTab({
                         className="flex items-center gap-1"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {schedule.autoCalculate && (
-                          <Button
-                            size="xs"
-                            variant="ghost"
-                            onClick={() => handleAutoCalculate(schedule.id)}
-                            disabled={busy}
-                            title="Auto-calculate rates"
-                          >
-                            <Calculator className="h-3 w-3" />
-                          </Button>
-                        )}
                         <button
                           className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger"
                           onClick={() => handleDeleteSchedule(schedule.id)}
