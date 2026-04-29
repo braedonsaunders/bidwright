@@ -27,7 +27,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
       name: "Material", entityType: "Material", shortform: "M", defaultUom: "EA",
       validUoms: ["EA", "LF", "SF", "CY", "TON", "GAL", "LB", "LS", "LOT", "SET"], color: "#22c55e", order: 3,
       calculationType: "manual", itemSource: "freeform" as const,
-      editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false },
+      editableFields: { quantity: true, cost: true, markup: true, price: false, unit1: false, unit2: false, unit3: false },
       unitLabels: { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" },
     },
     {
