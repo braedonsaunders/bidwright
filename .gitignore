@@ -28,4 +28,7 @@ packages/db/.tmp/
 venv/
 __pycache__/
 *.pyc
+# Local Claude Code scratch state (lock files, scheduled task scratch)
+.claude/scheduled_tasks.lock
+.claude/scheduled_tasks/
 # Client RFQ packages and test data — never commit
