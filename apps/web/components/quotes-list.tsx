@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
-import * as RadixSelect from "@radix-ui/react-select";
 import {
   ArrowUpDown,
   Bot,
@@ -39,6 +38,7 @@ import {
   ModalBackdrop,
 } from "@/components/ui";
 import { getClientDisplayName } from "@/lib/client-display";
+import { SearchablePicker } from "@/components/shared/searchable-picker";
 
 type SortKey =
   | "quoteNumber"
@@ -65,62 +65,6 @@ const STATUS_OPTIONS = [
 
 function statusTone(status: string) {
   return STATUS_OPTIONS.find((s) => s.value === status)?.tone ?? ("default" as const);
-}
-
-/* ─── Radix single-select ─── */
-
-function StyledSelect({
-  value,
-  onValueChange,
-  placeholder,
-  disabled,
-  children,
-}: {
-  value: string;
-  onValueChange: (val: string) => void;
-  placeholder?: string;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <RadixSelect.Root value={value || undefined} onValueChange={onValueChange} disabled={disabled}>
-      <RadixSelect.Trigger
-        className={cn(
-          "inline-flex w-full items-center justify-between gap-1.5 h-9 rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none transition-colors",
-          "hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20",
-          "disabled:opacity-50 disabled:pointer-events-none",
-        )}
-      >
-        <RadixSelect.Value placeholder={placeholder ?? "Select..."} />
-        <RadixSelect.Icon className="shrink-0">
-          <ChevronDown className="h-3 w-3 text-fg/40" />
-        </RadixSelect.Icon>
-      </RadixSelect.Trigger>
-      <RadixSelect.Portal>
-        <RadixSelect.Content
-          className="z-[300] min-w-[var(--radix-select-trigger-width)] max-h-[300px] rounded-lg border border-line bg-panel shadow-xl"
-          position="popper"
-          sideOffset={4}
-        >
-          <RadixSelect.Viewport className="p-1">{children}</RadixSelect.Viewport>
-        </RadixSelect.Content>
-      </RadixSelect.Portal>
-    </RadixSelect.Root>
-  );
-}
-
-function StyledSelectItem({ value, children }: { value: string; children: React.ReactNode }) {
-  return (
-    <RadixSelect.Item
-      value={value}
-      className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs outline-none hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent"
-    >
-      <RadixSelect.ItemIndicator className="w-3 shrink-0">
-        <Check className="h-3 w-3" />
-      </RadixSelect.ItemIndicator>
-      <RadixSelect.ItemText>{children}</RadixSelect.ItemText>
-    </RadixSelect.Item>
-  );
 }
 
 /* ─── Filter Dropdown ─── */
@@ -590,21 +534,21 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                 ) : (
                   <div className="flex gap-1.5">
                     <div className="flex-1">
-                      <StyledSelect
-                        value={manualCustomerId}
-                        onValueChange={setManualCustomerId}
-                        placeholder="Select client..."
-                        disabled={manualSaving}
-                      >
-                        {manualCustomerOptions
+                      <SearchablePicker
+                        value={manualCustomerId || null}
+                        onSelect={setManualCustomerId}
+                        options={manualCustomerOptions
                           .filter((c) => c.active)
-                          .map((c) => (
-                            <StyledSelectItem key={c.id} value={c.id}>
-                              {c.name}
-                              {c.shortName ? ` (${c.shortName})` : ""}
-                            </StyledSelectItem>
-                          ))}
-                      </StyledSelect>
+                          .map((c) => ({
+                            id: c.id,
+                            label: c.name,
+                            secondary: c.shortName || undefined,
+                          }))}
+                        placeholder="Select client..."
+                        searchPlaceholder="Search clients..."
+                        disabled={manualSaving}
+                        triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
+                      />
                     </div>
                     <Button
                       type="button"
