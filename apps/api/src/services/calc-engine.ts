@@ -276,9 +276,14 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
     // "separate" mode: travel shows as its own line item, handled outside calc engine
   }
 
+  // Convention: `cost` is stored per-unit (UI computes extCost = cost × qty);
+  // `price` is stored as the line total. Up to here totalCost has been
+  // accumulated as the line total (× quantity, with burden / per-diem / etc.
+  // applied to that total), so divide back to per-unit before returning.
+  const qty = item.quantity || 1;
   return {
     price: round(totalPrice),
-    cost: round(totalCost),
+    cost: round(totalCost / qty),
   };
 }
 
@@ -316,7 +321,7 @@ function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
       const monthlyTotal = monthlyRate * months;
       const dailyTotal = dailyCatRate * duration;
       if (monthlyTotal < dailyTotal) {
-        return { price: round(monthlyTotal * item.quantity), cost: round(monthlyTotal * item.quantity) };
+        return { price: round(monthlyTotal * item.quantity), cost: round(monthlyTotal) };
       }
     }
 
@@ -325,15 +330,16 @@ function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
       const weeklyTotal = weeklyRate * weeks;
       const dailyTotal = dailyCatRate * duration;
       if (weeklyTotal < dailyTotal) {
-        return { price: round(weeklyTotal * item.quantity), cost: round(weeklyTotal * item.quantity) };
+        return { price: round(weeklyTotal * item.quantity), cost: round(weeklyTotal) };
       }
     }
 
     dailyRate = dailyCatRate || dailyRate;
   }
 
-  const price = round(dailyRate * duration * item.quantity);
-  return { price, cost: price };
+  // cost is stored per-unit; price is stored as line total (UI multiplies cost × qty for extCost)
+  const perUnit = round(dailyRate * duration);
+  return { price: round(perUnit * item.quantity), cost: perUnit };
 }
 
 function calcQuantityMarkup(item: WorksheetItem): CalcResult {
