@@ -212,6 +212,7 @@ const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
 ];
 
 const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
+  "expand",
   "entityName",
   "description",
   "quantity",
@@ -224,7 +225,7 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
 ];
 
 const COLUMN_LABELS: Record<ColumnId, string> = {
-  expand: "Expand",
+  expand: "Detail",
   checkbox: "Select",
   reorder: "Reorder",
   lineOrder: "#",
@@ -567,6 +568,7 @@ export function EstimateGrid({
   // Entity dropdown state
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
+  const [entityHighlightIdx, setEntityHighlightIdx] = useState(0);
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
   const [entityDropdownPos, setEntityDropdownPos] = useState<EntityDropdownPosition>(null);
   const entityCellRef = useRef<HTMLTableCellElement | null>(null);
@@ -906,6 +908,37 @@ export function EstimateGrid({
     [workspace, entityCategories]
   );
 
+  // Flat list of selectable entity items for keyboard navigation when the
+  // entity dropdown is open. Items in the "matching" group come first.
+  const entityFlatItems = useMemo(() => {
+    if (!entityDropdownRowId) return [];
+    const allRows = (workspace.worksheets ?? []).flatMap((w) => w.items);
+    const row = allRows.find((r) => r.id === entityDropdownRowId);
+    if (!row) return [];
+    const q = entitySearchTerm.toLowerCase();
+    const matching = entityOptions.filter((g) => g.categoryName === row.category);
+    const others = entityOptions.filter((g) => g.categoryName !== row.category);
+    type FlatEntity = { group: typeof entityOptions[0]; item: EntityOptionItem };
+    const out: FlatEntity[] = [];
+    for (const group of [...matching, ...others]) {
+      const filtered = q ? group.items.filter((it) => it.label.toLowerCase().includes(q)) : group.items;
+      for (const item of filtered) out.push({ group, item });
+    }
+    return out;
+  }, [entityDropdownRowId, entitySearchTerm, entityOptions, workspace.worksheets]);
+
+  // Reset highlight when dropdown opens or search changes
+  useEffect(() => {
+    setEntityHighlightIdx(0);
+  }, [entityDropdownRowId, entitySearchTerm]);
+
+  // Scroll the highlighted entity item into view
+  useEffect(() => {
+    if (!entityDropdownRowId || !entityDropdownRef.current) return;
+    const el = entityDropdownRef.current.querySelector<HTMLElement>(`[data-entity-idx="${entityHighlightIdx}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [entityHighlightIdx, entityDropdownRowId]);
+
   // ─── Dynamic Column Visibility (auto-default) ───
   // Analyzes active rows' categories to auto-hide irrelevant labor columns.
   // Only applies when user hasn't manually toggled columns yet.
@@ -1240,6 +1273,35 @@ export function EstimateGrid({
     }
   }
 
+  function retreatToPrevCell(rowId: string, column: EditableColumn) {
+    const row = visibleRows.find((r) => r.id === rowId);
+    if (!row) return;
+    const catDef = findCategoryForRow(row, entityCategories);
+    const colIdx = EDITABLE_COLUMNS_ORDER.indexOf(column);
+    for (let i = colIdx - 1; i >= 0; i--) {
+      const prevCol = EDITABLE_COLUMNS_ORDER[i];
+      if (!isCellDisabledByCategory(catDef, prevCol)) {
+        const rawVal = getEditableValue(row, prevCol);
+        startEditing(rowId, prevCol, rawVal as string | number);
+        return;
+      }
+    }
+    // Wrap to previous row's last editable column
+    const rowIdx = visibleRows.indexOf(row);
+    if (rowIdx > 0) {
+      const prevRow = visibleRows[rowIdx - 1];
+      const prevCatDef = findCategoryForRow(prevRow, entityCategories);
+      for (let i = EDITABLE_COLUMNS_ORDER.length - 1; i >= 0; i--) {
+        const col = EDITABLE_COLUMNS_ORDER[i];
+        if (!isCellDisabledByCategory(prevCatDef, col)) {
+          const rawVal = getEditableValue(prevRow, col);
+          startEditing(prevRow.id, col, rawVal as string | number);
+          return;
+        }
+      }
+    }
+  }
+
   function handleCellKeyDown(e: React.KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1254,6 +1316,19 @@ export function EstimateGrid({
           setTimeout(() => startEditing(nextRow.id, column, rawVal as string | number), 0);
         }
       }
+    } else if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      if (editingCell) {
+        const { rowId, column } = editingCell;
+        commitEdit();
+        // Move up to same column in previous row
+        const rowIdx = visibleRows.findIndex((r) => r.id === rowId);
+        if (rowIdx > 0) {
+          const prevRow = visibleRows[rowIdx - 1];
+          const rawVal = getEditableValue(prevRow, column);
+          setTimeout(() => startEditing(prevRow.id, column, rawVal as string | number), 0);
+        }
+      }
     } else if (e.key === "Escape") {
       cancelEdit();
     } else if (e.key === "Tab") {
@@ -1261,7 +1336,11 @@ export function EstimateGrid({
       if (editingCell) {
         const { rowId, column } = editingCell;
         commitEdit();
-        setTimeout(() => advanceToNextCell(rowId, column), 0);
+        if (e.shiftKey) {
+          setTimeout(() => retreatToPrevCell(rowId, column), 0);
+        } else {
+          setTimeout(() => advanceToNextCell(rowId, column), 0);
+        }
       }
     }
   }
@@ -1366,7 +1445,7 @@ export function EstimateGrid({
     const payload: CreateWorksheetItemInput = {
       category: catName,
       entityType: catDef?.entityType ?? "Material",
-      entityName: "New Item",
+      entityName: catName,
       description: "",
       quantity: 1,
       uom: catDef?.defaultUom ?? "EA",
@@ -1789,14 +1868,6 @@ export function EstimateGrid({
     setTabMenu({ wsId, x: e.clientX, y: e.clientY });
   }
 
-  // ─── Description click → open detail drawer ───
-
-  function handleDescClick(rowId: string) {
-    if (isTemporaryWorksheetItemId(rowId)) return;
-    const allItems = (workspace.worksheets ?? []).flatMap((w: { items: WorkspaceWorksheetItem[] }) => w.items);
-    const item = allItems.find((i: WorkspaceWorksheetItem) => i.id === rowId);
-    if (item) setDetailItem(item);
-  }
 
   // ─── Category group toggle ───
 
@@ -2145,39 +2216,54 @@ export function EstimateGrid({
             const matchingGroups = entityOptions.filter((g) => g.categoryName === row.category);
             const otherGroups = entityOptions.filter((g) => g.categoryName !== row.category);
 
+            const selectFlatItem = (idx: number) => {
+              const flat = entityFlatItems[idx];
+              if (!flat) return;
+              handleEntitySelect(
+                row.id,
+                flat.item.value,
+                flat.group.categoryName,
+                flat.group.entityType,
+                flat.group.defaultUom,
+                flat.item.unitCost !== undefined
+                  ? { cost: flat.item.unitCost, uom: flat.item.unit, description: flat.item.label }
+                  : undefined,
+                flat.item.rateScheduleItemId,
+                flat.item.itemId,
+              );
+            };
+
+            // Running flat index used to apply the highlight to the right button as we render groups
+            let flatRenderIdx = 0;
             const renderGroupItems = (group: typeof entityOptions[0], filtered: EntityOptionItem[]) =>
-              filtered.map((item) => (
-                <button
-                  key={`${group.categoryId}-${item.value}-${item.rateScheduleItemId ?? ""}`}
-                  className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent/10 transition-colors flex items-center justify-between"
-                  onClick={() =>
-                    handleEntitySelect(
-                      row.id,
-                      item.value,
-                      group.categoryName,
-                      group.entityType,
-                      group.defaultUom,
-                      item.unitCost !== undefined
-                        ? { cost: item.unitCost, uom: item.unit, description: item.label }
-                        : undefined,
-                      item.rateScheduleItemId,
-                      item.itemId,
-                    )
-                  }
-                >
-                  <span className="truncate">
-                    {item.rateScheduleItemId && <span className="text-accent mr-1">&#9679;</span>}
-                    {item.label}
-                  </span>
-                  {(item.unitCost !== undefined || item.unitPrice !== undefined) && (
-                    <span className="ml-2 text-[10px] text-fg/30 tabular-nums whitespace-nowrap">
-                      {item.unitCost !== undefined && `$${item.unitCost.toFixed(2)}`}
-                      {item.unitCost !== undefined && item.unitPrice !== undefined && " / "}
-                      {item.unitPrice !== undefined && `$${item.unitPrice.toFixed(2)}`}
+              filtered.map((item) => {
+                const myIdx = flatRenderIdx++;
+                const isHighlighted = myIdx === entityHighlightIdx;
+                return (
+                  <button
+                    key={`${group.categoryId}-${item.value}-${item.rateScheduleItemId ?? ""}`}
+                    data-entity-idx={myIdx}
+                    className={cn(
+                      "w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between",
+                      isHighlighted ? "bg-accent/15" : "hover:bg-accent/10",
+                    )}
+                    onMouseEnter={() => setEntityHighlightIdx(myIdx)}
+                    onClick={() => selectFlatItem(myIdx)}
+                  >
+                    <span className="truncate">
+                      {item.rateScheduleItemId && <span className="text-accent mr-1">&#9679;</span>}
+                      {item.label}
                     </span>
-                  )}
-                </button>
-              ));
+                    {(item.unitCost !== undefined || item.unitPrice !== undefined) && (
+                      <span className="ml-2 text-[10px] text-fg/30 tabular-nums whitespace-nowrap">
+                        {item.unitCost !== undefined && `$${item.unitCost.toFixed(2)}`}
+                        {item.unitCost !== undefined && item.unitPrice !== undefined && " / "}
+                        {item.unitPrice !== undefined && `$${item.unitPrice.toFixed(2)}`}
+                      </span>
+                    )}
+                  </button>
+                );
+              });
 
             return createPortal(
               <motion.div
@@ -2204,9 +2290,27 @@ export function EstimateGrid({
                     value={entitySearchTerm}
                     onChange={(e) => setEntitySearchTerm(e.target.value)}
                     onKeyDown={(e) => {
+                      const len = entityFlatItems.length;
                       if (e.key === "Escape") {
+                        e.preventDefault();
                         setEntityDropdownRowId(null);
                         setEntityDropdownPos(null);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx((i) => (i + 1) % len);
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx((i) => (i - 1 + len) % len);
+                      } else if (e.key === "Home") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx(0);
+                      } else if (e.key === "End") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx(len - 1);
+                      } else if (e.key === "Enter" || e.key === "Tab") {
+                        if (len === 0) return;
+                        e.preventDefault();
+                        selectFlatItem(entityHighlightIdx);
                       }
                     }}
                   />
@@ -2748,7 +2852,6 @@ export function EstimateGrid({
                         selectedRowId={selectedRowId}
                         onSelectRow={setSelectedRowId}
                         onContextMenu={handleContextMenu}
-                        onDescDoubleClick={handleDescClick}
                         renderEditableCell={renderEditableCell}
                         renderUnitsCell={renderUnitsCell}
                         entityCategories={entityCategories}
@@ -3227,7 +3330,6 @@ function GroupRows({
   selectedRowId,
   onSelectRow,
   onContextMenu,
-  onDescDoubleClick,
   renderEditableCell,
   renderUnitsCell,
   entityCategories,
@@ -3254,7 +3356,6 @@ function GroupRows({
   selectedRowId: string | null;
   onSelectRow: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, rowId: string) => void;
-  onDescDoubleClick: (rowId: string) => void;
   renderEditableCell: (
     row: WorkspaceWorksheetItem,
     column: EditableColumn,
@@ -3343,12 +3444,7 @@ function GroupRows({
                   : "hover:bg-panel2/15"
               )}
               style={{ borderLeftColor: (catDef?.color ?? "#6b7280") + "40" }}
-              onClick={() => {
-                onSelectRow(row.id);
-                if (!isTemporary) {
-                  onOpenDetail(row);
-                }
-              }}
+              onClick={() => onSelectRow(row.id)}
               onContextMenu={(e) => onContextMenu(e, row.id)}
             >
               {/* Expand button */}
@@ -3446,15 +3542,13 @@ function GroupRows({
                 renderEditableCell(row, "vendor", row.vendor ?? "", "min-w-[100px]")}
 
               {/* Description */}
-              {isColVisible("description") && (
-                <td
-                  className="border-b border-line px-2 py-2 text-xs cursor-pointer hover:bg-accent/5 min-w-[160px] max-w-[200px] truncate"
-                  onClick={() => onDescDoubleClick(row.id)}
-                  title={row.description}
-                >
-                  {row.description || <span className="text-fg/20 italic">Add description...</span>}
-                </td>
-              )}
+              {isColVisible("description") &&
+                renderEditableCell(
+                  row,
+                  "description",
+                  row.description || <span className="text-fg/20 italic">Add description...</span>,
+                  "min-w-[160px] max-w-[260px] truncate",
+                )}
 
               {/* Quantity */}
               {isColVisible("quantity") &&
