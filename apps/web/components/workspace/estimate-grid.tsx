@@ -2104,6 +2104,7 @@ export function EstimateGrid({
     ) => {
       const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
       const disabled = isTemporary || isCellDisabledByCategory(catDef, field);
+      const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === field;
 
       if (isEditing) {
         return (
@@ -2142,10 +2143,16 @@ export function EstimateGrid({
           key={field}
           role="button"
           tabIndex={0}
-          className="tabular-nums text-xs px-1.5 py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors min-w-[32px] text-center inline-block"
+          data-cell-row={row.id}
+          data-cell-col={field}
+          className={cn(
+            "tabular-nums text-xs px-1.5 py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors min-w-[32px] text-center inline-block",
+            isSelected && "ring-1 ring-inset ring-accent/60 bg-accent/5 text-accent",
+          )}
           title={`Click to edit ${label}`}
           onClick={(e) => {
             e.stopPropagation();
+            setSelectedCell({ rowId: row.id, column: field });
             startEditing(row.id, field, value);
           }}
           onKeyDown={(e) => {
