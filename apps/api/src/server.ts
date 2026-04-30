@@ -2892,10 +2892,10 @@ export function buildServer() {
   });
   const summaryBuilderSchema = z.object({
     version: z.literal(1),
-    preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]),
+    preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]),
     mode: z.enum(["total", "grouped", "pivot"]),
-    rowDimension: z.enum(["none", "phase", "category"]),
-    columnDimension: z.enum(["none", "phase", "category"]),
+    rowDimension: z.enum(["none", "phase", "category", "worksheet"]),
+    columnDimension: z.enum(["none", "phase", "category", "worksheet"]),
     rows: z.array(summaryBuilderAxisItemSchema),
     columns: z.array(summaryBuilderAxisItemSchema),
     totals: z.object({
@@ -2973,7 +2973,7 @@ export function buildServer() {
   app.post("/projects/:projectId/summary-rows/apply-preset", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const parsed = z.object({
-      preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]),
+      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]),
     }).safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ message: "Invalid preset" });

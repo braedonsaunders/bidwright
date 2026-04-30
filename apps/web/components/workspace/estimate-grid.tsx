@@ -2202,9 +2202,13 @@ export function EstimateGrid({
       if (column === "uom") {
         const validUoms = catDef?.validUoms ?? ["EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS"];
         return (
-          <td className={cn("border-b border-line px-1 py-0.5", className)}>
-            <Select
-              size="xs"
+          <td
+            className={cn("border-b border-line px-2 py-1 text-xs", className)}
+            onKeyDownCapture={(e) => {
+              if (e.key === "Enter") e.stopPropagation();
+            }}
+          >
+            <RadixSelect.Root
               defaultOpen
               value={editValue}
               onValueChange={(val) => {
@@ -2217,9 +2221,32 @@ export function EstimateGrid({
                   setEditingCell(null);
                 }
               }}
-              triggerClassName="border-accent/50 rounded bg-bg"
-              options={validUoms.map((u) => ({ value: u, label: u }))}
-            />
+            >
+              <RadixSelect.Trigger
+                className="inline-flex h-6 w-full min-w-0 items-center justify-between gap-1 rounded border border-accent/50 bg-bg px-1.5 text-[11px] text-fg outline-none"
+              >
+                <RadixSelect.Value />
+                <RadixSelect.Icon><ChevronDown className="h-3 w-3 text-fg/40" /></RadixSelect.Icon>
+              </RadixSelect.Trigger>
+              <RadixSelect.Portal>
+                <RadixSelect.Content position="popper" sideOffset={4} className="z-[300] overflow-hidden rounded-lg border border-line bg-panel shadow-xl">
+                  <RadixSelect.Viewport className="p-1 max-h-[280px]">
+                    {validUoms.map((u) => (
+                      <RadixSelect.Item
+                        key={u}
+                        value={u}
+                        className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
+                      >
+                        <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
+                          <Check className="h-3.5 w-3.5" />
+                        </RadixSelect.ItemIndicator>
+                        <RadixSelect.ItemText>{u}</RadixSelect.ItemText>
+                      </RadixSelect.Item>
+                    ))}
+                  </RadixSelect.Viewport>
+                </RadixSelect.Content>
+              </RadixSelect.Portal>
+            </RadixSelect.Root>
           </td>
         );
       }
@@ -2228,9 +2255,13 @@ export function EstimateGrid({
         const phases = workspace.phases ?? [];
         const PHASE_NONE = "__none__";
         return (
-          <td className={cn("border-b border-line px-1 py-0.5", className)}>
-            <Select
-              size="xs"
+          <td
+            className={cn("border-b border-line px-2 py-1 text-xs", className)}
+            onKeyDownCapture={(e) => {
+              if (e.key === "Enter") e.stopPropagation();
+            }}
+          >
+            <RadixSelect.Root
               defaultOpen
               value={editValue || PHASE_NONE}
               onValueChange={(val) => {
@@ -2244,12 +2275,41 @@ export function EstimateGrid({
                   setEditingCell(null);
                 }
               }}
-              triggerClassName="border-accent/50 rounded bg-bg"
-              options={[
-                { value: PHASE_NONE, label: "None" },
-                ...phases.map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
-              ]}
-            />
+            >
+              <RadixSelect.Trigger
+                className="inline-flex h-6 w-full min-w-0 items-center justify-between gap-1 rounded border border-accent/50 bg-bg px-1.5 text-[11px] text-fg outline-none"
+              >
+                <RadixSelect.Value />
+                <RadixSelect.Icon><ChevronDown className="h-3 w-3 text-fg/40" /></RadixSelect.Icon>
+              </RadixSelect.Trigger>
+              <RadixSelect.Portal>
+                <RadixSelect.Content position="popper" sideOffset={4} className="z-[300] overflow-hidden rounded-lg border border-line bg-panel shadow-xl">
+                  <RadixSelect.Viewport className="p-1 max-h-[280px]">
+                    <RadixSelect.Item
+                      value={PHASE_NONE}
+                      className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
+                    >
+                      <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
+                        <Check className="h-3.5 w-3.5" />
+                      </RadixSelect.ItemIndicator>
+                      <RadixSelect.ItemText>None</RadixSelect.ItemText>
+                    </RadixSelect.Item>
+                    {phases.map((p) => (
+                      <RadixSelect.Item
+                        key={p.id}
+                        value={p.id}
+                        className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
+                      >
+                        <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
+                          <Check className="h-3.5 w-3.5" />
+                        </RadixSelect.ItemIndicator>
+                        <RadixSelect.ItemText>{`${p.number} - ${p.name}`}</RadixSelect.ItemText>
+                      </RadixSelect.Item>
+                    ))}
+                  </RadixSelect.Viewport>
+                </RadixSelect.Content>
+              </RadixSelect.Portal>
+            </RadixSelect.Root>
           </td>
         );
       }
@@ -2266,12 +2326,13 @@ export function EstimateGrid({
           : "text";
 
       return (
-        <td className={cn("border-b border-line px-1 py-0.5", className)}>
+        <td className={cn("border-b border-line px-2 py-1 text-xs", className)}>
           <input
             ref={(el) => { editInputRef.current = el; }}
             type={inputType}
+            size={1}
             step={inputType === "number" ? "0.01" : undefined}
-            className="h-7 w-full rounded border border-accent/50 bg-bg px-1.5 text-xs outline-none tabular-nums"
+            className="h-6 w-full min-w-0 rounded border border-accent/50 bg-bg px-1.5 text-xs outline-none tabular-nums"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}

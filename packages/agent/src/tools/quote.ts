@@ -1060,9 +1060,9 @@ export const deleteReportSectionTool = createQuoteTool({
 export const applySummaryPresetTool = createQuoteTool({
   id: "quote.applySummaryPreset",
   name: "Apply Summary Preset",
-  description: "Apply a summary preset to configure how the quote total is broken out. Presets: quick_total (single total), by_category (one row per item category), by_phase (one row per project phase), phase_x_category (phases with category detail), custom (empty — build from scratch). After applying, rows can be individually customized.",
+  description: "Apply a summary preset to configure how the quote total is broken out. Presets: quick_total (single total), by_category (one row per item category), by_phase (one row per project phase), by_worksheet (one row per worksheet), phase_x_category (phases with category detail), custom (empty — build from scratch). After applying, rows can be individually customized.",
   inputSchema: z.object({
-    preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]).describe("The preset to apply"),
+    preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]).describe("The preset to apply"),
   }),
   tags: ["summary", "breakout", "preset", "write"],
 }, async (ctx, input) => {

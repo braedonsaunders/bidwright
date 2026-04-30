@@ -43,13 +43,15 @@ const SUMMARY_PRESETS: Array<{ id: SummaryPreset; label: string; description: st
   { id: "quick_total", label: "Quick Total", description: "Single grand total with pricing ladder." },
   { id: "by_phase", label: "By Phase", description: "One row per phase with a unified pricing ladder." },
   { id: "by_category", label: "By Category", description: "One row per category with a unified pricing ladder." },
-  { id: "phase_x_category", label: "Pivot", description: "Phase rows with category columns." },
+  { id: "by_worksheet", label: "By Worksheet", description: "One row per worksheet with a unified pricing ladder." },
+  { id: "phase_x_category", label: "By Phase × By Category", description: "Phase rows with category columns." },
 ];
 
 const DIMENSION_LABELS: Record<SummaryBuilderDimension, string> = {
   none: "None",
   phase: "Phase",
   category: "Category",
+  worksheet: "Worksheet",
 };
 
 const ADJUSTMENT_MODE_OPTIONS: Array<{ id: AdjustmentPricingMode; label: string }> = [
@@ -184,6 +186,9 @@ function sourceEntriesForDimension(
   if (dimension === "category") {
     return totals.categoryTotals.filter((entry) => entry.value !== 0 || entry.cost !== 0);
   }
+  if (dimension === "worksheet") {
+    return (totals.worksheetTotals ?? []).filter((entry) => entry.value !== 0 || entry.cost !== 0);
+  }
   return [];
 }
 
@@ -232,6 +237,7 @@ function inferPresetFromBuilder(config: Pick<SummaryBuilderConfig, "mode" | "row
   if (config.mode === "total" || config.rowDimension === "none") return "quick_total";
   if (config.mode === "grouped" && config.rowDimension === "phase") return "by_phase";
   if (config.mode === "grouped" && config.rowDimension === "category") return "by_category";
+  if (config.mode === "grouped" && config.rowDimension === "worksheet") return "by_worksheet";
   if (config.mode === "pivot" && config.rowDimension === "phase" && config.columnDimension === "category") return "phase_x_category";
   return "custom";
 }
@@ -289,6 +295,9 @@ function createPresetBuilder(
   if (preset === "by_category") {
     return normalizeBuilder({ version: 1, preset, mode: "grouped", rowDimension: "category", columnDimension: "none", rows: [], columns: [], totals: { label: "Grand Total", visible: true } }, totals);
   }
+  if (preset === "by_worksheet") {
+    return normalizeBuilder({ version: 1, preset, mode: "grouped", rowDimension: "worksheet", columnDimension: "none", rows: [], columns: [], totals: { label: "Grand Total", visible: true } }, totals);
+  }
   return normalizeBuilder({ version: 1, preset: preset === "custom" ? "phase_x_category" : preset, mode: "pivot", rowDimension: "phase", columnDimension: "category", rows: [], columns: [], totals: { label: "Grand Total", visible: true } }, totals);
 }
 
@@ -309,10 +318,24 @@ function resolvePivotCell(
   column: SummaryBuilderAxisItem,
   totals: ProjectWorkspaceData["estimate"]["totals"],
 ) {
+  const empty = { id: "", name: "", label: "", value: 0, cost: 0, margin: 0 };
+  const dims = [config.rowDimension, config.columnDimension];
+  if (dims.includes("worksheet") && dims.includes("category")) {
+    const worksheetId = config.rowDimension === "worksheet" ? row.sourceId : column.sourceId;
+    const categoryId = config.rowDimension === "category" ? row.sourceId : column.sourceId;
+    const entry = (totals.worksheetCategoryTotals ?? []).find((candidate) => candidate.id === `${worksheetId}::${categoryId ?? ""}`);
+    return entry ?? empty;
+  }
+  if (dims.includes("worksheet") && dims.includes("phase")) {
+    const worksheetId = config.rowDimension === "worksheet" ? row.sourceId : column.sourceId;
+    const phaseId = config.rowDimension === "phase" ? row.sourceId : column.sourceId;
+    const entry = (totals.worksheetPhaseTotals ?? []).find((candidate) => candidate.id === `${worksheetId}::${phaseId ?? "__unphased__"}`);
+    return entry ?? empty;
+  }
   const phaseId = config.rowDimension === "phase" ? row.sourceId : column.sourceId;
   const categoryId = config.rowDimension === "category" ? row.sourceId : column.sourceId;
   const entry = totals.phaseCategoryTotals.find((candidate) => candidate.id === buildPhaseCategoryKey(phaseId, categoryId ?? ""));
-  return entry ?? { id: "", name: "", label: "", value: 0, cost: 0, margin: 0 };
+  return entry ?? empty;
 }
 
 function builderSignature(config: SummaryBuilderConfig) {
@@ -340,6 +363,7 @@ function resolveAxisTotal(
   if (!sourceId) return null;
   if (dimension === "phase") return totals.phaseTotals.find((entry) => entry.id === sourceId) ?? null;
   if (dimension === "category") return totals.categoryTotals.find((entry) => entry.id === sourceId) ?? null;
+  if (dimension === "worksheet") return (totals.worksheetTotals ?? []).find((entry) => entry.id === sourceId) ?? null;
   return null;
 }
 
@@ -676,6 +700,7 @@ export function SummarizeTab({
                       { value: "none", label: "Grand Total Only" },
                       { value: "phase", label: "Phase" },
                       { value: "category", label: "Category" },
+                      { value: "worksheet", label: "Worksheet" },
                     ]}
                     className="h-8 min-w-[160px] text-xs"
                   />
@@ -691,6 +716,7 @@ export function SummarizeTab({
                       { value: "none", label: "None" },
                       ...(draftBuilder.rowDimension !== "phase" ? [{ value: "phase", label: "Phase" }] : []),
                       ...(draftBuilder.rowDimension !== "category" ? [{ value: "category", label: "Category" }] : []),
+                      ...(draftBuilder.rowDimension !== "worksheet" ? [{ value: "worksheet", label: "Worksheet" }] : []),
                     ]}
                     className="h-8 min-w-[132px] text-xs"
                   />
