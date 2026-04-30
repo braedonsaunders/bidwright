@@ -964,6 +964,7 @@ export function mapEntityCategory(e: any): EntityCategory {
     calcFormula: e.calcFormula ?? "",
     itemSource: (e.itemSource as EntityCategory["itemSource"]) ?? "freeform",
     catalogId: e.catalogId ?? null,
+    analyticsBucket: e.analyticsBucket ?? null,
     color: e.color ?? "#6b7280",
     order: e.order ?? 0,
     isBuiltIn: e.isBuiltIn ?? false,

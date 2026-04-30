@@ -1869,6 +1869,28 @@ export function SettingsPage({
 
                           <Separator />
 
+                          {/* Analytics bucket */}
+                          <div>
+                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Analytics Bucket</p>
+                            <Select
+                              value={edited.analyticsBucket || "__none__"}
+                              onValueChange={(v) => updateCatEdit(cat.id, { analyticsBucket: v === "__none__" ? null : v })}
+                              options={[
+                                { value: "__none__", label: "(none)" },
+                                { value: "labour", label: "Labour" },
+                                { value: "material", label: "Material" },
+                                { value: "equipment", label: "Equipment" },
+                                { value: "subcontractor", label: "Subcontractor" },
+                                { value: "allowance", label: "Allowance" },
+                              ]}
+                            />
+                            <p className="mt-1 text-[11px] text-fg/40">
+                              Drives the labour / material / equipment breakout style and the per-bucket benchmark fields. Leave blank if this category isn&rsquo;t part of the analytics roll-up.
+                            </p>
+                          </div>
+
+                          <Separator />
+
                           {/* Units */}
                           <div>
                             <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Units</p>

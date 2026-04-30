@@ -1164,7 +1164,7 @@ export class PrismaApiStore {
       return null;
     }
 
-    const [worksheets, phases, adjustments, revisionSchedules] = await Promise.all([
+    const [worksheets, phases, adjustments, revisionSchedules, entityCategories] = await Promise.all([
       this.db.worksheet.findMany({
         where: { revisionId: revision.id },
         include: { items: true },
@@ -1182,6 +1182,7 @@ export class PrismaApiStore {
         where: { revisionId: revision.id },
         include: { tiers: true, items: true },
       }),
+      this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } }),
     ]);
 
     const mappedRevision = mapRevision(revision);
@@ -1208,6 +1209,7 @@ export class PrismaApiStore {
         phases.map(mapPhase),
         adjustments.map(mapAdjustment),
         revisionSchedules.map(mapRateScheduleWithChildren),
+        entityCategories.map(mapEntityCategory),
       ),
     };
   }
@@ -1248,7 +1250,7 @@ export class PrismaApiStore {
       return null;
     }
 
-    const [aggregateRows, phaseRows, adjustmentRows, revisionSchedules] = await Promise.all([
+    const [aggregateRows, phaseRows, adjustmentRows, revisionSchedules, entityCategoryRows] = await Promise.all([
       this.getRevisionItemAggregateRows(revision.id),
       this.db.phase.findMany({
         where: { revisionId: revision.id },
@@ -1264,6 +1266,7 @@ export class PrismaApiStore {
             where: { revisionId: revision.id },
             include: { tiers: true, items: true },
           }).then((rows) => rows.map(mapRateScheduleWithChildren)),
+      this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } }),
     ]);
 
     const groupedAggregates = new Map<string, {
@@ -1334,6 +1337,7 @@ export class PrismaApiStore {
       phaseRows.map(mapPhase),
       adjustmentRows.map(mapAdjustment),
       [],
+      entityCategoryRows.map(mapEntityCategory),
     );
 
     const toHourTotals = (item?: WorksheetItem | null) => {
@@ -1919,38 +1923,56 @@ export class PrismaApiStore {
     strategy?: { benchmarkProfile?: unknown } | null,
   ): Record<string, unknown> {
     const items = (workspace.worksheets ?? []).flatMap((worksheet) => worksheet.items ?? []);
-    const categoryTotals = new Map<string, { lineItemCount: number; hours: number; cost: number; price: number }>();
+    type Totals = { lineItemCount: number; hours: number; cost: number; price: number };
+    const emptyTotals = (): Totals => ({ lineItemCount: 0, hours: 0, cost: 0, price: 0 });
+    const accumulate = (target: Totals, item: typeof items[number]) => {
+      target.lineItemCount += 1;
+      target.hours += this.estimateItemExtendedHours(item);
+      target.cost += this.estimateItemExtendedCost(item);
+      target.price += Number(item.price ?? 0);
+    };
 
-    for (const item of items) {
-      const category = this.normalizeEstimateCategory(item.category, item.entityType);
-      const existing = categoryTotals.get(category) ?? { lineItemCount: 0, hours: 0, cost: 0, price: 0 };
-      existing.lineItemCount += 1;
-      existing.hours += this.estimateItemExtendedHours(item);
-      existing.cost += this.estimateItemExtendedCost(item);
-      existing.price += Number(item.price ?? 0);
-      categoryTotals.set(category, existing);
+    // Per-category roll-up (keyed by category name).
+    const categoryTotals = new Map<string, Totals>();
+    // Per-analytics-bucket roll-up (keyed by bucket name from EntityCategory.analyticsBucket).
+    const bucketTotals = new Map<string, Totals>();
+
+    // Build category-name → bucket lookup from the org's configured EntityCategory rows.
+    const bucketByCategory = new Map<string, string | null>();
+    for (const cat of workspace.entityCategories ?? []) {
+      bucketByCategory.set(cat.name, cat.analyticsBucket ?? null);
     }
 
-    const pickCategory = (names: string[]) =>
-      names.reduce((acc, name) => {
-        const totals = categoryTotals.get(name);
-        if (!totals) return acc;
-        acc.lineItemCount += totals.lineItemCount;
-        acc.hours += totals.hours;
-        acc.cost += totals.cost;
-        acc.price += totals.price;
-        return acc;
-      }, { lineItemCount: 0, hours: 0, cost: 0, price: 0 });
+    for (const item of items) {
+      const categoryName = this.normalizeEstimateCategory(item.category, item.entityType);
+      const categoryEntry = categoryTotals.get(categoryName) ?? emptyTotals();
+      accumulate(categoryEntry, item);
+      categoryTotals.set(categoryName, categoryEntry);
+
+      const bucket = bucketByCategory.get(categoryName);
+      if (bucket) {
+        const bucketEntry = bucketTotals.get(bucket) ?? emptyTotals();
+        accumulate(bucketEntry, item);
+        bucketTotals.set(bucket, bucketEntry);
+      }
+    }
+
+    const fmtTotals = (totals: Totals) => ({
+      lineItemCount: totals.lineItemCount,
+      hours: Number(totals.hours.toFixed(2)),
+      cost: Number(totals.cost.toFixed(2)),
+      price: Number(totals.price.toFixed(2)),
+    });
 
     const categoryBreakdown = Object.fromEntries(
       Array.from(categoryTotals.entries())
         .sort((left, right) => left[0].localeCompare(right[0]))
-        .map(([category, totals]) => [category, {
-          lineItemCount: totals.lineItemCount,
-          hours: Number(totals.hours.toFixed(2)),
-          cost: Number(totals.cost.toFixed(2)),
-          price: Number(totals.price.toFixed(2)),
-        }]),
+        .map(([category, totals]) => [category, fmtTotals(totals)]),
+    );
+    const bucketBreakdown = Object.fromEntries(
+      Array.from(bucketTotals.entries())
+        .sort((left, right) => left[0].localeCompare(right[0]))
+        .map(([bucket, totals]) => [bucket, fmtTotals(totals)]),
     );
 
     const zeroPricedItems = items.filter((item) => Number(item.price ?? 0) === 0 && this.estimateItemExtendedCost(item) === 0);
@@ -1964,19 +1986,6 @@ export class PrismaApiStore {
     }
     const duplicateEntries = Array.from(duplicateGroups.values()).filter((count) => count > 1);
 
-    const labour = pickCategory(["Labour"]);
-    const material = pickCategory(["Material"]);
-    const equipment = pickCategory(["Equipment", "Rental Equipment"]);
-    const subcontractor = pickCategory(["Subcontractors"]);
-    const allowance = Array.from(categoryTotals.entries())
-      .filter(([category]) => /allowance|contingency/i.test(category))
-      .reduce((acc, [, totals]) => {
-        acc.lineItemCount += totals.lineItemCount;
-        acc.hours += totals.hours;
-        acc.cost += totals.cost;
-        acc.price += totals.price;
-        return acc;
-      }, { lineItemCount: 0, hours: 0, cost: 0, price: 0 });
     const totalHours = Number(workspace.currentRevision.totalHours ?? workspace.estimate.totals.totalHours ?? 0);
     const subtotal = Number(workspace.currentRevision.subtotal ?? workspace.estimate.totals.subtotal ?? 0);
     const worksheetCount = workspace.worksheets.length;
@@ -1998,21 +2007,15 @@ export class PrismaApiStore {
       subtotal,
       worksheetCount,
       lineItemCount,
-      totalLabourMH: Number(labour.hours.toFixed(2)),
-      labourPrice: Number(labour.price.toFixed(2)),
-      labourCost: Number(labour.cost.toFixed(2)),
-      materialPrice: Number(material.price.toFixed(2)),
-      materialCost: Number(material.cost.toFixed(2)),
-      equipmentPrice: Number(equipment.price.toFixed(2)),
-      equipmentCost: Number(equipment.cost.toFixed(2)),
-      subcontractorPrice: Number(subcontractor.price.toFixed(2)),
-      subcontractorCost: Number(subcontractor.cost.toFixed(2)),
-      allowancePrice: Number(allowance.price.toFixed(2)),
-      allowanceCost: Number(allowance.cost.toFixed(2)),
       zeroPriceItemCount: zeroPricedItems.length,
       duplicateGroupCount: duplicateEntries.length,
       duplicateItemCount: duplicateEntries.reduce((sum, count) => sum + count, 0),
+      // Per-category and per-analytics-bucket rolls — keyed by the org's own
+      // configured names, not a fixed enum. Consumers (AI claim verifier,
+      // benchmark profile, downstream reports) read from these maps instead of
+      // hardcoded labour/material/equipment fields.
       categoryBreakdown,
+      bucketBreakdown,
       benchmarkProfile,
       capturedAt: new Date().toISOString(),
     };
@@ -2082,13 +2085,23 @@ export class PrismaApiStore {
       ? packagePlanValue.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
       : [];
     const itemPackageAssignments = new Map<string, string[]>();
-    const directExecutionCategories = new Set([
-      "Labour",
-      "Material",
-      "Equipment",
-      "Rental Equipment",
-      "Travel & Per Diem",
-    ]);
+
+    // Build a categoryName → analyticsBucket lookup so policy decisions
+    // ("does this package have a labour line?" / "an allowance line?") key on
+    // the org's configured bucket instead of hardcoded category names.
+    const bucketByCategory = new Map<string, string | null>();
+    for (const cat of workspace.entityCategories ?? []) {
+      bucketByCategory.set(cat.name, cat.analyticsBucket ?? null);
+    }
+    const bucketOf = (item: { category?: string | null; entityType?: string | null }): string | null =>
+      bucketByCategory.get(this.normalizeEstimateCategory(item.category, item.entityType)) ?? null;
+
+    // Categories that contribute "execution" rows — anything with a non-null
+    // analytics bucket counts as an execution category.
+    const isExecutionCategory = (categoryName: string): boolean => {
+      const bucket = bucketByCategory.get(categoryName);
+      return !!bucket;
+    };
 
     const worksheetRows = (workspace.worksheets ?? []).flatMap((worksheet) =>
       (worksheet.items ?? []).map((item) => ({ worksheet, item })),
@@ -2151,16 +2164,17 @@ export class PrismaApiStore {
 
       const labourHours = matchedItems.reduce((sum, item) => sum + this.estimateItemExtendedHours(item), 0);
       const categoriesPresent = new Set(matchedItems.map((item) => this.normalizeEstimateCategory(item.category, item.entityType)));
-      const hasLabourLine = categoriesPresent.has("Labour");
-      const hasSubcontractorLine = categoriesPresent.has("Subcontractors");
-      const hasAllowanceLine = Array.from(categoriesPresent).some((category) => /allowance|contingency/i.test(category));
+      const bucketsPresent = new Set(matchedItems.map(bucketOf).filter((b): b is string => !!b));
+      const hasLabourLine = bucketsPresent.has("labour");
+      const hasSubcontractorLine = bucketsPresent.has("subcontractor");
+      const hasAllowanceLine = bucketsPresent.has("allowance");
       const hasCommercialCarryLine = matchedItems.some((item) =>
         !hasLabourLine &&
-        (/allowance|contingency/i.test(this.normalizeEstimateCategory(item.category, item.entityType))
+        (bucketOf(item) === "allowance"
           || Number(item.price ?? 0) !== 0
           || Number(item.cost ?? 0) !== 0),
       );
-      const hasDetailedExecutionLine = Array.from(categoriesPresent).some((category) => directExecutionCategories.has(category)) || labourHours > 0;
+      const hasDetailedExecutionLine = Array.from(categoriesPresent).some(isExecutionCategory) || labourHours > 0;
 
       if (pricingMode === "subcontract") {
         if (labourHours > 0 || hasLabourLine) {
@@ -3122,23 +3136,48 @@ export class PrismaApiStore {
       }
     }
 
+    const tolerancePct = (actual: number) => Math.max(1, Math.abs(actual) * 0.02);
+
     const comparisons: Array<{
       claimKeys: string[];
       actualKeys: string[];
       tolerance: (actual: number) => number;
     }> = [
-      { claimKeys: ["totalHours", "totalLabourMH"], actualKeys: ["totalHours", "totalLabourMH"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
-      { claimKeys: ["subtotal", "quotedTotal", "totalPrice"], actualKeys: ["subtotal"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
+      { claimKeys: ["totalHours"], actualKeys: ["totalHours"], tolerance: tolerancePct },
+      { claimKeys: ["subtotal", "quotedTotal", "totalPrice"], actualKeys: ["subtotal"], tolerance: tolerancePct },
       { claimKeys: ["worksheetCount"], actualKeys: ["worksheetCount"], tolerance: () => 0 },
       { claimKeys: ["lineItemCount", "itemCount"], actualKeys: ["lineItemCount"], tolerance: () => 0 },
-      { claimKeys: ["labourPrice", "labourCost"], actualKeys: ["labourPrice", "labourCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
-      { claimKeys: ["materialPrice", "materialCost"], actualKeys: ["materialPrice", "materialCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
-      { claimKeys: ["subcontractorPrice", "subcontractorCost"], actualKeys: ["subcontractorPrice", "subcontractorCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
-      { claimKeys: ["equipmentPrice", "equipmentCost"], actualKeys: ["equipmentPrice", "equipmentCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
-      { claimKeys: ["allowancePrice", "allowanceCost"], actualKeys: ["allowancePrice", "allowanceCost"], tolerance: (actual) => Math.max(1, Math.abs(actual) * 0.02) },
       { claimKeys: ["zeroPriceItemCount"], actualKeys: ["zeroPriceItemCount"], tolerance: () => 0 },
       { claimKeys: ["duplicateGroupCount", "duplicateItemCount"], actualKeys: ["duplicateGroupCount", "duplicateItemCount"], tolerance: () => 0 },
     ];
+
+    // Generate per-bucket comparisons from the actual bucketBreakdown so the
+    // verifier matches an LLM claim like "labourPrice: $X" / "materialCost: $Y"
+    // against the corresponding bucketBreakdown[bucket].price/cost/hours.
+    const bucketBreakdown = (computedSummary.bucketBreakdown ?? {}) as Record<string, { price?: number; cost?: number; hours?: number }>;
+    const bucketLookup: Record<string, number> = {};
+    for (const [bucket, totals] of Object.entries(bucketBreakdown)) {
+      const cap = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+      if (typeof totals.price === "number") bucketLookup[`${bucket}Price`] = totals.price;
+      if (typeof totals.cost === "number") bucketLookup[`${bucket}Cost`] = totals.cost;
+      if (typeof totals.hours === "number") bucketLookup[`${bucket}Hours`] = totals.hours;
+      // Common camelCase aliases (e.g. "Labour" → "labourPrice").
+      if (typeof totals.price === "number") bucketLookup[`${cap}Price`] = totals.price;
+      if (typeof totals.cost === "number") bucketLookup[`${cap}Cost`] = totals.cost;
+      if (typeof totals.hours === "number") bucketLookup[`${cap}Hours`] = totals.hours;
+    }
+    for (const bucket of Object.keys(bucketBreakdown)) {
+      const cap = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+      comparisons.push({ claimKeys: [`${bucket}Price`, `${cap}Price`], actualKeys: [`${bucket}Price`, `${cap}Price`], tolerance: tolerancePct });
+      comparisons.push({ claimKeys: [`${bucket}Cost`, `${cap}Cost`], actualKeys: [`${bucket}Cost`, `${cap}Cost`], tolerance: tolerancePct });
+      comparisons.push({ claimKeys: [`${bucket}Hours`, `${cap}Hours`], actualKeys: [`${bucket}Hours`, `${cap}Hours`], tolerance: tolerancePct });
+    }
+    const lookupActual = (key: string): number | null => {
+      if (key in bucketLookup) return bucketLookup[key];
+      const direct = computedSummary[key];
+      const num = Number(direct);
+      return Number.isFinite(num) ? num : null;
+    };
 
     for (const comparison of comparisons) {
       const claimKey = comparison.claimKeys.find((key) => numericClaim(key) !== null);
@@ -3147,8 +3186,8 @@ export class PrismaApiStore {
       if (claimed === null) continue;
 
       const actualCandidates = comparison.actualKeys
-        .map((key) => ({ key, value: Number(computedSummary[key] ?? 0) }))
-        .filter((entry) => Number.isFinite(entry.value));
+        .map((key) => ({ key, value: lookupActual(key) }))
+        .filter((entry): entry is { key: string; value: number } => entry.value !== null);
       if (actualCandidates.length === 0) continue;
 
       const closest = actualCandidates.reduce(
@@ -3896,6 +3935,7 @@ export class PrismaApiStore {
     calcFormula?: string;
     itemSource?: string;
     catalogId?: string | null;
+    analyticsBucket?: string | null;
     color?: string;
   }): Promise<EntityCategory> {
     const maxOrder = await this.db.entityCategory.aggregate({
@@ -3917,6 +3957,7 @@ export class PrismaApiStore {
         calcFormula: input.calcFormula ?? "",
         itemSource: input.itemSource ?? "freeform",
         catalogId: input.catalogId ?? null,
+        analyticsBucket: input.analyticsBucket ?? null,
         color: input.color ?? "#6b7280",
         order: (maxOrder._max.order ?? 0) + 1,
         isBuiltIn: false,
@@ -3944,6 +3985,7 @@ export class PrismaApiStore {
     if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
     if (patch.itemSource !== undefined) data.itemSource = patch.itemSource;
     if (patch.catalogId !== undefined) data.catalogId = patch.catalogId;
+    if (patch.analyticsBucket !== undefined) data.analyticsBucket = patch.analyticsBucket;
     if (patch.color !== undefined) data.color = patch.color;
     if (patch.order !== undefined) data.order = patch.order;
     if (patch.enabled !== undefined) data.enabled = patch.enabled;

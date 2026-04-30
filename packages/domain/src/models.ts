@@ -1500,6 +1500,13 @@ export interface EntityCategory {
   calcFormula: string;
   itemSource: "rate_schedule" | "catalog" | "freeform";
   catalogId?: string | null;
+  /**
+   * Analytics roll-up bucket used by the labour/material/equipment breakout
+   * style and the per-bucket benchmark output. Free string; common values are
+   * "labour" / "material" / "equipment" / "subcontractor" / "allowance". Null
+   * means the category isn't part of the standard analytics roll-up.
+   */
+  analyticsBucket?: string | null;
   color: string;
   order: number;
   isBuiltIn: boolean;
@@ -1627,6 +1634,7 @@ export interface ProjectWorkspace {
   summaryRows: SummaryRow[];
   conditions: Condition[];
   catalogs: Array<Catalog & { items: CatalogItem[] }>;
+  entityCategories: EntityCategory[];
   aiRuns: AiRun[];
   citations: Citation[];
   scheduleTasks: ScheduleTask[];

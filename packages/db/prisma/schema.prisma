@@ -1572,6 +1572,11 @@ model EntityCategory {
   calcFormula     String       @default("") // custom formula expression for "formula" calc type
   itemSource      String       @default("freeform") // "rate_schedule" | "catalog" | "freeform"
   catalogId       String? // When itemSource="catalog", which catalog backs this category
+  // Analytics roll-up bucket. Drives the labour/material/equipment breakout
+  // style, the per-bucket benchmark output, and allowance detection — instead
+  // of code branching on hardcoded category names. Free string; common values:
+  // "labour" | "material" | "equipment" | "subcontractor" | "allowance".
+  analyticsBucket String?
   color           String       @default("#6b7280")
   order           Int          @default(0)
   isBuiltIn       Boolean      @default(false)

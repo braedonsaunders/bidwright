@@ -2040,10 +2040,12 @@ export function buildServer() {
 
       // Catalog-backed categories should use a valid catalogItemId when catalogs are configured
       if (itemSrc === "catalog" && !parsed.data.itemId && !parsed.data.rateScheduleItemId) {
-        // Check if there are actually catalog items available
         const catalogs = await request.store!.listCatalogs?.() ?? [];
+        const linkedCatalogId = (matchedCategory as any).catalogId as string | null | undefined;
         const catKind = (matchedCategory as any).entityType?.toLowerCase();
-        const relevantCatalog = catalogs.find((c: any) => c.kind === catKind || c.kind === "equipment");
+        const relevantCatalog = catalogs.find((c: any) =>
+          linkedCatalogId ? c.id === linkedCatalogId : c.kind?.toLowerCase() === catKind,
+        );
         if (relevantCatalog) {
           return reply.code(400).send({
             message: `Category "${parsed.data.category}" is catalog-backed. Set itemId to a valid catalog item ID, or set cost directly if no catalog is configured.`,

@@ -381,10 +381,12 @@ function buildEntityOptions(
 
     switch (itemSource) {
       case "rate_schedule": {
-        // Pull items from revision-scoped rate schedules
+        // Pull items from revision-scoped rate schedules whose category string
+        // matches this EntityCategory's entityType (case-insensitive). The
+        // schedule's category is a free string set by the org when creating it.
         const catKey = cat.entityType.toLowerCase();
         for (const sched of workspace.rateSchedules ?? []) {
-          if (sched.category === catKey || sched.category === "general") {
+          if (sched.category.toLowerCase() === catKey) {
             for (const rsItem of sched.items ?? []) {
               const firstTier = sched.tiers?.[0];
               const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
@@ -400,26 +402,20 @@ function buildEntityOptions(
             }
           }
         }
-        // Also include matching catalog items as fallback
-        for (const catalog of workspace.catalogs ?? []) {
-          if (catalog.kind === catKey || catalog.kind === "labor") {
-            for (const ci of catalog.items ?? []) {
-              if (!items.some((i) => i.value === ci.name)) {
-                items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit, itemId: ci.id });
-              }
-            }
-          }
-        }
         if (items.length === 0) {
           items.push({ label: cat.name, value: cat.name });
         }
         break;
       }
       case "catalog": {
-        // Pull items from catalogs — filter by catalogId if set, otherwise by kind matching entityType
+        // Pull from the explicitly-linked catalog (cat.catalogId) when set,
+        // else any catalog whose kind matches entityType (case-insensitive).
         const catKey = cat.entityType.toLowerCase();
         for (const catalog of workspace.catalogs ?? []) {
-          if (cat.catalogId ? catalog.id === cat.catalogId : (catalog.kind === catKey || catalog.kind === "equipment" || catalog.kind === "materials")) {
+          const isLinked = cat.catalogId
+            ? catalog.id === cat.catalogId
+            : catalog.kind.toLowerCase() === catKey;
+          if (isLinked) {
             for (const ci of catalog.items ?? []) {
               items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit, itemId: ci.id });
             }

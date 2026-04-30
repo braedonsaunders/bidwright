@@ -4,6 +4,7 @@ import type {
   AdditionalLineItem,
   BidwrightStore,
   BreakoutEntry,
+  EntityCategory,
   ProjectWorkspace,
   QuoteRevision,
   RevisionTotals,
@@ -46,23 +47,6 @@ function categoryIdForName(value: string) {
     .replace(/^_+|_+$/g, "");
 
   return `cat_${normalized || "uncategorized"}`;
-}
-
-function normalizeModifierTarget(appliesTo: string) {
-  switch (appliesTo) {
-    case "LaborClass":
-    case "Labor":
-      return "Labour";
-    case "EquipmentRate":
-      return "Equipment";
-    case "Material":
-    case "Materials":
-      return "Material";
-    case "Subcontractor":
-      return "Subcontractors";
-    default:
-      return appliesTo;
-  }
 }
 
 function additionalLineItemTypeForAdjustment(adjustment: Adjustment) {
@@ -262,30 +246,24 @@ function groupItemsForBreakout(
   breakoutStyle: QuoteRevision["breakoutStyle"],
   lineItems: WorksheetItem[],
   phases: BidwrightStore["phases"],
+  entityCategories: EntityCategory[] = [],
 ) {
   if (breakoutStyle === "labour_material_equipment") {
+    // Map each item to a bucket via the org's EntityCategory.analyticsBucket.
+    // Items in categories with bucket "labour" → Labour; "equipment" → Equipment;
+    // anything else (including null and "material") rolls into Materials.
+    const bucketByName = new Map<string, string | null | undefined>();
+    for (const c of entityCategories) bucketByName.set(c.name, c.analyticsBucket);
+    const bucketFor = (item: WorksheetItem): "labour" | "equipment" | "materials" => {
+      const b = bucketByName.get(normalizeCategoryName(item.category, item.entityType));
+      if (b === "labour") return "labour";
+      if (b === "equipment") return "equipment";
+      return "materials";
+    };
     return [
-      {
-        key: "Labour",
-        name: "Labour",
-        items: lineItems.filter((item) => normalizeCategoryName(item.category) === "Labour"),
-      },
-      {
-        key: "Materials",
-        name: "Materials",
-        items: lineItems.filter((item) => {
-          const category = normalizeCategoryName(item.category);
-          return !["Labour", "Equipment", "Rental Equipment"].includes(category);
-        }),
-      },
-      {
-        key: "Equipment",
-        name: "Equipment",
-        items: lineItems.filter((item) => {
-          const category = normalizeCategoryName(item.category);
-          return ["Equipment", "Rental Equipment"].includes(category);
-        }),
-      },
+      { key: "Labour",    name: "Labour",    items: lineItems.filter((i) => bucketFor(i) === "labour") },
+      { key: "Materials", name: "Materials", items: lineItems.filter((i) => bucketFor(i) === "materials") },
+      { key: "Equipment", name: "Equipment", items: lineItems.filter((i) => bucketFor(i) === "equipment") },
     ];
   }
 
@@ -489,7 +467,10 @@ function applyHiddenAdjustmentToAggregates(
 }
 
 function calculateModifierAmount(adjustment: Adjustment, lineItems: WorksheetItem[]) {
-  const target = normalizeModifierTarget(adjustment.appliesTo);
+  // Adjustment.appliesTo is either "All" or an EntityCategory.name verbatim;
+  // legacy "LaborClass" / "EquipmentRate" / plural-form aliases were dropped
+  // when the app moved to per-org dynamic categories.
+  const target = adjustment.appliesTo;
   const applicableItems =
     target === "All"
       ? lineItems
@@ -603,6 +584,7 @@ export function calculateTotals(
   phases: BidwrightStore["phases"],
   adjustments: Adjustment[],
   revisionSchedules: WorksheetHourRateScheduleLike[] = [],
+  entityCategories: EntityCategory[] = [],
 ): RevisionTotals {
   const lineItems = worksheets.flatMap((worksheet) => worksheet.items);
   const {
@@ -614,7 +596,7 @@ export function calculateTotals(
   let subtotal = roundMoney(lineItems.reduce((sum, item) => sum + item.price, 0));
   const cost = roundMoney(lineItems.reduce((sum, item) => sum + computeItemCost(item), 0));
 
-  let breakout: BreakoutEntry[] = groupItemsForBreakout(revision.breakoutStyle, lineItems, phases)
+  let breakout: BreakoutEntry[] = groupItemsForBreakout(revision.breakoutStyle, lineItems, phases, entityCategories)
     .filter((group) => group.name)
     .map((group) => {
       const aggregates = computeAggregates(group.items);
@@ -913,7 +895,7 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     .filter((entry) => entry.revisionId === revision.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const revisionSchedules = getRevisionRateSchedules(store, revision.id);
-  const totals = calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules);
+  const totals = calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules, store.entityCategories ?? []);
   const summaryBuilder = buildSummaryBuilderConfig(
     (revision.pdfPreferences as Record<string, unknown> | undefined)?.summaryBuilder as any,
     summaryRows,
@@ -986,6 +968,7 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
       scheduleTaskIds.has(assignment.taskId),
     ),
     takeoffLinks: (store.takeoffLinks || []).filter((link) => link.projectId === projectId),
+    entityCategories: store.entityCategories ?? [],
     estimateStrategy,
     estimateFeedback,
     estimate: {
@@ -1337,7 +1320,7 @@ export function summarizeProjectTotals(store: BidwrightStore, projectId: string)
   const adjustments = store.adjustments.filter((adjustment) => adjustment.revisionId === revision.id);
   const revisionSchedules = getRevisionRateSchedules(store, revision.id);
 
-  return calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules);
+  return calculateTotals(revision, worksheets, phases, adjustments, revisionSchedules, store.entityCategories ?? []);
 }
 
 export function updateWorksheetItem(
