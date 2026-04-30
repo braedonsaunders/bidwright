@@ -1049,9 +1049,9 @@ export function registerQuoteTools(server: McpServer) {
   // ── applySummaryPreset ──────────────────────────────────────
   server.tool(
     "applySummaryPreset",
-    "Apply a summary preset to configure quote breakout. Presets: quick_total (single total), by_category (per category), by_phase (per phase), phase_x_category (phases with category detail), custom (empty). After applying, rows can be individually customized.",
+    "Apply a summary preset to configure quote breakout. Presets: quick_total (single total), by_category (per category), by_phase (per phase), by_worksheet (per worksheet), phase_x_category (phases with category detail), custom (empty). After applying, rows can be individually customized.",
     {
-      preset: z.enum(["quick_total", "by_category", "by_phase", "phase_x_category", "custom"]).describe("Preset name"),
+      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]).describe("Preset name"),
     },
     async ({ preset }) => {
       await apiPost(projectPath("/summary-rows/apply-preset"), { preset });

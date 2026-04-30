@@ -381,9 +381,9 @@ export interface AdditionalLineItem {
 
 export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
-export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "phase_x_category" | "custom";
+export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "by_worksheet" | "phase_x_category" | "custom";
 export type SummaryBuilderMode = "total" | "grouped" | "pivot";
-export type SummaryBuilderDimension = "none" | "phase" | "category";
+export type SummaryBuilderDimension = "none" | "phase" | "category" | "worksheet";
 
 export interface SummaryBuilderAxisItem {
   key: string;
@@ -1615,6 +1615,9 @@ export interface RevisionTotals {
   categoryTotals: SourceTotalEntry[];
   phaseTotals: SourceTotalEntry[];
   phaseCategoryTotals: SourceTotalEntry[];
+  worksheetTotals: SourceTotalEntry[];
+  worksheetCategoryTotals: SourceTotalEntry[];
+  worksheetPhaseTotals: SourceTotalEntry[];
   adjustmentTotals: AdjustmentTotalEntry[];
   tierUnitTotals?: Record<string, number>;
   breakout: BreakoutEntry[];

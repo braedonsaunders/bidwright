@@ -515,11 +515,20 @@ function affectsSubtotal(adjustment: Adjustment) {
 function buildSourceTotals(
   lineItems: WorksheetItem[],
   phases: BidwrightStore["phases"],
+  worksheets: Array<Worksheet & { items: WorksheetItem[] }> = [],
 ) {
   const phaseNameById = new Map(phases.map((phase) => [phase.id, phase.name]));
+  const worksheetNameById = new Map(worksheets.map((ws) => [ws.id, ws.name]));
   const categoryTotals = new Map<string, SourceTotalEntry>();
   const phaseTotals = new Map<string, SourceTotalEntry>();
   const phaseCategoryTotals = new Map<string, SourceTotalEntry>();
+  const worksheetTotals = new Map<string, SourceTotalEntry>();
+  const worksheetCategoryTotals = new Map<string, SourceTotalEntry>();
+  const worksheetPhaseTotals = new Map<string, SourceTotalEntry>();
+
+  for (const worksheet of worksheets) {
+    worksheetTotals.set(worksheet.id, createSourceEntry(worksheet.id, worksheet.name));
+  }
 
   for (const phase of phases) {
     phaseTotals.set(
@@ -537,6 +546,8 @@ function buildSourceTotals(
     const categoryId = categoryIdForName(categoryLabel);
     const phaseId = item.phaseId ?? "__unphased__";
     const phaseLabel = getPhaseLabel(item.phaseId, phaseNameById);
+    const worksheetId = item.worksheetId;
+    const worksheetLabel = worksheetNameById.get(worksheetId) ?? "Worksheet";
 
     const categoryEntry = categoryTotals.get(categoryId) ?? createSourceEntry(categoryId, categoryLabel);
     categoryEntry.value += item.price;
@@ -565,16 +576,46 @@ function buildSourceTotals(
     phaseCategoryEntry.value += item.price;
     phaseCategoryEntry.cost += computeItemCost(item);
     phaseCategoryTotals.set(phaseCategoryKey, phaseCategoryEntry);
+
+    const worksheetEntry = worksheetTotals.get(worksheetId) ?? createSourceEntry(worksheetId, worksheetLabel);
+    worksheetEntry.value += item.price;
+    worksheetEntry.cost += computeItemCost(item);
+    worksheetTotals.set(worksheetId, worksheetEntry);
+
+    const worksheetCategoryKey = `${worksheetId}::${categoryId}`;
+    const worksheetCategoryEntry =
+      worksheetCategoryTotals.get(worksheetCategoryKey) ?? createSourceEntry(worksheetCategoryKey, categoryLabel);
+    worksheetCategoryEntry.value += item.price;
+    worksheetCategoryEntry.cost += computeItemCost(item);
+    worksheetCategoryTotals.set(worksheetCategoryKey, worksheetCategoryEntry);
+
+    const worksheetPhaseKey = `${worksheetId}::${phaseId}`;
+    const worksheetPhaseEntry =
+      worksheetPhaseTotals.get(worksheetPhaseKey) ??
+      {
+        ...createSourceEntry(worksheetPhaseKey, phaseLabel),
+        phaseId,
+        phaseLabel,
+      };
+    worksheetPhaseEntry.value += item.price;
+    worksheetPhaseEntry.cost += computeItemCost(item);
+    worksheetPhaseTotals.set(worksheetPhaseKey, worksheetPhaseEntry);
   }
 
   updateSourceMargins(categoryTotals.values());
   updateSourceMargins(phaseTotals.values());
   updateSourceMargins(phaseCategoryTotals.values());
+  updateSourceMargins(worksheetTotals.values());
+  updateSourceMargins(worksheetCategoryTotals.values());
+  updateSourceMargins(worksheetPhaseTotals.values());
 
   return {
     categoryTotals,
     phaseTotals,
     phaseCategoryTotals,
+    worksheetTotals,
+    worksheetCategoryTotals,
+    worksheetPhaseTotals,
   };
 }
 
@@ -591,7 +632,10 @@ export function calculateTotals(
     categoryTotals: categoryTotalsMap,
     phaseTotals: phaseTotalsMap,
     phaseCategoryTotals: phaseCategoryTotalsMap,
-  } = buildSourceTotals(lineItems, phases);
+    worksheetTotals: worksheetTotalsMap,
+    worksheetCategoryTotals: worksheetCategoryTotalsMap,
+    worksheetPhaseTotals: worksheetPhaseTotalsMap,
+  } = buildSourceTotals(lineItems, phases, worksheets);
 
   let subtotal = roundMoney(lineItems.reduce((sum, item) => sum + item.price, 0));
   const cost = roundMoney(lineItems.reduce((sum, item) => sum + computeItemCost(item), 0));
@@ -758,6 +802,9 @@ export function calculateTotals(
   updateSourceMargins(categoryTotalsMap.values());
   updateSourceMargins(phaseTotalsMap.values());
   updateSourceMargins(phaseCategoryTotalsMap.values());
+  updateSourceMargins(worksheetTotalsMap.values());
+  updateSourceMargins(worksheetCategoryTotalsMap.values());
+  updateSourceMargins(worksheetPhaseTotalsMap.values());
 
   const allItemHours = lineItems.map((item) => computeItemHours(item, revisionSchedules));
   const regHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit1, 0));
@@ -791,6 +838,9 @@ export function calculateTotals(
     categoryTotals: sortSourceEntries(Array.from(categoryTotalsMap.values())),
     phaseTotals: sortSourceEntries(Array.from(phaseTotalsMap.values())),
     phaseCategoryTotals: sortSourceEntries(Array.from(phaseCategoryTotalsMap.values())),
+    worksheetTotals: sortSourceEntries(Array.from(worksheetTotalsMap.values())),
+    worksheetCategoryTotals: sortSourceEntries(Array.from(worksheetCategoryTotalsMap.values())),
+    worksheetPhaseTotals: sortSourceEntries(Array.from(worksheetPhaseTotalsMap.values())),
     adjustmentTotals: adjustmentTotals.map((entry) => ({
       ...entry,
       value: roundMoney(entry.value),

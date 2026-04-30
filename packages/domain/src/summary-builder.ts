@@ -39,6 +39,9 @@ function sourceEntriesForDimension(dimension: SummaryBuilderDimension, totals: R
   if (dimension === "category") {
     return totals.categoryTotals.filter((entry) => entry.value !== 0 || entry.cost !== 0);
   }
+  if (dimension === "worksheet") {
+    return (totals.worksheetTotals ?? []).filter((entry) => entry.value !== 0 || entry.cost !== 0);
+  }
   return [];
 }
 
@@ -95,6 +98,9 @@ export function inferSummaryPresetFromBuilder(config: Pick<SummaryBuilderConfig,
   if (config.mode === "grouped" && config.rowDimension === "category") {
     return "by_category";
   }
+  if (config.mode === "grouped" && config.rowDimension === "worksheet") {
+    return "by_worksheet";
+  }
   if (config.mode === "pivot" && config.rowDimension === "phase" && config.columnDimension === "category") {
     return "phase_x_category";
   }
@@ -136,6 +142,19 @@ export function createSummaryBuilderPreset(preset: SummaryPreset, totals: Revisi
       rowDimension: "category",
       columnDimension: "none",
       rows: mergeAxisItems("category", [], totals),
+      columns: [],
+      totals: { label: "Grand Total", visible: true },
+    };
+  }
+
+  if (preset === "by_worksheet") {
+    return {
+      version: 1,
+      preset: "by_worksheet",
+      mode: "grouped",
+      rowDimension: "worksheet",
+      columnDimension: "none",
+      rows: mergeAxisItems("worksheet", [], totals),
       columns: [],
       totals: { label: "Grand Total", visible: true },
     };
@@ -359,6 +378,21 @@ export function materializeSummaryRowsFromBuilder(
 
   if (config.mode === "grouped") {
     for (const row of visibleRows) {
+      if (config.rowDimension === "worksheet") {
+        // No legacy field for worksheet — represent as a heading so persistence stays intact.
+        rows.push({
+          type: "heading",
+          label: row.label,
+          order: rows.length,
+          visible: true,
+          style: "normal",
+          sourceCategoryId: null,
+          sourceCategoryLabel: null,
+          sourcePhaseId: null,
+          sourceAdjustmentId: null,
+        });
+        continue;
+      }
       rows.push({
         type: config.rowDimension === "phase" ? "phase" : "category",
         label: row.label,
@@ -374,6 +408,20 @@ export function materializeSummaryRowsFromBuilder(
   } else if (config.mode === "pivot") {
     for (const row of visibleRows) {
       for (const column of visibleColumns) {
+        if (config.rowDimension === "worksheet" || config.columnDimension === "worksheet") {
+          rows.push({
+            type: "heading",
+            label: `${row.label} — ${column.label}`,
+            order: rows.length,
+            visible: true,
+            style: "normal",
+            sourceCategoryId: null,
+            sourceCategoryLabel: null,
+            sourcePhaseId: null,
+            sourceAdjustmentId: null,
+          });
+          continue;
+        }
         rows.push({
           type: "category",
           label: `${row.label} — ${column.label}`,
