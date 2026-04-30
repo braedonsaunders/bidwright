@@ -2202,51 +2202,28 @@ export function EstimateGrid({
       if (column === "uom") {
         const validUoms = catDef?.validUoms ?? ["EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS"];
         return (
-          <td
-            className={cn("border-b border-line px-2 py-1 text-xs", className)}
-            onKeyDownCapture={(e) => {
-              if (e.key === "Enter") e.stopPropagation();
-            }}
-          >
-            <RadixSelect.Root
+          <td className={cn("border-b border-line px-2 py-1 text-xs", className)}>
+            <Select
+              size="xs"
               defaultOpen
               value={editValue}
               onValueChange={(val) => {
                 setEditValue(val);
                 setEditingCell(null);
-                commitItemPatch(row.id, { uom: val });
+                setSelectedCell({ rowId: row.id, column });
+                setSelectedRowId(row.id);
+                if (val !== row.uom) commitItemPatch(row.id, { uom: val });
               }}
               onOpenChange={(o) => {
                 if (!o && editingCell?.rowId === row.id && editingCell?.column === column) {
                   setEditingCell(null);
+                  setSelectedCell({ rowId: row.id, column });
+                  setSelectedRowId(row.id);
                 }
               }}
-            >
-              <RadixSelect.Trigger
-                className="inline-flex h-6 w-full min-w-0 items-center justify-between gap-1 rounded border border-accent/50 bg-bg px-1.5 text-[11px] text-fg outline-none"
-              >
-                <RadixSelect.Value />
-                <RadixSelect.Icon><ChevronDown className="h-3 w-3 text-fg/40" /></RadixSelect.Icon>
-              </RadixSelect.Trigger>
-              <RadixSelect.Portal>
-                <RadixSelect.Content position="popper" sideOffset={4} className="z-[300] overflow-hidden rounded-lg border border-line bg-panel shadow-xl">
-                  <RadixSelect.Viewport className="p-1 max-h-[280px]">
-                    {validUoms.map((u) => (
-                      <RadixSelect.Item
-                        key={u}
-                        value={u}
-                        className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
-                      >
-                        <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
-                          <Check className="h-3.5 w-3.5" />
-                        </RadixSelect.ItemIndicator>
-                        <RadixSelect.ItemText>{u}</RadixSelect.ItemText>
-                      </RadixSelect.Item>
-                    ))}
-                  </RadixSelect.Viewport>
-                </RadixSelect.Content>
-              </RadixSelect.Portal>
-            </RadixSelect.Root>
+              triggerClassName="h-6 min-w-0 border-accent/50 rounded bg-bg px-1.5"
+              options={validUoms.map((u) => ({ value: u, label: u }))}
+            />
           </td>
         );
       }
@@ -2255,61 +2232,32 @@ export function EstimateGrid({
         const phases = workspace.phases ?? [];
         const PHASE_NONE = "__none__";
         return (
-          <td
-            className={cn("border-b border-line px-2 py-1 text-xs", className)}
-            onKeyDownCapture={(e) => {
-              if (e.key === "Enter") e.stopPropagation();
-            }}
-          >
-            <RadixSelect.Root
+          <td className={cn("border-b border-line px-2 py-1 text-xs", className)}>
+            <Select
+              size="xs"
               defaultOpen
               value={editValue || PHASE_NONE}
               onValueChange={(val) => {
                 const realVal = val === PHASE_NONE ? "" : val;
                 setEditValue(realVal);
                 setEditingCell(null);
-                commitItemPatch(row.id, { phaseId: realVal || null });
+                setSelectedCell({ rowId: row.id, column });
+                setSelectedRowId(row.id);
+                if (realVal !== (row.phaseId ?? "")) commitItemPatch(row.id, { phaseId: realVal || null });
               }}
               onOpenChange={(o) => {
                 if (!o && editingCell?.rowId === row.id && editingCell?.column === column) {
                   setEditingCell(null);
+                  setSelectedCell({ rowId: row.id, column });
+                  setSelectedRowId(row.id);
                 }
               }}
-            >
-              <RadixSelect.Trigger
-                className="inline-flex h-6 w-full min-w-0 items-center justify-between gap-1 rounded border border-accent/50 bg-bg px-1.5 text-[11px] text-fg outline-none"
-              >
-                <RadixSelect.Value />
-                <RadixSelect.Icon><ChevronDown className="h-3 w-3 text-fg/40" /></RadixSelect.Icon>
-              </RadixSelect.Trigger>
-              <RadixSelect.Portal>
-                <RadixSelect.Content position="popper" sideOffset={4} className="z-[300] overflow-hidden rounded-lg border border-line bg-panel shadow-xl">
-                  <RadixSelect.Viewport className="p-1 max-h-[280px]">
-                    <RadixSelect.Item
-                      value={PHASE_NONE}
-                      className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
-                    >
-                      <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
-                        <Check className="h-3.5 w-3.5" />
-                      </RadixSelect.ItemIndicator>
-                      <RadixSelect.ItemText>None</RadixSelect.ItemText>
-                    </RadixSelect.Item>
-                    {phases.map((p) => (
-                      <RadixSelect.Item
-                        key={p.id}
-                        value={p.id}
-                        className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
-                      >
-                        <RadixSelect.ItemIndicator className="absolute left-2 inline-flex items-center text-accent">
-                          <Check className="h-3.5 w-3.5" />
-                        </RadixSelect.ItemIndicator>
-                        <RadixSelect.ItemText>{`${p.number} - ${p.name}`}</RadixSelect.ItemText>
-                      </RadixSelect.Item>
-                    ))}
-                  </RadixSelect.Viewport>
-                </RadixSelect.Content>
-              </RadixSelect.Portal>
-            </RadixSelect.Root>
+              triggerClassName="h-6 min-w-0 border-accent/50 rounded bg-bg px-1.5"
+              options={[
+                { value: PHASE_NONE, label: "None" },
+                ...phases.map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+              ]}
+            />
           </td>
         );
       }
@@ -2479,15 +2427,19 @@ export function EstimateGrid({
                         e.preventDefault();
                         if (len > 0) setEntityHighlightIdx(len - 1);
                       } else if (e.key === "Enter") {
-                        if (len === 0) return;
                         e.preventDefault();
-                        selectFlatItem(entityHighlightIdx);
+                        if (len > 0) selectFlatItem(entityHighlightIdx);
                       } else if (e.key === "Tab") {
-                        if (len === 0) return;
                         e.preventDefault();
                         const advancing = !e.shiftKey;
                         const targetRowId = row.id;
-                        selectFlatItem(entityHighlightIdx);
+                        if (len > 0) {
+                          selectFlatItem(entityHighlightIdx);
+                        } else {
+                          setEntityDropdownRowId(null);
+                          setEntityDropdownPos(null);
+                          setEntitySearchTerm("");
+                        }
                         // After selecting, hop to the next/prev editable cell
                         setTimeout(() => {
                           if (advancing) advanceToNextCell(targetRowId, "entityName");
