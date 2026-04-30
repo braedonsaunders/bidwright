@@ -158,14 +158,32 @@ packages/
 
 ## Run it locally
 
-### Prerequisites
+There are two paths depending on what you want to do.
 
-- Node.js 20+
-- pnpm 10+
-- Docker Desktop
-- Optional: OpenAI and/or Anthropic API keys for AI features
+### Just run Bidwright (no Node, no pnpm, no source build)
 
-### Fastest dev path
+For self-hosters who want to use Bidwright, not work on it. The only thing
+you need installed is **Docker Desktop**.
+
+1. Download this repo as a ZIP (green **Code** button → **Download ZIP**) or
+   `git clone` it.
+2. Open the `scripts/launcher/` folder.
+3. Double-click `start.bat` (Windows) or `start.command` (macOS).
+
+The launcher pulls prebuilt images from GitHub Container Registry, starts
+Postgres / Redis / Ollama / api / web / worker, and opens the app at
+`http://localhost:3000`. First run downloads ~5 GB.
+
+Stop with `stop.bat` / `stop.command`. Pull the latest version with
+`update.bat` / `update.command`. AI provider keys (Anthropic, OpenAI, etc.)
+go in **Settings → Integrations** inside the app — not in environment
+variables. See [scripts/launcher/README.md](./scripts/launcher/README.md)
+for ports, version pinning, logs, and reset.
+
+### Develop on Bidwright
+
+If you're going to edit code, you need Node.js 20+, pnpm 10+, and Docker
+Desktop. Optionally an OpenAI and/or Anthropic API key.
 
 ```bash
 pnpm install
