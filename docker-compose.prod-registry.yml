@@ -1,0 +1,159 @@
+# Production compose — registry mode.
+#
+# Mirrors docker-compose.prod.yml but pulls prebuilt images from GHCR
+# instead of building them on the deploy host. Pin BIDWRIGHT_TAG in
+# .env.server to a specific :sha-* tag for immutable releases; rolling
+# back is then a tag swap + `docker compose up -d`.
+#
+# The build-mode compose (docker-compose.prod.yml) is retained as a
+# documented fallback path. remote-deploy.sh selects between them via
+# the COMPOSE_FILE / DEPLOY_MODE variables.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-bidwright}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-bidwright}"
+      POSTGRES_DB: "${POSTGRES_DB:-bidwright}"
+    volumes:
+      - ${POSTGRES_DATA_PATH:-pgdata}:/var/lib/postgresql/data
+      - ./scripts/db/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bidwright} -d ${POSTGRES_DB:-bidwright}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - ${REDIS_DATA_PATH:-redisdata}:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama
+    profiles:
+      - embeddings
+    restart: unless-stopped
+    volumes:
+      - ${OLLAMA_DATA_PATH:-ollama_data}:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  ollama-init:
+    image: curlimages/curl:latest
+    profiles:
+      - embeddings
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "curl -sf -X POST http://ollama:11434/api/pull -d '{\"name\":\"${EMBEDDING_MODEL:-snowflake-arctic-embed}\"}' && echo 'Model ready'"
+
+  # Runs Prisma db:push using the runtime API image (which carries the schema
+  # and pnpm tooling because it COPYs the full /app from the builder stage).
+  # No build target needed — we run the same image that powers the API service.
+  db-migrate:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+    restart: "no"
+    command: ["pnpm", "--filter", "@bidwright/db", "db:push"]
+
+  api:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      DATA_DIR: "${DATA_DIR:-/data}"
+      API_PORT: "${API_PORT:-3001}"
+      CLAUDE_CONFIG_DIR: "${CLAUDE_CONFIG_DIR:-/root/.claude}"
+      CODEX_HOME: "${CODEX_HOME:-/root/.codex}"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
+    volumes:
+      - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
+      - ${CLAUDE_CONFIG_PATH:-/opt/bidwright/data/agent-home/claude}:/root/.claude
+      - ${CODEX_HOME_PATH:-/opt/bidwright/data/agent-home/codex}:/root/.codex
+    ports:
+      - "${API_PUBLIC_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-web:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}"
+      INTERNAL_API_BASE_URL: "http://api:3001"
+    ports:
+      - "${WEB_PUBLIC_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      DATA_DIR: "${DATA_DIR:-/data}"
+      API_PORT: "${API_PORT:-3001}"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    volumes:
+      - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  ollama_data:
