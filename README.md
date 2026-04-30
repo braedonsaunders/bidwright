@@ -16,8 +16,6 @@
   Drop the bid package. Index the spec. Take off the drawings <em>and</em> the model. Parameterize the assemblies. Price it with real burdens. Let the agent review it. Send the branded quote.
 </p>
 
-> Bidwright is under active development. This README is written around capabilities already present in the repo today. Where something is foundational rather than fully shipped, it's called out.
-
 ## Why estimators care
 
 Estimating today is duct tape: a PDF viewer, a takeoff app, a spreadsheet from 2014, a pricing book in someone's drawer, a schedule in a separate tool, and a chatbot that doesn't know what project you're on.
@@ -109,7 +107,7 @@ Bind them to **Estimator Personas** — per-trade AI configurations with system 
 
 Drop in a plugin with a config schema and tool definitions, and it shows up in the agent's tool registry and the UI. Every execution is tracked (input, formstate, output, applied line items) so plugins are auditable, not magic.
 
-## What's in the box (verified, today)
+## What's in the box
 
 | Area | Live capabilities |
 | --- | --- |

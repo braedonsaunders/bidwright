@@ -12,6 +12,29 @@ permissions:
   packages: write
 
 jobs:
+  # Detect whether anything outside docs/README changed. Used to gate the
+  # publish + deploy jobs so a README-only push doesn't rebuild images
+  # or redeploy prod.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!README.md'
+              - '!docs/**'
+              - '!.github/codeflow-card.svg'
+              - '!.github/workflows/codeflow-card.yml'
+              - '!**/*.md'
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -70,11 +93,13 @@ jobs:
   publish:
     needs:
       - verify
+      - changes
     runs-on: ubuntu-latest
     timeout-minutes: 60
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      && needs.changes.outputs.code == 'true'
     permissions:
       contents: read
       packages: write
@@ -135,15 +160,17 @@ jobs:
     needs:
       - verify
       - publish
+      - changes
     # Deploys run from a self-hosted runner that can reach the configured target host.
     runs-on: [self-hosted, linux, x64, bidwright-prod]
     timeout-minutes: 40
     environment: production
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' &&
-       github.ref == 'refs/heads/main' &&
-       vars.ENABLE_SERVER_DEPLOY == 'true')
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' &&
+        vars.ENABLE_SERVER_DEPLOY == 'true'))
+      && needs.changes.outputs.code == 'true'
     concurrency:
       group: bidwright-production-deploy
       cancel-in-progress: false
