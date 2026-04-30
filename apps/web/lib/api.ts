@@ -739,6 +739,12 @@ export interface EntityCategory {
   calcFormula: string;
   itemSource: "rate_schedule" | "catalog" | "freeform";
   catalogId?: string | null;
+  /**
+   * Analytics roll-up bucket. Drives the labour/material/equipment breakout
+   * style and per-bucket benchmark fields. Free string; common values:
+   * "labour" / "material" / "equipment" / "subcontractor" / "allowance".
+   */
+  analyticsBucket?: string | null;
   color: string;
   order: number;
   isBuiltIn: boolean;

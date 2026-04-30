@@ -248,6 +248,7 @@ export const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
   calcFormula: "",
   itemSource: "freeform",
   catalogId: null,
+  analyticsBucket: null,
   color: "#6366f1",
   order: 999,
   isBuiltIn: false,
