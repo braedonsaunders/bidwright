@@ -34,6 +34,7 @@ jobs:
               - '!.github/codeflow-card.svg'
               - '!.github/workflows/codeflow-card.yml'
               - '!**/*.md'
+              - '!scripts/launcher/**'
 
   verify:
     runs-on: ubuntu-latest

@@ -10,6 +10,29 @@ just Docker.
 - ~10 GB of free disk space (images + initial database + embedding model)
 - About 5 minutes for the first launch
 
+## Install
+
+The fastest path is the one-liner installer — it grabs just the launcher
+files (no source checkout) and starts the stack:
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.ps1 | iex
+```
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.sh | bash
+```
+
+Files install to `~/bidwright` by default (override with the
+`BIDWRIGHT_DIR` env var).
+
+If you'd rather do it by hand, copy this folder anywhere and run the
+scripts directly.
+
 ## Start
 
 - **Windows:** double-click `start.bat`
