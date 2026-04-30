@@ -200,12 +200,18 @@ jobs:
 
       - name: Deploy release on server
         run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
           ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "
             set -euo pipefail
             RELEASE_DIR='$DEPLOY_BASE/releases/$GITHUB_SHA'
             mkdir -p \"\$RELEASE_DIR/app\"
             tar -xzf \"\$RELEASE_DIR/release.tgz\" -C \"\$RELEASE_DIR/app\"
             chmod +x \"\$RELEASE_DIR/app/scripts/deploy/remote-deploy.sh\" \"\$RELEASE_DIR/app/scripts/deploy/restore-server-state.sh\"
+            # If the env file pins BIDWRIGHT_TAG (registry mode), point it at this commit's image.
+            # Build mode doesn't carry that line and is left untouched.
+            if grep -q '^BIDWRIGHT_TAG=' '$DEPLOY_ENV_FILE'; then
+              sed -i 's/^BIDWRIGHT_TAG=.*/BIDWRIGHT_TAG=sha-$SHORT_SHA/' '$DEPLOY_ENV_FILE'
+            fi
             DEPLOY_BASE='$DEPLOY_BASE' \
             ENV_FILE='$DEPLOY_ENV_FILE' \
             COMPOSE_PROJECT_NAME='$DEPLOY_COMPOSE_PROJECT_NAME' \
