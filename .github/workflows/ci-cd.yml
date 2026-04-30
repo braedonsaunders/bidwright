@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   verify:
@@ -60,9 +61,80 @@ jobs:
       - name: Validate production compose
         run: docker compose -f docker-compose.prod.yml config > /dev/null
 
+      - name: Validate production registry compose
+        run: docker compose -f docker-compose.prod-registry.yml config > /dev/null
+
+      - name: Validate launcher compose
+        run: docker compose -f scripts/launcher/docker-compose.yml config > /dev/null
+
+  publish:
+    needs:
+      - verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: Dockerfile.api
+          - service: web
+            dockerfile: Dockerfile.web
+          - service: worker
+            dockerfile: Dockerfile.worker
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase repository owner
+        id: repo
+        run: echo "owner_lc=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.repo.outputs.owner_lc }}/bidwright-${{ matrix.service }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          provenance: false
+
   deploy:
     needs:
       - verify
+      - publish
     # Deploys run from a self-hosted runner that can reach the configured target host.
     runs-on: [self-hosted, linux, x64, bidwright-prod]
     timeout-minutes: 40

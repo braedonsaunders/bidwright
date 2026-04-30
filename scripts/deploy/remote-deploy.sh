@@ -17,6 +17,32 @@ set -a
 . "${ENV_FILE}"
 set +a
 
+# DEPLOY_MODE selects which compose file backs the stack:
+#   build    — docker-compose.prod.yml, builds images on this host (legacy)
+#   registry — docker-compose.prod-registry.yml, pulls images from GHCR
+# Default is build so an unconfigured server keeps the legacy behaviour.
+DEPLOY_MODE="${DEPLOY_MODE:-build}"
+
+if [[ "${DEPLOY_MODE}" == "registry" ]]; then
+  COMPOSE_FILE="${COMPOSE_FILE:-${APP_DIR}/docker-compose.prod-registry.yml}"
+elif [[ "${DEPLOY_MODE}" == "build" ]]; then
+  COMPOSE_FILE="${COMPOSE_FILE:-${APP_DIR}/docker-compose.prod.yml}"
+else
+  echo "Unsupported DEPLOY_MODE: ${DEPLOY_MODE} (expected 'build' or 'registry')" >&2
+  exit 1
+fi
+
+if [[ ! -f "${COMPOSE_FILE}" ]]; then
+  echo "Missing compose file: ${COMPOSE_FILE}" >&2
+  exit 1
+fi
+
+echo "Deploy mode: ${DEPLOY_MODE}"
+echo "Compose file: ${COMPOSE_FILE}"
+if [[ "${DEPLOY_MODE}" == "registry" ]]; then
+  echo "Image tag: ${BIDWRIGHT_TAG:-latest} from ${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}"
+fi
+
 mkdir -p \
   "${DEPLOY_BASE}/releases" \
   "${BIDWRIGHT_DATA_PATH:-${DEPLOY_BASE}/data/app}" \
@@ -30,7 +56,7 @@ compose() {
   docker compose \
     -p "${COMPOSE_PROJECT_NAME}" \
     --env-file "${ENV_FILE}" \
-    -f "${APP_DIR}/docker-compose.prod.yml" \
+    -f "${COMPOSE_FILE}" \
     "$@"
 }
 
@@ -90,6 +116,13 @@ smoke_pdf_generation() {
 }
 
 compose_up_profiles config >/dev/null
+
+# Registry mode: fail fast if images aren't available before we touch the running stack.
+if [[ "${DEPLOY_MODE}" == "registry" ]]; then
+  echo "Pulling images from registry..."
+  compose_up_profiles pull
+fi
+
 compose up -d postgres redis
 wait_for_postgres
 
@@ -98,11 +131,20 @@ if is_local_embeddings; then
   compose_up_profiles run --rm ollama-init
 fi
 
-compose build db-migrate
+# Build mode rebuilds the migrate image from source; registry mode reuses
+# the runtime API image, so no build step is needed.
+if [[ "${DEPLOY_MODE}" == "build" ]]; then
+  compose build db-migrate
+fi
 cleanup_db_migrate_container
 compose run --rm db-migrate
 compose run --rm db-migrate sh -lc "pnpm --filter @bidwright/db exec tsx src/run-seed-datasets.ts && pnpm --filter @bidwright/db exec tsx src/run-seed-plugins.ts"
-compose_up_profiles up -d --build --remove-orphans api web worker
+
+if [[ "${DEPLOY_MODE}" == "build" ]]; then
+  compose_up_profiles up -d --build --remove-orphans api web worker
+else
+  compose_up_profiles up -d --remove-orphans api web worker
+fi
 cleanup_db_migrate_container
 
 wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
