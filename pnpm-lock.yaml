@@ -35,6 +35,9 @@ importers:
       '@bidwright/ingestion':
         specifier: workspace:*
         version: link:../../packages/ingestion
+      '@bidwright/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       '@bidwright/vector':
         specifier: workspace:*
         version: link:../../packages/vector
@@ -259,6 +262,9 @@ importers:
       '@bidwright/ingestion':
         specifier: workspace:*
         version: link:../../packages/ingestion
+      '@bidwright/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       bullmq:
         specifier: ^5.34.8
         version: 5.71.0
@@ -342,6 +348,12 @@ importers:
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
+  packages/integrations:
+    dependencies:
       zod:
         specifier: ^3.24.1
         version: 3.25.76

@@ -83,6 +83,8 @@ import { labourCostRoutes } from "./routes/labour-cost-routes.js";
 import { burdenRoutes } from "./routes/burden-routes.js";
 import { travelPolicyRoutes } from "./routes/travel-policy-routes.js";
 import { settingsRoutes } from "./routes/settings-routes.js";
+import { integrationsRoutes } from "./routes/integrations-routes.js";
+import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
@@ -5151,6 +5153,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(burdenRoutes);
   app.register(travelPolicyRoutes);
   app.register(settingsRoutes);
+  app.register(integrationsRoutes);
+  app.register(webhooksRoutes);
   app.register(estimateRoutes);
   app.register(catalogRoutes);
   app.register(assemblyRoutes);

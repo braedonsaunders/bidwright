@@ -8,7 +8,7 @@ export const STORAGE_KEY = "bidwright-settings";
 export type SettingsGroup = "organization" | "data" | "integrations" | "users";
 export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
 export type DataSubTab = "categories" | "clients" | "conditions" | "catalogs" | "assemblies" | "rates" | "costs" | "travel";
-export type IntegrationsSubTab = "email" | "apikeys" | "agent" | "plugins";
+export type IntegrationsSubTab = "agent" | "apikeys" | "email" | "plugins" | "integrations";
 
 export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "general", label: "General" },
@@ -35,6 +35,7 @@ export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] =
   { id: "apikeys", label: "API Keys" },
   { id: "email", label: "Email" },
   { id: "plugins", label: "Plugins" },
+  { id: "integrations", label: "Integrations" },
 ];
 
 export interface GeneralSettings {

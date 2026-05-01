@@ -1,0 +1,75 @@
+import type { IntegrationManifest } from "../manifest/schema.js";
+
+export const netsuiteManifest: IntegrationManifest = {
+  id: "netsuite",
+  version: "1.0.0",
+  name: "NetSuite",
+  description: "Sync NetSuite customers, items, and invoices via SuiteTalk REST.",
+  category: "erp",
+  vendor: "Oracle NetSuite",
+  source: "builtin",
+  homepage: "https://www.netsuite.com",
+  docsUrl: "https://docs.oracle.com/en/cloud/saas/netsuite/",
+  icon: "NetSuite",
+  tags: ["erp", "oauth"],
+  connection: {
+    // NetSuite REST is account-scoped: {accountId}.suitetalk.api.netsuite.com
+    baseUrl: "https://{{config.accountId}}.suitetalk.api.netsuite.com/services/rest",
+    allowedHosts: ["*.suitetalk.api.netsuite.com", "*.app.netsuite.com", "system.netsuite.com"],
+    auth: {
+      type: "oauth2",
+      flow: "authorization_code",
+      authUrl: "https://{{config.accountId}}.app.netsuite.com/app/login/oauth2/authorize.nl",
+      tokenUrl: "https://{{config.accountId}}.suitetalk.api.netsuite.com/services/rest/auth/oauth2/v1/token",
+      scopes: ["restlets", "rest_webservices"],
+      scopeSeparator: " ",
+      tokenPlacement: "header",
+      tokenParamName: "Authorization",
+      tokenPrefix: "Bearer ",
+      pkce: false,
+      extraAuthParams: {},
+      extraTokenParams: {},
+      tokenRequestStyle: "form",
+    },
+    fields: [
+      {
+        key: "accountId",
+        label: "NetSuite Account ID",
+        type: "string",
+        required: true,
+        helpText: "Your NetSuite account id, lowercased and dash-separated where applicable (e.g. '12345' or '12345_sb1' for sandbox).",
+      },
+    ],
+    test: { method: "GET", path: "/record/v1/customer?limit=1", expectStatus: [200], headers: {} },
+  },
+  capabilities: {
+    actions: [
+      {
+        id: "find_customer",
+        name: "Find customer",
+        description: "Search NetSuite customers by email or company name.",
+        input: [
+          { name: "email", type: "string", description: "Email", required: false },
+          { name: "companyName", type: "string", description: "Company name", required: false },
+        ],
+        output: { select: "$.items[0]" },
+        request: {
+          method: "GET",
+          path: "/record/v1/customer",
+          query: { q: "email IS '{{input.email}}'", limit: "1" },
+          headers: {},
+          body: undefined,
+          bodyEncoding: "none",
+          timeoutMs: 30_000,
+          retry: { maxAttempts: 3, initialDelayMs: 500, backoff: "exponential", retryOnStatus: [408, 429, 500, 502, 503, 504] },
+        },
+        mutates: false,
+        requiresConfirmation: false,
+        tags: ["read"],
+      },
+    ],
+    triggers: [],
+    syncs: [],
+  },
+  ui: { sections: [] },
+};
