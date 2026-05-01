@@ -9,6 +9,7 @@ COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
 COPY packages/ai/package.json packages/ai/
 COPY packages/ingestion/package.json packages/ingestion/
+COPY packages/integrations/package.json packages/integrations/
 COPY packages/vector/package.json packages/vector/
 COPY packages/agent/package.json packages/agent/
 COPY apps/worker/package.json apps/worker/
