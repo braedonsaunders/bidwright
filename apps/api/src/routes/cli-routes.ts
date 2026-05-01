@@ -1084,8 +1084,18 @@ export function registerCliRoutes(app: FastifyInstance) {
 
     await generateInstructionFiles(runtime, params);
 
-    // Create AiRun record
+    // Create AiRun record. If the user typed an explicit prompt to kick the
+    // session off, seed it as a "message" event so the chat panel renders
+    // (and keeps rendering across reloads/polls) the user's bubble.
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    const seededEvents: PersistedCliEvent[] = [];
+    if (typeof prompt === "string" && prompt.trim()) {
+      seededEvents.push({
+        type: "message",
+        data: { role: "user", content: prompt.trim() },
+        timestamp: new Date().toISOString(),
+      });
+    }
     await store.createAiRun({
       id: sessionId,
       projectId,
@@ -1094,7 +1104,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       status: "running",
       model: model || adapter.defaultModel,
       input: { runtime, scope: effectiveScope, documentCount: documents.length } as any,
-      output: { events: [] } as any,
+      output: { events: seededEvents } as any,
     });
 
     await prisma.estimateStrategy.upsert({
@@ -1345,6 +1355,16 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
 
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    // Persist the user's prompt as a "message" event so the chat panel's
+    // rebuild paths (initial restore / poll / terminal-status) keep the
+    // user's bubble visible. Without this, the bubble survives only as
+    // local React state and disappears the moment the client reloads
+    // messages from the server.
+    const userMessageEvent: PersistedCliEvent = {
+      type: "message",
+      data: { role: "user", content: message },
+      timestamp: new Date().toISOString(),
+    };
     await store.createAiRun({
       id: sessionId,
       projectId,
@@ -1358,7 +1378,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         followUp: true,
         previousAiRunId: latestRun?.id ?? null,
       } as any,
-      output: { events: [] } as any,
+      output: { events: [userMessageEvent] } as any,
     });
     await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, sessionId);
 
