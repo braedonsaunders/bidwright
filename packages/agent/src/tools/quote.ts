@@ -511,7 +511,7 @@ If the server rejects your item, read the error message — it will tell you wha
 export const updateWorksheetItemTool = createQuoteTool({
   id: "quote.updateWorksheetItem",
   name: "Update Line Item",
-  description: "Update an existing line item. Only fields provided will be changed.",
+  description: "Update an existing line item. Only fields provided will be changed. When pointing an item at a different rate-schedule item (e.g. swapping MECH labour for SHOP labour), pass BOTH rateScheduleItemId AND tierUnits in the same call — the server keeps the previously persisted tierUnits otherwise, which leaves stale tier IDs that price to $0.",
   inputSchema: z.object({
     itemId: z.string().describe("ID of the line item to update"),
     category: z.string().optional().describe("Item category"),
@@ -525,7 +525,9 @@ export const updateWorksheetItemTool = createQuoteTool({
     unit1: z.number().optional().describe("Unit 1 value per unit"),
     unit2: z.number().optional().describe("Unit 2 value per unit"),
     unit3: z.number().optional().describe("Unit 3 value per unit"),
-    phaseId: z.string().optional().describe("Phase ID"),
+    rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass with tierUnits when re-pointing labour/equipment at a different schedule. Pass null to clear."),
+    tierUnits: z.record(z.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. Required when changing rateScheduleItemId; otherwise the previously persisted tierUnits stay and price calculations break."),
+    phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
     sortOrder: z.number().optional().describe("Sort order"),
     sourceNotes: z.string().optional().describe("Source citations and notes — knowledge refs, dataset lookups, correction factors, web URLs, assumptions"),
   }),

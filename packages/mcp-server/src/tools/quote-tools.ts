@@ -490,7 +490,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── updateWorksheetItem ───────────────────────────────────
   server.tool(
     "updateWorksheetItem",
-    "Update an existing line item. Only provided fields are changed.",
+    "Update an existing line item. Only provided fields are changed. When re-pointing an item at a different rate-schedule item (e.g. swapping MECH labour for SHOP labour), pass BOTH rateScheduleItemId AND tierUnits in the same call — the server keeps the previously persisted tierUnits otherwise, leaving stale tier IDs that price to $0.",
     {
       itemId: z.string().describe("Line item ID"),
       entityName: z.string().optional(),
@@ -503,7 +503,10 @@ export function registerQuoteTools(server: McpServer) {
       unit1: z.number().optional(),
       unit2: z.number().optional(),
       unit3: z.number().optional(),
-      rateScheduleItemId: z.string().optional(),
+      rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
+      tierUnits: z.record(z.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
+      phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
+      sourceNotes: z.string().optional(),
       catalogItemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
     },
     async ({ itemId, catalogItemId, ...patch }) => {

@@ -4658,6 +4658,56 @@ export class PrismaApiStore {
     }
 
     // ── Resolve tierUnit keys to full tier IDs ────────────
+    // When the rate-schedule item is changing in this patch, remap existing
+    // tierUnits onto the NEW schedule's tiers by name. Otherwise the persisted
+    // tierUnits keep pointing at the old schedule's tier IDs and the calc
+    // engine prices the line at $0 because those IDs aren't in the new
+    // schedule's rates. This catches the agent flow that re-points labour
+    // items at a different schedule (e.g. MECH → SHOP) without explicitly
+    // sending tierUnits.
+    const rateScheduleIdChanged =
+      normalizedPatch.rateScheduleItemId !== undefined &&
+      normalizedPatch.rateScheduleItemId !== item.rateScheduleItemId;
+    if (
+      rateScheduleIdChanged &&
+      normalizedPatch.tierUnits === undefined &&
+      domainItem.rateScheduleItemId &&
+      domainItem.tierUnits &&
+      Object.keys(domainItem.tierUnits).length > 0
+    ) {
+      const targetSchedule = revisionScheduleRows.find((s) =>
+        (s.items ?? []).some((ri) => ri.id === domainItem.rateScheduleItemId),
+      );
+      if (targetSchedule) {
+        const oldTierById = new Map<string, { id: string; name: string }>(
+          revisionScheduleRows.flatMap((s) =>
+            (s.tiers ?? []).map((t: any) => [t.id, { id: t.id, name: (t.name as string) ?? "" }]),
+          ),
+        );
+        const newTiers = (targetSchedule.tiers ?? []).map((t: any) => ({
+          id: t.id as string,
+          name: (t.name as string) ?? "",
+        }));
+        const newTierByNameLower = new Map(newTiers.map((t) => [t.name.toLowerCase(), t]));
+        const newTierById = new Map(newTiers.map((t) => [t.id, t]));
+        const remapped: Record<string, number> = {};
+        for (const [key, val] of Object.entries(domainItem.tierUnits)) {
+          const numVal = Number(val) || 0;
+          if (newTierById.has(key)) {
+            remapped[key] = numVal;
+            continue;
+          }
+          const oldTier = oldTierById.get(key);
+          const byName = oldTier
+            ? newTierByNameLower.get(oldTier.name.toLowerCase())
+            : newTierByNameLower.get(key.toLowerCase());
+          if (byName) remapped[byName.id] = numVal;
+          // else drop — the old tier has no equivalent in the new schedule
+        }
+        domainItem.tierUnits = remapped;
+      }
+    }
+
     if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
       domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
     }
