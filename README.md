@@ -16,13 +16,7 @@
   Drop the bid package. Index the spec. Take off the drawings <em>and</em> the model. Parameterize the assemblies. Price it with real burdens. Let the agent review it. Send the branded quote.
 </p>
 
-## Why estimators care
-
-Estimating today is duct tape: a PDF viewer, a takeoff app, a spreadsheet from 2014, a pricing book in someone's drawer, a schedule in a separate tool, and a chatbot that doesn't know what project you're on.
-
-Bidwright collapses that stack. One workspace. One database. One AI agent with **150+ tools** wired into your live project — quotes, knowledge, drawings, models, pricing, schedules, plugins. No copy-paste. No "let me describe my project to the AI again."
-
-## The headline features
+## Features
 
 ### 1. An agent with 150+ real tools — not a chat box bolted on
 
@@ -30,7 +24,7 @@ The agent layer ships with **150 typed tools across 13 modules** (`packages/agen
 
 Multi-provider out of the box: **Anthropic, OpenAI, OpenRouter, Gemini, LM Studio**. Local embeddings via **Ollama**. Hybrid retrieval over **pgvector**.
 
-### 2. Bring your own coding agent — Claude Code & Codex runtimes
+### 2. Bring your own coding agent — Claude Code, Codex, OpenCode, & more
 
 Bidwright can spawn a **Claude Code** or **Codex** session against an isolated workspace seeded with the project's documents, knowledge, and CLAUDE.md context. Stream responses, read/write memory, monitor sessions, stop them. The same machinery powers the in-app review feature — and it's exposed at `/api/cli/*` for your own automations.
 
@@ -107,6 +101,24 @@ Bind them to **Estimator Personas** — per-trade AI configurations with system 
 
 Drop in a plugin with a config schema and tool definitions, and it shows up in the agent's tool registry and the UI. Every execution is tracked (input, formstate, output, applied line items) so plugins are auditable, not magic.
 
+### Run Bidwright locally
+
+The only thing you need installed is **Docker Desktop**. The installer
+below pulls a few KB of launcher files (compose + start/stop scripts)
+into `~/bidwright`, then starts the stack — no source checkout.
+
+**Windows (PowerShell):**
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.ps1 | iex
+```
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.sh | bash
+```
+
 ## What's in the box
 
 | Area | Live capabilities |
@@ -123,16 +135,6 @@ Drop in a plugin with a config schema and tool definitions, and it shows up in t
 | AI & agents | Multi-provider models, 150+ tools, local Ollama embeddings, MCP server, Claude Code / Codex runtime sessions, plugin framework. |
 | Quote review | Agent-driven coverage / gap / risk / competitiveness analysis with evidence-linked findings and calibration feedback. |
 | Multi-tenant ops | Organizations, users, super-admin setup, org switching, brand profiles, brand capture from website crawl, estimator personas, data import/export, admin flows. |
-
-**By the numbers:** 73 Prisma models · 150 agent tools across 13 modules · 17 API route files · 21 web pages · 7 MCP tool modules · 6 worker job types.
-
-## What makes it different
-
-- **The agent has the keys.** Every estimate, every drawing, every catalog row, every schedule task is reachable through typed tools — not pasted into a prompt.
-- **Drawings, models, knowledge, and dollars share one schema.** A 3D element points to a worksheet line. A symbol count drives a quantity. A spec chunk justifies a finding. No CSV bridges.
-- **Built for actual estimating ops** — burdens, travel, branded output, persona-driven AI, customer management. Not a generic SaaS dressed up as a takeoff tool.
-- **Local-first AI is a real option.** Run Ollama for embeddings, LM Studio for inference. Your bid data doesn't have to leave the machine.
-- **Extensible from day one.** Plugins, dynamic tools, MCP, Claude Code / Codex runtimes. If you can write the tool, Bidwright can run it.
 
 ## Inside the monorepo
 
@@ -153,38 +155,6 @@ packages/
   vector/       Embeddings and pgvector hybrid retrieval
   vision/       PDF rendering, 2D symbol analysis, 3D model parsing
 ```
-
-## Run it locally
-
-There are two paths depending on what you want to do.
-
-### Just run Bidwright (no Node, no pnpm, no source build)
-
-The only thing you need installed is **Docker Desktop**. The installer
-below pulls a few KB of launcher files (compose + start/stop scripts)
-into `~/bidwright`, then starts the stack — no source checkout.
-
-**Windows (PowerShell):**
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.ps1 | iex
-```
-
-**macOS / Linux:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.sh | bash
-```
-
-The launcher then pulls prebuilt images from GitHub Container Registry,
-starts Postgres / Redis / Ollama / api / web / worker, and opens the app
-at `http://localhost:3000`. First image pull is ~5 GB.
-
-Stop with `stop.bat` / `stop.command` in the install dir. Pull the latest
-images with `update.bat` / `update.command`. AI provider keys (Anthropic,
-OpenAI, etc.) go in **Settings → Integrations** inside the app — not in
-environment variables. See [scripts/launcher/README.md](./scripts/launcher/README.md)
-for ports, version pinning, logs, and reset.
 
 ### Develop on Bidwright
 
@@ -210,79 +180,6 @@ After startup:
 - Web: `http://localhost:3000`
 - API: `http://localhost:4001`
 - If no super admin exists, Bidwright opens the first-run setup wizard. From there, create your org and optionally load sample data.
-
-### Useful commands
-
-```bash
-pnpm dev:web
-pnpm dev:api
-pnpm dev:worker
-pnpm build
-pnpm typecheck
-pnpm lint
-pnpm db:generate
-pnpm db:push
-pnpm db:seed
-pnpm deploy:export
-pnpm docker:up
-pnpm docker:down
-```
-
-### Script layout
-
-- `scripts/dev/` — local hot-reload launchers
-- `scripts/db/` — database bootstrap and seed helpers
-- `scripts/deploy/` — export, restore, server deploy helpers
-- `scripts/launch/` — one-click Docker launchers
-- `scripts/ad-hoc/` — one-off maintenance and extraction scripts
-
-### Containerized run
-
-```bash
-pnpm docker:up
-```
-
-Wrappers:
-
-- macOS: `./scripts/launch/start-docker.command`
-- Windows: `.\scripts\launch\start-docker.bat`
-
-For Ubuntu deployment and data migration: [docs/deployment/ubuntu-docker.md](./docs/deployment/ubuntu-docker.md).
-For the GitHub Actions release/deploy flow: [docs/deployment/github-actions-docker.md](./docs/deployment/github-actions-docker.md).
-
-## Core environment variables
-
-```bash
-DATABASE_URL="postgresql://bidwright:bidwright@localhost:5432/bidwright"
-REDIS_URL="redis://localhost:6379"
-DATA_DIR="./data/bidwright-api"
-API_PORT="4001"
-NEXT_PUBLIC_API_BASE_URL="http://localhost:4001"
-WEB_PUBLIC_PORT="3000"
-API_PUBLIC_PORT="3001"
-
-OPENAI_API_KEY=""
-OPENAI_MODEL="gpt-5"
-OPENAI_EMBEDDING_MODEL="text-embedding-3-large"
-
-ANTHROPIC_API_KEY=""
-LLM_PROVIDER="anthropic"
-LLM_MODEL="claude-sonnet-4-20250514"
-
-EMBEDDING_PROVIDER="local"
-EMBEDDING_BASE_URL="http://localhost:11434/v1"
-EMBEDDING_MODEL="snowflake-arctic-embed"
-EMBEDDING_DIMENSIONS="1024"
-
-SMTP_HOST=""
-SMTP_PORT="587"
-SMTP_USER=""
-SMTP_PASS=""
-SMTP_FROM=""
-SMTP_FROM_NAME="Bidwright"
-```
-
-For Docker or server deployments, set `NEXT_PUBLIC_API_BASE_URL` to a URL the browser can actually reach. `http://localhost:3001` only works for single-machine local runs.
 
 ## Tech stack
 
