@@ -298,8 +298,7 @@ async function extractText(
   // PDF: use Azure DI layout model for table extraction when available,
   // otherwise fall back to local parser
   if (mimeType === "application/pdf") {
-    const hasAzure = !!(azureConfig?.endpoint && azureConfig?.key) ||
-                     !!(process.env.AZURE_DI_ENDPOINT && process.env.AZURE_DI_KEY);
+    const hasAzure = !!(azureConfig?.endpoint && azureConfig?.key);
 
     // For knowledge books: ALWAYS prefer Azure layout model because it
     // extracts tables as structured data. Even PDFs with embedded text
@@ -308,8 +307,8 @@ async function extractText(
 
     const parser = createPdfParser({
       provider,
-      azureEndpoint: azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT,
-      azureKey: azureConfig?.key || process.env.AZURE_DI_KEY,
+      azureEndpoint: azureConfig?.endpoint,
+      azureKey: azureConfig?.key,
       azureModel: "prebuilt-layout",
       options: { tableExtractionEnabled: true },
     });

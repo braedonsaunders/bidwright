@@ -866,7 +866,7 @@ async function hybridParsePdf(
   // No Azure config — return local result with helpful warning
   localResult.warnings.push(
     'Scanned PDF detected but no Azure Document Intelligence credentials configured. ' +
-      'Set AZURE_DI_ENDPOINT and AZURE_DI_KEY environment variables for OCR support.',
+      'Add credentials in Settings > Integrations to enable OCR.',
   );
   return localResult;
 }

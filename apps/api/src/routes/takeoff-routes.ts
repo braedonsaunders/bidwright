@@ -3,11 +3,9 @@ import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
 
-// Resolve Azure Document Intelligence creds the same way the rest of the
-// API does: organisation Settings > Integrations override env vars. Without
-// this lookup, takeoff OCR (legend / scale) would refuse to run for orgs
-// that store creds in Settings instead of env — even though knowledge book
-// ingestion happily uses them.
+// Azure Document Intelligence creds come exclusively from organisation
+// Settings > Integrations. There is no env-var fallback — configure them
+// in the UI.
 async function resolveAzureConfig(
   request: FastifyRequest,
 ): Promise<{ endpoint?: string; key?: string }> {
@@ -18,11 +16,11 @@ async function resolveAzureConfig(
       azureDiKey?: string;
     };
     return {
-      endpoint: integrations.azureDiEndpoint || process.env.AZURE_DI_ENDPOINT,
-      key: integrations.azureDiKey || process.env.AZURE_DI_KEY,
+      endpoint: integrations.azureDiEndpoint || undefined,
+      key: integrations.azureDiKey || undefined,
     };
   } catch {
-    return { endpoint: process.env.AZURE_DI_ENDPOINT, key: process.env.AZURE_DI_KEY };
+    return {};
   }
 }
 

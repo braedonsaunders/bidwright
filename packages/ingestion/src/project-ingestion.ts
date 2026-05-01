@@ -37,13 +37,14 @@ async function extractTextFromEntry(
   const ext = entry.extension.toLowerCase();
   const notes: string[] = [];
 
-  // PDF: use hybrid provider (local + Azure DI fallback for scanned PDFs)
+  // PDF: use hybrid provider (local + Azure DI fallback for scanned PDFs).
+  // Azure creds come from org Settings > Integrations via azureConfig.
   if (PDF_EXTENSIONS.has(ext)) {
     try {
       const parser = createPdfParser({
         provider: 'hybrid',
-        azureEndpoint: azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT,
-        azureKey: azureConfig?.key || process.env.AZURE_DI_KEY,
+        azureEndpoint: azureConfig?.endpoint,
+        azureKey: azureConfig?.key,
       });
       const doc = await parser.parse(Buffer.from(entry.bytes), entry.name);
       const text = doc.pages.map((p) => p.content).join('\n\n--- Page Break ---\n\n');
