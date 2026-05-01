@@ -4,8 +4,8 @@ import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEv
 import { ChevronDown, FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as RadixSelect from "@radix-ui/react-select";
-import type { Customer, PackageIngestFile, ProjectListItem } from "@/lib/api";
-import { submitPackageIngest, getCustomers, createCustomer } from "@/lib/api";
+import type { Customer, EstimatorPersona, PackageIngestFile, ProjectListItem } from "@/lib/api";
+import { submitPackageIngest, getCustomers, createCustomer, listPersonas } from "@/lib/api";
 import { Badge, Button, Card, CardBody, Input, Label, Textarea } from "@/components/ui";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 import { cn } from "@/lib/utils";
@@ -648,6 +648,8 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
   const [dueDate, setDueDate] = useState("");
   const [scope, setScope] = useState("");
   const [notes, setNotes] = useState("");
+  const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
+  const [personaId, setPersonaId] = useState<string>("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -661,6 +663,14 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     getCustomers()
       .then((loadedCustomers) => {
         setCustomerOptions((prev) => mergeCustomers(prev, loadedCustomers));
+      })
+      .catch(() => {});
+    listPersonas()
+      .then((loaded) => {
+        const enabled = loaded
+          .filter((persona) => persona.enabled !== false)
+          .sort((left, right) => left.order - right.order);
+        setPersonas(enabled);
       })
       .catch(() => {});
   }, []);
@@ -765,7 +775,8 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
         );
 
         if (nextProjectId) {
-          router.push(`/projects/${nextProjectId}?tab=estimate&intake=true`);
+          const personaParam = personaId ? `&persona=${encodeURIComponent(personaId)}` : "";
+          router.push(`/projects/${nextProjectId}?tab=estimate&intake=true${personaParam}`);
         }
       } catch (submissionError) {
         setError(submissionError instanceof Error ? submissionError.message : "Upload failed.");
@@ -958,6 +969,29 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               className="min-h-16"
             />
           </div>
+
+          {personas.length > 0 && (
+            <div>
+              <Label>Estimator persona</Label>
+              <StyledSelect
+                value={personaId || "__auto__"}
+                onValueChange={(v) => setPersonaId(v === "__auto__" ? "" : v)}
+                placeholder="Auto-detect (let agent choose)"
+              >
+                <SelectItem value="__auto__">Auto-detect (let agent choose)</SelectItem>
+                {personas.map((persona) => (
+                  <SelectItem key={persona.id} value={persona.id}>
+                    {persona.name}{persona.trade ? ` — ${persona.trade}` : ""}
+                  </SelectItem>
+                ))}
+              </StyledSelect>
+              {personaId && (
+                <div className="mt-1 text-[10px] text-fg/40 leading-tight">
+                  {personas.find((p) => p.id === personaId)?.description || ""}
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <Label>Notes</Label>

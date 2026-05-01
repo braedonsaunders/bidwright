@@ -561,6 +561,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [autoIntake, setAutoIntake] = useState(false);
+  const [intakePersonaId, setIntakePersonaId] = useState<string | null>(null);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
   const [revisionDiffOpen, setRevisionDiffOpen] = useState(false);
   const intakeInitRef = useRef(false);
@@ -569,6 +570,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const urlTab = searchParams.get("tab");
   const urlSubTab = searchParams.get("subtab");
   const urlIntake = searchParams.get("intake");
+  const urlPersona = searchParams.get("persona");
 
   const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
 
@@ -677,13 +679,15 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     if (urlIntake === "true") {
       setChatOpen(true);
       setAutoIntake(true);
+      if (urlPersona) setIntakePersonaId(urlPersona);
       intakeInitRef.current = true;
-      // Remove ?intake=true from URL so it doesn't re-trigger on reload
+      // Remove ?intake=true (and ?persona=) from URL so it doesn't re-trigger on reload
       const url = new URL(window.location.href);
       url.searchParams.delete("intake");
+      url.searchParams.delete("persona");
       window.history.replaceState({}, "", url.pathname + url.search);
     }
-  }, [urlIntake]);
+  }, [urlIntake, urlPersona]);
 
   const visibleRows = useMemo(() => {
     const rows = selectedWs ? selectedWs.items : (workspace.worksheets ?? []).flatMap((w) => w.items);
@@ -1461,6 +1465,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         open={chatOpen}
         onClose={() => setChatOpen(false)}
         autoStartIntake={autoIntake}
+        initialPersonaId={intakePersonaId}
         onIntakeStarted={() => setAutoIntake(false)}
         onWorkspaceMutated={refreshWorkspace}
       />
