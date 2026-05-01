@@ -4,10 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Plus, Search, X } from "lucide-react";
 
 import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Select } from "@/components/ui";
-import { detectCli, listCliModels } from "@/lib/api";
+import { detectCli, listCliModels, type CliRuntimeStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-type AgentRuntime = "claude-code" | "codex";
+type AgentRuntime = string;
 type AgentReasoningEffort = "auto" | "low" | "medium" | "high" | "extra_high" | "max";
 type CliModelOption = {
   id: string;
@@ -17,6 +17,13 @@ type CliModelOption = {
   hidden?: boolean;
   isDefault?: boolean;
   supportedReasoningEfforts?: string[];
+};
+
+type DetectCliResult = {
+  claude: CliRuntimeStatus;
+  codex: CliRuntimeStatus;
+  runtimes: Record<string, CliRuntimeStatus>;
+  configured: { runtime: string | null; model: string | null };
 };
 
 const REASONING_EFFORT_OPTIONS: Array<{
@@ -32,16 +39,18 @@ const REASONING_EFFORT_OPTIONS: Array<{
   { value: "max", label: "Max", description: "Deepest available reasoning for the current runtime" },
 ];
 
-function isAgentRuntime(value: unknown): value is AgentRuntime {
-  return value === "claude-code" || value === "codex";
+function listRegisteredRuntimes(status: DetectCliResult | null): CliRuntimeStatus[] {
+  if (!status?.runtimes) return [];
+  return Object.values(status.runtimes);
 }
 
-function isClaudeCliModel(model: string) {
-  return ["default", "best", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "opusplan"].includes(model) || model.startsWith("claude-");
-}
-
-function isCodexCliModel(model: string) {
-  return !!model.trim() && !isClaudeCliModel(model);
+function isAgentRuntime(value: unknown, status: DetectCliResult | null): value is AgentRuntime {
+  if (typeof value !== "string" || !value) return false;
+  if (!status?.runtimes) {
+    // Fall back to known legacy ids while detection is still loading.
+    return value === "claude-code" || value === "codex" || value === "opencode" || value === "gemini";
+  }
+  return value in status.runtimes;
 }
 
 function normalizeAgentReasoningEffort(value: unknown): AgentReasoningEffort {
@@ -51,25 +60,39 @@ function normalizeAgentReasoningEffort(value: unknown): AgentReasoningEffort {
   return "extra_high";
 }
 
-function getAutoRuntime(cliStatus: {
-  claude?: { available: boolean };
-  codex?: { available: boolean };
-} | null): AgentRuntime | null {
-  if (cliStatus?.claude?.available) return "claude-code";
-  if (cliStatus?.codex?.available) return "codex";
-  return null;
+function getAutoRuntime(status: DetectCliResult | null): AgentRuntime | null {
+  // Prefer non-experimental adapters that are installed; fall back to any
+  // installed adapter if only experimental ones are around.
+  const runtimes = listRegisteredRuntimes(status);
+  const stable = runtimes.find((r) => r.available && !r.experimental);
+  if (stable) return stable.id;
+  const any = runtimes.find((r) => r.available);
+  return any ? any.id : null;
 }
 
-function isCompatibleModel(runtime: AgentRuntime | null, model: string | null | undefined) {
+function getRuntimeStatus(runtime: AgentRuntime | null, status: DetectCliResult | null): CliRuntimeStatus | null {
+  if (!runtime || !status?.runtimes) return null;
+  return status.runtimes[runtime] ?? null;
+}
+
+function isCompatibleModel(runtime: AgentRuntime | null, model: string | null | undefined, status: DetectCliResult | null) {
   if (!runtime || !model) return true;
-  return runtime === "codex" ? isCodexCliModel(model) : isClaudeCliModel(model);
+  const r = getRuntimeStatus(runtime, status);
+  if (!r) return true;
+  // If the server returned a model list, treat membership as the compat signal.
+  // Otherwise (no list yet), accept anything — the server will normalize on use.
+  if (r.models && r.models.length > 0) {
+    return r.models.some((m) => m.id === model);
+  }
+  return true;
 }
 
-function getRuntimeCliPath(runtime: AgentRuntime | null, integrations: Record<string, any>) {
+function getRuntimeCliPath(runtime: AgentRuntime | null, integrations: Record<string, any>, status: DetectCliResult | null): string {
   if (!runtime) return "";
-  return runtime === "codex"
-    ? integrations.codexPath || ""
-    : integrations.claudeCodePath || "";
+  const r = getRuntimeStatus(runtime, status);
+  if (!r) return "";
+  const value = integrations[r.pathSettingKey];
+  return typeof value === "string" ? value : "";
 }
 
 export function SearchableModelSelect({
@@ -235,16 +258,9 @@ export function AgentRuntimeSettings({
   onUpdate: (patch: Record<string, any>) => void;
   onUpdateDefaults: (patch: Record<string, any>) => void;
 }) {
-  const [cliStatus, setCliStatus] = useState<{
-    claude: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: CliModelOption[] };
-    codex: { available: boolean; path: string; version?: string; auth: { authenticated: boolean; method: string }; models?: CliModelOption[] };
-    configured: { runtime: string | null; model: string | null };
-  } | null>(null);
+  const [cliStatus, setCliStatus] = useState<DetectCliResult | null>(null);
   const [detecting, setDetecting] = useState(true);
-  const [liveModels, setLiveModels] = useState<Record<AgentRuntime, CliModelOption[]>>({
-    "claude-code": [],
-    codex: [],
-  });
+  const [liveModels, setLiveModels] = useState<Record<string, CliModelOption[]>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [debouncedCliPath, setDebouncedCliPath] = useState("");
 
@@ -252,27 +268,30 @@ export function AgentRuntimeSettings({
     setDetecting(true);
     detectCli()
       .then((result) => {
-        const nextStatus = result as any;
+        const nextStatus = result as DetectCliResult;
         setCliStatus(nextStatus);
-        setLiveModels({
-          "claude-code": nextStatus?.claude?.models || [],
-          codex: nextStatus?.codex?.models || [],
-        });
+        const initialModels: Record<string, CliModelOption[]> = {};
+        for (const [runtimeId, runtime] of Object.entries(nextStatus.runtimes || {})) {
+          initialModels[runtimeId] = runtime.models || [];
+        }
+        setLiveModels(initialModels);
       })
       .catch(() => setCliStatus(null))
       .finally(() => setDetecting(false));
   }, []);
 
-  const currentRuntime = isAgentRuntime(settings.integrations.agentRuntime)
-    ? settings.integrations.agentRuntime
-    : isAgentRuntime(cliStatus?.configured?.runtime)
-      ? cliStatus.configured.runtime
+  const registeredRuntimes = listRegisteredRuntimes(cliStatus);
+  const currentRuntime = isAgentRuntime(settings.integrations.agentRuntime, cliStatus)
+    ? (settings.integrations.agentRuntime as string)
+    : isAgentRuntime(cliStatus?.configured?.runtime, cliStatus)
+      ? (cliStatus!.configured.runtime as string)
       : "";
-  const effectiveRuntime = isAgentRuntime(currentRuntime) ? currentRuntime : getAutoRuntime(cliStatus);
+  const effectiveRuntime = currentRuntime || getAutoRuntime(cliStatus);
+  const effectiveRuntimeStatus = getRuntimeStatus(effectiveRuntime, cliStatus);
   const rawCurrentModel = settings.integrations.agentModel || cliStatus?.configured?.model || "";
-  const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel) ? rawCurrentModel : "";
+  const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel, cliStatus) ? rawCurrentModel : "";
   const reasoningEffort = normalizeAgentReasoningEffort(settings.integrations.agentReasoningEffort);
-  const selectedCliPath = getRuntimeCliPath(effectiveRuntime, settings.integrations);
+  const selectedCliPath = getRuntimeCliPath(effectiveRuntime, settings.integrations, cliStatus);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -283,9 +302,7 @@ export function AgentRuntimeSettings({
 
   useEffect(() => {
     if (!effectiveRuntime) return;
-    const runtimeAvailable = effectiveRuntime === "claude-code"
-      ? cliStatus?.claude?.available
-      : cliStatus?.codex?.available;
+    const runtimeAvailable = !!effectiveRuntimeStatus?.available;
     if (!runtimeAvailable) return;
 
     let active = true;
@@ -300,15 +317,17 @@ export function AgentRuntimeSettings({
         setLiveModels((prev) => ({ ...prev, [effectiveRuntime]: models }));
         setCliStatus((prev) => {
           if (!prev) return prev;
-          if (effectiveRuntime === "claude-code") {
-            return {
-              ...prev,
-              claude: { ...prev.claude, models },
-            };
-          }
+          const existing = prev.runtimes?.[effectiveRuntime];
+          if (!existing) return prev;
           return {
             ...prev,
-            codex: { ...prev.codex, models },
+            runtimes: { ...prev.runtimes, [effectiveRuntime]: { ...existing, models } },
+            ...(effectiveRuntime === "claude-code"
+              ? { claude: { ...prev.claude, models } as CliRuntimeStatus }
+              : {}),
+            ...(effectiveRuntime === "codex"
+              ? { codex: { ...prev.codex, models } as CliRuntimeStatus }
+              : {}),
           };
         });
       } catch {
@@ -327,12 +346,7 @@ export function AgentRuntimeSettings({
       active = false;
       if (pollingTimer != null) window.clearInterval(pollingTimer);
     };
-  }, [
-    effectiveRuntime,
-    cliStatus?.claude?.available,
-    cliStatus?.codex?.available,
-    debouncedCliPath,
-  ]);
+  }, [effectiveRuntime, effectiveRuntimeStatus?.available, debouncedCliPath]);
 
   return (
     <Card>
@@ -344,51 +358,38 @@ export function AgentRuntimeSettings({
           <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">Detected CLIs</h4>
           {detecting ? (
             <div className="text-xs text-fg/40">Detecting installed CLIs...</div>
+          ) : registeredRuntimes.length === 0 ? (
+            <div className="text-xs text-fg/40">No CLI runtimes registered.</div>
           ) : (
             <div className="space-y-2">
-              <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <div className={`h-2 w-2 rounded-full ${cliStatus?.claude?.available ? "bg-success" : "bg-fg/20"}`} />
-                  <span className="text-sm font-medium">Claude Code</span>
-                  {cliStatus?.claude?.version && (
-                    <span className="text-[10px] text-fg/30">{cliStatus.claude.version}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {cliStatus?.claude?.available ? (
-                    <>
-                      <span className="text-[10px] text-fg/40">{cliStatus.claude.path}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.claude.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                        {cliStatus.claude.auth?.authenticated ? `Auth: ${cliStatus.claude.auth.method}` : "Not authenticated"}
+              {registeredRuntimes.map((runtime) => (
+                <div key={runtime.id} className="flex items-center justify-between rounded-md border border-line px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2 w-2 rounded-full ${runtime.available ? "bg-success" : "bg-fg/20"}`} />
+                    <span className="text-sm font-medium">{runtime.displayName}</span>
+                    {runtime.experimental && (
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-warning/10 text-warning">
+                        Beta
                       </span>
-                    </>
-                  ) : (
-                    <span className="text-[10px] text-fg/30">Not installed — run: npm i -g @anthropic-ai/claude-code</span>
-                  )}
+                    )}
+                    {runtime.version && (
+                      <span className="text-[10px] text-fg/30">{runtime.version}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {runtime.available ? (
+                      <>
+                        <span className="text-[10px] text-fg/40">{runtime.path}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${runtime.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
+                          {runtime.auth?.authenticated ? `Auth: ${runtime.auth.method}` : "Not authenticated"}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[10px] text-fg/30">{runtime.installHint}</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              <div className="flex items-center justify-between rounded-md border border-line px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <div className={`h-2 w-2 rounded-full ${cliStatus?.codex?.available ? "bg-success" : "bg-fg/20"}`} />
-                  <span className="text-sm font-medium">Codex CLI</span>
-                  {cliStatus?.codex?.version && (
-                    <span className="text-[10px] text-fg/30">{cliStatus.codex.version}</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {cliStatus?.codex?.available ? (
-                    <>
-                      <span className="text-[10px] text-fg/40">{cliStatus.codex.path}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${cliStatus.codex.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                        {cliStatus.codex.auth?.authenticated ? `Auth: ${cliStatus.codex.auth.method}` : "Not authenticated"}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="text-[10px] text-fg/30">Not installed — see openai.com/codex</span>
-                  )}
-                </div>
-              </div>
+              ))}
             </div>
           )}
         </div>
@@ -399,17 +400,20 @@ export function AgentRuntimeSettings({
             value={currentRuntime || "__auto__"}
             onValueChange={(v) => {
               const raw = v === "__auto__" ? "" : v;
-              const nextRuntime = isAgentRuntime(raw) ? raw : null;
+              const nextRuntime = isAgentRuntime(raw, cliStatus) ? raw : null;
               const nextEffectiveRuntime = nextRuntime ?? getAutoRuntime(cliStatus);
               onUpdate({
                 agentRuntime: nextRuntime,
-                agentModel: isCompatibleModel(nextEffectiveRuntime, rawCurrentModel) ? rawCurrentModel : null,
+                agentModel: isCompatibleModel(nextEffectiveRuntime, rawCurrentModel, cliStatus) ? rawCurrentModel : null,
               });
             }}
             options={[
               { value: "__auto__", label: "Auto-detect (best available)" },
-              { value: "claude-code", label: `Claude Code CLI ${!cliStatus?.claude?.available ? "(not installed)" : ""}`, disabled: !cliStatus?.claude?.available },
-              { value: "codex", label: `Codex CLI ${!cliStatus?.codex?.available ? "(not installed)" : ""}`, disabled: !cliStatus?.codex?.available },
+              ...registeredRuntimes.map((runtime) => ({
+                value: runtime.id,
+                label: `${runtime.displayName}${runtime.experimental ? " (Beta)" : ""}${!runtime.available ? " (not installed)" : ""}`,
+                disabled: !runtime.available,
+              })),
             ]}
           />
         </div>
@@ -453,15 +457,15 @@ export function AgentRuntimeSettings({
           <Label>CLI Path Override (optional)</Label>
           <Input
             type="text"
-            placeholder={effectiveRuntime === "codex" ? cliStatus?.codex?.path || "/usr/local/bin/codex" : cliStatus?.claude?.path || "/usr/local/bin/claude"}
-            value={effectiveRuntime === "codex" ? settings.integrations.codexPath || "" : settings.integrations.claudeCodePath || ""}
+            placeholder={effectiveRuntimeStatus?.path || "/usr/local/bin/<cli>"}
+            value={effectiveRuntimeStatus
+              ? (settings.integrations[effectiveRuntimeStatus.pathSettingKey] || "")
+              : ""}
             onChange={(e) => {
-              if (effectiveRuntime === "codex") {
-                onUpdate({ codexPath: e.target.value || null });
-              } else {
-                onUpdate({ claudeCodePath: e.target.value || null });
-              }
+              if (!effectiveRuntimeStatus) return;
+              onUpdate({ [effectiveRuntimeStatus.pathSettingKey]: e.target.value || null });
             }}
+            disabled={!effectiveRuntimeStatus}
           />
           <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
         </div>
@@ -498,6 +502,8 @@ export function AgentRuntimeSettings({
           <p className="font-medium text-fg/50">Authentication</p>
           <p>Claude Code uses your <code className="text-fg/50">ANTHROPIC_API_KEY</code> environment variable or OAuth login (run <code className="text-fg/50">claude</code> in terminal and type <code className="text-fg/50">/login</code>).</p>
           <p>Codex uses your <code className="text-fg/50">OPENAI_API_KEY</code> environment variable or OAuth login.</p>
+          <p>OpenCode reads provider keys (<code className="text-fg/50">ANTHROPIC_API_KEY</code> / <code className="text-fg/50">OPENAI_API_KEY</code> / <code className="text-fg/50">GOOGLE_API_KEY</code>) and supports its own OAuth via <code className="text-fg/50">opencode auth login</code>.</p>
+          <p>Gemini CLI uses your <code className="text-fg/50">GOOGLE_API_KEY</code> / <code className="text-fg/50">GEMINI_API_KEY</code> or Google OAuth (run <code className="text-fg/50">gemini auth</code>).</p>
           <p>API keys configured in the API Keys tab are also passed to the CLI automatically.</p>
         </div>
       </CardBody>

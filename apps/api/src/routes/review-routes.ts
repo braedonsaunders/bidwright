@@ -9,7 +9,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
-import { generateReviewClaudeMd, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { getAdapter, isRegisteredRuntime, tryGetAdapter } from "../services/cli-adapters/registry.js";
+import { generateReviewInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { resolveProjectDir, apiDataRoot } from "../paths.js";
 import { prisma } from "@bidwright/db";
 import { getSessionCookieToken } from "../services/session-cookie.js";
@@ -312,13 +313,9 @@ export function registerReviewRoutes(app: FastifyInstance) {
       model?: string;
     };
 
-    const runtime: AgentRuntime = body.runtime || "claude-code";
-    let model = body.model;
-    if (runtime === "claude-code" && (!model || model.includes("/"))) {
-      model = "sonnet";
-    } else if (runtime === "codex" && !model) {
-      model = "gpt-5.4";
-    }
+    const runtime: AgentRuntime = isRegisteredRuntime(body.runtime) ? body.runtime : "claude-code";
+    const adapter = getAdapter(runtime);
+    let model = adapter.normalizeModel(body.model ?? null);
 
     const store = request.store!;
 
@@ -375,8 +372,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
 
-    // Generate review-specific CLAUDE.md
-    await generateReviewClaudeMd({
+    // Generate review-specific instruction files for the active runtime
+    await generateReviewInstructionFiles(runtime, {
       projectDir,
       projectName: project.name || "Untitled Project",
       clientName: project.clientName || "",
@@ -432,7 +429,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
     });
 
     // Spawn CLI
-    const instructionFile = runtime === "codex" ? "AGENTS.md" : "CLAUDE.md";
+    const instructionFile = adapter.primaryInstructionFile;
     const initialPrompt = `Read ${instructionFile} now. Execute the FULL review workflow:
 
 1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
@@ -467,11 +464,18 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: revision.id,
         quoteId: quote.id,
-        customCliPath: runtime === "claude-code"
-          ? integrations.claudeCodePath || undefined
-          : integrations.codexPath || undefined,
+        customCliPath:
+          (typeof integrations[adapter.pathSettingKey] === "string"
+            ? (integrations[adapter.pathSettingKey] as string)
+            : undefined) || undefined,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
+        googleApiKey:
+          integrations.geminiKey ||
+          process.env.GOOGLE_API_KEY ||
+          process.env.GEMINI_API_KEY ||
+          undefined,
+        openrouterApiKey: integrations.openrouterKey || process.env.OPENROUTER_API_KEY || undefined,
         reasoningEffort,
       });
 

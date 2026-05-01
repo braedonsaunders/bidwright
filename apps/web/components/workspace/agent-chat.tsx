@@ -86,36 +86,57 @@ function intakeStorageKey(projectId: string) {
   return `bw_intake_${projectId}`;
 }
 
-type CliRuntime = "claude-code" | "codex";
+type CliRuntime = string;
 type CliModelOption = { id: string; name: string; description: string };
+type CliRuntimeMap = Record<string, {
+  id: string;
+  displayName: string;
+  available: boolean;
+  experimental: boolean;
+  primaryInstructionFile: string;
+  models: CliModelOption[];
+}>;
 
-function isCliRuntime(value: unknown): value is CliRuntime {
-  return value === "claude-code" || value === "codex";
+const KNOWN_RUNTIMES: readonly string[] = ["claude-code", "codex", "opencode", "gemini"];
+
+function isCliRuntime(value: unknown, runtimeMap?: CliRuntimeMap | null): value is CliRuntime {
+  if (typeof value !== "string" || !value) return false;
+  if (runtimeMap) return value in runtimeMap;
+  return KNOWN_RUNTIMES.includes(value);
 }
 
-function isClaudeCliModel(model: string) {
-  return ["default", "best", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "opusplan"].includes(model) || model.startsWith("claude-");
-}
-
-function isCodexCliModel(model: string) {
-  return !!model.trim() && !isClaudeCliModel(model);
-}
-
-function defaultCliModel(runtime: CliRuntime) {
-  return runtime === "codex" ? "gpt-5.4" : "sonnet";
-}
-
-function normalizeCliModel(runtime: CliRuntime, model: string | null | undefined) {
-  if (runtime === "codex") {
-    return model && isCodexCliModel(model) ? model : defaultCliModel(runtime);
+function defaultCliModel(runtime: CliRuntime, runtimeMap?: CliRuntimeMap | null): string {
+  // Prefer the first model surfaced for that runtime; fall back to legacy aliases
+  // for the original two CLIs to preserve historical behavior.
+  const list = runtimeMap?.[runtime]?.models;
+  if (list && list.length > 0) {
+    const def = list.find((m) => (m as any).isDefault) || list[0];
+    return def.id;
   }
-  return model && isClaudeCliModel(model) ? model : defaultCliModel(runtime);
+  if (runtime === "codex") return "gpt-5.4";
+  if (runtime === "gemini") return "gemini-2.5-pro";
+  if (runtime === "opencode") return "anthropic/claude-sonnet-4-5";
+  return "sonnet";
 }
 
-function getAutoCliRuntime(availability: { claude: boolean; codex: boolean }): CliRuntime | null {
-  if (availability.claude) return "claude-code";
-  if (availability.codex) return "codex";
-  return null;
+function isCompatibleCliModel(runtime: CliRuntime, model: string, runtimeMap?: CliRuntimeMap | null): boolean {
+  const list = runtimeMap?.[runtime]?.models;
+  if (list && list.length > 0) return list.some((m) => m.id === model);
+  // No live model list — accept anything; the server normalizes on use.
+  return !!model;
+}
+
+function normalizeCliModel(runtime: CliRuntime, model: string | null | undefined, runtimeMap?: CliRuntimeMap | null): string {
+  if (model && isCompatibleCliModel(runtime, model, runtimeMap)) return model;
+  return defaultCliModel(runtime, runtimeMap);
+}
+
+function getAutoCliRuntime(runtimeMap: CliRuntimeMap | null): CliRuntime | null {
+  if (!runtimeMap) return null;
+  const stable = Object.values(runtimeMap).find((r) => r.available && !r.experimental);
+  if (stable) return stable.id;
+  const any = Object.values(runtimeMap).find((r) => r.available);
+  return any ? any.id : null;
 }
 
 const MUTATING_TOOL_PATTERNS = /^(quote\.(create|update|delete)|knowledge\.(add|update|remove|ingest|index)|system\.logActivity|mcp__bidwright__(create|update|delete|import|recalculate))/;
@@ -1042,7 +1063,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const [ingestionStatus, setIngestionStatus] = useState<string | null>(null);
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
   const [docsExpanded, setDocsExpanded] = useState(false);
-  const [cliModels, setCliModels] = useState<{ claude: CliModelOption[]; codex: CliModelOption[] }>({ claude: [], codex: [] });
+  const [cliRuntimeMap, setCliRuntimeMap] = useState<CliRuntimeMap | null>(null);
   const [cliRuntime, setCliRuntime] = useState<CliRuntime | null>(null);
   const [cliAgentModel, setCliAgentModel] = useState<string | null>(null);
   const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
@@ -1060,7 +1081,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
   const sseReconnectCount = useRef(0);
   const pollFailCount = useRef(0);
   const intakeScopeEditedRef = useRef(false);
-  const effectiveCliModel = cliRuntime ? normalizeCliModel(cliRuntime, cliAgentModel) : null;
+  const effectiveCliModel = cliRuntime ? normalizeCliModel(cliRuntime, cliAgentModel, cliRuntimeMap) : null;
 
   const recordCliPrompt = useCallback((prompt: PendingQuestionPrompt) => {
     setCliPendingQuestion(prompt);
@@ -1105,27 +1126,32 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
           ? (settingsResult.value?.integrations as Record<string, any> | undefined)
           : undefined;
 
-      const availability = {
-        claude: cliResult.status === "fulfilled" ? cliResult.value.claude.available : false,
-        codex: cliResult.status === "fulfilled" ? cliResult.value.codex.available : false,
-      };
-      if (cliResult.status === "fulfilled") {
-        setCliModels({
-          claude: cliResult.value.claude.models || [],
-          codex: cliResult.value.codex.models || [],
-        });
+      let runtimeMap: CliRuntimeMap | null = null;
+      if (cliResult.status === "fulfilled" && cliResult.value.runtimes) {
+        runtimeMap = {};
+        for (const [id, info] of Object.entries(cliResult.value.runtimes)) {
+          runtimeMap[id] = {
+            id: info.id,
+            displayName: info.displayName,
+            available: info.available,
+            experimental: info.experimental,
+            primaryInstructionFile: info.primaryInstructionFile,
+            models: (info.models || []).map((m) => ({ id: m.id, name: m.name, description: m.description })),
+          };
+        }
+        setCliRuntimeMap(runtimeMap);
       }
 
-      const configuredRuntime = isCliRuntime(integ?.agentRuntime)
-        ? integ.agentRuntime
-        : cliResult.status === "fulfilled" && isCliRuntime(cliResult.value.configured?.runtime)
-          ? cliResult.value.configured.runtime
+      const configuredRuntime = isCliRuntime(integ?.agentRuntime, runtimeMap)
+        ? (integ!.agentRuntime as string)
+        : cliResult.status === "fulfilled" && isCliRuntime(cliResult.value.configured?.runtime, runtimeMap)
+          ? (cliResult.value.configured!.runtime as string)
           : null;
       const configuredModel = integ?.agentModel
         ?? (cliResult.status === "fulfilled" ? cliResult.value.configured?.model : null);
-      const resolvedRuntime = configuredRuntime ?? getAutoCliRuntime(availability);
+      const resolvedRuntime = configuredRuntime ?? getAutoCliRuntime(runtimeMap);
       setCliRuntime(resolvedRuntime);
-      setCliAgentModel(resolvedRuntime ? normalizeCliModel(resolvedRuntime, configuredModel) : null);
+      setCliAgentModel(resolvedRuntime ? normalizeCliModel(resolvedRuntime, configuredModel, runtimeMap) : null);
 
       if (personasResult.status === "fulfilled") {
         const enabled = personasResult.value.filter(p => p.enabled);
@@ -1336,7 +1362,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       if (cliRuntime) {
         // CLI-based intake (preferred)
         // Use the agent model from org settings, falling back to sensible defaults
-        const cliModel = normalizeCliModel(cliRuntime, cliAgentModel);
+        const cliModel = normalizeCliModel(cliRuntime, cliAgentModel, cliRuntimeMap);
         const result = await startCliSession({
           projectId,
           runtime: cliRuntime,
@@ -1789,7 +1815,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
               <div>
                 <div className="text-sm font-semibold">Bidwright AI</div>
                 <div className="text-[10px] text-fg/35">
-                  {cliRuntime ? `${cliRuntime === "claude-code" ? "Claude Code" : "Codex"} CLI \u00B7 ${effectiveCliModel}` : "CLI runtime required"}
+                  {cliRuntime ? `${cliRuntimeMap?.[cliRuntime]?.displayName || cliRuntime} \u00B7 ${effectiveCliModel}` : "CLI runtime required"}
                   {sseConnected && <span className="ml-1 text-success">connected</span>}
                 </div>
               </div>
@@ -1867,12 +1893,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
                     </label>
                     <Select
                       size="sm"
-                      value={effectiveCliModel || defaultCliModel(cliRuntime)}
+                      value={effectiveCliModel || defaultCliModel(cliRuntime, cliRuntimeMap)}
                       onValueChange={(v) => setCliAgentModel(v)}
                       options={(() => {
-                        const runtimeModels = cliRuntime === "claude-code" ? cliModels.claude : cliModels.codex;
+                        const runtimeModels = cliRuntimeMap?.[cliRuntime]?.models || [];
                         const opts = runtimeModels.filter((option, index) => runtimeModels.findIndex((candidate) => candidate.id === option.id) === index);
-                        const selectedModel = effectiveCliModel || defaultCliModel(cliRuntime);
+                        const selectedModel = effectiveCliModel || defaultCliModel(cliRuntime, cliRuntimeMap);
                         const displayOptions = opts.some((option) => option.id === selectedModel)
                           ? opts
                           : [
