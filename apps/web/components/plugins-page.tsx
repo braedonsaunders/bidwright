@@ -253,10 +253,15 @@ export function PluginsPage({
             </p>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3 text-xs text-fg/40">
-              <span>{plugins.filter((p) => p.enabled).length} active</span>
-              <span className="text-fg/20">|</span>
-              <span>{totalTools} tools</span>
+            <div className="flex items-center gap-2 text-xs text-fg/40">
+              <span>
+                {plugins.length} plugin{plugins.length === 1 ? "" : "s"}
+                {plugins.length > 0 && plugins.filter((p) => !p.enabled).length > 0 && (
+                  <span className="text-fg/30"> ({plugins.filter((p) => p.enabled).length} enabled)</span>
+                )}
+              </span>
+              <span className="text-fg/20">·</span>
+              <span>{totalTools} tool{totalTools === 1 ? "" : "s"}</span>
             </div>
             <Button size="sm" variant="ghost" onClick={handleExportPlugins} title="Export plugins">
               <Download className="h-3 w-3" /> Export
