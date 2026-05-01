@@ -144,6 +144,7 @@ import { ItemsManager } from "@/components/items-manager";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
 import { AssemblyManager } from "@/components/assembly-manager";
 import { PluginsPage } from "@/components/plugins-page";
+import { IntegrationsPage } from "@/components/integrations/integrations-page";
 import { LabourCostManager } from "@/components/labour-cost-manager";
 import { BurdenManager } from "@/components/burden-manager";
 import { TravelPolicyManager } from "@/components/travel-policy-manager";
@@ -2953,6 +2954,11 @@ export function SettingsPage({
           {/* ── Plugins ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "plugins" && (
             <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} entityCategories={categories} />
+          )}
+
+          {/* ── Integrations (NetSuite, Procore, Slack, Custom REST...) ─── */}
+          {activeGroup === "integrations" && integrationsSubTab === "integrations" && (
+            <IntegrationsPage />
           )}
 
         </FadeIn>

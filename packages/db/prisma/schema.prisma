@@ -37,6 +37,7 @@ model Organization {
   travelPolicies           TravelPolicy[]
   estimatorPersonas        EstimatorPersona[]
   assemblies               Assembly[]
+  integrations             Integration[]
 }
 
 model OrganizationSettings {
@@ -1704,4 +1705,169 @@ model Department {
   quotes Quote[]
 
   @@index([organizationId])
+}
+
+
+// ── Integrations ──────────────────────────────────────────────────────────
+//
+// Manifest-driven framework for connecting external systems (NetSuite, Procore,
+// QuickBooks, Slack, custom REST, ...). Distinct from Plugin — Plugins produce
+// estimate artifacts, Integrations talk to outside systems. Tools surfaced to
+// the agent and MCP under namespace `integration.{slug}.{action}`.
+
+model Integration {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  manifestId        String       // e.g. "netsuite", "procore", "generic-rest"
+  manifestVersion   String       // semver of installed manifest
+  manifestSource    String       @default("builtin") // builtin | community | custom
+  manifestSnapshot  Json         // frozen manifest at install time (audit + offline)
+  slug              String       // unique per-org instance slug, often equals manifestId
+  displayName       String
+  description       String       @default("")
+  icon              String?
+  category          String       @default("other") // erp | crm | accounting | construction | comms | storage | identity | other
+  enabled           Boolean      @default(true)
+  status            String       @default("needs_auth") // needs_auth | connected | error | paused | disabled
+  lastError         String?
+  lastTestedAt      DateTime?
+  lastConnectedAt   DateTime?
+  config            Json         @default("{}") // non-secret config (account ids, base urls, feature flags)
+  scopes            String[]     @default([])   // OAuth scopes granted (subset of manifest.connection.scopes)
+  exposeToAgent     Boolean      @default(true) // surface actions in agent tool registry
+  exposeToMcp       Boolean      @default(true) // surface actions over MCP
+  createdBy         String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  credentials  IntegrationCredential[]
+  syncStates   IntegrationSyncState[]
+  events       IntegrationEvent[]
+  runs         IntegrationRun[]
+  externalRecords ExternalRecord[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId])
+  @@index([manifestId])
+  @@index([status])
+}
+
+model IntegrationCredential {
+  id            String      @id @default(cuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  // kind = "api_key" | "oauth_access_token" | "oauth_refresh_token" | "hmac_secret"
+  // | "basic_password" | "bearer_token" | "client_secret" | "private_key"
+  kind          String
+  // AES-256-GCM payload: iv(12) || authTag(16) || ciphertext, all base64
+  ciphertext    String
+  // HKDF context — included in additional-authenticated-data so a credential
+  // moved to another integration cannot be decrypted.
+  keyContext    String      @default("")
+  // Optional non-secret metadata about this credential (token type, account id,
+  // refresh URL hint, etc.). NEVER store secret values here.
+  meta          Json        @default("{}")
+  expiresAt     DateTime?
+  refreshAfter  DateTime?
+  rotatedAt     DateTime?
+  rotatedFrom   String?     // previous credential id chain for audit
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([integrationId, kind])
+  @@index([integrationId])
+  @@index([expiresAt])
+}
+
+model IntegrationSyncState {
+  id            String      @id @default(cuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  resourceId    String      // matches manifest.capabilities.syncs[].id
+  cursor        String?     // opaque (timestamp / page token / etag)
+  fullSyncAt    DateTime?   // last successful full sync
+  lastRunAt     DateTime?
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+  recordsTotal  Int         @default(0)
+  recordsLast   Int         @default(0)
+  status        String      @default("idle") // idle | running | error | paused
+  schedule      String?     // cron override (manifest provides default)
+  enabled       Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([integrationId, resourceId])
+  @@index([integrationId])
+  @@index([status])
+}
+
+model IntegrationEvent {
+  id            String      @id @default(cuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  // direction: "inbound" (webhook received) | "outbound" (we sent / fired)
+  direction     String
+  // type: e.g. "webhook.invoice.paid" | "sync.run" | "action.invoke" | "auth.refresh"
+  type          String
+  status        String      @default("pending") // pending | delivered | failed | replayed
+  payload       Json        @default("{}")
+  headers       Json        @default("{}")
+  signatureValid Boolean?   // null when not applicable
+  externalId    String?     // for idempotency on inbound webhooks
+  attemptCount  Int         @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([integrationId, externalId])
+  @@index([integrationId])
+  @@index([direction, status])
+  @@index([createdAt])
+}
+
+model IntegrationRun {
+  id              String      @id @default(cuid())
+  integrationId   String
+  integration     Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  actionId        String      // matches manifest.capabilities.actions[].id
+  status          String      @default("pending") // pending | running | success | error | timeout
+  invokedBy       String      @default("user")    // user | agent | sync | webhook | system
+  agentSessionId  String?
+  userId          String?
+  input           Json        @default("{}")
+  output          Json?
+  error           String?
+  httpStatus      Int?
+  durationMs      Int?
+  idempotencyKey  String?
+  startedAt       DateTime    @default(now())
+  completedAt     DateTime?
+
+  @@unique([integrationId, idempotencyKey])
+  @@index([integrationId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+model ExternalRecord {
+  id            String      @id @default(cuid())
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  resourceId    String      // matches manifest.capabilities.syncs[].id
+  externalId    String      // ID in the foreign system
+  data          Json        @default("{}")
+  fingerprint   String      @default("") // sha256 of canonicalized data, used to skip no-ops
+  // When mapped to a Bidwright entity, format "Customer:abc123" / "Project:xyz".
+  mappedTo      String?
+  fetchedAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([integrationId, resourceId, externalId])
+  @@index([integrationId])
+  @@index([mappedTo])
+  @@index([fetchedAt])
 }

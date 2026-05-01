@@ -1,6 +1,7 @@
 export { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 export * from "./api/settings";
 export * from "./api/auth";
+export * from "./api/integrations";
 
 import { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 

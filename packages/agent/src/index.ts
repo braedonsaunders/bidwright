@@ -21,3 +21,4 @@ export { scheduleTools } from "./tools/schedule.js";
 export { rateScheduleTools } from "./tools/rate-schedule.js";
 export { pricingTools } from "./tools/pricing.js";
 export { pluginManagementTools } from "./tools/plugin.js";
+export { createIntegrationTools, type IntegrationToolBinding } from "./tools/integration.js";

@@ -4,6 +4,7 @@ import { createRetrievalAdapter, InMemoryChunkStore, ingestCustomerPackage, type
 import { createId } from '@bidwright/ingestion';
 
 import { InMemoryWorkflowOrchestrator, type WorkerContext } from './orchestrator.js';
+import { runIntegrationSyncWorker, listAllSyncResources } from './integrations-sync-runner.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -194,10 +195,61 @@ export function createBidwrightWorkerRuntime(
       );
       workers.push(generalWorker);
 
-      console.log('[worker] BullMQ workers started for queues: ingestion, ai, general');
+      // ── Integration syncs ────────────────────────────────────────────
+      // One BullMQ worker for executing manifest-driven sync pulls. The
+      // queue is fed by repeatable jobs registered at boot time, one per
+      // (integration, sync) pair from manifest.capabilities.syncs.
+
+      const integrationSyncWorker = new Worker(
+        'bidwright-integration-syncs',
+        async (job: any) => {
+          const { integrationId, resourceId } = job.data as { integrationId: string; resourceId: string };
+          if (!integrationId || !resourceId) throw new Error('integrationId + resourceId required');
+          await runIntegrationSyncWorker(integrationId, resourceId);
+        },
+        { connection, concurrency: 4 },
+      );
+      workers.push(integrationSyncWorker);
+
+      // Register repeatable jobs from current manifests. We do this lazily
+      // at boot — when the user installs/enables/disables an integration
+      // mid-run, they can hit "Run now" from the UI; the next worker
+      // restart picks up the schedule changes.
+      void registerIntegrationSyncRepeatables(connection);
+
+      console.log('[worker] BullMQ workers started for queues: ingestion, ai, general, integration-syncs');
     }).catch((err) => {
       console.warn('[worker] BullMQ not available:', err.message);
     });
+  }
+
+  /**
+   * Register one repeatable BullMQ job per (integration, sync resource).
+   * Each job dispatches `{ integrationId, resourceId }` onto the
+   * `bidwright-integration-syncs` queue at the manifest's cron cadence.
+   */
+  async function registerIntegrationSyncRepeatables(connection: any): Promise<void> {
+    try {
+      const { Queue } = await import('bullmq');
+      const queue = new Queue('bidwright-integration-syncs', { connection });
+      const due = await listAllSyncResources();
+      for (const d of due) {
+        const jobId = `sync:${d.integrationId}:${d.resourceId}`;
+        await queue.add(
+          'sync',
+          { integrationId: d.integrationId, resourceId: d.resourceId },
+          {
+            jobId,
+            repeat: { pattern: d.schedule },
+            removeOnComplete: { count: 50 },
+            removeOnFail: { count: 100 },
+          },
+        );
+      }
+      console.log(`[worker] Registered ${due.length} integration-sync repeatable job(s).`);
+    } catch (err) {
+      console.warn('[worker] failed to register integration-sync repeatables:', (err as Error).message);
+    }
   }
 
   async function stopWorkers() {

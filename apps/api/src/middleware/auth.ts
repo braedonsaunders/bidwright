@@ -28,7 +28,7 @@ declare module "fastify" {
 // Public route prefixes (no auth required)
 // ---------------------------------------------------------------------------
 
-const PUBLIC_PREFIXES = ["/api/auth/", "/auth/", "/health"];
+const PUBLIC_PREFIXES = ["/api/auth/", "/auth/", "/health", "/api/webhooks/"];
 
 // Setup routes that must work without authentication
 const PUBLIC_EXACT_ROUTES = [

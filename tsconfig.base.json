@@ -21,7 +21,9 @@
       "@bidwright/db": ["packages/db/src/index.ts"],
       "@bidwright/db/*": ["packages/db/src/*"],
       "@bidwright/agent": ["packages/agent/src/index.ts"],
-      "@bidwright/agent/*": ["packages/agent/src/*"]
+      "@bidwright/agent/*": ["packages/agent/src/*"],
+      "@bidwright/integrations": ["packages/integrations/src/index.ts"],
+      "@bidwright/integrations/*": ["packages/integrations/src/*"]
     }
   }
 }
