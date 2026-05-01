@@ -226,6 +226,16 @@ export function RateScheduleManager({
     }
   }, []);
 
+  // Sync flyout edits back to the list so tier/item counts (and any other
+  // header-level fields) update without a page reload.
+  const applyScheduleUpdate = useCallback(
+    (updated: RateSchedule) => {
+      setDetail(updated);
+      setSchedules((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    },
+    [setSchedules]
+  );
+
   /* ─── Schedule CRUD ─── */
 
   const startCreate = useCallback(() => {
@@ -309,7 +319,7 @@ export function RateScheduleManager({
         multiplier: parseFloat(newTierMultiplier) || 1.0,
         uom: newTierUom === "__none__" ? null : newTierUom,
       });
-      setDetail(updated);
+      applyScheduleUpdate(updated);
       setNewTierName("");
       setNewTierMultiplier("1.0");
       setNewTierUom("__none__");
@@ -317,19 +327,19 @@ export function RateScheduleManager({
     } catch (err) {
       console.error("Failed to add tier:", err);
     }
-  }, [detail, newTierName, newTierMultiplier, newTierUom]);
+  }, [detail, newTierName, newTierMultiplier, newTierUom, applyScheduleUpdate]);
 
   const handleDeleteTier = useCallback(
     async (tierId: string) => {
       if (!detail) return;
       try {
         const updated = await deleteRateScheduleTier(detail.id, tierId);
-        setDetail(updated);
+        applyScheduleUpdate(updated);
       } catch (err) {
         console.error("Failed to delete tier:", err);
       }
     },
-    [detail]
+    [detail, applyScheduleUpdate]
   );
 
   const handleUpdateTierMultiplier = useCallback(
@@ -337,12 +347,12 @@ export function RateScheduleManager({
       if (!detail) return;
       try {
         const updated = await updateRateScheduleTier(detail.id, tierId, { multiplier });
-        setDetail(updated);
+        applyScheduleUpdate(updated);
       } catch (err) {
         console.error("Failed to update tier:", err);
       }
     },
-    [detail]
+    [detail, applyScheduleUpdate]
   );
 
   const handleSaveTierEdit = useCallback(
@@ -357,13 +367,13 @@ export function RateScheduleManager({
           multiplier,
           uom: editTierForm.uom === "__none__" ? null : editTierForm.uom,
         });
-        setDetail(updated);
+        applyScheduleUpdate(updated);
         setEditingTierId(null);
       } catch (err) {
         console.error("Failed to update tier:", err);
       }
     },
-    [detail, editingTierId, editTierForm]
+    [detail, editingTierId, editTierForm, applyScheduleUpdate]
   );
 
   /* ─── Item CRUD ─── */
@@ -374,13 +384,13 @@ export function RateScheduleManager({
       const updated = await addRateScheduleItem(detail.id, {
         catalogItemId: newItemForm.catalogItemId,
       });
-      setDetail(updated);
+      applyScheduleUpdate(updated);
       setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null });
       setShowAddItem(false);
     } catch (err) {
       console.error("Failed to add item:", err);
     }
-  }, [detail, newItemForm]);
+  }, [detail, newItemForm, applyScheduleUpdate]);
 
   const handlePickerSelect = useCallback((item: CatalogPickerItem) => {
     setNewItemForm({
@@ -396,12 +406,12 @@ export function RateScheduleManager({
       if (!detail) return;
       try {
         const updated = await deleteRateScheduleItem(detail.id, itemId);
-        setDetail(updated);
+        applyScheduleUpdate(updated);
       } catch (err) {
         console.error("Failed to delete item:", err);
       }
     },
-    [detail]
+    [detail, applyScheduleUpdate]
   );
 
   const startRateEdit = (item: Item, tierId: string) => {
@@ -416,24 +426,24 @@ export function RateScheduleManager({
       const newRates = { ...item.rates, [editingCell.tierId]: val };
       try {
         const updated = await updateRateScheduleItem(detail.id, item.id, { rates: newRates });
-        setDetail(updated);
+        applyScheduleUpdate(updated);
         setEditingCell(null);
       } catch (err) {
         console.error("Failed to update rate:", err);
       }
     },
-    [detail, editingCell, editValue]
+    [detail, editingCell, editValue, applyScheduleUpdate]
   );
 
   const handleAutoCalculate = useCallback(async () => {
     if (!detail) return;
     try {
       const updated = await autoCalculateRateSchedule(detail.id);
-      setDetail(updated);
+      applyScheduleUpdate(updated);
     } catch (err) {
       console.error("Failed to auto-calculate:", err);
     }
-  }, [detail]);
+  }, [detail, applyScheduleUpdate]);
 
   /* ─── Render ─── */
 
