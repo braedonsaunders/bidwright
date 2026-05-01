@@ -16,7 +16,7 @@ export function calculateLineItem(
   _revision: QuoteRevision,
   calculationType: CalculationType,
   rateSchedules?: Array<{
-    tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number }>;
+    tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
     items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
   }>,
   options?: CalcLineItemOptions,

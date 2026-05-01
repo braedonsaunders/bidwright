@@ -6669,17 +6669,24 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
-  async createRateScheduleTier(scheduleId: string, input: { name: string; multiplier?: number; sortOrder?: number }): Promise<RateScheduleWithChildren> {
+  async createRateScheduleTier(scheduleId: string, input: { name: string; multiplier?: number; sortOrder?: number; uom?: string | null }): Promise<RateScheduleWithChildren> {
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
     const maxOrder = await this.db.rateScheduleTier.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
     await this.db.rateScheduleTier.create({
-      data: { id: createId("rst"), scheduleId, name: input.name, multiplier: input.multiplier ?? 1.0, sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1) },
+      data: {
+        id: createId("rst"),
+        scheduleId,
+        name: input.name,
+        multiplier: input.multiplier ?? 1.0,
+        sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
+        uom: input.uom ?? null,
+      },
     });
     return this.getRateSchedule(scheduleId);
   }
 
-  async updateRateScheduleTier(tierId: string, patch: { name?: string; multiplier?: number; sortOrder?: number }): Promise<RateScheduleWithChildren> {
+  async updateRateScheduleTier(tierId: string, patch: { name?: string; multiplier?: number; sortOrder?: number; uom?: string | null }): Promise<RateScheduleWithChildren> {
     const tier = await this.db.rateScheduleTier.findFirst({ where: { id: tierId } });
     if (!tier) throw new Error(`Rate schedule tier ${tierId} not found`);
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: tier.scheduleId, organizationId: this.organizationId } });
@@ -6688,6 +6695,7 @@ export class PrismaApiStore {
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.multiplier !== undefined) data.multiplier = patch.multiplier;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+    if (patch.uom !== undefined) data.uom = patch.uom;
     await this.db.rateScheduleTier.update({ where: { id: tierId }, data });
     return this.getRateSchedule(tier.scheduleId);
   }
@@ -6804,7 +6812,7 @@ export class PrismaApiStore {
         const newTierId = createId("rst");
         tierIdMap.set(tier.id, newTierId);
         await tx.rateScheduleTier.create({
-          data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder },
+          data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder, uom: tier.uom ?? null },
         });
       }
 
@@ -7064,7 +7072,7 @@ export class PrismaApiStore {
           const newTierId = createId("rst");
           tierIdMap.set(tier.id, newTierId);
           await tx.rateScheduleTier.create({
-            data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder },
+            data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder, uom: (tier as any).uom ?? null },
           });
         }
         for (const item of sched.items) {

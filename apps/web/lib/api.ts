@@ -1904,6 +1904,7 @@ export interface RateScheduleTier {
   name: string;
   multiplier: number;
   sortOrder: number;
+  uom?: string | null;
 }
 
 export interface RateScheduleItem {
@@ -1976,7 +1977,7 @@ export async function deleteRateSchedule(id: string): Promise<{ deleted: boolean
 }
 
 export async function addRateScheduleTier(scheduleId: string, input: {
-  name: string; multiplier?: number; sortOrder?: number;
+  name: string; multiplier?: number; sortOrder?: number; uom?: string | null;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/tiers`, {
     method: "POST",
@@ -1986,7 +1987,7 @@ export async function addRateScheduleTier(scheduleId: string, input: {
 }
 
 export async function updateRateScheduleTier(scheduleId: string, tierId: string, patch: {
-  name?: string; multiplier?: number; sortOrder?: number;
+  name?: string; multiplier?: number; sortOrder?: number; uom?: string | null;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/tiers/${tierId}`, {
     method: "PATCH",

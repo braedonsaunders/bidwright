@@ -637,6 +637,10 @@ export interface RateScheduleTier {
   name: string;
   multiplier: number;
   sortOrder: number;
+  /** UoM this tier prices (DAY/WK/MO/HR/etc.). Calc engine prefers a tier
+      whose uom matches the line item's uom before falling back to multiplier
+      or name-pattern matching. */
+  uom?: string | null;
 }
 
 export interface RateScheduleItem {

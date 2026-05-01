@@ -658,6 +658,7 @@ model RateScheduleTier {
   name       String
   multiplier Float        @default(1.0)
   sortOrder  Int          @default(0)
+  uom        String?
 
   @@index([scheduleId])
 }

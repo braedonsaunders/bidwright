@@ -60,7 +60,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
   app.post("/api/rate-schedules/:id/tiers", async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const body = request.body as { name: string; multiplier?: number; sortOrder?: number };
+      const body = request.body as { name: string; multiplier?: number; sortOrder?: number; uom?: string | null };
       return await request.store!.createRateScheduleTier(id, body);
     } catch (e: any) {
       reply.code(e.message?.includes("not found") ? 404 : 500);
