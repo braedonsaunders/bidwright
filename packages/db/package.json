@@ -16,13 +16,13 @@
     "db:reset": "tsx src/reset.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.6.0"
+    "@prisma/adapter-pg": "^7.5.0",
+    "@prisma/client": "^6.6.0",
+    "pg": "^8.20.0",
+    "prisma": "^6.6.0"
   },
   "devDependencies": {
-    "@prisma/adapter-pg": "^7.5.0",
     "@types/pg": "8.11.11",
-    "pg": "^8.20.0",
-    "prisma": "^6.6.0",
     "tsx": "^4.19.2"
   }
 }
