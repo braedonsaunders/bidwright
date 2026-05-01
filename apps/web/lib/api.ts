@@ -3668,66 +3668,58 @@ export async function runVisionCountAllPages(input: {
 // CLI Agent Runtime
 // ---------------------------------------------------------------------------
 
+export type CliRuntimeModel = {
+  id: string;
+  name: string;
+  description: string;
+  defaultReasoningEffort?: string | null;
+  hidden?: boolean;
+  isDefault?: boolean;
+  supportedReasoningEfforts?: string[];
+};
+
+export type CliRuntimeStatus = {
+  id: string;
+  displayName: string;
+  installHint: string;
+  pathSettingKey: string;
+  primaryInstructionFile: string;
+  experimental: boolean;
+  available: boolean;
+  path: string;
+  version?: string;
+  auth: { authenticated: boolean; method: string };
+  models: CliRuntimeModel[];
+};
+
 export async function detectCli() {
   return apiRequest<{
-    claude: {
-      available: boolean;
-      path: string;
-      version?: string;
-      auth?: { authenticated: boolean; method: string };
-      models?: {
-        id: string;
-        name: string;
-        description: string;
-        defaultReasoningEffort?: string | null;
-        hidden?: boolean;
-        isDefault?: boolean;
-        supportedReasoningEfforts?: string[];
-      }[];
-    };
-    codex: {
-      available: boolean;
-      path: string;
-      version?: string;
-      auth?: { authenticated: boolean; method: string };
-      models?: {
-        id: string;
-        name: string;
-        description: string;
-        defaultReasoningEffort?: string | null;
-        hidden?: boolean;
-        isDefault?: boolean;
-        supportedReasoningEfforts?: string[];
-      }[];
-    };
+    /** Legacy alias preserved for older call sites — equivalent to runtimes["claude-code"]. */
+    claude: CliRuntimeStatus;
+    /** Legacy alias preserved for older call sites — equivalent to runtimes["codex"]. */
+    codex: CliRuntimeStatus;
+    /** All registered CLI adapters keyed by id (claude-code, codex, opencode, gemini, …). */
+    runtimes: Record<string, CliRuntimeStatus>;
     configured: {
-      runtime: "claude-code" | "codex" | null;
+      runtime: string | null;
       model: string | null;
     };
   }>("/api/cli/detect");
 }
 
-export async function listCliModels(runtime: "claude-code" | "codex", cliPath?: string | null) {
+export async function listCliModels(runtime: string, cliPath?: string | null) {
   const params = new URLSearchParams({ runtime });
   if (cliPath?.trim()) params.set("path", cliPath.trim());
   return apiRequest<{
-    runtime: "claude-code" | "codex";
+    runtime: string;
     queriedAt: string;
-    models: {
-      id: string;
-      name: string;
-      description: string;
-      defaultReasoningEffort?: string | null;
-      hidden?: boolean;
-      isDefault?: boolean;
-      supportedReasoningEfforts?: string[];
-    }[];
+    models: CliRuntimeModel[];
   }>(`/api/cli/models?${params.toString()}`);
 }
 
 export async function startCliSession(input: {
   projectId: string;
-  runtime?: "claude-code" | "codex";
+  runtime?: string;
   model?: string;
   scope?: string;
   prompt?: string;

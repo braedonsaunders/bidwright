@@ -6,7 +6,8 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
-import { generateClaudeMd, generateCodexMd, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
+import { generateInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
@@ -560,7 +561,7 @@ function hasCliQuestionEvent(events: PersistedCliEvent[], questionId: string): b
 }
 
 function isCliRuntime(value: unknown): value is AgentRuntime {
-  return value === "claude-code" || value === "codex";
+  return isRegisteredRuntime(value);
 }
 
 function resolveCliRuntime(requestedRuntime: unknown, configuredRuntime?: unknown): AgentRuntime {
@@ -575,19 +576,10 @@ type CliModelOption = {
   description: string;
 };
 
-function isClaudeCliModel(model: string) {
-  return ["default", "best", "sonnet", "opus", "haiku", "sonnet[1m]", "opus[1m]", "opusplan"].includes(model) || model.startsWith("claude-");
-}
-
-function isCodexCliModel(model: string) {
-  return !!model.trim() && !isClaudeCliModel(model);
-}
-
 function normalizeCliModel(runtime: AgentRuntime, model: string | null | undefined) {
-  if (runtime === "claude-code") {
-    return model && isClaudeCliModel(model) ? model : "sonnet";
-  }
-  return model && isCodexCliModel(model) ? model : "gpt-5.4";
+  const adapter = tryGetAdapter(runtime);
+  if (!adapter) return "";
+  return adapter.normalizeModel(model ?? null);
 }
 
 function normalizeCliReasoningEffort(value: unknown): "auto" | "low" | "medium" | "high" | "extra_high" | "max" {
@@ -696,26 +688,81 @@ async function buildCliModelOptions(runtime: AgentRuntime, apiKey?: string): Pro
     ];
     return dedupeCliModels([...aliasModels, ...(await fetchAnthropicCliModels(apiKey))]);
   }
-
-  const defaultModels: CliModelOption[] = [
-    { id: "gpt-5.4", name: "GPT-5.4", description: "Strong frontier default for complex agentic work" },
-    { id: "gpt-5-codex", name: "GPT-5-Codex", description: "GPT-5 optimized for Codex-style coding" },
-    { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", description: "Agentic coding model with xhigh reasoning support" },
-    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", description: "Faster and cheaper than GPT-5.4" },
-  ];
-  return dedupeCliModels([...defaultModels, ...(await fetchOpenAiCliModels(apiKey))]);
+  if (runtime === "codex") {
+    const defaultModels: CliModelOption[] = [
+      { id: "gpt-5.4", name: "GPT-5.4", description: "Strong frontier default for complex agentic work" },
+      { id: "gpt-5-codex", name: "GPT-5-Codex", description: "GPT-5 optimized for Codex-style coding" },
+      { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", description: "Agentic coding model with xhigh reasoning support" },
+      { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", description: "Faster and cheaper than GPT-5.4" },
+    ];
+    return dedupeCliModels([...defaultModels, ...(await fetchOpenAiCliModels(apiKey))]);
+  }
+  // For non-Claude/Codex adapters, fall back to whatever static list the
+  // adapter supplies (opencode, gemini both ship a baseline).
+  const adapter = tryGetAdapter(runtime);
+  if (!adapter) return [];
+  const apiKeys: Record<string, string | undefined> = {};
+  if (runtime === "gemini") apiKeys.google = apiKey;
+  else if (runtime === "opencode") apiKeys.anthropic = apiKey;
+  return adapter.listModels({ apiKeys: apiKeys as any });
 }
 
 function resolveCliPathOverride(
   runtime: AgentRuntime,
   integrations: Record<string, unknown>,
   requestedPath?: unknown,
-) {
+): string | undefined {
   if (typeof requestedPath === "string" && requestedPath.trim()) return requestedPath.trim();
-  if (runtime === "claude-code") {
-    return typeof integrations.claudeCodePath === "string" ? integrations.claudeCodePath : undefined;
+  const adapter = tryGetAdapter(runtime);
+  if (!adapter) return undefined;
+  const value = integrations[adapter.pathSettingKey];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/** Pick the runtime-specific API key for the legacy single-key plumbing. */
+function resolveRuntimeApiKey(runtime: AgentRuntime, integrations: Record<string, unknown>): string | undefined {
+  const adapter = tryGetAdapter(runtime);
+  if (!adapter) return undefined;
+  // Prefer the most-relevant integration key per runtime, fall back to env.
+  if (runtime === "claude-code" || runtime === "opencode") {
+    return (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined;
   }
-  return typeof integrations.codexPath === "string" ? integrations.codexPath : undefined;
+  if (runtime === "codex") {
+    return (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined;
+  }
+  if (runtime === "gemini") {
+    return (
+      (integrations.geminiKey as string) ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      undefined
+    );
+  }
+  return undefined;
+}
+
+interface SpawnApiKeyBundle {
+  anthropicApiKey?: string;
+  openaiApiKey?: string;
+  googleApiKey?: string;
+  openrouterApiKey?: string;
+}
+
+/** Build the full set of API keys to forward into spawnSession/resumeSession. */
+function buildSpawnApiKeys(integrations: Record<string, unknown>): SpawnApiKeyBundle {
+  return {
+    anthropicApiKey:
+      (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined,
+    openaiApiKey:
+      (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined,
+    googleApiKey:
+      (integrations.geminiKey as string) ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      undefined,
+    openrouterApiKey:
+      (integrations.openrouterKey as string) || process.env.OPENROUTER_API_KEY || undefined,
+  };
 }
 
 async function listRuntimeModels(
@@ -741,20 +788,16 @@ async function listRuntimeModels(
     }));
   }
 
-  return buildCliModelOptions(
-    runtime,
-    runtime === "claude-code"
-      ? (typeof integrations.anthropicKey === "string" ? integrations.anthropicKey : process.env.ANTHROPIC_API_KEY)
-      : (typeof integrations.openaiKey === "string" ? integrations.openaiKey : process.env.OPENAI_API_KEY),
-  );
+  return buildCliModelOptions(runtime, resolveRuntimeApiKey(runtime, integrations));
 }
 
-function buildResumePrompt(runtime: AgentRuntime, prompt?: string) {
+function buildResumePrompt(runtime: AgentRuntime, prompt?: string): string {
   if (typeof prompt === "string" && prompt.trim()) return prompt.trim();
-  if (runtime === "codex") {
-    return "Resume the previous estimate session. Read AGENTS.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
-  }
-  return "Resume the previous estimate session. Read CLAUDE.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist.";
+  const adapter = tryGetAdapter(runtime);
+  return (
+    adapter?.defaultResumePrompt() ||
+    "Resume the previous estimate session. Read CLAUDE.md, check the current state with getWorkspace and getEstimateStrategy, then continue from where you left off. Do not re-create phases, worksheets, or items that already exist."
+  );
 }
 
 async function bindEstimateStrategyRun(projectId: string, revisionId: string | null | undefined, aiRunId: string) {
@@ -845,14 +888,34 @@ export function registerCliRoutes(app: FastifyInstance) {
     const configuredRuntime = isCliRuntime(integrations.agentRuntime) ? integrations.agentRuntime : null;
     const configuredModel = configuredRuntime ? normalizeCliModel(configuredRuntime, integrations.agentModel) : null;
 
-    const claude = detectCli("claude-code", integrations.claudeCodePath || undefined);
-    const codex = detectCli("codex", integrations.codexPath || undefined);
-    const claudeAuth = checkCliAuth("claude-code", integrations.anthropicKey);
-    const codexAuth = checkCliAuth("codex", integrations.openaiKey);
+    // Build a per-adapter status block plus a flat `runtimes` map so the
+    // settings UI can render any number of CLIs without code changes.
+    const runtimes: Record<string, any> = {};
+    for (const adapter of listAdapters()) {
+      const cliPath = resolveCliPathOverride(adapter.id, integrations) || undefined;
+      const detected = detectCli(adapter.id, cliPath);
+      const auth = checkCliAuth(adapter.id, resolveRuntimeApiKey(adapter.id, integrations));
+      const models = detected.available
+        ? await listRuntimeModels(adapter.id, integrations).catch(() => [])
+        : [];
+      runtimes[adapter.id] = {
+        id: adapter.id,
+        displayName: adapter.displayName,
+        installHint: adapter.installHint,
+        pathSettingKey: adapter.pathSettingKey,
+        primaryInstructionFile: adapter.primaryInstructionFile,
+        experimental: adapter.experimental === true,
+        ...detected,
+        auth,
+        models,
+      };
+    }
 
     return {
-      claude: { ...claude, auth: claudeAuth },
-      codex: { ...codex, auth: codexAuth },
+      // Legacy keys preserved for the existing settings UI / api.ts shape.
+      claude: runtimes["claude-code"] || { available: false, path: "", auth: { authenticated: false, method: "none" } },
+      codex: runtimes["codex"] || { available: false, path: "", auth: { authenticated: false, method: "none" } },
+      runtimes,
       configured: {
         runtime: configuredRuntime,
         model: configuredModel,
@@ -968,10 +1031,11 @@ export function registerCliRoutes(app: FastifyInstance) {
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
     const estimateDefaults = (settingsEarly as any)?.defaults || {};
     const runtime = resolveCliRuntime(body.runtime, integrationsEarly.agentRuntime);
+    const adapter = getAdapter(runtime);
     const model = normalizeCliModel(runtime, body.model ?? integrationsEarly.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrationsEarly.agentReasoningEffort);
 
-    // Generate CLAUDE.md / codex.md (includes knowledge book file list)
+    // Generate per-runtime instruction files (CLAUDE.md / AGENTS.md / GEMINI.md)
     const params = {
       projectDir,
       projectName: project.name || "Untitled Project",
@@ -1018,11 +1082,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       })() : null,
     };
 
-    if (runtime === "claude-code") {
-      await generateClaudeMd(params);
-    } else {
-      await generateCodexMd(params);
-    }
+    await generateInstructionFiles(runtime, params);
 
     // Create AiRun record
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -1032,7 +1092,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       revisionId: revision.id || "",
       kind: "cli-intake",
       status: "running",
-      model: model || (runtime === "claude-code" ? "sonnet" : "gpt-5.4"),
+      model: model || adapter.defaultModel,
       input: { runtime, scope: effectiveScope, documentCount: documents.length } as any,
       output: { events: [] } as any,
     });
@@ -1059,7 +1119,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
     const benchmarkingEnabled = (settings as any)?.defaults?.benchmarkingEnabled !== false;
-    const instructionFile = runtime === "codex" ? "AGENTS.md" : "CLAUDE.md";
+    const instructionFile = adapter.primaryInstructionFile;
 
     // Spawn CLI
     const scopeDirective = effectiveScope
@@ -1084,15 +1144,13 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         prompt: initialPrompt,
         runtime,
         model,
+        reasoningEffort,
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: revision.id,
         quoteId: quote.id,
-        customCliPath: runtime === "claude-code"
-          ? integrations.claudeCodePath || undefined
-          : integrations.codexPath || undefined,
-        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
-        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
+        customCliPath: resolveCliPathOverride(runtime, integrations),
+        ...buildSpawnApiKeys(integrations),
       });
 
       attachCliRunPersistence(sessionId, session);
@@ -1183,10 +1241,10 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       select: { id: true, model: true, input: true },
     });
     const latestRuntime = (latestRun?.input as any)?.runtime;
-    const runtime: AgentRuntime = latestRuntime === "codex" || latestRuntime === "claude-code"
+    const runtime: AgentRuntime = isCliRuntime(latestRuntime)
       ? latestRuntime
-      : integrations.agentRuntime === "codex"
-        ? "codex"
+      : isCliRuntime(integrations.agentRuntime)
+        ? integrations.agentRuntime
         : "claude-code";
     const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
@@ -1204,11 +1262,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
-        customCliPath: runtime === "claude-code"
-          ? integrations.claudeCodePath || undefined
-          : integrations.codexPath || undefined,
-        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
-        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
+        customCliPath: resolveCliPathOverride(runtime, integrations),
+        ...buildSpawnApiKeys(integrations),
         reasoningEffort,
       });
 
@@ -1281,10 +1336,10 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       select: { id: true, model: true, input: true },
     });
     const latestRuntime = (latestRun?.input as any)?.runtime;
-    const runtime: AgentRuntime = latestRuntime === "codex" || latestRuntime === "claude-code"
+    const runtime: AgentRuntime = isCliRuntime(latestRuntime)
       ? latestRuntime
-      : integrations.agentRuntime === "codex"
-        ? "codex"
+      : isCliRuntime(integrations.agentRuntime)
+        ? integrations.agentRuntime
         : "claude-code";
     const model = normalizeCliModel(runtime, latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
@@ -1318,11 +1373,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
-        customCliPath: runtime === "claude-code"
-          ? integrations.claudeCodePath || undefined
-          : integrations.codexPath || undefined,
-        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
-        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
+        customCliPath: resolveCliPathOverride(runtime, integrations),
+        ...buildSpawnApiKeys(integrations),
         reasoningEffort,
       });
 
@@ -1606,21 +1658,27 @@ Read the PDF in batches of 20 pages (it has ${book.pageCount} total). Scan every
 Merge tables that span multiple pages. Skip non-data pages.
 `;
 
-    await writeFile(join(workDir, "CLAUDE.md"), claudeMd);
-    await writeFile(join(workDir, "AGENTS.md"), claudeMd);
-    await writeFile(join(workDir, "codex.md"), claudeMd);
+    // Write the instruction content under every known runtime filename so
+    // any registered adapter can pick it up.
+    const adapter = getAdapter(runtime);
+    const allInstructionFilenames = new Set<string>(["CLAUDE.md", "AGENTS.md", "codex.md"]);
+    for (const cliAdapter of listAdapters()) {
+      for (const filename of cliAdapter.instructionFiles) allInstructionFilenames.add(filename);
+    }
+    for (const filename of allInstructionFilenames) {
+      await writeFile(join(workDir, filename), claudeMd);
+    }
 
     // Spawn CLI session — spawnSession handles MCP config + auth token internally
     const token = extractAuthToken(request);
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,
-      prompt: `Read ${runtime === "codex" ? "AGENTS.md" : "CLAUDE.md"} then extract all data tables from the PDF in book/. Call createDataset for each table.`,
+      prompt: `Read ${adapter.primaryInstructionFile} then extract all data tables from the PDF in book/. Call createDataset for each table.`,
       runtime,
       model: normalizedModel,
       authToken: token,
-      anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY,
-      openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY,
+      ...buildSpawnApiKeys(integrations),
       reasoningEffort,
     });
 

@@ -1347,6 +1347,11 @@ export interface AppSettings {
     agentModel?: string;
     agentReasoningEffort?: string;
     maxConcurrentSubAgents?: number;
+    /** Optional CLI binary path overrides for each registered runtime adapter. */
+    claudeCodePath?: string;
+    codexPath?: string;
+    opencodePath?: string;
+    geminiPath?: string;
   };
   brand: BrandProfile;
   termsAndConditions: string;

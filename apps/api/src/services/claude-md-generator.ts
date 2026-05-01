@@ -855,6 +855,36 @@ export async function generateCodexMd(params: ClaudeMdParams): Promise<void> {
 }
 
 /**
+ * Filenames every supported runtime expects to find. Writing all of them
+ * unconditionally means a project folder works regardless of which CLI
+ * the user later runs against it.
+ */
+const ALL_INSTRUCTION_FILENAMES = [
+  "CLAUDE.md", // claude-code
+  "AGENTS.md", // codex, opencode (and many others)
+  "codex.md",  // legacy codex name
+  "GEMINI.md", // gemini-cli
+] as const;
+
+/**
+ * Adapter-aware dispatcher. Generates the instruction content once and
+ * writes it under every well-known filename so future runtime swaps
+ * don't strand the project. The `runtime` arg is accepted for symmetry
+ * with the route layer but the on-disk output is identical across
+ * runtimes — adapters opt into different filenames via `instructionFiles`.
+ */
+export async function generateInstructionFiles(
+  _runtime: string,
+  params: ClaudeMdParams,
+): Promise<void> {
+  await prepareInstructionWorkspace(params);
+  const content = buildClaudeMdContent(params);
+  for (const filename of ALL_INSTRUCTION_FILENAMES) {
+    await writeFile(join(params.projectDir, filename), content, "utf-8");
+  }
+}
+
+/**
  * Generate a review-specific CLAUDE.md for quote review sessions.
  * The review agent analyzes documents against the existing estimate
  * and saves structured findings via MCP review tools.
@@ -869,11 +899,22 @@ export async function generateReviewClaudeMd(params: ClaudeMdParams): Promise<vo
   // Symlink source documents
   await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
 
-  // Build review-specific CLAUDE.md
+  // Build review-specific instruction content
   const content = buildReviewClaudeMdContent(params);
-  await writeFile(join(projectDir, "CLAUDE.md"), content, "utf-8");
-  await writeFile(join(projectDir, "AGENTS.md"), content, "utf-8");
-  await writeFile(join(projectDir, "codex.md"), content, "utf-8");
+  for (const filename of ALL_INSTRUCTION_FILENAMES) {
+    await writeFile(join(projectDir, filename), content, "utf-8");
+  }
+}
+
+/**
+ * Adapter-aware review dispatcher — same structure as `generateInstructionFiles`
+ * but uses the review prompt body. The `runtime` arg is accepted for symmetry.
+ */
+export async function generateReviewInstructionFiles(
+  _runtime: string,
+  params: ClaudeMdParams,
+): Promise<void> {
+  return generateReviewClaudeMd(params);
 }
 
 function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
