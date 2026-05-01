@@ -90,8 +90,9 @@ wait_for_postgres() {
 
 wait_for_url() {
   local url="$1"
+  local service="${2:-}"
 
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 90); do
     if curl -fsS "${url}" >/dev/null 2>&1; then
       return 0
     fi
@@ -99,6 +100,11 @@ wait_for_url() {
   done
 
   echo "Health check failed for ${url}" >&2
+  if [[ -n "${service}" ]]; then
+    echo "─── Last 200 lines from ${service} container ───" >&2
+    compose logs --no-color --tail 200 "${service}" >&2 || true
+    echo "─── End ${service} logs ───" >&2
+  fi
   return 1
 }
 
@@ -147,8 +153,8 @@ else
 fi
 cleanup_db_migrate_container
 
-wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health"
-wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}"
+wait_for_url "http://127.0.0.1:${API_PUBLIC_PORT:-3001}/health" "api"
+wait_for_url "http://127.0.0.1:${WEB_PUBLIC_PORT:-3000}" "web"
 smoke_pdf_generation
 
 compose ps
