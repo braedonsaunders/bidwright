@@ -402,7 +402,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir, userMap]);
 
   const headers: { key: SortKey; label: string; className?: string }[] = [
-    { key: "quoteNumber", label: "Quote #", className: "w-28" },
+    { key: "quoteNumber", label: "Quote #", className: "w-36" },
     { key: "title", label: "Title" },
     { key: "client", label: "Client", className: "w-40" },
     { key: "estimator", label: "Estimator", className: "w-36" },
@@ -716,7 +716,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                     transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
                     className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
                   >
-                    <td className="px-4 py-2.5 text-xs font-medium text-accent">
+                    <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
                       <Link href={`/projects/${project.id}`} className="hover:underline">
                         {project.quote.quoteNumber}
                       </Link>
