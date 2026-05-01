@@ -304,21 +304,22 @@ export function PluginsPage({
         </div>
       </FadeIn>
 
-      {/* Plugin Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Plugin Grid — every card is a fixed height so rows are flush
+           regardless of description length, tag count, or tool count. */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
         {filtered.map((plugin, i) => {
           const tone = CATEGORY_COLORS[plugin.category] ?? "default";
           const toolCount = plugin.toolDefinitions.length;
           const hasUI = plugin.toolDefinitions.some((t) => t.ui);
 
           return (
-            <FadeIn key={plugin.id} delay={0.05 + i * 0.02}>
+            <FadeIn key={plugin.id} delay={0.05 + i * 0.02} className="h-full">
               <Card className={cn(
-                "transition-all hover:ring-1 hover:ring-accent/20 cursor-pointer",
+                "h-full flex flex-col transition-all hover:ring-1 hover:ring-accent/20 cursor-pointer",
                 !plugin.enabled && "opacity-50"
               )}>
                 <CardHeader
-                  className="flex flex-row items-start justify-between gap-3"
+                  className="flex flex-row items-start justify-between gap-3 flex-none"
                   onClick={() => {
                     setDetailPlugin(plugin);
                     setDetailActiveTool(plugin.toolDefinitions[0]?.id ?? "");
@@ -332,19 +333,21 @@ export function PluginsPage({
                         {displayPluginCategory(plugin.category)}
                       </Badge>
                     </div>
-                    <p className="text-[11px] text-fg/50 line-clamp-2">{plugin.description}</p>
-                    {plugin.tags && plugin.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {plugin.tags.slice(0, 4).map((tag) => (
-                          <span key={tag} className="rounded px-1.5 py-0.5 text-[9px] bg-panel2 text-fg/40">
-                            {tag}
-                          </span>
-                        ))}
-                        {plugin.tags.length > 4 && (
-                          <span className="text-[9px] text-fg/30">+{plugin.tags.length - 4}</span>
-                        )}
-                      </div>
-                    )}
+                    {/* Description: fixed 2-line slot whether full or empty. */}
+                    <p className="text-[11px] text-fg/50 line-clamp-2 min-h-[2.4em]">
+                      {plugin.description}
+                    </p>
+                    {/* Tags: fixed 1-line slot; reserved even when there are none. */}
+                    <div className="flex flex-wrap gap-1 mt-1.5 min-h-[1.25rem] overflow-hidden">
+                      {(plugin.tags ?? []).slice(0, 4).map((tag) => (
+                        <span key={tag} className="rounded px-1.5 py-0.5 text-[9px] bg-panel2 text-fg/40">
+                          {tag}
+                        </span>
+                      ))}
+                      {plugin.tags && plugin.tags.length > 4 && (
+                        <span className="text-[9px] text-fg/30">+{plugin.tags.length - 4}</span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <Toggle
@@ -355,8 +358,8 @@ export function PluginsPage({
                     />
                   </div>
                 </CardHeader>
-                <CardBody className="pt-0 pb-3 px-4">
-                  <div className="flex items-center justify-between">
+                <CardBody className="pt-0 pb-3 px-4 flex-1 flex flex-col">
+                  <div className="flex items-center justify-between flex-none">
                     <div className="flex items-center gap-3 text-[10px] text-fg/40">
                       <span className="flex items-center gap-1">
                         <Wrench className="h-3 w-3" />
@@ -374,21 +377,20 @@ export function PluginsPage({
                     </div>
                     <ChevronRight className="h-3.5 w-3.5 text-fg/20" />
                   </div>
-                  {/* Mini tool list */}
-                  {toolCount > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {plugin.toolDefinitions.slice(0, 3).map((tool) => (
-                        <div key={tool.id} className="flex items-center gap-2 text-[10px] text-fg/50">
-                          <span className="w-1 h-1 rounded-full bg-fg/20 shrink-0" />
-                          <span className="truncate">{tool.name}</span>
-                          <Badge tone="info" className="text-[8px] ml-auto shrink-0">{tool.outputType}</Badge>
-                        </div>
-                      ))}
-                      {toolCount > 3 && (
-                        <p className="text-[9px] text-fg/30 pl-3">+{toolCount - 3} more</p>
-                      )}
-                    </div>
-                  )}
+                  {/* Mini tool list — fixed 3-row slot so cards stay aligned
+                      whether the plugin has 0, 1, or 10 tools. */}
+                  <div className="mt-2 flex-1 flex flex-col gap-1 min-h-[3.75rem]">
+                    {plugin.toolDefinitions.slice(0, 3).map((tool) => (
+                      <div key={tool.id} className="flex items-center gap-2 text-[10px] text-fg/50">
+                        <span className="w-1 h-1 rounded-full bg-fg/20 shrink-0" />
+                        <span className="truncate">{tool.name}</span>
+                        <Badge tone="info" className="text-[8px] ml-auto shrink-0">{tool.outputType}</Badge>
+                      </div>
+                    ))}
+                    {toolCount > 3 && (
+                      <p className="text-[9px] text-fg/30 pl-3">+{toolCount - 3} more</p>
+                    )}
+                  </div>
                 </CardBody>
               </Card>
             </FadeIn>
