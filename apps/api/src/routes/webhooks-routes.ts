@@ -33,7 +33,10 @@ interface WebhookParams {
 }
 
 export async function webhooksRoutes(app: FastifyInstance): Promise<void> {
-  // Capture raw body alongside the parsed JSON.
+  // Capture raw body alongside the parsed JSON. Fastify ships a default
+  // application/json parser, so we replace it (Fastify 5 rejects duplicate
+  // registrations).
+  app.removeContentTypeParser("application/json");
   app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
     const raw = typeof body === "string" ? body : body.toString("utf8");
     (_req as FastifyRequest).rawBody = raw;
