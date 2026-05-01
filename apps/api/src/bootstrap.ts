@@ -110,44 +110,103 @@ function runCommand(cmd: string, args: string[], cwd: string, env: NodeJS.Proces
   });
 }
 
-export async function applyPendingMigrations(): Promise<{ applied: boolean; reason?: string }> {
-  if (!process.env.DATABASE_URL) {
-    return { applied: false, reason: "DATABASE_URL not set" };
-  }
-
+/**
+ * Runs `prisma <subcommand>` against the schema, walking through the same
+ * candidate-CLI list (`prisma`, `pnpm exec prisma`, `npx prisma`) and
+ * returning the first successful invocation. Returns `{ ok: false }` and
+ * the last failure if every candidate fails.
+ */
+async function runPrismaCommand(
+  subArgs: string[],
+): Promise<{ ok: boolean; result?: SpawnResult; lastErr?: SpawnResult }> {
   const cwd = locatePrismaCwd();
   const schema = locatePrismaSchema();
   const env = { ...process.env };
 
-  // Try the local prisma CLI first (fastest, deterministic). Fall back to
-  // `pnpm --filter @bidwright/db exec prisma` and finally `npx prisma`.
   const candidates: Array<{ cmd: string; args: string[] }> = [
-    { cmd: "prisma", args: ["migrate", "deploy", `--schema=${schema}`] },
-    { cmd: "pnpm", args: ["--filter", "@bidwright/db", "exec", "prisma", "migrate", "deploy", `--schema=${schema}`] },
-    { cmd: "npx", args: ["--yes", "prisma", "migrate", "deploy", `--schema=${schema}`] },
+    { cmd: "prisma", args: [...subArgs, `--schema=${schema}`] },
+    { cmd: "pnpm", args: ["--filter", "@bidwright/db", "exec", "prisma", ...subArgs, `--schema=${schema}`] },
+    { cmd: "npx", args: ["--yes", "prisma", ...subArgs, `--schema=${schema}`] },
   ];
 
   let lastErr: SpawnResult | undefined;
   for (const candidate of candidates) {
     try {
       const result = await runCommand(candidate.cmd, candidate.args, cwd, env);
-      if (result.code === 0) {
-        // Trim and forward prisma's own line-by-line output for visibility.
-        const out = result.stdout.trim();
-        if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
-        return { applied: true };
-      }
+      if (result.code === 0) return { ok: true, result };
       lastErr = result;
     } catch (err) {
-      // ENOENT for the binary — try the next candidate.
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") continue;
       throw err;
     }
   }
+  return { ok: false, lastErr };
+}
 
-  const detail = lastErr
-    ? `\n${lastErr.stdout.trim()}\n${lastErr.stderr.trim()}`
+/**
+ * Mark a single migration as applied in `_prisma_migrations`. Used to
+ * recover from P3009 (failed migration left half-applied) when the DB
+ * schema is already in sync via some other path (e.g. `db push`).
+ */
+async function resolveMigrationApplied(migrationName: string): Promise<boolean> {
+  const { ok } = await runPrismaCommand(["migrate", "resolve", "--applied", migrationName]);
+  return ok;
+}
+
+const FAILED_MIGRATION_PATTERN = /The `([^`]+)` migration[^]*?failed/;
+
+export async function applyPendingMigrations(): Promise<{ applied: boolean; reason?: string }> {
+  if (!process.env.DATABASE_URL) {
+    return { applied: false, reason: "DATABASE_URL not set" };
+  }
+
+  // Escape hatch: skip bootstrap migrations entirely. Useful in
+  // docker-compose deploys where a separate db-migrate container has
+  // already synced the schema (e.g. via `prisma db push`) and running
+  // `prisma migrate deploy` would just re-discover history-table
+  // mismatches the operator already worked around.
+  if (process.env.BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS === "1") {
+    return { applied: false, reason: "BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS=1" };
+  }
+
+  const first = await runPrismaCommand(["migrate", "deploy"]);
+  if (first.ok) {
+    const out = first.result?.stdout.trim() ?? "";
+    if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
+    return { applied: true };
+  }
+
+  // Self-heal: P3009 means the migration history table has a row stuck in
+  // a failed state. If the schema is otherwise current (typical for setups
+  // that mix `db push` + `migrate deploy`), marking the failed row as
+  // applied and retrying clears the block without manual SQL.
+  const combinedOutput = `${first.lastErr?.stdout ?? ""}\n${first.lastErr?.stderr ?? ""}`;
+  if (combinedOutput.includes("P3009")) {
+    const match = combinedOutput.match(FAILED_MIGRATION_PATTERN);
+    const stuckMigration = match?.[1];
+    if (stuckMigration) {
+      console.warn(
+        `[bootstrap] Detected stuck migration "${stuckMigration}" (P3009). ` +
+          `Marking applied and retrying — schema is already managed elsewhere.`,
+      );
+      const resolved = await resolveMigrationApplied(stuckMigration);
+      if (resolved) {
+        const retry = await runPrismaCommand(["migrate", "deploy"]);
+        if (retry.ok) {
+          const out = retry.result?.stdout.trim() ?? "";
+          if (out) console.log(`[bootstrap] prisma migrate deploy (after recovery):\n${out}`);
+          return { applied: true };
+        }
+        const detail = `\n${retry.lastErr?.stdout.trim() ?? ""}\n${retry.lastErr?.stderr.trim() ?? ""}`;
+        throw new Error(`prisma migrate deploy failed even after resolving ${stuckMigration}.${detail}`);
+      }
+      console.warn(`[bootstrap] Failed to mark "${stuckMigration}" as applied; surfacing original error.`);
+    }
+  }
+
+  const detail = first.lastErr
+    ? `\n${first.lastErr.stdout.trim()}\n${first.lastErr.stderr.trim()}`
     : "";
   throw new Error(`prisma migrate deploy failed across all candidates.${detail}`);
 }
