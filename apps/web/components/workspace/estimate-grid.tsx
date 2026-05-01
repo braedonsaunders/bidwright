@@ -2120,7 +2120,8 @@ export function EstimateGrid({
             ref={(el) => { editInputRef.current = el; }}
             type="number"
             step="0.01"
-            className="w-14 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
+            size={1}
+            className="w-12 min-w-0 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}
@@ -2136,7 +2137,7 @@ export function EstimateGrid({
         return (
           <span
             key={field}
-            className="tabular-nums text-xs text-fg/30 italic px-1"
+            className="tabular-nums text-xs text-fg/30 italic w-12 inline-block text-center"
             title={label}
             onClick={(e) => e.stopPropagation()}
           >
@@ -2153,7 +2154,7 @@ export function EstimateGrid({
           data-cell-row={row.id}
           data-cell-col={field}
           className={cn(
-            "tabular-nums text-xs px-1.5 py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors min-w-[32px] text-center inline-block",
+            "tabular-nums text-xs py-0.5 rounded cursor-pointer hover:bg-accent/5 hover:text-accent transition-colors w-12 text-center inline-block",
             isSelected && "ring-1 ring-inset ring-accent/60 bg-accent/5 text-accent",
           )}
           title={`Click to edit ${label}`}
@@ -2220,23 +2221,27 @@ export function EstimateGrid({
             if (val !== row.uom) commitItemPatch(row.id, { uom: val });
           }
         };
-        const closeAndAdvance = (dir: "next" | "prev" | "stay") => {
+        const close = () => {
           setEditingCell(null);
           setSelectedCell({ rowId: row.id, column });
           setSelectedRowId(row.id);
+        };
+        const advanceAfter = (dir: "next" | "prev") => {
+          close();
           if (dir === "next") setTimeout(() => advanceToNextCell(row.id, column), 0);
-          else if (dir === "prev") setTimeout(() => retreatToPrevCell(row.id, column), 0);
+          else setTimeout(() => retreatToPrevCell(row.id, column), 0);
         };
         return (
           <td className={cn("border-b border-line px-2 py-1 text-xs", className)}>
             <RadixSelect.Root
-              defaultOpen
+              open
               value={currentValue}
-              onValueChange={commit}
+              onValueChange={(val) => {
+                commit(val);
+                close();
+              }}
               onOpenChange={(o) => {
-                if (!o && editingCell?.rowId === row.id && editingCell?.column === column) {
-                  closeAndAdvance("stay");
-                }
+                if (!o) close();
               }}
             >
               <RadixSelect.Trigger className="inline-flex h-6 w-full min-w-0 items-center justify-between gap-1 rounded border border-accent/50 bg-bg px-1.5 text-[11px] text-fg outline-none">
@@ -2251,11 +2256,9 @@ export function EstimateGrid({
                   onKeyDown={(e) => {
                     if (e.key === "Tab") {
                       e.preventDefault();
-                      const target = (e.target as HTMLElement | null)?.getAttribute("data-state") === "checked"
-                        ? currentValue
-                        : (e.target as HTMLElement | null)?.getAttribute("data-radix-select-item-value") ?? null;
+                      const target = (e.target as HTMLElement | null)?.getAttribute("data-radix-select-item-value") ?? null;
                       if (target) commit(target);
-                      closeAndAdvance(e.shiftKey ? "prev" : "next");
+                      advanceAfter(e.shiftKey ? "prev" : "next");
                     }
                   }}
                 >
@@ -2906,7 +2909,7 @@ export function EstimateGrid({
             </EmptyState>
           ) : (
             <div className="overflow-auto rounded-lg border border-line h-full">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[1280px] table-fixed text-sm">
                 <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
                     {/* Expand button column */}
@@ -2934,17 +2937,17 @@ export function EstimateGrid({
                       </th>
                     )}
                     {isColVisible("entityName") && (
-                      <th className="border-b border-line px-2 py-2 text-left min-w-[140px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
+                      <th className="border-b border-line px-2 py-2 text-left w-[200px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
                         <span className="flex items-center gap-1">Entity Name {renderSortIcon("entityName")}</span>
                       </th>
                     )}
                     {isColVisible("vendor") && (
-                      <th className="border-b border-line px-2 py-2 text-left min-w-[100px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("vendor")}>
+                      <th className="border-b border-line px-2 py-2 text-left w-[120px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("vendor")}>
                         <span className="flex items-center gap-1">Vendor {renderSortIcon("vendor")}</span>
                       </th>
                     )}
                     {isColVisible("description") && (
-                      <th className="border-b border-line px-2 py-2 text-left min-w-[160px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("description")}>
+                      <th className="border-b border-line px-2 py-2 text-left w-[220px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("description")}>
                         <span className="flex items-center gap-1">Description {renderSortIcon("description")}</span>
                       </th>
                     )}
@@ -2954,12 +2957,12 @@ export function EstimateGrid({
                       </th>
                     )}
                     {isColVisible("uom") && (
-                      <th className="border-b border-line px-2 py-2 text-center w-14 cursor-pointer select-none group/th" onClick={() => handleSortToggle("uom")}>
+                      <th className="border-b border-line px-2 py-2 text-center w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("uom")}>
                         <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
                       </th>
                     )}
                     {isColVisible("units") && (
-                      <th className="border-b border-line px-1.5 py-2 text-center cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
+                      <th className="border-b border-line px-1.5 py-2 text-center w-[160px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
                         <span className="flex items-center justify-center gap-1 text-[10px]">Units {renderSortIcon("unit1")}</span>
                       </th>
                     )}
@@ -2989,7 +2992,7 @@ export function EstimateGrid({
                       </th>
                     )}
                     {isColVisible("phaseId") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-20 max-w-[80px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
+                      <th className="border-b border-line px-2 py-2 text-left w-[88px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
                         <span className="flex items-center gap-1">Phase {renderSortIcon("phaseId")}</span>
                       </th>
                     )}
