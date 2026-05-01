@@ -37,6 +37,7 @@ interface AgentChatProps {
   open: boolean;
   onClose: () => void;
   autoStartIntake?: boolean;
+  initialPersonaId?: string | null;
   onIntakeStarted?: () => void;
   onWorkspaceMutated?: () => void;
 }
@@ -1050,7 +1051,7 @@ interface IngestionDoc {
   hasText: boolean;
 }
 
-export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeStarted, onWorkspaceMutated }: AgentChatProps) {
+export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated }: AgentChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1167,6 +1168,15 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, onIntakeS
       active = false;
     };
   }, []);
+
+  // Honor an externally requested persona (e.g. from the intake URL param).
+  // Runs once when the persona list is ready or when initialPersonaId becomes set.
+  useEffect(() => {
+    if (!initialPersonaId) return;
+    if (personas.length === 0) return;
+    const requested = personas.find((p) => p.id === initialPersonaId);
+    if (requested) setSelectedPersonaId(requested.id);
+  }, [initialPersonaId, personas]);
 
   useEffect(() => {
     intakeScopeEditedRef.current = false;
