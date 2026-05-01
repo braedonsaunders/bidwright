@@ -93,12 +93,11 @@ function findHeaderRow(data: string[][]): number {
 }
 
 async function parsePdfTables(buffer: Buffer, filename: string, azureConfig?: { endpoint?: string; key?: string }): Promise<SpreadsheetTable[]> {
-  const hasAzure =
-    !!(azureConfig?.endpoint && azureConfig?.key) || !!(process.env.AZURE_DI_ENDPOINT && process.env.AZURE_DI_KEY);
+  const hasAzure = !!(azureConfig?.endpoint && azureConfig?.key);
   const parser = createPdfParser({
     provider: hasAzure ? "azure" : "local",
-    azureEndpoint: azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT,
-    azureKey: azureConfig?.key || process.env.AZURE_DI_KEY,
+    azureEndpoint: azureConfig?.endpoint,
+    azureKey: azureConfig?.key,
     azureModel: "prebuilt-layout",
     options: { tableExtractionEnabled: true },
   });

@@ -208,11 +208,11 @@ export async function detectTitleBlockScale(
   }
 
   const buffer = await readFile(resolveApiPath(storagePath));
-  // Resolve Azure DI creds: caller-supplied (org settings) wins, then env.
-  const azureEndpoint = azureConfig?.endpoint || process.env.AZURE_DI_ENDPOINT;
-  const azureKey = azureConfig?.key || process.env.AZURE_DI_KEY;
+  // Azure DI creds come from org Settings > Integrations.
+  const azureEndpoint = azureConfig?.endpoint;
+  const azureKey = azureConfig?.key;
   if (!azureEndpoint || !azureKey) {
-    warnings.push("Azure Document Intelligence isn't configured — OCR cannot run.");
+    warnings.push("Azure Document Intelligence isn't configured — OCR cannot run. Set credentials in Settings > Integrations.");
     return { ocrText: "", detectedScales: [], detectedDiscipline: null, warnings };
   }
 

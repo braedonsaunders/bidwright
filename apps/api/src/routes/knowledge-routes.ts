@@ -422,11 +422,11 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         return reply.code(400).send({ message: "documentId is required" });
       }
 
-      // Resolve Azure DI credentials: org settings first, then env vars
+      // Azure DI credentials live exclusively in Settings > Integrations.
       const settings = await request.store!.getSettings();
       const integrations = settings.integrations ?? {} as any;
-      const azureEndpoint = integrations.azureDiEndpoint || process.env.AZURE_DI_ENDPOINT;
-      const azureKey = integrations.azureDiKey || process.env.AZURE_DI_KEY;
+      const azureEndpoint = integrations.azureDiEndpoint || undefined;
+      const azureKey = integrations.azureDiKey || undefined;
       if (!azureEndpoint || !azureKey) {
         return reply.code(503).send({
           message: "Azure Document Intelligence not configured. Add credentials in Settings > Integrations > API Keys.",
