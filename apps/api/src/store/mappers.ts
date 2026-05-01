@@ -429,7 +429,7 @@ export function mapCondition(c: any): Condition {
 }
 
 export function mapRateScheduleTier(t: any): RateScheduleTier {
-  return { id: t.id, scheduleId: t.scheduleId, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder };
+  return { id: t.id, scheduleId: t.scheduleId, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder, uom: t.uom ?? null };
 }
 
 export function mapRateScheduleItem(i: any): RateScheduleItem {

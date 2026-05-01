@@ -50,6 +50,19 @@ import { CatalogItemPicker, type CatalogPickerItem } from "@/components/shared/c
 
 /* ─── Constants ─── */
 
+const TIER_UOM_OPTIONS = [
+  { value: "__none__", label: "Any UoM" },
+  { value: "HR", label: "HR" },
+  { value: "DAY", label: "DAY" },
+  { value: "WK", label: "WK" },
+  { value: "MO", label: "MO" },
+  { value: "EA", label: "EA" },
+  { value: "LF", label: "LF" },
+  { value: "FT", label: "FT" },
+  { value: "SF", label: "SF" },
+  { value: "LS", label: "LS" },
+];
+
 type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
 
 const FALLBACK_TONES: Record<string, BadgeTone> = {
@@ -167,8 +180,9 @@ export function RateScheduleManager({
   const [showAddTier, setShowAddTier] = useState(false);
   const [newTierName, setNewTierName] = useState("");
   const [newTierMultiplier, setNewTierMultiplier] = useState("1.0");
+  const [newTierUom, setNewTierUom] = useState<string>("__none__");
   const [editingTierId, setEditingTierId] = useState<string | null>(null);
-  const [editTierForm, setEditTierForm] = useState({ name: "", multiplier: "1.0" });
+  const [editTierForm, setEditTierForm] = useState<{ name: string; multiplier: string; uom: string }>({ name: "", multiplier: "1.0", uom: "__none__" });
   const [showAddItem, setShowAddItem] = useState(false);
   const [newItemForm, setNewItemForm] = useState({ name: "", code: "", unit: "HR", catalogItemId: null as string | null });
 
@@ -293,15 +307,17 @@ export function RateScheduleManager({
       const updated = await addRateScheduleTier(detail.id, {
         name: newTierName.trim(),
         multiplier: parseFloat(newTierMultiplier) || 1.0,
+        uom: newTierUom === "__none__" ? null : newTierUom,
       });
       setDetail(updated);
       setNewTierName("");
       setNewTierMultiplier("1.0");
+      setNewTierUom("__none__");
       setShowAddTier(false);
     } catch (err) {
       console.error("Failed to add tier:", err);
     }
-  }, [detail, newTierName, newTierMultiplier]);
+  }, [detail, newTierName, newTierMultiplier, newTierUom]);
 
   const handleDeleteTier = useCallback(
     async (tierId: string) => {
@@ -336,7 +352,11 @@ export function RateScheduleManager({
       const multiplier = parseFloat(editTierForm.multiplier) || 1;
       if (!name) return;
       try {
-        const updated = await updateRateScheduleTier(detail.id, editingTierId, { name, multiplier });
+        const updated = await updateRateScheduleTier(detail.id, editingTierId, {
+          name,
+          multiplier,
+          uom: editTierForm.uom === "__none__" ? null : editTierForm.uom,
+        });
         setDetail(updated);
         setEditingTierId(null);
       } catch (err) {
@@ -639,8 +659,18 @@ export function RateScheduleManager({
                           <label className="text-[10px] font-medium text-fg/40 uppercase">Multiplier</label>
                           <Input className="mt-1 h-8 text-xs" type="number" step="0.1" value={newTierMultiplier} onChange={(e) => setNewTierMultiplier(e.target.value)} />
                         </div>
+                        <div className="w-28">
+                          <label className="text-[10px] font-medium text-fg/40 uppercase">UoM</label>
+                          <Select
+                            size="sm"
+                            value={newTierUom}
+                            onValueChange={setNewTierUom}
+                            options={TIER_UOM_OPTIONS}
+                            triggerClassName="mt-1"
+                          />
+                        </div>
                         <Button size="xs" onClick={handleAddTier} disabled={!newTierName.trim()}>Add</Button>
-                        <Button size="xs" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); }}><X className="h-3 w-3" /></Button>
+                        <Button size="xs" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); setNewTierUom("__none__"); }}><X className="h-3 w-3" /></Button>
                       </div>
                     )}
                     {detail.tiers.length === 0 ? (
@@ -653,13 +683,23 @@ export function RateScheduleManager({
                               <Input className="h-6 w-24 text-xs" value={editTierForm.name} onChange={(e) => setEditTierForm({ ...editTierForm, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} autoFocus />
                               <Input className="h-6 w-14 text-xs text-right" type="number" step="0.1" value={editTierForm.multiplier} onChange={(e) => setEditTierForm({ ...editTierForm, multiplier: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} />
                               <span className="text-[10px] text-fg/40">×</span>
+                              <Select
+                                size="xs"
+                                value={editTierForm.uom}
+                                onValueChange={(v) => setEditTierForm({ ...editTierForm, uom: v })}
+                                options={TIER_UOM_OPTIONS}
+                                triggerClassName="w-20"
+                              />
                               <button onClick={handleSaveTierEdit} className="p-0.5 rounded hover:bg-accent/10 text-accent transition-colors"><Check className="h-3 w-3" /></button>
                               <button onClick={() => setEditingTierId(null)} className="p-0.5 rounded hover:bg-panel2/60 text-fg/30 transition-colors"><X className="h-3 w-3" /></button>
                             </div>
                           ) : (
-                            <div key={tier.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group cursor-pointer hover:border-accent/30 transition-colors" onClick={() => { setEditingTierId(tier.id); setEditTierForm({ name: tier.name, multiplier: String(tier.multiplier) }); }}>
+                            <div key={tier.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-panel2/40 border border-line group cursor-pointer hover:border-accent/30 transition-colors" onClick={() => { setEditingTierId(tier.id); setEditTierForm({ name: tier.name, multiplier: String(tier.multiplier), uom: tier.uom ?? "__none__" }); }}>
                               <span className="text-xs font-medium text-fg">{tier.name}</span>
                               <span className="text-[10px] text-fg/40">{tier.multiplier}×</span>
+                              {tier.uom ? (
+                                <span className="text-[10px] font-medium text-accent/70 uppercase tracking-wider">{tier.uom}</span>
+                              ) : null}
                               <button onClick={(e) => { e.stopPropagation(); handleDeleteTier(tier.id); }} className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all">
                                 <X className="h-2.5 w-2.5" />
                               </button>

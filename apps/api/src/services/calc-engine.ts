@@ -16,7 +16,7 @@ import { normalizeCalculationType } from "@bidwright/domain";
 export interface RateScheduleContext {
   id: string;
   category: string;
-  tiers: Array<{ id: string; name: string; multiplier: number; sortOrder: number }>;
+  tiers: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
   items: Array<{
     id: string;
     name: string;
@@ -194,36 +194,53 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
   // unit1 → Regular (multiplier 1.0), unit2 → Overtime (1.5), unit3 → DoubleTime (2.0)
   const hasTierHours = Object.keys(tierUnits).length > 0;
   if (!hasTierHours) {
-    const hasLegacyUnits = (item.unit1 || 0) > 0 || (item.unit2 || 0) > 0 || (item.unit3 || 0) > 0;
-    if (!hasLegacyUnits) return null;
-
-    // Map unit1/unit2/unit3 to the corresponding tier IDs by multiplier
-    const sortedTiers = [...schedule.tiers].sort((a, b) => a.multiplier - b.multiplier);
-    const regularTier = sortedTiers.find((t) => t.multiplier === 1 || t.multiplier === 1.0);
-    const overtimeTier = sortedTiers.find((t) => t.multiplier === 1.5);
-    const doubletimeTier = sortedTiers.find((t) => t.multiplier === 2 || t.multiplier === 2.0);
-
-    tierUnits = {};
-    if ((item.unit1 || 0) > 0 && regularTier) tierUnits[regularTier.id] = item.unit1;
-    if ((item.unit2 || 0) > 0 && overtimeTier) tierUnits[overtimeTier.id] = item.unit2;
-    if ((item.unit3 || 0) > 0 && doubletimeTier) tierUnits[doubletimeTier.id] = item.unit3;
-
-    // For equipment, unit3 may represent monthly duration — try matching by tier name patterns
-    if (Object.keys(tierUnits).length === 0) {
-      // Try matching tiers by name convention (Daily/Weekly/Monthly) for equipment
-      for (const tier of schedule.tiers) {
-        const lowerName = tier.name.toLowerCase();
-        if ((item.unit1 || 0) > 0 && (lowerName.includes("daily") || lowerName.includes("day"))) {
-          tierUnits[tier.id] = item.unit1;
-        } else if ((item.unit2 || 0) > 0 && (lowerName.includes("weekly") || lowerName.includes("week"))) {
-          tierUnits[tier.id] = item.unit2;
-        } else if ((item.unit3 || 0) > 0 && (lowerName.includes("monthly") || lowerName.includes("month"))) {
-          tierUnits[tier.id] = item.unit3;
-        }
+    // UoM-tagged tier: if the line item's uom matches a tier's configured uom,
+    // bill `(unit1 || 1) × qty` against that tier's rate. Lets equipment
+    // schedules with DAY/WEEK/MONTH tiers price purely from the line's UoM
+    // without having to populate unit1/unit2/unit3 by convention.
+    const itemUom = (item.uom ?? "").trim().toUpperCase();
+    if (itemUom) {
+      const uomTier = schedule.tiers.find(
+        (t) => t.uom && t.uom.trim().toUpperCase() === itemUom,
+      );
+      if (uomTier) {
+        const units = (item.unit1 || 0) > 0 ? item.unit1 : 1;
+        tierUnits = { [uomTier.id]: units };
       }
     }
 
-    if (Object.keys(tierUnits).length === 0) return null;
+    if (Object.keys(tierUnits).length === 0) {
+      const hasLegacyUnits = (item.unit1 || 0) > 0 || (item.unit2 || 0) > 0 || (item.unit3 || 0) > 0;
+      if (!hasLegacyUnits) return null;
+
+      // Map unit1/unit2/unit3 to the corresponding tier IDs by multiplier
+      const sortedTiers = [...schedule.tiers].sort((a, b) => a.multiplier - b.multiplier);
+      const regularTier = sortedTiers.find((t) => t.multiplier === 1 || t.multiplier === 1.0);
+      const overtimeTier = sortedTiers.find((t) => t.multiplier === 1.5);
+      const doubletimeTier = sortedTiers.find((t) => t.multiplier === 2 || t.multiplier === 2.0);
+
+      tierUnits = {};
+      if ((item.unit1 || 0) > 0 && regularTier) tierUnits[regularTier.id] = item.unit1;
+      if ((item.unit2 || 0) > 0 && overtimeTier) tierUnits[overtimeTier.id] = item.unit2;
+      if ((item.unit3 || 0) > 0 && doubletimeTier) tierUnits[doubletimeTier.id] = item.unit3;
+
+      // For equipment, unit3 may represent monthly duration — try matching by tier name patterns
+      if (Object.keys(tierUnits).length === 0) {
+        // Try matching tiers by name convention (Daily/Weekly/Monthly) for equipment
+        for (const tier of schedule.tiers) {
+          const lowerName = tier.name.toLowerCase();
+          if ((item.unit1 || 0) > 0 && (lowerName.includes("daily") || lowerName.includes("day"))) {
+            tierUnits[tier.id] = item.unit1;
+          } else if ((item.unit2 || 0) > 0 && (lowerName.includes("weekly") || lowerName.includes("week"))) {
+            tierUnits[tier.id] = item.unit2;
+          } else if ((item.unit3 || 0) > 0 && (lowerName.includes("monthly") || lowerName.includes("month"))) {
+            tierUnits[tier.id] = item.unit3;
+          }
+        }
+      }
+
+      if (Object.keys(tierUnits).length === 0) return null;
+    }
   }
 
   // Determine cost rates: prefer global LabourCostContext over per-item costRates
