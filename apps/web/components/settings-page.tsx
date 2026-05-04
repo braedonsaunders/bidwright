@@ -97,14 +97,10 @@ import {
   type Department,
   testProviderKey as apiTestProviderKey,
   fetchProviderModels as apiFetchProviderModels,
-  getConditionLibrary as apiGetConditionLibrary,
-  createConditionLibraryEntry as apiCreateConditionLibraryEntry,
-  deleteConditionLibraryEntry as apiDeleteConditionLibraryEntry,
   listEstimateFactorLibraryEntries as apiListEstimateFactorLibraryEntries,
   createEstimateFactorLibraryEntry as apiCreateEstimateFactorLibraryEntry,
   updateEstimateFactorLibraryEntry as apiUpdateEstimateFactorLibraryEntry,
   deleteEstimateFactorLibraryEntry as apiDeleteEstimateFactorLibraryEntry,
-  type ConditionLibraryEntry,
   type CreateEstimateFactorInput,
   type DatasetRecord,
   type EstimatorPersona,
@@ -128,6 +124,7 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { PluginsPage } from "@/components/plugins-page";
 import { IntegrationsPage } from "@/components/integrations/integrations-page";
+import { ConditionLibraryManager } from "@/components/condition-library-manager";
 import {
   exportAllDataManagement,
   parseExportFile,
@@ -221,13 +218,6 @@ export function SettingsPage({
   const [personaDeleteConfirm, setPersonaDeleteConfirm] = useState<string | null>(null);
   const [knowledgeBooks, setKnowledgeBooks] = useState<KnowledgeBookRecord[]>([]);
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocumentRecord[]>([]);
-
-  // Conditions library
-  const [conditionLibrary, setConditionLibrary] = useState<ConditionLibraryEntry[]>([]);
-  const [newInclusion, setNewInclusion] = useState("");
-  const [newExclusion, setNewExclusion] = useState("");
-  const [newClarification, setNewClarification] = useState("");
-  const [conditionSaving, setConditionSaving] = useState(false);
 
   // Data Management import/export
   const [exporting, setExporting] = useState(false);
@@ -431,31 +421,8 @@ export function SettingsPage({
     }
   }, [activeGroup, orgSubTab]);
 
-  // Load condition library
-  useEffect(() => {
-    apiGetConditionLibrary().then(setConditionLibrary).catch(() => {});
-  }, []);
-
-  const addConditionLibraryEntry = async (type: string, value: string) => {
-    if (!value.trim()) return;
-    setConditionSaving(true);
-    try {
-      const entry = await apiCreateConditionLibraryEntry({ type, value: value.trim() });
-      setConditionLibrary((prev) => [...prev, entry]);
-      if (type === "inclusion") setNewInclusion("");
-      else if (type === "exclusion") setNewExclusion("");
-      else if (type === "clarification") setNewClarification("");
-      else setNewExclusion("");
-    } catch {}
-    setConditionSaving(false);
-  };
-
-  const removeConditionLibraryEntry = async (entryId: string) => {
-    try {
-      await apiDeleteConditionLibraryEntry(entryId);
-      setConditionLibrary((prev) => prev.filter((e) => e.id !== entryId));
-    } catch {}
-  };
+  // Conditions library is owned by ConditionLibraryManager (own state, own
+  // fetch, own drawer). No state lives on the settings page.
 
   // ── Department CRUD ─────────────────────────────────────────────────────
 
@@ -2045,147 +2012,9 @@ export function SettingsPage({
             document.body,
           )}
 
-          {/* ── Inclusions / Exclusions ─── */}
+          {/* ── Conditions Library (unified table + pill filters + drawer) ─── */}
           {activeGroup === "data" && dataSubTab === "conditions" && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Conditions Library</CardTitle>
-              </CardHeader>
-              <div className="px-5 pb-5">
-                <p className="text-xs text-fg/50 mb-4">
-                                              Manage your organization's standard clause library. These are available to quickly add when setting up project quotes.
-                </p>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-                  {/* Inclusions */}
-                  <div className="flex flex-col">
-                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
-                      Inclusions
-                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
-                        {conditionLibrary.filter((e) => e.type === "inclusion" || e.type === "Inclusion").length}
-                      </span>
-                    </h3>
-                    <div className="space-y-1.5 mb-3 flex-1">
-                      {conditionLibrary.filter((e) => e.type === "inclusion" || e.type === "Inclusion").length === 0 && (
-                        <p className="text-xs text-fg/40 italic py-2">No inclusions yet</p>
-                      )}
-                      {conditionLibrary
-                        .filter((e) => e.type === "inclusion" || e.type === "Inclusion")
-                        .map((entry) => (
-                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
-                            <button
-                              onClick={() => removeConditionLibraryEntry(entry.id)}
-                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
-                              title="Remove"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newInclusion}
-                        onChange={(e) => setNewInclusion(e.target.value)}
-                        placeholder="Add inclusion clause..."
-                        className="flex-1"
-                        onKeyDown={(e) => e.key === "Enter" && addConditionLibraryEntry("inclusion", newInclusion)}
-                      />
-                      <Button variant="secondary" size="sm" onClick={() => addConditionLibraryEntry("inclusion", newInclusion)} disabled={conditionSaving || !newInclusion.trim()}>
-                        <Plus className="h-3.5 w-3.5" />
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Exclusions */}
-                  <div className="flex flex-col">
-                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
-                      Exclusions
-                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
-                        {conditionLibrary.filter((e) => e.type === "exclusion" || e.type === "Exclusion").length}
-                      </span>
-                    </h3>
-                    <div className="space-y-1.5 mb-3 flex-1">
-                      {conditionLibrary.filter((e) => e.type === "exclusion" || e.type === "Exclusion").length === 0 && (
-                        <p className="text-xs text-fg/40 italic py-2">No exclusions yet</p>
-                      )}
-                      {conditionLibrary
-                        .filter((e) => e.type === "exclusion" || e.type === "Exclusion")
-                        .map((entry) => (
-                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
-                            <button
-                              onClick={() => removeConditionLibraryEntry(entry.id)}
-                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
-                              title="Remove"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newExclusion}
-                        onChange={(e) => setNewExclusion(e.target.value)}
-                        placeholder="Add exclusion clause..."
-                        className="flex-1"
-                        onKeyDown={(e) => e.key === "Enter" && addConditionLibraryEntry("exclusion", newExclusion)}
-                      />
-                      <Button variant="secondary" size="sm" onClick={() => addConditionLibraryEntry("exclusion", newExclusion)} disabled={conditionSaving || !newExclusion.trim()}>
-                        <Plus className="h-3.5 w-3.5" />
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Clarifications */}
-                  <div className="flex flex-col">
-                    <h3 className="text-sm font-medium text-fg mb-3 flex items-center gap-2">
-                      Clarifications
-                      <span className="text-[10px] font-normal text-fg/35 bg-fg/5 rounded-full px-2 py-0.5">
-                        {conditionLibrary.filter((e) => e.type === "clarification" || e.type === "Clarification").length}
-                      </span>
-                    </h3>
-                    <div className="space-y-1.5 mb-3 flex-1">
-                      {conditionLibrary.filter((e) => e.type === "clarification" || e.type === "Clarification").length === 0 && (
-                        <p className="text-xs text-fg/40 italic py-2">No clarifications yet</p>
-                      )}
-                      {conditionLibrary
-                        .filter((e) => e.type === "clarification" || e.type === "Clarification")
-                        .map((entry) => (
-                          <div key={entry.id} className="group flex items-start gap-2 rounded-lg border border-line bg-panel2/50 px-3 py-2">
-                            <span className="flex-1 text-xs text-fg leading-relaxed">{entry.value}</span>
-                            <button
-                              onClick={() => removeConditionLibraryEntry(entry.id)}
-                              className="mt-0.5 shrink-0 rounded p-1 text-fg/20 opacity-0 group-hover:opacity-100 hover:bg-danger/10 hover:text-danger transition-all"
-                              title="Remove"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
-                        ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <Input
-                        value={newClarification}
-                        onChange={(e) => setNewClarification(e.target.value)}
-                        placeholder="Add clarification clause..."
-                        className="flex-1"
-                        onKeyDown={(e) => e.key === "Enter" && addConditionLibraryEntry("clarification", newClarification)}
-                      />
-                      <Button variant="secondary" size="sm" onClick={() => addConditionLibraryEntry("clarification", newClarification)} disabled={conditionSaving || !newClarification.trim()}>
-                        <Plus className="h-3.5 w-3.5" />
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-            </Card>
+            <ConditionLibraryManager />
           )}
 
           {/* ── Factors ─── */}
@@ -2623,7 +2452,7 @@ function FactorLibraryManager() {
     setLoading(true);
     setError(null);
     try {
-      setEntries((await apiListEstimateFactorLibraryEntries()).filter((entry) => !entry.builtIn));
+      setEntries(await apiListEstimateFactorLibraryEntries());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load factor library");
     } finally {

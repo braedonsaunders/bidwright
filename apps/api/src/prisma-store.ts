@@ -8549,6 +8549,24 @@ export class PrismaApiStore {
     return mapConditionLibrary(entry);
   }
 
+  async updateConditionLibraryEntry(
+    entryId: string,
+    patch: { type?: string; value?: string },
+  ) {
+    const existing = await this.db.conditionLibraryEntry.findFirst({
+      where: { id: entryId, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Condition library entry ${entryId} not found`);
+    const data: Record<string, unknown> = {};
+    if (patch.type !== undefined) data.type = patch.type;
+    if (patch.value !== undefined) data.value = patch.value;
+    const updated = await this.db.conditionLibraryEntry.update({
+      where: { id: entryId },
+      data,
+    });
+    return mapConditionLibrary(updated);
+  }
+
   async deleteConditionLibraryEntry(entryId: string) {
     const entry = await this.db.conditionLibraryEntry.findFirst({
       where: { id: entryId, organizationId: this.organizationId },
