@@ -2,108 +2,6 @@
   "version": 1,
   "runs": [
     {
-      "at": "2026-04-29T20:25:04.435Z",
-      "sha": "42d41fb5c1efe3fc5e33b39e0f76eef1abaf0925",
-      "pr": null,
-      "actor": "braedonsaunders",
-      "files": 931,
-      "functions": 4144,
-      "loc": 313000,
-      "languages": 21,
-      "topLanguages": [
-        {
-          "ext": "ts",
-          "pct": 38,
-          "lines": 119473
-        },
-        {
-          "ext": "json",
-          "pct": 33,
-          "lines": 102979
-        },
-        {
-          "ext": "tsx",
-          "pct": 21,
-          "lines": 65415
-        },
-        {
-          "ext": "yaml",
-          "pct": 3,
-          "lines": 8441
-        },
-        {
-          "ext": "py",
-          "pct": 1,
-          "lines": 3428
-        }
-      ],
-      "dead": 73,
-      "deadPct": 1.8,
-      "circular": 1,
-      "godObjects": 1,
-      "avgCoupling": 8.9,
-      "securityIssues": 67,
-      "patterns": 10,
-      "duplicates": 24,
-      "layerViolations": 1914,
-      "connections": 8300,
-      "avgFnLines": 15.5,
-      "longestFn": 16,
-      "testFiles": 80,
-      "testRatio": 8.6,
-      "topFolders": [
-        {
-          "name": "apps",
-          "count": 767
-        },
-        {
-          "name": "packages",
-          "count": 141
-        },
-        {
-          "name": "root",
-          "count": 10
-        },
-        {
-          "name": "scripts",
-          "count": 9
-        },
-        {
-          "name": ".claude",
-          "count": 2
-        }
-      ],
-      "folders": 5,
-      "grade": "F",
-      "score": 58,
-      "topBlast": {
-        "path": "apps/model-editor/cpp/test/index.html",
-        "direct": 514,
-        "transitive": 702,
-        "total": 1216
-      },
-      "fragility": [
-        {
-          "path": "apps/model-editor/cpp/test/index.html",
-          "direct": 514,
-          "transitive": 702,
-          "total": 1216
-        },
-        {
-          "path": "apps/model-editor/packages/core/src/config.ts",
-          "direct": 179,
-          "transitive": 701,
-          "total": 880
-        },
-        {
-          "path": "apps/model-editor/packages/storage/src/indexedDBStorage.ts",
-          "direct": 171,
-          "transitive": 700,
-          "total": 871
-        }
-      ]
-    },
-    {
       "at": "2026-04-30T14:20:10.202Z",
       "sha": "8db80b66d5ae7cc3903f333c0fe944bb7ac8e19c",
       "pr": null,
@@ -2983,6 +2881,108 @@
           "ext": "tsx",
           "pct": 25,
           "lines": 92743
+        },
+        {
+          "ext": "yaml",
+          "pct": 2,
+          "lines": 8469
+        },
+        {
+          "ext": "py",
+          "pct": 1,
+          "lines": 3428
+        }
+      ],
+      "dead": 88,
+      "deadPct": 1.6,
+      "circular": 1,
+      "godObjects": 1,
+      "avgCoupling": 9.3,
+      "securityIssues": 78,
+      "patterns": 10,
+      "duplicates": 30,
+      "layerViolations": 2342,
+      "connections": 9636,
+      "avgFnLines": 15.6,
+      "longestFn": 16,
+      "testFiles": 94,
+      "testRatio": 9,
+      "topFolders": [
+        {
+          "name": "apps",
+          "count": 810
+        },
+        {
+          "name": "packages",
+          "count": 199
+        },
+        {
+          "name": "scripts",
+          "count": 16
+        },
+        {
+          "name": "root",
+          "count": 11
+        },
+        {
+          "name": ".claude",
+          "count": 2
+        }
+      ],
+      "folders": 5,
+      "grade": "F",
+      "score": 58,
+      "topBlast": {
+        "path": "apps/model-editor/cpp/test/index.html",
+        "direct": 555,
+        "transitive": 778,
+        "total": 1333
+      },
+      "fragility": [
+        {
+          "path": "apps/model-editor/cpp/test/index.html",
+          "direct": 555,
+          "transitive": 778,
+          "total": 1333
+        },
+        {
+          "path": "apps/api/src/services/integrations-service.ts",
+          "direct": 331,
+          "transitive": 777,
+          "total": 1108
+        },
+        {
+          "path": "apps/model-editor/packages/core/src/config.ts",
+          "direct": 182,
+          "transitive": 773,
+          "total": 955
+        }
+      ]
+    },
+    {
+      "at": "2026-05-04T14:56:34.496Z",
+      "sha": "e1ca611e88de3ca1eacd9d2211af4a563bd1a721",
+      "pr": null,
+      "actor": "braedonsaunders",
+      "files": 1040,
+      "functions": 5584,
+      "loc": 369815,
+      "languages": 21,
+      "topLanguages": [
+        {
+          "ext": "ts",
+          "pct": 39,
+          "lines": 145861
+        },
+        {
+          "ext": "json",
+          "pct": 28,
+          "lines": 103009
+        },
+        {
+          "ext": "tsx",
+          "pct": 25,
+          "lines": 92769
         },
         {
           "ext": "yaml",
