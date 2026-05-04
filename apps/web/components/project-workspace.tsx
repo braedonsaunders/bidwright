@@ -2627,7 +2627,9 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
                       <Badge tone="default">{factorImpactLabel(entry.impact)}</Badge>
                       <Badge tone="info">{factorApplicationScopeLabel(entry.applicationScope)}</Badge>
                       <Badge tone="default">{factorFormulaLabel(entry.formulaType)}</Badge>
-                      {entry.builtIn ? <Badge tone="success">Book</Badge> : <Badge tone="default">Org</Badge>}
+                      <Badge tone={entry.sourceType === "knowledge" ? "success" : "default"}>
+                        {entry.sourceType === "knowledge" ? "Book" : "Org"}
+                      </Badge>
                     </div>
                   </div>
                   <Button size="xs" onClick={() => setFlyout({ mode: "preset", entry })} disabled={isPending}><Plus className="h-3 w-3" /> Add</Button>
@@ -2786,7 +2788,9 @@ function FactorFlyout({
 
   const baseSourceRef = state.mode === "edit" ? state.factor.sourceRef : state.mode === "preset" ? state.entry.sourceRef : {};
   const title = state.mode === "edit" ? "Edit Factor" : state.mode === "preset" ? "Add Factor" : "Create Factor";
-  const canSaveToLibrary = !(state.mode === "preset" && state.entry.builtIn);
+  // All library entries are user-owned org rows now (no built-in/read-only
+  // shadow set), so saving back to the library is always allowed.
+  const canSaveToLibrary = true;
   const alreadyInLibrary = state.mode === "preset" || (state.mode === "edit" && library.some((entry) => entry.id === state.factor.sourceId));
 
   function updateDraft(patch: Partial<FactorDraft>) {
@@ -2818,7 +2822,7 @@ function FactorFlyout({
           sourceInput = {
             ...input,
             sourceId: currentState.entry.id,
-            sourceRef: { ...(input.sourceRef ?? {}), libraryEntryId: currentState.entry.id, builtIn: !!currentState.entry.builtIn },
+            sourceRef: { ...(input.sourceRef ?? {}), libraryEntryId: currentState.entry.id },
           };
         }
 

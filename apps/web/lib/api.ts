@@ -393,12 +393,10 @@ export interface EstimateFactorPreset extends Omit<EstimateFactor, "id" | "revis
 }
 
 export interface EstimateFactorLibraryRecord extends EstimateFactorPreset {
-  organizationId: string | null;
+  organizationId: string;
   order: number;
-  builtIn?: boolean;
-  readOnly?: boolean;
-  createdAt?: string | null;
-  updatedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ProjectCondition {
@@ -2274,6 +2272,17 @@ export async function createConditionLibraryEntry(input: { type: string; value: 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
+  });
+}
+
+export async function updateConditionLibraryEntry(
+  entryId: string,
+  patch: { type?: string; value?: string },
+) {
+  return apiRequest<ConditionLibraryEntry>(`/conditions/library/${entryId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
   });
 }
 

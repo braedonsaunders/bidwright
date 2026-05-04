@@ -28,11 +28,22 @@ import {
 } from "./construction-classification";
 import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder";
 import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours";
-import {
-  NECA_DIFFICULTY_RANGES,
-  NECA_EXTENDED_DURATION_TABLE,
-  NECA_TEMPERATURE_PRODUCTIVITY_SAMPLES,
-} from "./estimate-factors";
+
+/**
+ * Shape of a row in the extended-duration interpolation table. Stored on each
+ * EstimateFactorLibraryEntry's `parameters.table` for factors of type
+ * "extended_duration"; the calc engine reads it through there. No hardcoded
+ * NECA tables live in this file — empty parameters mean a no-op multiplier.
+ */
+interface ExtendedDurationRow {
+  laborHours: number;
+  laborDays: number;
+  workers: number;
+  crewWeeks: number;
+  normalMonths: number;
+  factor: number;
+  extraHours: number;
+}
 
 
 const standalonePricingModes = new Set<AdjustmentPricingMode>([
@@ -1238,10 +1249,13 @@ function resolveNecaTemperatureMultiplier(parameters: Record<string, unknown>) {
       productivity: factorNumber(record.productivity ?? record.P, 100),
     };
   }).filter((entry) => Number.isFinite(entry.productivity));
-  const source = samples.length > 0 ? samples : NECA_TEMPERATURE_PRODUCTIVITY_SAMPLES;
-  let best = source[0] ?? { temperatureF: 68, humidity: 60, productivity: 100 };
+  // No fallback: if a temperature_productivity factor has no sampleData,
+  // it is a no-op (multiplier 1.0). The factor library entry is expected
+  // to carry its own sample grid in `parameters.sampleData`.
+  if (samples.length === 0) return 1;
+  let best = samples[0]!;
   let minDistance = Number.POSITIVE_INFINITY;
-  for (const sample of source) {
+  for (const sample of samples) {
     const distance = Math.sqrt(Math.pow(sample.temperatureF - temperatureF, 2) + Math.pow(sample.humidity - humidity, 2));
     if (distance < minDistance) {
       minDistance = distance;
@@ -1263,8 +1277,9 @@ function resolveNecaConditionMultiplier(parameters: Record<string, unknown>) {
       multiplier: factorNumber(record.multiplier, 1),
     };
   }).filter((entry) => entry.maxScore >= entry.minScore);
-  const source = ranges.length > 0 ? ranges : NECA_DIFFICULTY_RANGES;
-  const matched = source.find((range) => totalScore >= range.minScore && totalScore <= range.maxScore);
+  // No fallback: factor must carry its own ranges in `parameters.ranges`.
+  if (ranges.length === 0) return 1;
+  const matched = ranges.find((range) => totalScore >= range.minScore && totalScore <= range.maxScore);
   return normalizeFactorMultiplier(matched?.multiplier ?? 1);
 }
 
@@ -1279,7 +1294,7 @@ function resolveConditionScoreMultiplier(parameters: Record<string, unknown>) {
   return normalizeFactorMultiplier(Math.max(Math.min(raw, max), min));
 }
 
-function interpolateExtendedDurationRow(table: typeof NECA_EXTENDED_DURATION_TABLE, baseHours: number) {
+function interpolateExtendedDurationRow(table: ExtendedDurationRow[], baseHours: number) {
   const rows = table.slice().sort((left, right) => left.laborHours - right.laborHours);
   if (rows.length === 0) return { laborHours: baseHours, workers: 1, extraHours: 0 };
   const interpolate = (lower: typeof rows[number], upper: typeof rows[number]) => {
@@ -1302,7 +1317,7 @@ function interpolateExtendedDurationRow(table: typeof NECA_EXTENDED_DURATION_TAB
 function resolveExtendedDurationMultiplier(parameters: Record<string, unknown>, baseHours: number) {
   if (baseHours <= 0) return 1;
   const tableInput = factorArray(parameters.table);
-  const table = tableInput.map((entry) => {
+  const table: ExtendedDurationRow[] = tableInput.map((entry) => {
     const record = factorRecord(entry);
     return {
       laborHours: factorNumber(record.laborHours),
@@ -1314,8 +1329,9 @@ function resolveExtendedDurationMultiplier(parameters: Record<string, unknown>, 
       extraHours: factorNumber(record.extraHours),
     };
   }).filter((entry) => entry.laborHours > 0);
-  const source = table.length > 0 ? table : NECA_EXTENDED_DURATION_TABLE;
-  const synthetic = interpolateExtendedDurationRow(source, baseHours);
+  // No fallback: factor must carry its own interpolation table.
+  if (table.length === 0) return 1;
+  const synthetic = interpolateExtendedDurationRow(table, baseHours);
   const workers = factorNumber(parameters.workers, synthetic.workers || 1);
   const monthsExtended = Math.max(0, factorNumber(parameters.monthsExtended, 0));
   const additionalHours = synthetic.workers === 0 ? 0 : (synthetic.extraHours / synthetic.workers) * workers * monthsExtended;

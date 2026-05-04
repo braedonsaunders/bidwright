@@ -11,7 +11,6 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
-import { ESTIMATE_FACTOR_PRESETS } from "@bidwright/domain";
 
 import {
   type PrismaApiStore,
@@ -441,21 +440,6 @@ const createEstimateFactorSchema = z.object({
 const estimateFactorPatchSchema = createEstimateFactorSchema;
 
 const estimateFactorLibraryEntrySchema = createEstimateFactorSchema;
-
-function builtinEstimateFactorLibraryEntries() {
-  return ESTIMATE_FACTOR_PRESETS.map((entry, index) => ({
-    ...entry,
-    applicationScope: entry.applicationScope ?? "both",
-    formulaType: entry.formulaType ?? "fixed_multiplier",
-    parameters: entry.parameters ?? {},
-    organizationId: null,
-    order: index,
-    builtIn: true,
-    readOnly: true,
-    createdAt: null,
-    updatedAt: null,
-  }));
-}
 
 const createConditionSchema = z.object({
   type: z.string().min(1),
@@ -3042,11 +3026,7 @@ export function buildServer() {
   });
 
   app.get("/factor-library", async (request) => {
-    const organizationEntries = await request.store!.listEstimateFactorLibraryEntries();
-    return [
-      ...builtinEstimateFactorLibraryEntries(),
-      ...organizationEntries.map((entry) => ({ ...entry, builtIn: false, readOnly: false })),
-    ];
+    return await request.store!.listEstimateFactorLibraryEntries();
   });
 
   app.post("/factor-library", async (request, reply) => {
@@ -3059,14 +3039,11 @@ export function buildServer() {
     }
     const created = await request.store!.createEstimateFactorLibraryEntry(parsed.data satisfies CreateEstimateFactorLibraryEntryInput);
     reply.code(201);
-    return { ...created, builtIn: false, readOnly: false };
+    return created;
   });
 
   app.patch("/factor-library/:entryId", async (request, reply) => {
     const { entryId } = request.params as { entryId: string };
-    if (ESTIMATE_FACTOR_PRESETS.some((entry) => entry.id === entryId)) {
-      return reply.code(400).send({ message: "Built-in factor library entries are read-only" });
-    }
     const parsed = estimateFactorLibraryEntrySchema.safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({
@@ -3074,15 +3051,11 @@ export function buildServer() {
         issues: parsed.error.flatten()
       });
     }
-    const updated = await request.store!.updateEstimateFactorLibraryEntry(entryId, parsed.data satisfies EstimateFactorLibraryEntryPatchInput);
-    return { ...updated, builtIn: false, readOnly: false };
+    return await request.store!.updateEstimateFactorLibraryEntry(entryId, parsed.data satisfies EstimateFactorLibraryEntryPatchInput);
   });
 
   app.delete("/factor-library/:entryId", async (request, reply) => {
     const { entryId } = request.params as { entryId: string };
-    if (ESTIMATE_FACTOR_PRESETS.some((entry) => entry.id === entryId)) {
-      return reply.code(400).send({ message: "Built-in factor library entries are read-only" });
-    }
     await request.store!.deleteEstimateFactorLibraryEntry(entryId);
     return { deleted: true };
   });
@@ -3102,11 +3075,7 @@ export function buildServer() {
     if (!project) {
       return reply.code(404).send({ message: "Project not found" });
     }
-    const organizationEntries = await request.store!.listEstimateFactorLibraryEntries();
-    return [
-      ...builtinEstimateFactorLibraryEntries(),
-      ...organizationEntries.map((entry) => ({ ...entry, builtIn: false, readOnly: false })),
-    ];
+    return await request.store!.listEstimateFactorLibraryEntries();
   });
 
   app.post("/projects/:projectId/factors", async (request, reply) => {
@@ -3230,6 +3199,12 @@ export function buildServer() {
     const { type, value } = request.body as { type: string; value: string };
     if (!type || !value) throw new Error("type and value are required");
     return request.store!.createConditionLibraryEntry({ type, value });
+  });
+
+  app.patch("/conditions/library/:entryId", async (request) => {
+    const { entryId } = request.params as { entryId: string };
+    const body = request.body as { type?: string; value?: string };
+    return request.store!.updateConditionLibraryEntry(entryId, body);
   });
 
   app.delete("/conditions/library/:entryId", async (request) => {

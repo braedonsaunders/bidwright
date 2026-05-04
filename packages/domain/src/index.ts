@@ -14,7 +14,6 @@ export * from "./worksheet-hours";
 export * from "./assembly-expansion";
 export * from "./cost-matcher";
 export * from "./estimate-evidence";
-export * from "./estimate-factors";
 export * from "./estimate-position";
 export * from "./estimate-resources";
 export * from "./estimate-risk";
