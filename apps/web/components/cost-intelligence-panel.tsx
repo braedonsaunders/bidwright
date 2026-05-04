@@ -77,8 +77,15 @@ const VENDOR_DETAIL_SUBTABS = [
   { id: "evidence", label: "Evidence", icon: History },
 ] as const;
 
+const EFFECTIVE_COST_DRAWER_TABS = [
+  { id: "details", label: "Details", icon: SlidersHorizontal },
+  { id: "vendors", label: "Vendors", icon: PackageSearch },
+  { id: "history", label: "Price History", icon: History },
+] as const;
+
 type CostIntelligenceSubtab = typeof COST_INTELLIGENCE_SUBTABS[number]["id"];
 type VendorDetailTab = typeof VENDOR_DETAIL_SUBTABS[number]["id"];
+type EffectiveCostDrawerTab = typeof EFFECTIVE_COST_DRAWER_TABS[number]["id"];
 type CostImportSource = "csv" | "excel" | "estimate" | "pdf";
 type CostConfidenceFilter = "all" | "high" | "review" | "low";
 type EvidenceFilter = "all" | "multi" | "single" | "stale";
@@ -943,7 +950,7 @@ export function CostIntelligencePanel({
     try {
       const [nextObservations, nextCosts, nextResources, nextVendors] = await Promise.all([
         listCostObservations({ limit: 1000 }),
-        listEffectiveCosts({ q: query || undefined, limit: COST_BASIS_COUNT_LIMIT }),
+        listEffectiveCosts({ q: query || undefined, scope: "aggregate", limit: COST_BASIS_COUNT_LIMIT }),
         listCostResources({ limit: 5000 }),
         listCostVendors({ q: query || undefined, limit: 5000 }),
       ]);
@@ -978,7 +985,7 @@ export function CostIntelligencePanel({
       const [nextVendors, nextObservations, nextCosts] = await Promise.all([
         listCostVendors({ vendorName, limit: 5000 }),
         listCostObservations({ vendorName, limit: 5000 }),
-        listEffectiveCosts({ vendorName, limit: COST_BASIS_COUNT_LIMIT }),
+        listEffectiveCosts({ vendorName, scope: "per_vendor", limit: COST_BASIS_COUNT_LIMIT }),
       ]);
       const exactVendor = nextVendors.find((vendor) => vendorNamesMatch(vendor.vendorName, vendorName)) ?? nextVendors[0] ?? null;
       const exactObservations = nextObservations.filter((observation) => vendorNamesMatch(observation.vendorName, vendorName));
@@ -3271,6 +3278,308 @@ export function CostIntelligencePanel({
   );
 }
 
+function vendorColor(index: number): string {
+  return `hsl(${(index * 137.508) % 360}, 70%, 55%)`;
+}
+
+type PriceHistoryPoint = { ts: number; cost: number; date: string; sampleSize: number };
+type PriceHistorySeries = { vendor: string; color: string; points: PriceHistoryPoint[] };
+
+function PriceHistoryChart({
+  series,
+  currency,
+  uom,
+}: {
+  series: PriceHistorySeries[];
+  currency: string;
+  uom: string;
+}) {
+  const allPoints = series.flatMap((s) => s.points);
+  if (allPoints.length === 0) {
+    return (
+      <div className="flex h-56 items-center justify-center rounded-lg border border-dashed border-line bg-bg/35 text-xs text-fg/35">
+        No price history yet
+      </div>
+    );
+  }
+
+  const width = 720;
+  const height = 240;
+  const padX = 56;
+  const padY = 22;
+  const innerW = Math.max(1, width - padX * 2);
+  const innerH = Math.max(1, height - padY * 2);
+
+  const xs = allPoints.map((p) => p.ts);
+  const ys = allPoints.map((p) => p.cost);
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const yMinRaw = Math.min(...ys);
+  const yMaxRaw = Math.max(...ys);
+  const ySpread = yMaxRaw - yMinRaw;
+  const yMin = ySpread === 0 ? Math.max(0, yMinRaw - 1) : Math.max(0, yMinRaw - ySpread * 0.1);
+  const yMax = ySpread === 0 ? yMaxRaw + 1 : yMaxRaw + ySpread * 0.1;
+  const xRange = Math.max(1, xMax - xMin);
+  const yRange = Math.max(1, yMax - yMin);
+
+  function project(p: PriceHistoryPoint) {
+    const x = padX + ((p.ts - xMin) / xRange) * innerW;
+    const y = height - padY - ((p.cost - yMin) / yRange) * innerH;
+    return { x, y };
+  }
+
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((r) => yMin + r * (yMax - yMin));
+  const xTicks = [xMin, xMin + (xMax - xMin) / 2, xMax];
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border border-line bg-bg/35 p-3">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-56 w-full">
+          {yTicks.map((tick, i) => {
+            const y = height - padY - ((tick - yMin) / yRange) * innerH;
+            return (
+              <g key={`y-${i}`}>
+                <line x1={padX} x2={width - padX} y1={y} y2={y} stroke="currentColor" strokeOpacity="0.08" strokeWidth="1" className="text-fg" />
+                <text x={padX - 6} y={y + 4} textAnchor="end" fontSize="10" className="fill-current text-fg/45">
+                  {formatMoney(tick, currency)}
+                </text>
+              </g>
+            );
+          })}
+          {xTicks.map((tick, i) => {
+            const x = padX + ((tick - xMin) / xRange) * innerW;
+            return (
+              <text key={`x-${i}`} x={x} y={height - 4} textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"} fontSize="10" className="fill-current text-fg/45">
+                {new Date(tick).toLocaleDateString(undefined, { month: "short", year: "2-digit" })}
+              </text>
+            );
+          })}
+          {series.map((s) => {
+            const projected = s.points.map(project);
+            const path = projected.map((pt, i) => `${i === 0 ? "M" : "L"} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`).join(" ");
+            return (
+              <g key={s.vendor}>
+                {projected.length > 1 && (
+                  <path d={path} fill="none" stroke={s.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity={0.85} />
+                )}
+                {projected.map((pt, i) => (
+                  <circle key={i} cx={pt.x} cy={pt.y} r={2.5} fill={s.color}>
+                    <title>{`${s.vendor} · ${formatMoney(s.points[i].cost, currency)}/${uom} · ${formatDate(s.points[i].date)} · ${s.points[i].sampleSize} sample${s.points[i].sampleSize === 1 ? "" : "s"}`}</title>
+                  </circle>
+                ))}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[11px]">
+        {series.map((s) => (
+          <div key={s.vendor} className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: s.color }} />
+            <span className="text-fg/65">{s.vendor || "Unknown vendor"}</span>
+            <span className="text-fg/35">· {s.points.length}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PriceHistoryTab({ resourceId, currency, uom }: { resourceId: string; currency: string; uom: string }) {
+  const [observations, setObservations] = useState<CostObservationRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listCostObservations({ resourceId, limit: 5000 })
+      .then((rows) => {
+        if (!cancelled) setObservations(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load price history");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resourceId]);
+
+  const series = useMemo<PriceHistorySeries[]>(() => {
+    const byVendor = new Map<string, PriceHistoryPoint[]>();
+    for (const obs of observations) {
+      const ts = obs.observedAt ? new Date(obs.observedAt).getTime() : NaN;
+      if (!Number.isFinite(ts)) continue;
+      const cost = Number(obs.unitCost);
+      if (!Number.isFinite(cost)) continue;
+      const vendor = (obs.vendorName || "").trim() || "Unknown vendor";
+      const arr = byVendor.get(vendor) ?? [];
+      arr.push({ ts, cost, date: obs.observedAt ?? "", sampleSize: obs.quantity ?? 1 });
+      byVendor.set(vendor, arr);
+    }
+    const sortedVendors = Array.from(byVendor.keys()).sort((a, b) => (byVendor.get(b)!.length - byVendor.get(a)!.length) || a.localeCompare(b));
+    return sortedVendors.map((vendor, i) => ({
+      vendor,
+      color: vendorColor(i),
+      points: byVendor.get(vendor)!.sort((a, b) => a.ts - b.ts),
+    }));
+  }, [observations]);
+
+  const totalObs = observations.length;
+  const dateRange = useMemo(() => {
+    if (observations.length === 0) return null;
+    const ts = observations.map((o) => (o.observedAt ? new Date(o.observedAt).getTime() : NaN)).filter(Number.isFinite);
+    if (ts.length === 0) return null;
+    return { from: new Date(Math.min(...ts)), to: new Date(Math.max(...ts)) };
+  }, [observations]);
+
+  if (loading) {
+    return (
+      <div className="flex h-48 items-center justify-center text-xs text-fg/40">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading price history…
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-lg border border-line bg-panel2/35 px-3 py-2">
+          <div className="text-[10px] uppercase text-fg/35">Observations</div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums text-fg">{totalObs.toLocaleString()}</div>
+        </div>
+        <div className="rounded-lg border border-line bg-panel2/35 px-3 py-2">
+          <div className="text-[10px] uppercase text-fg/35">Vendors</div>
+          <div className="mt-0.5 text-base font-semibold tabular-nums text-fg">{series.length}</div>
+        </div>
+        <div className="rounded-lg border border-line bg-panel2/35 px-3 py-2">
+          <div className="text-[10px] uppercase text-fg/35">Date Range</div>
+          <div className="mt-0.5 truncate text-[11px] font-medium text-fg/75">
+            {dateRange ? `${dateRange.from.toLocaleDateString()} → ${dateRange.to.toLocaleDateString()}` : "—"}
+          </div>
+        </div>
+      </div>
+      <PriceHistoryChart series={series} currency={currency} uom={uom} />
+      {observations.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-line">
+          <table className="w-full text-xs">
+            <thead className="bg-panel2/45 text-[10px] uppercase text-fg/40">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Date</th>
+                <th className="px-3 py-2 text-left font-medium">Vendor</th>
+                <th className="px-3 py-2 text-left font-medium">SKU</th>
+                <th className="px-3 py-2 text-right font-medium">Unit Cost</th>
+                <th className="px-3 py-2 text-left font-medium">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {observations.slice(0, 50).map((obs) => (
+                <tr key={obs.id} className="border-t border-line/70">
+                  <td className="px-3 py-1.5 text-fg/75">{formatDate(obs.observedAt)}</td>
+                  <td className="px-3 py-1.5 text-fg/75">{obs.vendorName || "—"}</td>
+                  <td className="px-3 py-1.5 text-fg/55">{obs.vendorSku || "—"}</td>
+                  <td className="px-3 py-1.5 text-right font-medium tabular-nums text-fg">{formatMoney(obs.unitCost, obs.currency)}</td>
+                  <td className="px-3 py-1.5 text-fg/55">{obs.documentType || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {observations.length > 50 && (
+            <div className="border-t border-line/70 px-3 py-1.5 text-[10px] text-fg/40">
+              Showing 50 of {observations.length} observations
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VendorsTab({ resourceId }: { resourceId: string }) {
+  const [costs, setCosts] = useState<EffectiveCostRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listEffectiveCosts({ resourceId, scope: "per_vendor", limit: 1000 })
+      .then((rows) => {
+        if (!cancelled) setCosts(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load vendor cost basis");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resourceId]);
+
+  if (loading) {
+    return (
+      <div className="flex h-48 items-center justify-center text-xs text-fg/40">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        Loading vendors…
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>;
+  }
+  if (costs.length === 0) {
+    return (
+      <div className="flex h-48 items-center justify-center rounded-lg border border-dashed border-line bg-bg/35 text-xs text-fg/35">
+        No vendor cost basis rows for this resource yet
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-line">
+      <table className="w-full text-xs">
+        <thead className="bg-panel2/45 text-[10px] uppercase text-fg/40">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium">Vendor</th>
+            <th className="px-3 py-2 text-left font-medium">SKU</th>
+            <th className="px-3 py-2 text-right font-medium">Cost Basis</th>
+            <th className="px-3 py-2 text-left font-medium">UOM</th>
+            <th className="px-3 py-2 text-right font-medium">Samples</th>
+            <th className="px-3 py-2 text-left font-medium">Effective</th>
+            <th className="px-3 py-2 text-right font-medium">Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {costs.map((cost) => (
+            <tr key={cost.id} className="border-t border-line/70">
+              <td className="px-3 py-2 font-medium text-fg/75">{cost.vendorName || costVendor(cost) || "—"}</td>
+              <td className="px-3 py-2 text-fg/55">{cost.sourceObservation?.vendorSku || "—"}</td>
+              <td className="px-3 py-2 text-right font-semibold tabular-nums text-fg">{formatMoney(cost.unitCost, cost.currency)}</td>
+              <td className="px-3 py-2 text-fg/55">{cost.uom}</td>
+              <td className="px-3 py-2 text-right tabular-nums text-fg/65">{cost.sampleSize}</td>
+              <td className="px-3 py-2 text-fg/65">{formatDate(costEvidenceDate(cost))}</td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                <Badge tone={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function EffectiveCostDrawer({
   cost,
   deleting,
@@ -3310,6 +3619,10 @@ function EffectiveCostDrawer({
       ? []
       : [{ value: currencyValue, label: currencyValue }]),
   ];
+
+  const [activeTab, setActiveTab] = useState<EffectiveCostDrawerTab>("details");
+  const drawerResourceId = mode === "edit" ? cost?.resourceId ?? null : null;
+  const showTabs = Boolean(drawerResourceId);
 
   function handleResourceSelect(resourceId: string) {
     const resource = resourceRecords.find((candidate) => candidate.id === resourceId);
@@ -3351,6 +3664,33 @@ function EffectiveCostDrawer({
         </button>
       </div>
 
+      {showTabs && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-line bg-panel2/35 px-3 py-2">
+          <div role="tablist" aria-label="Cost basis detail views" className="flex min-w-0 flex-wrap gap-1 rounded-lg bg-bg/45 p-1">
+            {EFFECTIVE_COST_DRAWER_TABS.map((tab) => {
+              const active = activeTab === tab.id;
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors",
+                    active ? "bg-panel text-fg shadow-sm" : "text-fg/50 hover:bg-panel/70 hover:text-fg",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {error && (
           <div className="mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
@@ -3358,6 +3698,14 @@ function EffectiveCostDrawer({
           </div>
         )}
 
+        {showTabs && activeTab === "vendors" && drawerResourceId && (
+          <VendorsTab resourceId={drawerResourceId} />
+        )}
+        {showTabs && activeTab === "history" && drawerResourceId && (
+          <PriceHistoryTab resourceId={drawerResourceId} currency={cost?.currency || "USD"} uom={cost?.uom || "EA"} />
+        )}
+
+        {(!showTabs || activeTab === "details") && (
         <div className="grid gap-4">
           <section className="rounded-lg border border-line bg-panel2/35 p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -3573,6 +3921,7 @@ function EffectiveCostDrawer({
             </section>
           )}
         </div>
+        )}
       </div>
 
       <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/35 px-5 py-3">
@@ -3586,12 +3935,14 @@ function EffectiveCostDrawer({
         </div>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={saving || deleting}>
-            Cancel
+            {(!showTabs || activeTab === "details") ? "Cancel" : "Close"}
           </Button>
-          <Button variant="accent" size="sm" onClick={onSave} disabled={saving || deleting}>
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-            Save
-          </Button>
+          {(!showTabs || activeTab === "details") && (
+            <Button variant="accent" size="sm" onClick={onSave} disabled={saving || deleting}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Save
+            </Button>
+          )}
         </div>
       </div>
     </motion.aside>

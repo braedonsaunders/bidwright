@@ -123,6 +123,7 @@ export interface CostIntelligenceListFilters {
   sourceDocumentId?: string;
   vendorName?: string;
   limit?: number;
+  scope?: "aggregate" | "per_vendor" | "all";
 }
 
 export interface VendorPdfIngestFile {
@@ -2962,6 +2963,16 @@ export class CostIntelligenceService {
     if (filters.resourceId) where.resourceId = filters.resourceId;
     if (filters.projectId) where.projectId = filters.projectId;
     if (filters.vendorName) where.vendorName = { contains: filters.vendorName, mode: "insensitive" };
+
+    const scope = filters.scope ?? "all";
+    const scopeAnd: any[] = [];
+    if (scope === "aggregate") {
+      scopeAnd.push({ vendorName: "" }, { vendorProductId: null });
+    } else if (scope === "per_vendor") {
+      scopeAnd.push({ OR: [{ vendorName: { not: "" } }, { vendorProductId: { not: null } }] });
+    }
+    if (scopeAnd.length > 0) where.AND = scopeAnd;
+
     if (filters.query?.trim()) {
       const query = filters.query.trim();
       where.OR = [
