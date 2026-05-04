@@ -89,15 +89,23 @@ wait_for_postgres() {
 }
 
 run_schema_preflight() {
-  local preflight_sql="${APP_DIR}/scripts/db/preflight-worksheet-item-category-id.sql"
-  if [[ -f "${preflight_sql}" ]]; then
-    echo "Running deploy schema preflight..."
+  local preflight_sql
+  shopt -s nullglob
+  local preflight_files=("${APP_DIR}"/scripts/db/preflight-*.sql)
+  shopt -u nullglob
+
+  if (( ${#preflight_files[@]} > 0 )); then
+    echo "Running deploy schema preflights..."
+  fi
+
+  for preflight_sql in "${preflight_files[@]}"; do
+    echo "Applying ${preflight_sql##*/}..."
     compose exec -T postgres psql \
       -v ON_ERROR_STOP=1 \
       -U "${POSTGRES_USER:-bidwright}" \
       -d "${POSTGRES_DB:-bidwright}" \
       < "${preflight_sql}"
-  fi
+  done
 }
 
 wait_for_url() {
