@@ -471,6 +471,7 @@ type VendorProductTableRow = {
   key: string;
   vendorSku: string;
   name: string;
+  resourceId: string | null;
   resourceName: string;
   uom: string;
   currency: string;
@@ -1229,6 +1230,7 @@ export function CostIntelligencePanel({
         key,
         vendorSku: seed.vendorSku ?? "",
         name: seed.name ?? "Vendor product",
+        resourceId: seed.resourceId ?? null,
         resourceName: seed.resourceName ?? "",
         uom: seed.uom ?? "EA",
         currency: seed.currency ?? "USD",
@@ -1275,12 +1277,14 @@ export function CostIntelligencePanel({
       const row = ensureRow(key, {
         vendorSku: displayToken(observation.vendorSku),
         name,
+        resourceId: observation.resourceId ?? null,
         resourceName: resource?.name ?? "",
         uom: observation.observedUom,
         currency: observation.currency,
       });
       row.vendorSku ||= displayToken(observation.vendorSku);
       row.name = row.name === "Vendor product" ? name : row.name;
+      row.resourceId ||= observation.resourceId ?? null;
       row.resourceName ||= resource?.name ?? "";
       row.uom = observation.observedUom || row.uom;
       row.currency = observation.currency || row.currency;
@@ -1309,6 +1313,7 @@ export function CostIntelligencePanel({
       const row = ensureRow(key, {
         vendorSku: displayToken(sourceObservation?.vendorSku),
         name: costResourceName(cost),
+        resourceId: cost.resourceId ?? null,
         resourceName: displayToken(cost.resource?.name),
         uom: cost.uom,
         currency: cost.currency,
@@ -1319,6 +1324,7 @@ export function CostIntelligencePanel({
       row.costBasisCount += 1;
       row.vendorSku ||= displayToken(sourceObservation?.vendorSku);
       row.name = row.name === "Vendor product" ? costResourceName(cost) : row.name;
+      row.resourceId ||= cost.resourceId ?? null;
       row.resourceName ||= displayToken(cost.resource?.name);
       if (row.points.length === 0 && Number.isFinite(cost.unitCost)) {
         row.points.push({ label: costEvidenceDate(cost), value: cost.unitCost });
@@ -1573,6 +1579,18 @@ export function CostIntelligencePanel({
     setSelectedCostId(null);
     setDrawerMode("create");
     setCostFormError(null);
+  }
+
+  function openEditCostDrawerForProduct(product: VendorProductTableRow) {
+    if (!product.resourceId) return;
+    const match = effectiveCosts.find(
+      (cost) =>
+        cost.resourceId === product.resourceId &&
+        (cost.uom || "").toUpperCase() === (product.uom || "").toUpperCase() &&
+        (cost.currency || "").toUpperCase() === (product.currency || "").toUpperCase(),
+    ) ?? effectiveCosts.find((cost) => cost.resourceId === product.resourceId);
+    if (!match) return;
+    openEditCostDrawer(match);
   }
 
   function openEditCostDrawer(cost: EffectiveCostRecord) {
@@ -2819,13 +2837,21 @@ export function CostIntelligencePanel({
                                 <tbody>
                                   {visibleVendorProducts.map((product, index) => {
                                     const trendPct = productTrendPercent(product);
+                                    const clickable = Boolean(
+                                      product.resourceId &&
+                                        effectiveCosts.some((cost) => cost.resourceId === product.resourceId),
+                                    );
                                     return (
                                       <motion.tr
                                         key={product.key}
                                         initial={{ opacity: 0, y: 6 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{ duration: 0.18, delay: index * 0.015 }}
-                                        className="h-14 border-b border-line/70 last:border-b-0"
+                                        onClick={clickable ? () => openEditCostDrawerForProduct(product) : undefined}
+                                        className={cn(
+                                          "h-14 border-b border-line/70 last:border-b-0",
+                                          clickable && "cursor-pointer transition-colors hover:bg-panel2/65",
+                                        )}
                                       >
                                         <td className="px-3 py-2">
                                           <div className="truncate font-semibold text-fg">{product.name}</div>
