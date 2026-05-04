@@ -103,7 +103,7 @@ import {
   workspaceChannelName,
   type WorkspaceSyncMessage,
 } from "@/lib/workspace-sync";
-import { getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
+import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
 import { AgentChat } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
@@ -176,9 +176,7 @@ type ItemDraft = {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
+  tierUnits: Record<string, number>;
   lineOrder: number;
 };
 
@@ -244,8 +242,7 @@ function buildItemDraft(
     vendor: item?.vendor ?? "", description: item?.description ?? "",
     quantity: item?.quantity ?? 1, uom: item?.uom ?? "EA",
     cost: item?.cost ?? 0, markup: item?.markup ?? 0.2, price: item?.price ?? 0,
-    unit1: item?.unit1 ?? 0, unit2: item?.unit2 ?? 0,
-    unit3: item?.unit3 ?? 0, lineOrder: item?.lineOrder ?? ws.items.length + 1,
+    tierUnits: { ...(item?.tierUnits ?? {}) }, lineOrder: item?.lineOrder ?? ws.items.length + 1,
   };
 }
 
@@ -376,9 +373,10 @@ function worksheetItemExtendedHours(
 ): ResourceHourFields {
   const quantity = Number(item.quantity) || 0;
   const breakdown = getWorksheetHourBreakdown(item, rateSchedules ?? []);
-  const hoursUnit1 = roundResourceHours(breakdown.unit1 * quantity);
-  const hoursUnit2 = roundResourceHours(breakdown.unit2 * quantity);
-  const hoursUnit3 = roundResourceHours(breakdown.unit3 * quantity);
+  const buckets = bucketHoursByMultiplier(breakdown);
+  const hoursUnit1 = roundResourceHours(buckets.reg * quantity);
+  const hoursUnit2 = roundResourceHours(buckets.ot * quantity);
+  const hoursUnit3 = roundResourceHours(buckets.dt * quantity);
   return {
     hoursUnit1,
     hoursUnit2,
@@ -424,9 +422,7 @@ function isHourBearingResource(
     item.uom,
     category?.analyticsBucket,
     category?.entityType,
-    category?.unitLabels?.unit1,
-    category?.unitLabels?.unit2,
-    category?.unitLabels?.unit3,
+    ...Object.values(category?.unitLabels ?? {}),
     resourceText(resource?.resourceType),
     resourceText(resource?.type),
     resourceText(resource?.sourceType),
@@ -943,9 +939,7 @@ function buildModelEditorLineItemFallback(
     cost: 0,
     markup: options.markup,
     price: 0,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
+    tierUnits: {},
     sourceNotes: [
       `From BidWright model editor: ${sourceFile}`,
       `${primary.label}: ${formatModelEditorQuantity(primary.quantity, primary.uom)}`,
@@ -1014,9 +1008,7 @@ function buildModelEditorObjectDrafts(
       cost: 0,
       markup: options.markup,
       price: 0,
-      unit1: 0,
-      unit2: 0,
-      unit3: 0,
+      tierUnits: {},
       sourceNotes: [
         `From BidWright model editor: ${sourceFile}`,
         `${primary.label}: ${formatModelEditorQuantity(primary.quantity, primary.uom)}`,
@@ -1059,9 +1051,7 @@ function normalizeModelEditorLineItemDraft(
     cost: Number.isFinite(Number(draft.cost)) ? Number(draft.cost) : fallback.cost,
     markup: Number.isFinite(Number(draft.markup)) ? Number(draft.markup) : fallback.markup,
     price: Number.isFinite(Number(draft.price)) ? Number(draft.price) : fallback.price,
-    unit1: Number.isFinite(Number(draft.unit1)) ? Number(draft.unit1) : fallback.unit1,
-    unit2: Number.isFinite(Number(draft.unit2)) ? Number(draft.unit2) : fallback.unit2,
-    unit3: Number.isFinite(Number(draft.unit3)) ? Number(draft.unit3) : fallback.unit3,
+    tierUnits: draft.tierUnits ?? fallback.tierUnits,
     sourceNotes: draft.sourceNotes || fallback.sourceNotes,
   };
 }
@@ -1307,9 +1297,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           uom: item.uom,
           cost: item.cost,
           price: item.price,
-          unit1: item.unit1,
-          unit2: item.unit2,
-          unit3: item.unit3,
           rateScheduleItemId: item.rateScheduleItemId,
           itemId: item.itemId,
           costResourceId: item.costResourceId,
@@ -1725,8 +1712,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       phaseId: itemDraft.phaseId || null, categoryId: itemDraft.categoryId, category: itemDraft.category, entityType: itemDraft.entityType,
       entityName: itemDraft.entityName, vendor: itemDraft.vendor || null, description: itemDraft.description,
       quantity: itemDraft.quantity, uom: itemDraft.uom, cost: itemDraft.cost, markup: itemDraft.markup,
-      price: itemDraft.price, unit1: itemDraft.unit1, unit2: itemDraft.unit2,
-      unit3: itemDraft.unit3, lineOrder: itemDraft.lineOrder,
+      price: itemDraft.price, tierUnits: itemDraft.tierUnits, lineOrder: itemDraft.lineOrder,
     };
     startTransition(async () => {
       try {
@@ -1757,8 +1743,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       phaseId: itemDraft.phaseId || null, categoryId: itemDraft.categoryId, category: itemDraft.category, entityType: itemDraft.entityType,
       entityName: itemDraft.entityName, vendor: itemDraft.vendor || null, description: itemDraft.description,
       quantity: itemDraft.quantity, uom: itemDraft.uom, cost: itemDraft.cost, markup: itemDraft.markup,
-      price: itemDraft.price, unit1: itemDraft.unit1, unit2: itemDraft.unit2,
-      unit3: itemDraft.unit3, lineOrder: itemDraft.lineOrder + 1,
+      price: itemDraft.price, tierUnits: itemDraft.tierUnits, lineOrder: itemDraft.lineOrder + 1,
     };
     startTransition(async () => {
       try { apply(await createWorksheetItem(workspace.project.id, itemDraft.worksheetId, payload)); }
@@ -3129,8 +3114,6 @@ function phaseRollupItems(workspace: ProjectWorkspaceData) {
 }
 
 function phaseItemHours(item: WorkspaceWorksheetItem, rateSchedules: ProjectWorkspaceData["rateSchedules"]) {
-  const directHours = (Number(item.unit1) || 0) + (Number(item.unit2) || 0) + (Number(item.unit3) || 0);
-  if (directHours > 0) return directHours;
   return getWorksheetHourBreakdown(item, rateSchedules ?? []).total;
 }
 

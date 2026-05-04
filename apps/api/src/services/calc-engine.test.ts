@@ -25,9 +25,6 @@ const baseItem: WorksheetItem = {
   cost: 0,
   markup: 0,
   price: 0,
-  unit1: 0,
-  unit2: 0,
-  unit3: 0,
   lineOrder: 0,
 };
 
@@ -38,8 +35,8 @@ const baseCategory: EntityCategory = {
   shortform: "M",
   defaultUom: "EA",
   validUoms: ["EA"],
-  editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false },
-  unitLabels: { unit1: "", unit2: "", unit3: "" },
+  editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: false },
+  unitLabels: {},
   calculationType: "manual",
   calcFormula: "",
   itemSource: "freeform",
@@ -60,7 +57,7 @@ const labourCategory: EntityCategory = {
   validUoms: ["HR"],
   calculationType: "tiered_rate",
   itemSource: "rate_schedule",
-  editableFields: { quantity: true, cost: false, markup: false, price: false, unit1: true, unit2: true, unit3: true },
+  editableFields: { quantity: true, cost: false, markup: false, price: false, tierUnits: true },
 };
 
 /* ─── manual / unit_markup / quantity_markup ──────────────────────────── */
@@ -140,47 +137,6 @@ test("tiered_rate: cost is stored per-unit so UI extCost = cost × qty matches t
   assert.ok(result.price! >= extCost, "price must cover ext cost");
   // Markup is engine-derived (user's 0.99 ignored), reflects (price - extCost) / extCost.
   assert.equal(result.markup, 1); // (1300 - 650) / 650 = 1.0
-});
-
-test("tiered_rate with 46% MECH burden: burden is applied to total cost before per-unit storage", () => {
-  // tierUnits = {Reg:1, OT:1, DT:2}; cost rates (per labourCost) = {50, 75, 100}.
-  // Raw per-unit cost: 1×50 + 1×75 + 2×100 = 325.
-  // With 46% burden: 325 × 1.46 = 474.5 per-unit.
-  // qty=2 → line total cost (with burden) = 949, stored per-unit = 474.5.
-  const item: WorksheetItem = {
-    ...baseItem,
-    category: "Labour",
-    entityType: "Labour",
-    entityName: "MECH:Trade Labour",
-    rateScheduleItemId: "rsi-test",
-    quantity: 2,
-    tierUnits: { "tier-reg": 1, "tier-ot": 1, "tier-dt": 2 },
-  };
-  const ctx: CalcContext = {
-    rateSchedules: [labourRateSchedule],
-    labourCost: {
-      entries: [
-        { code: "TL", name: "MECH:Trade Labour", group: "MECH", costRates: { regular: 50, overtime: 75, doubletime: 100 } },
-      ],
-      burdenPeriods: [
-        { group: "MECH", percentage: 0.46, startDate: "2026-01-01", endDate: "2026-12-31" },
-      ],
-      referenceDate: "2026-04-29",
-    },
-  };
-
-  const result = calculateItem(item, labourCategory, ctx);
-
-  // price uses rates (not costRates), unaffected by burden.
-  assert.equal(result.price, 1300); // qty × Σ(rates × tierUnits)
-  // cost includes burden, stored per-unit.
-  assert.equal(result.cost, 474.5);
-  // UI extCost = 474.5 × 2 = 949; not 1898 (which the old engine would have produced).
-  const extCost = result.cost! * item.quantity;
-  assert.equal(extCost, 949);
-  assert.ok(result.price! > extCost, "price > ext cost under burden");
-  // Markup is engine-derived and matches actual margin: (1300 - 949) / 949 ≈ 0.3699.
-  assert.equal(result.markup, 0.3699);
 });
 
 test("tiered_rate: zero quantity does not divide by zero", () => {

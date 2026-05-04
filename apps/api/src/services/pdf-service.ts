@@ -27,9 +27,12 @@ export interface PdfDataPackage {
     cost: number;
     markup: number;
     price: number;
-    unit1: number;
-    unit2: number;
-    unit3: number;
+    /** Per-unit hour breakdown bucketed by canonical tier multiplier. */
+    regHours: number;
+    otHours: number;
+    dtHours: number;
+    /** Per-unit total hours including tiers outside the reg/ot/dt buckets. */
+    itemTotalHours: number;
     vendor: string;
     description: string;
     phaseName?: string;
@@ -228,9 +231,36 @@ export function buildPdfDataPackage(
   } = {},
 ): PdfDataPackage {
   const rev = workspace.currentRevision;
+
+  // Build a tierId → multiplier map across all schedules so we can bucket
+  // per-item tierUnits hours into reg/ot/dt and compute itemTotalHours.
+  const tierMultipliers = new Map<string, number>();
+  for (const schedule of (workspace.rateSchedules ?? []) as Array<{ tiers?: Array<{ id: string; multiplier?: number | null }> }>) {
+    for (const tier of schedule.tiers ?? []) {
+      tierMultipliers.set(tier.id, Number(tier.multiplier) || 0);
+    }
+  }
+  const bucketHours = (tierUnits: Record<string, number> | null | undefined) => {
+    let regHours = 0;
+    let otHours = 0;
+    let dtHours = 0;
+    let itemTotalHours = 0;
+    for (const [tierId, rawHours] of Object.entries(tierUnits ?? {})) {
+      const hours = Number(rawHours) || 0;
+      if (hours <= 0) continue;
+      itemTotalHours += hours;
+      const m = tierMultipliers.get(tierId) ?? 0;
+      if (m === 1) regHours += hours;
+      else if (m === 1.5) otHours += hours;
+      else if (m === 2) dtHours += hours;
+    }
+    return { regHours, otHours, dtHours, itemTotalHours };
+  };
+
   const lineItems = (workspace.worksheets ?? []).flatMap((ws: any) =>
     (ws.items ?? []).map((item: any) => ({
       ...item,
+      ...bucketHours(item.tierUnits),
       worksheetName: ws.name,
       phaseName: (workspace.phases ?? []).find(
         (p: any) => p.id === item.phaseId
@@ -587,7 +617,7 @@ export function generatePdfHtml(
     const groupBy = opts.lineItemOptions.groupBy;
     const showWorksheetColumn = backupCol && groupBy !== "worksheet";
     const descriptorColumnCount = showWorksheetColumn ? 6 : 5;
-    const getItemHours = (item: PdfDataPackage["lineItems"][0]) => item.unit1 + item.unit2 + item.unit3;
+    const getItemHours = (item: PdfDataPackage["lineItems"][0]) => item.itemTotalHours;
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
       const hours = getItemHours(item);
@@ -708,9 +738,9 @@ export function generatePdfHtml(
     return `<h2>Hours Summary</h2>
       <table><thead><tr><th>Regular</th><th>Overtime (1.5x)</th><th>Double Time (2x)</th><th>Total</th></tr></thead>
       <tbody><tr>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit1 * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit2 * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.unit3 * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.regHours * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.otHours * i.quantity, 0).toLocaleString()}</td>
+        <td class="num">${data.lineItems.reduce((s, i) => s + i.dtHours * i.quantity, 0).toLocaleString()}</td>
         <td class="num"><strong>${data.totalHours.toLocaleString()}</strong></td>
       </tr></tbody></table>`;
   };
@@ -722,9 +752,9 @@ export function generatePdfHtml(
     for (const item of data.lineItems) {
       const key = item.phaseName || "Unphased";
       const existing = phaseLabour.get(key) ?? { reg: 0, ot: 0, dt: 0, total: 0, cost: 0 };
-      const reg = item.unit1 * item.quantity;
-      const ot = item.unit2 * item.quantity;
-      const dt = item.unit3 * item.quantity;
+      const reg = item.regHours * item.quantity;
+      const ot = item.otHours * item.quantity;
+      const dt = item.dtHours * item.quantity;
       existing.reg += reg;
       existing.ot += ot;
       existing.dt += dt;

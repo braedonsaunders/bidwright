@@ -128,9 +128,6 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { PluginsPage } from "@/components/plugins-page";
 import { IntegrationsPage } from "@/components/integrations/integrations-page";
-import { LabourCostManager } from "@/components/labour-cost-manager";
-import { BurdenManager } from "@/components/burden-manager";
-import { TravelPolicyManager } from "@/components/travel-policy-manager";
 import {
   exportAllDataManagement,
   parseExportFile,
@@ -153,8 +150,6 @@ function resolveSettingsNavigation(tabParam: string | null, groupParam: string |
   const dataTabAliases: Record<string, DataSubTab> = {
     units: "uoms",
     uoms: "uoms",
-    costs: "costs",
-    travel: "travel",
     conditions: "conditions",
     factors: "factors",
   };
@@ -174,7 +169,7 @@ function resolveSettingsNavigation(tabParam: string | null, groupParam: string |
   return {
     group,
     orgSubTab: orgTab ?? "general",
-    dataSubTab: dataTab ?? "costs",
+    dataSubTab: dataTab ?? "uoms",
     integrationsSubTab: integrationTab ?? "email",
   };
 }
@@ -2196,19 +2191,6 @@ export function SettingsPage({
           {/* ── Factors ─── */}
           {activeGroup === "data" && dataSubTab === "factors" && (
             <FactorLibraryManager />
-          )}
-
-          {/* ── Labour Costs & Burden ─── */}
-          {activeGroup === "data" && dataSubTab === "costs" && (
-            <div className="space-y-6">
-              <LabourCostManager />
-              <BurdenManager />
-            </div>
-          )}
-
-          {/* ── Travel Policies ─── */}
-          {activeGroup === "data" && dataSubTab === "travel" && (
-            <TravelPolicyManager />
           )}
 
           {/* ── Agent Runtime ─── */}

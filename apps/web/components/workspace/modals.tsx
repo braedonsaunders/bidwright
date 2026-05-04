@@ -396,9 +396,6 @@ const BOM_TARGET_COLUMNS = [
   { value: "category", label: "Category" },
   { value: "entityType", label: "Entity Type" },
   { value: "vendor", label: "Vendor" },
-  { value: "unit1", label: "Regular Hours" },
-  { value: "unit2", label: "Overtime Hours" },
-  { value: "unit3", label: "Double Time Hours" },
   { value: "lineOrder", label: "Line Order" },
   { value: "skip", label: "Skip" },
 ] as const;
@@ -416,9 +413,6 @@ const IMPORT_COLUMN_ALIASES: Record<Exclude<ImportTargetColumn, "skip">, RegExp[
   category: [/category/i, /cost\s*type/i, /class/i, /trade/i],
   entityType: [/entity\s*type/i, /resource\s*type/i, /item\s*type/i],
   vendor: [/vendor/i, /supplier/i, /manufacturer/i],
-  unit1: [/regular\s*hours/i, /^reg/i, /straight\s*time/i],
-  unit2: [/overtime/i, /^ot/i],
-  unit3: [/double\s*time/i, /^dt/i],
   lineOrder: [/line\s*order/i, /^order$/i, /sort/i],
 };
 

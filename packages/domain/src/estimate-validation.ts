@@ -69,9 +69,6 @@ export interface EstimateValidationWorksheetItemLike {
   uom?: string | null;
   cost?: number | string | null;
   price?: number | string | null;
-  unit1?: number | string | null;
-  unit2?: number | string | null;
-  unit3?: number | string | null;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   costResourceId?: string | null;
@@ -797,16 +794,13 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         }
 
         const tierTotal = sumPositiveTierUnits(row.item.tierUnits);
-        const legacyTotal = toFiniteNumber(row.item.unit1)
-          + toFiniteNumber(row.item.unit2)
-          + toFiniteNumber(row.item.unit3);
-        if (tierTotal <= 0 || legacyTotal <= 0) {
+        if (tierTotal <= 0) {
           continue;
         }
 
-        if (nearlyEqual(tierTotal, legacyTotal, Math.max(0.25, legacyTotal * 0.02))) {
+        if (nearlyEqual(tierTotal * quantity, tierTotal, Math.max(0.25, tierTotal * 0.02))) {
           issues.push({
-            message: `Tier units for "${displayItemName(row.item)}" match the legacy hour total while quantity is ${quantity}.`,
+            message: `Tier units for "${displayItemName(row.item)}" appear to already include the multiplier while quantity is ${quantity}.`,
             element: itemRef(row),
             suggestions: [
               "Confirm tierUnits are per-unit hours; BidWright multiplies tierUnits by quantity during rollups.",
@@ -815,7 +809,6 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
             details: {
               quantity,
               tierUnitsTotal: roundNumber(tierTotal),
-              legacyHoursTotal: roundNumber(legacyTotal),
               projectedExtendedHours: roundNumber(tierTotal * quantity),
             },
           });
@@ -1520,10 +1513,7 @@ function firstDateFromUnknownSources(sources: unknown[], keys: readonly string[]
 
 function expectsLaborBasis(item: EstimateValidationWorksheetItemLike) {
   const expectedType = expectedResourceTypeForItem(item);
-  const hasHours = sumPositiveTierUnits(item.tierUnits) > 0
-    || toFiniteNumber(item.unit1) > 0
-    || toFiniteNumber(item.unit2) > 0
-    || toFiniteNumber(item.unit3) > 0;
+  const hasHours = sumPositiveTierUnits(item.tierUnits) > 0;
   return expectedType === "labor" && hasHours;
 }
 

@@ -436,9 +436,7 @@ export function normalizeWorkspaceItemCandidate(
     metadata: {
       quantity: item.quantity,
       markup: item.markup,
-      unit1: item.unit1,
-      unit2: item.unit2,
-      unit3: item.unit3,
+      tierUnits: item.tierUnits,
       lineOrder: item.lineOrder,
     },
     order: options.order,

@@ -217,7 +217,21 @@ export function computeItemCost(item: WorksheetItem) {
   return item.quantity * item.cost;
 }
 
-function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
+interface ItemHourTotals {
+  /** Total hours summed across all tiers (× quantity). */
+  total: number;
+  /** Bucketed by canonical multiplier — used by revision summary columns. */
+  reg: number;
+  ot: number;
+  dt: number;
+  /** Per-tier hours (× quantity). */
+  tierUnits: Record<string, number>;
+}
+
+function computeItemHours(
+  item: WorksheetItem,
+  schedules: WorksheetHourRateScheduleLike[],
+): ItemHourTotals {
   // Items contribute to the labour-hours rollup only when their rate-schedule
   // tier breakdown is populated. Material / Subcontractor / Equipment etc.
   // never have tierUnits, so they short-circuit to zero — no hardcoded
@@ -225,12 +239,7 @@ function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateSched
   const hasTierUnits = !!item.tierUnits && Object.keys(item.tierUnits).length > 0;
   const linkedToSchedule = !!item.rateScheduleItemId;
   if (!hasTierUnits && !linkedToSchedule) {
-    return {
-      unit1: 0,
-      unit2: 0,
-      unit3: 0,
-      tierUnits: {} as Record<string, number>,
-    };
+    return { total: 0, reg: 0, ot: 0, dt: 0, tierUnits: {} };
   }
 
   const tierUnits: Record<string, number> = {};
@@ -240,14 +249,17 @@ function computeItemHours(item: WorksheetItem, schedules: WorksheetHourRateSched
     }
   }
 
-  const derivedHours = getExtendedWorksheetHourBreakdown(item, schedules, item.quantity);
+  const breakdown = getExtendedWorksheetHourBreakdown(item, schedules, item.quantity);
+  let reg = 0;
+  let ot = 0;
+  let dt = 0;
+  for (const tier of breakdown.tiers) {
+    if (tier.multiplier === 1) reg += tier.hours;
+    else if (tier.multiplier === 1.5) ot += tier.hours;
+    else if (tier.multiplier === 2) dt += tier.hours;
+  }
 
-  return {
-    unit1: derivedHours.unit1,
-    unit2: derivedHours.unit2,
-    unit3: derivedHours.unit3,
-    tierUnits,
-  };
+  return { total: breakdown.total, reg, ot, dt, tierUnits };
 }
 
 function computeAggregates(items: WorksheetItem[]) {
@@ -1347,12 +1359,11 @@ function scaleTierUnits(tierUnits: WorksheetItem["tierUnits"], multiplier: numbe
 
 function computeTotalHours(items: WorksheetItem[], schedules: WorksheetHourRateScheduleLike[]) {
   const hours = items.map((item) => computeItemHours(item, schedules));
-  return roundMoney(hours.reduce((sum, entry) => sum + entry.unit1 + entry.unit2 + entry.unit3, 0));
+  return roundMoney(hours.reduce((sum, entry) => sum + entry.total, 0));
 }
 
 function computeItemTotalHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
-  const hours = computeItemHours(item, schedules);
-  return roundMoney(hours.unit1 + hours.unit2 + hours.unit3);
+  return roundMoney(computeItemHours(item, schedules).total);
 }
 
 function applyEstimateFactorToItem(
@@ -1368,9 +1379,6 @@ function applyEstimateFactorToItem(
       ...item,
       cost: roundMoney(item.cost * multiplier),
       price: roundMoney(item.price * multiplier),
-      unit1: roundMoney(item.unit1 * multiplier),
-      unit2: roundMoney(item.unit2 * multiplier),
-      unit3: roundMoney(item.unit3 * multiplier),
       tierUnits: scaleTierUnits(item.tierUnits, multiplier),
     };
   }
@@ -1879,10 +1887,10 @@ export function calculateTotals(
   updateSourceMargins(categoryClassificationTotalsMap.values());
 
   const allItemHours = lineItems.map((item) => computeItemHours(item, revisionSchedules));
-  const regHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit1, 0));
-  const overHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit2, 0));
-  const doubleHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.unit3, 0));
-  const totalHours = roundMoney(regHours + overHours + doubleHours);
+  const regHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.reg, 0));
+  const overHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.ot, 0));
+  const doubleHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.dt, 0));
+  const totalHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.total, 0));
 
   const tierUnitTotals: Record<string, number> = {};
   for (const hours of allItemHours) {
@@ -1958,9 +1966,6 @@ export function calculateTotals(
       ...item,
       cost: roundMoney(item.cost),
       price: roundMoney(item.price),
-      unit1: roundMoney(item.unit1),
-      unit2: roundMoney(item.unit2),
-      unit3: roundMoney(item.unit3),
       tierUnits: scaleTierUnits(item.tierUnits, 1),
     })),
     estimatedProfit,

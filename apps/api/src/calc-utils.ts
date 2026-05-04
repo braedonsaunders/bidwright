@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { WorksheetItem, QuoteRevision, CalculationType } from "@bidwright/domain";
-import { calculateItem, type CalcContext, type RateScheduleContext, type LabourCostContext, type TravelPolicyContext } from "./services/calc-engine.js";
+import { calculateItem, type CalcContext, type RateScheduleContext } from "./services/calc-engine.js";
 
 export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-export interface CalcLineItemOptions {
-  labourCost?: LabourCostContext;
-  travelPolicy?: TravelPolicyContext;
 }
 
 export function calculateLineItem(
@@ -19,9 +14,7 @@ export function calculateLineItem(
     tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
     items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
   }>,
-  options?: CalcLineItemOptions,
 ): Partial<WorksheetItem> {
-  // Build a CalcContext and delegate to the universal calc engine
   const ctx: CalcContext = {
     rateSchedules: rateSchedules?.map((s) => ({
       id: "",
@@ -29,11 +22,8 @@ export function calculateLineItem(
       tiers: s.tiers ?? [],
       items: s.items,
     })) as RateScheduleContext[],
-    labourCost: options?.labourCost,
-    travelPolicy: options?.travelPolicy,
   };
 
-  // Build a fake EntityCategory to pass calculationType
   const category = { calculationType } as any;
 
   const result = calculateItem(item, category, ctx);

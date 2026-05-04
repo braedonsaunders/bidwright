@@ -1,4 +1,5 @@
 import type { CalculationType } from "./calculation-types";
+import type { LineTotal, MarkupRatio, PerUnitCost } from "./money";
 import type { UnitOfMeasure } from "./uom";
 
 export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted" | "estimating";
@@ -196,13 +197,17 @@ export interface WorksheetItem {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
   tierUnits?: Record<string, number>;
+  /**
+   * Snapshot of the source that produced this row's `cost` / `price` the
+   * last time the engine resolved it. Lets the UI show "priced from
+   * vendor X on date Y" and detect when the underlying library has moved
+   * since the snapshot was taken.
+   */
+  costSnapshot?: CostSnapshot;
   sourceNotes?: string;
   costResourceId?: string | null;
   effectiveCostId?: string | null;
@@ -211,6 +216,36 @@ export interface WorksheetItem {
   sourceEvidence?: Record<string, unknown>;
   sourceAssemblyId?: string | null;
   assemblyInstanceId?: string | null;
+}
+
+/** Where a worksheet item's cost/price came from when it was last priced. */
+export type CostSnapshotSource =
+  | "manual"
+  | "catalog"
+  | "rate_schedule"
+  | "effective_cost"
+  | "labor_unit"
+  | "assembly"
+  | "ai"
+  | "import";
+
+export interface CostSnapshot {
+  /** Which library / origin produced the cost. */
+  source: CostSnapshotSource;
+  /** FK of the source record (CatalogItem.id, EffectiveCost.id, …). */
+  sourceId: string | null;
+  /** Optional human-readable label for UI badges. */
+  sourceLabel?: string;
+  /** ISO timestamp of when the snapshot was captured. */
+  snapshotAt: string;
+  /** The per-unit cost at the moment of capture. */
+  originalUnitCost: number;
+  /** Optional per-unit price at the moment of capture. */
+  originalUnitPrice?: number;
+  /** Optional currency tag for international snapshots. */
+  currency?: string;
+  /** Optional region tag for regional pricing. */
+  region?: string;
 }
 
 export interface Phase {
@@ -967,7 +1002,6 @@ export interface RateSchedule {
   projectId: string | null;
   revisionId: string | null;
   sourceScheduleId: string | null;
-  travelPolicyId: string | null;
   effectiveDate: string | null;
   expiryDate: string | null;
   defaultMarkup: number;
@@ -980,75 +1014,6 @@ export interface RateSchedule {
 export interface RateScheduleWithChildren extends RateSchedule {
   tiers: RateScheduleTier[];
   items: RateScheduleItem[];
-}
-
-// ── Labour Cost & Burden ────────────────────────────────────────────────
-
-export interface LabourCostEntry {
-  id: string;
-  tableId: string;
-  code: string;
-  name: string;
-  group: string;
-  costRates: Record<string, number>;
-  metadata: Record<string, unknown>;
-  sortOrder: number;
-}
-
-export interface LabourCostTable {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string;
-  effectiveDate: string | null;
-  expiryDate: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LabourCostTableWithEntries extends LabourCostTable {
-  entries: LabourCostEntry[];
-}
-
-export interface BurdenPeriod {
-  id: string;
-  organizationId: string;
-  name: string;
-  group: string;
-  percentage: number;
-  startDate: string;
-  endDate: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ── Travel Policy ──────────────────────────────────────────────────────
-
-export type PerDiemEmbedMode = "separate" | "embed_hourly" | "embed_cost_only";
-export type FuelSurchargeAppliesTo = "labour" | "all" | "none";
-
-export interface TravelPolicy {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string;
-  perDiemRate: number;
-  perDiemEmbedMode: PerDiemEmbedMode;
-  hoursPerDay: number;
-  travelTimeHours: number;
-  travelTimeTrips: number;
-  kmToDestination: number;
-  mileageRate: number;
-  fuelSurchargePercent: number;
-  fuelSurchargeAppliesTo: FuelSurchargeAppliesTo;
-  accommodationRate: number;
-  accommodationNights: number;
-  showAsSeparateLine: boolean;
-  breakoutLabel: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
 }
 
 export interface Activity {
@@ -1381,9 +1346,6 @@ export interface PluginOutputLineItem {
   cost?: number;
   markup?: number;
   price?: number;
-  unit1?: number;
-  unit2?: number;
-  unit3?: number;
   phaseId?: string;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1799,15 +1761,11 @@ export interface EntityCategory {
     cost: boolean;
     markup: boolean;
     price: boolean;
-    unit1: boolean;
-    unit2: boolean;
-    unit3: boolean;
+    /** Whether tier-hour cells (tierUnits) are editable for this category. */
+    tierUnits?: boolean;
   };
-  unitLabels: {
-    unit1: string;
-    unit2: string;
-    unit3: string;
-  };
+  /** Display labels keyed by RateScheduleTier id. Empty for non-labour categories. */
+  unitLabels: Record<string, string>;
   calculationType: CalculationType;
   calcFormula: string;
   itemSource: "rate_schedule" | "catalog" | "freeform";

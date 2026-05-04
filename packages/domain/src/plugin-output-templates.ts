@@ -29,9 +29,6 @@ export function materialSearchOutputTemplate(args: {
         cost: { from: "input", key: "cost", type: "number" },
         markup: { from: "input", key: "markup", type: "number", default: 15 },
         price: 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
       },
     ],
     summary: {
@@ -105,9 +102,6 @@ export const googleHotelsOutputTemplate: PluginToolOutputTemplate = {
       cost: { from: "input", key: "totalCost", type: "number" },
       markup: { from: "input", key: "markup", type: "number", default: 15 },
       price: 0,
-      unit1: { from: "input", key: "nights", type: "number", default: 0, min: 0 },
-      unit2: { from: "input", key: "crewSize", type: "number", default: 1, min: 1 },
-      unit3: 0,
     },
   ],
   summary: {

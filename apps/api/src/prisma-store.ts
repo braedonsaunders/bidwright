@@ -97,11 +97,6 @@ import type {
   SummaryRow,
   User,
   WorksheetItem,
-  LabourCostTable,
-  LabourCostTableWithEntries,
-  LabourCostEntry,
-  BurdenPeriod,
-  TravelPolicy,
 } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
@@ -143,7 +138,6 @@ import {
   mapAdjustment,
   mapAdditionalLineItem,
   mapAiRun,
-  mapBurdenPeriod,
   mapAssembly,
   mapAssemblyComponent,
   mapAssemblyInstance,
@@ -173,9 +167,6 @@ import {
   mapKnowledgeDocument,
   mapKnowledgeDocumentChunk,
   mapKnowledgeDocumentPage,
-  mapLabourCostEntry,
-  mapLabourCostTable,
-  mapLabourCostTableWithEntries,
   mapLaborUnit,
   mapLaborUnitLibrary,
   mapModifier,
@@ -203,7 +194,6 @@ import {
   mapSummaryRow,
   mapTakeoffAnnotation,
   mapTakeoffLink,
-  mapTravelPolicy,
   mapUser,
   mapWorksheet,
   mapWorksheetFolder,
@@ -422,14 +412,54 @@ function costCodeFromClassification(classification: Record<string, unknown>): st
   return stringValue(nested.code) ?? stringValue(nested.value);
 }
 
-function synchronizeWorksheetItemHourBreakdown(
-  item: WorksheetItem,
-  schedules: RateScheduleWithChildren[],
-) {
-  const baseHours = getWorksheetHourBreakdown(item, schedules);
-  item.unit1 = baseHours.unit1;
-  item.unit2 = baseHours.unit2;
-  item.unit3 = baseHours.unit3;
+/**
+ * The shape we persist into WorksheetItem.costSnapshot. Mirrors the
+ * `CostSnapshot` interface from @bidwright/domain.
+ */
+interface PersistedCostSnapshot {
+  source:
+    | "manual"
+    | "catalog"
+    | "rate_schedule"
+    | "effective_cost"
+    | "labor_unit"
+    | "assembly"
+    | "ai"
+    | "import";
+  sourceId: string | null;
+  sourceLabel?: string;
+  snapshotAt: string;
+  originalUnitCost: number;
+  originalUnitPrice?: number;
+  currency?: string;
+  region?: string;
+}
+
+/**
+ * Pick the most appropriate cost-snapshot source for a worksheet item based
+ * on which library FK the item carries. The actual cost value is taken from
+ * the item's already-resolved `cost` field (per-unit). Used after auto-resolve
+ * has run so `cost` is the right number to snapshot.
+ */
+function buildSnapshotForItem(item: WorksheetItem): PersistedCostSnapshot {
+  const snapshotAt = new Date().toISOString();
+  const originalUnitCost = Number(item.cost) || 0;
+  if (item.effectiveCostId) {
+    return { source: "effective_cost", sourceId: item.effectiveCostId, snapshotAt, originalUnitCost };
+  }
+  if (item.rateScheduleItemId) {
+    return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost };
+  }
+  if (item.itemId) {
+    return { source: "catalog", sourceId: item.itemId, snapshotAt, originalUnitCost };
+  }
+  if (item.laborUnitId) {
+    return { source: "labor_unit", sourceId: item.laborUnitId, snapshotAt, originalUnitCost };
+  }
+  if (item.sourceAssemblyId) {
+    return { source: "assembly", sourceId: item.sourceAssemblyId, snapshotAt, originalUnitCost };
+  }
+  return { source: "manual", sourceId: null, snapshotAt, originalUnitCost };
 }
 
 interface RevisionItemAggregateRow {
@@ -621,9 +651,6 @@ export interface WorksheetItemPatchInput {
   cost?: number;
   markup?: number;
   price?: number;
-  unit1?: number;
-  unit2?: number;
-  unit3?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -651,9 +678,6 @@ export interface CreateWorksheetItemInput {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -2106,7 +2130,7 @@ export class PrismaApiStore {
             'subClassName', lu."subClassName",
             'catalogItemId', lu."catalogItemId",
             'description', lu."description",
-            'unit1', lu."hoursNormal",
+            'hoursNormal', lu."hoursNormal",
             'hoursDifficult', lu."hoursDifficult",
             'hoursVeryDifficult', lu."hoursVeryDifficult",
             'defaultDifficulty', lu."defaultDifficulty",
@@ -2861,9 +2885,6 @@ export class PrismaApiStore {
         cost: roundMoney(entry.costTotal),
         markup: 0,
         price: roundMoney(entry.priceTotal),
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
         lineOrder: index + 1,
         rateScheduleItemId: null,
         itemId: null,
@@ -2887,16 +2908,23 @@ export class PrismaApiStore {
       entityCategoryRows.map(mapEntityCategory),
     );
 
+    // Bucket per-tier hours into the revision's reg/over/double summary columns
+    // by tier multiplier (1.0 = reg, 1.5 = over, 2.0 = double). Tiers with other
+    // multipliers contribute to total only.
     const toHourTotals = (item?: WorksheetItem | null) => {
       if (!item) {
-        return { reg: 0, over: 0, double: 0 };
+        return { reg: 0, over: 0, double: 0, total: 0 };
       }
       const breakdown = getExtendedWorksheetHourBreakdown(item, revisionSchedules, item.quantity);
-      return {
-        reg: breakdown.unit1,
-        over: breakdown.unit2,
-        double: breakdown.unit3,
-      };
+      let reg = 0;
+      let over = 0;
+      let double = 0;
+      for (const tier of breakdown.tiers) {
+        if (tier.multiplier === 1) reg += tier.hours;
+        else if (tier.multiplier === 1.5) over += tier.hours;
+        else if (tier.multiplier === 2) double += tier.hours;
+      }
+      return { reg, over, double, total: breakdown.total };
     };
 
     const previousHours = toHourTotals(options.previousItem);
@@ -2904,7 +2932,7 @@ export class PrismaApiStore {
     const regHours = roundMoney((Number(revision.regHours) || 0) - previousHours.reg + nextHours.reg);
     const overHours = roundMoney((Number(revision.overHours) || 0) - previousHours.over + nextHours.over);
     const doubleHours = roundMoney((Number(revision.doubleHours) || 0) - previousHours.double + nextHours.double);
-    const totalHours = roundMoney(regHours + overHours + doubleHours);
+    const totalHours = roundMoney((Number(revision.totalHours) || 0) - previousHours.total + nextHours.total);
 
     const totals: RevisionTotals = {
       ...totalsBase,
@@ -3367,9 +3395,6 @@ export class PrismaApiStore {
     category?: string | null;
     entityType?: string | null;
     quantity?: number | null;
-    unit1?: number | null;
-    unit2?: number | null;
-    unit3?: number | null;
     tierUnits?: Record<string, number> | null;
     rateScheduleItemId?: string | null;
   }) {
@@ -3396,7 +3421,7 @@ export class PrismaApiStore {
     return quantity * cost;
   }
 
-  private categoryShareMetrics(items: Array<{ category?: string | null; entityType?: string | null; quantity?: number | null; price?: number | null; unit1?: number | null; unit2?: number | null; unit3?: number | null }>) {
+  private categoryShareMetrics(items: Array<{ category?: string | null; entityType?: string | null; quantity?: number | null; price?: number | null; tierUnits?: Record<string, number> | null; rateScheduleItemId?: string | null }>) {
     const totalsByCategory = new Map<string, { value: number; hours: number }>();
     let totalValue = 0;
     let totalHours = 0;
@@ -5621,8 +5646,8 @@ export class PrismaApiStore {
         shortform: input.shortform ?? input.name.charAt(0).toUpperCase(),
         defaultUom: input.defaultUom ?? "EA",
         validUoms: input.validUoms ?? ["EA"],
-        editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false }) as any,
-        unitLabels: (input.unitLabels ?? { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" }) as any,
+        editableFields: (input.editableFields ?? { quantity: true, cost: true, markup: true, price: true, tierUnits: false }) as any,
+        unitLabels: (input.unitLabels ?? {}) as any,
         calculationType: normalizeCalculationType(input.calculationType),
         calcFormula: input.calcFormula ?? "",
         itemSource: input.itemSource ?? "freeform",
@@ -6038,6 +6063,43 @@ export class PrismaApiStore {
 
   // ── Worksheet Item CRUD ────────────────────────────────────────────────
 
+  /**
+   * If the row carries a `costResourceId` but no `effectiveCostId`, pick the
+   * highest-confidence, currently-effective cost basis for the matching
+   * (resource, uom) pair and snap the row's `cost`/`effectiveCostId` to it.
+   *
+   * No-op when:
+   *   - the row already has an effectiveCostId (caller chose explicitly)
+   *   - the row has no costResourceId (not driven by cost intelligence)
+   *   - no matching EffectiveCost exists (caller's `cost` stays as-is)
+   *
+   * Mutates the item in place. Returns true when a cost basis was applied.
+   */
+  private async autoResolveEffectiveCost(
+    item: { uom?: string; cost?: number; costResourceId?: string | null; effectiveCostId?: string | null },
+  ): Promise<boolean> {
+    if (!item.costResourceId || item.effectiveCostId) return false;
+
+    const today = new Date().toISOString().substring(0, 10);
+    const ec = await this.db.effectiveCost.findFirst({
+      where: {
+        organizationId: this.organizationId,
+        resourceId: item.costResourceId,
+        ...(item.uom ? { uom: item.uom } : {}),
+        OR: [{ expiresAt: null }, { expiresAt: { gt: today } }],
+      },
+      orderBy: [
+        { confidence: "desc" },
+        { effectiveDate: "desc" },
+      ],
+    });
+
+    if (!ec) return false;
+    item.effectiveCostId = ec.id;
+    item.cost = ec.unitCost;
+    return true;
+  }
+
   async createWorksheetItem(projectId: string, worksheetId: string, input: CreateWorksheetItemInput) {
     return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input)).item;
   }
@@ -6102,9 +6164,6 @@ export class PrismaApiStore {
       cost: normalizedInput.cost,
       markup: normalizedInput.markup,
       price: normalizedInput.price,
-      unit1: normalizedInput.unit1,
-      unit2: normalizedInput.unit2,
-      unit3: normalizedInput.unit3,
       lineOrder,
       rateScheduleItemId: normalizedInput.rateScheduleItemId ?? null,
       itemId: normalizedInput.itemId ?? null,
@@ -6155,12 +6214,19 @@ export class PrismaApiStore {
     if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
       item.tierUnits = resolveTierUnitKeys(item.tierUnits, revisionScheduleRows);
     }
-    synchronizeWorksheetItemHourBreakdown(item, mappedRevisionSchedules);
 
-    const labourCostCtx = await this.getLabourCostContext();
+    // ── Auto-resolve EffectiveCost for cost-resource-linked rows ─────
+    // When the caller specifies costResourceId without an effectiveCostId,
+    // pick the highest-confidence, most recent matching cost basis. This
+    // gives the institutional financial engine a single resolution path
+    // instead of asking each caller to pre-look-up the cost id.
+    await this.autoResolveEffectiveCost(item);
+
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-    const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
+    const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(item, calculated);
+
+    const costSnapshot = buildSnapshotForItem(item);
 
 	    const created = await this.db.worksheetItem.create({
       include: { entityCategory: true },
@@ -6181,13 +6247,11 @@ export class PrismaApiStore {
         cost: item.cost,
         markup: item.markup,
         price: item.price,
-        unit1: item.unit1,
-        unit2: item.unit2,
-        unit3: item.unit3,
         lineOrder: item.lineOrder,
         rateScheduleItemId: item.rateScheduleItemId ?? null,
         itemId: item.itemId ?? null,
         tierUnits: item.tierUnits ?? {},
+        costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
         sourceNotes: item.sourceNotes ?? "",
         costResourceId: item.costResourceId ?? null,
         effectiveCostId: item.effectiveCostId ?? null,
@@ -6586,12 +6650,28 @@ export class PrismaApiStore {
     if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
       domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
     }
-    synchronizeWorksheetItemHourBreakdown(domainItem, mappedRevisionSchedules);
 
-    const updateLabourCostCtx = await this.getLabourCostContext();
+    // ── Auto-resolve EffectiveCost on cost-resource changes ──────────
+    // If the caller cleared `costResourceId` (set to null), drop the
+    // associated `effectiveCostId` too so the row no longer claims to
+    // be cost-intelligence-backed.
+    if (
+      Object.prototype.hasOwnProperty.call(normalizedPatch, "costResourceId") &&
+      !domainItem.costResourceId
+    ) {
+      domainItem.effectiveCostId = null;
+    } else {
+      // If costResourceId is set but effectiveCostId isn't, snap to the
+      // best-matching cost basis row.
+      await this.autoResolveEffectiveCost(domainItem);
+    }
+
     const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-    const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx, { labourCost: updateLabourCostCtx });
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
+
+    // Re-snapshot whenever cost or any library reference moved on this update.
+    const costSnapshot = buildSnapshotForItem(domainItem);
 
 	    const updated = await this.db.worksheetItem.update({
 	      where: { id: itemId },
@@ -6611,13 +6691,11 @@ export class PrismaApiStore {
         cost: domainItem.cost,
         markup: domainItem.markup,
         price: domainItem.price,
-        unit1: domainItem.unit1,
-        unit2: domainItem.unit2,
-        unit3: domainItem.unit3,
         lineOrder: domainItem.lineOrder,
         rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
         itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},
+        costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
         sourceNotes: domainItem.sourceNotes ?? "",
         costResourceId: domainItem.costResourceId ?? null,
         effectiveCostId: domainItem.effectiveCostId ?? null,
@@ -6645,6 +6723,103 @@ export class PrismaApiStore {
       item: mappedUpdated,
       snapshot,
     };
+  }
+
+  /**
+   * Re-pull cost from the library reference attached to this row, write a
+   * fresh snapshot, and re-price. Per-row only — this is the user-driven
+   * "Refresh from library" affordance. Never automatic.
+   *
+   * Behavior by source:
+   *   - costResourceId set: auto-resolve EffectiveCost (highest confidence
+   *     for the row's UoM), apply unitCost, snapshot.
+   *   - itemId set: pull CatalogItem.unitCost, apply, snapshot.
+   *   - laborUnitId set: pull LaborUnit.hoursNormal × tier rate via the
+   *     standard calc path; snapshot reflects the labor unit reference.
+   *   - rateScheduleItemId only: re-run the calc engine to recompute price
+   *     from the live rate schedule; snapshot reflects the rate-schedule ref.
+   *   - manual rows: nothing to refresh — returns the existing item unchanged.
+   */
+  async refreshWorksheetItemFromLibrary(projectId: string, itemId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    const item = await this.db.worksheetItem.findFirst({
+      where: { id: itemId },
+      include: { entityCategory: true },
+    });
+    if (!item || !revision) {
+      throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
+    }
+
+    const domainItem = mapWorksheetItem(item);
+    const before = mapWorksheetItem(item);
+
+    let pulledFromLibrary = false;
+
+    // Pull fresh cost from the most-specific available library source.
+    if (domainItem.costResourceId) {
+      // Force re-resolution by clearing the existing effectiveCostId so the
+      // helper picks the current best match.
+      domainItem.effectiveCostId = null;
+      pulledFromLibrary = await this.autoResolveEffectiveCost(domainItem);
+    } else if (domainItem.itemId) {
+      const catalogItem = await this.db.catalogItem.findFirst({ where: { id: domainItem.itemId } });
+      if (catalogItem) {
+        domainItem.cost = catalogItem.unitCost ?? domainItem.cost;
+        pulledFromLibrary = true;
+      }
+    }
+    // Rate schedule and labor unit pricing flow naturally through the calc
+    // engine below — no separate "pull cost" step needed; the schedule rates
+    // and labor-unit hours will already pick up any library updates.
+
+    // Re-run the standard calc engine.
+    const revisionScheduleRows = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      include: { tiers: true, items: true },
+    });
+    const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
+    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
+      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
+      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
+    }));
+    const calcType = (item.entityCategory?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx);
+    Object.assign(domainItem, calculated);
+
+    const costSnapshot = buildSnapshotForItem(domainItem);
+
+    const updated = await this.db.worksheetItem.update({
+      where: { id: itemId },
+      include: { entityCategory: true },
+      data: {
+        cost: domainItem.cost,
+        markup: domainItem.markup,
+        price: domainItem.price,
+        effectiveCostId: domainItem.effectiveCostId ?? null,
+        costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
+      },
+    });
+    const mappedUpdated = mapWorksheetItem(updated);
+
+    await this.pushActivity(projectId, revision.id, "item_refreshed", {
+      itemId,
+      entityName: domainItem.entityName,
+      pulledFromLibrary,
+      before: { cost: before.cost, price: before.price, effectiveCostId: before.effectiveCostId },
+      after: { cost: mappedUpdated.cost, price: mappedUpdated.price, effectiveCostId: mappedUpdated.effectiveCostId },
+    });
+
+    const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
+      previousItem: before,
+      nextItem: mappedUpdated,
+      revisionSchedules: mappedRevisionSchedules,
+    });
+    if (!snapshot) {
+      throw new Error(`Project ${projectId} does not have an active revision`);
+    }
+
+    return { item: mappedUpdated, snapshot, pulledFromLibrary };
   }
 
   async reorderWorksheetItems(projectId: string, worksheetId: string, orderedIds: string[]) {
@@ -6692,7 +6867,6 @@ export class PrismaApiStore {
       tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
-    const importLabourCostCtx = await this.getLabourCostContext();
     const mappedRev = mapRevision(revision);
     const importEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
@@ -6726,9 +6900,6 @@ export class PrismaApiStore {
         cost: Number(raw.cost) || 0,
         markup: Number(raw.markup) || 0.2,
         price: Number(raw.price) || 0,
-        unit1: Number(raw.unit1 ?? raw.LabourHourReg) || 0,
-        unit2: Number(raw.unit2 ?? raw.LabourHourOver) || 0,
-        unit3: Number(raw.unit3 ?? raw.LabourHourDouble) || 0,
         lineOrder: baseOrder + idx + 1,
         costResourceId: typeof raw.costResourceId === "string" ? raw.costResourceId : null,
         effectiveCostId: typeof raw.effectiveCostId === "string" ? raw.effectiveCostId : null,
@@ -6743,7 +6914,7 @@ export class PrismaApiStore {
 	    await this.validateWorksheetItemProvenanceRefs(item);
 
 	    const importCalcType = (importCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
-      const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx, { labourCost: importLabourCostCtx });
+      const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx);
       Object.assign(item, calculated);
 
       await this.db.worksheetItem.create({
@@ -6764,9 +6935,6 @@ export class PrismaApiStore {
           cost: item.cost,
           markup: item.markup,
           price: item.price,
-          unit1: item.unit1,
-          unit2: item.unit2,
-          unit3: item.unit3,
           lineOrder: item.lineOrder,
           tierUnits: item.tierUnits ?? {},
           sourceNotes: item.sourceNotes ?? "",
@@ -9244,7 +9412,6 @@ export class PrismaApiStore {
               costCode: oldItem.costCode ?? null,
               vendor: oldItem.vendor, description: oldItem.description, quantity: oldItem.quantity,
               uom: oldItem.uom, cost: oldItem.cost, markup: oldItem.markup, price: oldItem.price,
-              unit1: oldItem.unit1, unit2: oldItem.unit2, unit3: oldItem.unit3,
               lineOrder: oldItem.lineOrder,
               rateScheduleItemId: oldItem.rateScheduleItemId ?? null,
               itemId: oldItem.itemId ?? null,
@@ -9636,7 +9803,6 @@ export class PrismaApiStore {
               costCode: it.costCode ?? null,
               vendor: it.vendor, description: it.description, quantity: it.quantity,
               uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
-              unit1: it.unit1, unit2: it.unit2, unit3: it.unit3,
               lineOrder: it.lineOrder,
               rateScheduleItemId: it.rateScheduleItemId ?? null,
               itemId: it.itemId ?? null,
@@ -11618,9 +11784,6 @@ export class PrismaApiStore {
       description: string;
       quantity: number;
       uom: string;
-      unit1?: number;
-      unit2?: number;
-      unit3?: number;
       tierUnits?: Record<string, number>;
 	      unitCost: number;
 	      unitPrice: number;
@@ -11649,9 +11812,6 @@ export class PrismaApiStore {
         cost: expanded.unitCost,
         markup: expanded.markup,
         price: expanded.unitPrice,
-        unit1: expanded.unit1 ?? 0,
-        unit2: expanded.unit2 ?? 0,
-        unit3: expanded.unit3 ?? 0,
 	        rateScheduleItemId: expanded.rateScheduleItemId ?? null,
 	        itemId: expanded.catalogItemId ?? null,
 	        tierUnits: expanded.tierUnits ?? {},
@@ -12324,12 +12484,11 @@ export class PrismaApiStore {
       items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
     }));
 
-    const labourCostCtx = await this.getLabourCostContext();
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
 
     const domainItem = mapWorksheetItem(item);
     domainItem.quantity = totalQuantity;
-    const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
+    const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
 
     await this.db.worksheetItem.update({
@@ -12339,9 +12498,6 @@ export class PrismaApiStore {
         cost: domainItem.cost,
         markup: domainItem.markup,
         price: domainItem.price,
-        unit1: domainItem.unit1,
-        unit2: domainItem.unit2,
-        unit3: domainItem.unit3,
       },
     });
 
@@ -12442,9 +12598,6 @@ export class PrismaApiStore {
         cost: parseNumber(readCell(row, "cost"), 0),
         markup: parseMarkup(readCell(row, "markup"), 0.2),
         price: parseNumber(readCell(row, "price"), 0),
-        unit1: parseNumber(readCell(row, "unit1"), 0),
-        unit2: parseNumber(readCell(row, "unit2"), 0),
-        unit3: parseNumber(readCell(row, "unit3"), 0),
         ...(Number.isFinite(lineOrder) ? { lineOrder } : {}),
       };
 
@@ -12595,7 +12748,6 @@ export class PrismaApiStore {
     const entityCategories = await this.db.entityCategory.findMany({
       where: { organizationId: this.organizationId },
     });
-    const labourCostCtx = await this.getLabourCostContext();
     const mappedRevision = mapRevision(revision);
     const appliedLineItemIds: string[] = [];
 
@@ -12627,9 +12779,6 @@ export class PrismaApiStore {
         cost: sourceItem.cost ?? 0,
         markup: sourceItem.markup ?? 0,
         price: sourceItem.price ?? 0,
-        unit1: sourceItem.unit1 ?? 0,
-        unit2: sourceItem.unit2 ?? 0,
-        unit3: sourceItem.unit3 ?? 0,
         lineOrder: preserveLineOrder ? existing.lineOrder : nextLineOrder++,
         rateScheduleItemId: sourceItem.rateScheduleItemId ?? null,
         itemId: sourceItem.itemId ?? null,
@@ -12676,7 +12825,6 @@ export class PrismaApiStore {
         mappedRevision,
         calcType,
         rateScheduleCtx,
-        { labourCost: labourCostCtx },
       );
       Object.assign(domainItem, calculated);
 
@@ -12699,9 +12847,6 @@ export class PrismaApiStore {
             cost: domainItem.cost,
             markup: domainItem.markup,
             price: domainItem.price,
-            unit1: domainItem.unit1,
-            unit2: domainItem.unit2,
-            unit3: domainItem.unit3,
             lineOrder: domainItem.lineOrder,
             rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
             itemId: domainItem.itemId ?? null,
@@ -12745,9 +12890,6 @@ export class PrismaApiStore {
           cost: domainItem.cost,
           markup: domainItem.markup,
           price: domainItem.price,
-          unit1: domainItem.unit1,
-          unit2: domainItem.unit2,
-          unit3: domainItem.unit3,
           lineOrder: domainItem.lineOrder,
           rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
           itemId: domainItem.itemId ?? null,
@@ -12866,10 +13008,11 @@ export class PrismaApiStore {
       resolveRateScheduleItem: async (rateScheduleItemId) => {
         const match = await this.db.rateScheduleItem.findFirst({
           where: { id: rateScheduleItemId, schedule: { revisionId, organizationId: this.organizationId } },
-          include: { schedule: true },
+          include: { schedule: { include: { tiers: true } } },
         });
         if (!match) return null;
         const category = match.schedule?.category ?? "";
+        const regularTier = match.schedule?.tiers?.find((t) => t.multiplier === 1);
         const entityCategory = category
           ? await this.db.entityCategory.findFirst({
               where: {
@@ -12889,6 +13032,7 @@ export class PrismaApiStore {
           name: match.name,
           category: entityCategory?.name ?? category,
           entityCategoryType: entityCategory?.entityType ?? category,
+          regularTierId: regularTier?.id,
         };
       },
       lookupLaborUnit: async (providerLabel, labourInput) => {
@@ -12998,8 +13142,6 @@ export class PrismaApiStore {
             vendor: item.vendor ?? null, description: item.description,
             quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
             markup: item.markup ?? 0, price: item.price ?? 0,
-            unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
-            unit3: item.unit3 ?? 0, phaseId: item.phaseId,
             rateScheduleItemId: item.rateScheduleItemId ?? null,
             itemId: item.itemId ?? null,
             costResourceId: item.costResourceId ?? null,
@@ -13024,8 +13166,6 @@ export class PrismaApiStore {
           vendor: item.vendor ?? null, description: item.description,
           quantity: item.quantity, uom: item.uom, cost: item.cost ?? 0,
           markup: item.markup ?? 0, price: item.price ?? 0,
-          unit1: item.unit1 ?? 0, unit2: item.unit2 ?? 0,
-          unit3: item.unit3 ?? 0, phaseId: item.phaseId,
           rateScheduleItemId: item.rateScheduleItemId ?? null,
           itemId: item.itemId ?? null,
           costResourceId: item.costResourceId ?? null,
@@ -14267,269 +14407,6 @@ export class PrismaApiStore {
           }
         });
       });
-  }
-
-  // ── Labour Cost Tables ─────────────────────────────────────────────────────
-
-  async listLabourCostTables(): Promise<LabourCostTableWithEntries[]> {
-    const tables = await this.db.labourCostTable.findMany({
-      where: { organizationId: this.organizationId },
-      include: { entries: { orderBy: { sortOrder: "asc" } } },
-      orderBy: { name: "asc" },
-    });
-    return tables.map(mapLabourCostTableWithEntries);
-  }
-
-  async getLabourCostTable(id: string): Promise<LabourCostTableWithEntries> {
-    const table = await this.db.labourCostTable.findFirst({
-      where: { id, organizationId: this.organizationId },
-      include: { entries: { orderBy: { sortOrder: "asc" } } },
-    });
-    if (!table) throw new Error(`Labour cost table ${id} not found`);
-    return mapLabourCostTableWithEntries(table);
-  }
-
-  async createLabourCostTable(input: {
-    name: string; description?: string; effectiveDate?: string; expiryDate?: string;
-  }): Promise<LabourCostTableWithEntries> {
-    const created = await this.db.labourCostTable.create({
-      data: {
-        id: createId("lct"),
-        organizationId: this.organizationId,
-        name: input.name,
-        description: input.description ?? "",
-        effectiveDate: input.effectiveDate ?? null,
-        expiryDate: input.expiryDate ?? null,
-      },
-      include: { entries: true },
-    });
-    return mapLabourCostTableWithEntries(created);
-  }
-
-  async updateLabourCostTable(id: string, patch: {
-    name?: string; description?: string; effectiveDate?: string | null; expiryDate?: string | null;
-  }): Promise<LabourCostTableWithEntries> {
-    const existing = await this.db.labourCostTable.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Labour cost table ${id} not found`);
-    const data: any = {};
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.description !== undefined) data.description = patch.description;
-    if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
-    if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate;
-    const updated = await this.db.labourCostTable.update({
-      where: { id },
-      data,
-      include: { entries: { orderBy: { sortOrder: "asc" } } },
-    });
-    return mapLabourCostTableWithEntries(updated);
-  }
-
-  async deleteLabourCostTable(id: string): Promise<{ deleted: boolean }> {
-    const existing = await this.db.labourCostTable.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Labour cost table ${id} not found`);
-    await this.db.labourCostTable.delete({ where: { id } });
-    return { deleted: true };
-  }
-
-  async createLabourCostEntry(tableId: string, input: {
-    code: string; name: string; group?: string;
-    costRates?: Record<string, number>; sortOrder?: number;
-  }): Promise<LabourCostTableWithEntries> {
-    const table = await this.db.labourCostTable.findFirst({ where: { id: tableId, organizationId: this.organizationId } });
-    if (!table) throw new Error(`Labour cost table ${tableId} not found`);
-    await this.db.labourCostEntry.create({
-      data: {
-        id: createId("lce"),
-        tableId,
-        code: input.code,
-        name: input.name,
-        group: input.group ?? "",
-        costRates: input.costRates ?? {},
-        sortOrder: input.sortOrder ?? 0,
-      },
-    });
-    return this.getLabourCostTable(tableId);
-  }
-
-  async updateLabourCostEntry(entryId: string, patch: {
-    code?: string; name?: string; group?: string;
-    costRates?: Record<string, number>; sortOrder?: number;
-  }): Promise<LabourCostTableWithEntries> {
-    const entry = await this.db.labourCostEntry.findUnique({ where: { id: entryId } });
-    if (!entry) throw new Error(`Labour cost entry ${entryId} not found`);
-    const data: any = {};
-    if (patch.code !== undefined) data.code = patch.code;
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.group !== undefined) data.group = patch.group;
-    if (patch.costRates !== undefined) data.costRates = patch.costRates;
-    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-    await this.db.labourCostEntry.update({ where: { id: entryId }, data });
-    return this.getLabourCostTable(entry.tableId);
-  }
-
-  async deleteLabourCostEntry(entryId: string): Promise<LabourCostTableWithEntries> {
-    const entry = await this.db.labourCostEntry.findUnique({ where: { id: entryId } });
-    if (!entry) throw new Error(`Labour cost entry ${entryId} not found`);
-    const tableId = entry.tableId;
-    await this.db.labourCostEntry.delete({ where: { id: entryId } });
-    return this.getLabourCostTable(tableId);
-  }
-
-  // ── Burden Periods ─────────────────────────────────────────────────────────
-
-  async listBurdenPeriods(group?: string): Promise<BurdenPeriod[]> {
-    const where: any = { organizationId: this.organizationId };
-    if (group) where.group = group;
-    const periods = await this.db.burdenPeriod.findMany({
-      where,
-      orderBy: { startDate: "desc" },
-    });
-    return periods.map(mapBurdenPeriod);
-  }
-
-  async createBurdenPeriod(input: {
-    name?: string; group?: string; percentage: number;
-    startDate: string; endDate: string;
-  }): Promise<BurdenPeriod> {
-    const created = await this.db.burdenPeriod.create({
-      data: {
-        id: createId("bp"),
-        organizationId: this.organizationId,
-        name: input.name ?? "",
-        group: input.group ?? "",
-        percentage: input.percentage,
-        startDate: input.startDate,
-        endDate: input.endDate,
-      },
-    });
-    return mapBurdenPeriod(created);
-  }
-
-  async updateBurdenPeriod(id: string, patch: {
-    name?: string; group?: string; percentage?: number;
-    startDate?: string; endDate?: string;
-  }): Promise<BurdenPeriod> {
-    const existing = await this.db.burdenPeriod.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Burden period ${id} not found`);
-    const data: any = {};
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.group !== undefined) data.group = patch.group;
-    if (patch.percentage !== undefined) data.percentage = patch.percentage;
-    if (patch.startDate !== undefined) data.startDate = patch.startDate;
-    if (patch.endDate !== undefined) data.endDate = patch.endDate;
-    const updated = await this.db.burdenPeriod.update({ where: { id }, data });
-    return mapBurdenPeriod(updated);
-  }
-
-  async deleteBurdenPeriod(id: string): Promise<{ deleted: boolean }> {
-    const existing = await this.db.burdenPeriod.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Burden period ${id} not found`);
-    await this.db.burdenPeriod.delete({ where: { id } });
-    return { deleted: true };
-  }
-
-  // ── Travel Policies ────────────────────────────────────────────────────────
-
-  async listTravelPolicies(): Promise<TravelPolicy[]> {
-    const policies = await this.db.travelPolicy.findMany({
-      where: { organizationId: this.organizationId },
-      orderBy: { name: "asc" },
-    });
-    return policies.map(mapTravelPolicy);
-  }
-
-  async getTravelPolicy(id: string): Promise<TravelPolicy> {
-    const policy = await this.db.travelPolicy.findFirst({
-      where: { id, organizationId: this.organizationId },
-    });
-    if (!policy) throw new Error(`Travel policy ${id} not found`);
-    return mapTravelPolicy(policy);
-  }
-
-  async createTravelPolicy(input: {
-    name: string; description?: string;
-    perDiemRate?: number; perDiemEmbedMode?: string; hoursPerDay?: number;
-    travelTimeHours?: number; travelTimeTrips?: number;
-    kmToDestination?: number; mileageRate?: number;
-    fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: string;
-    accommodationRate?: number; accommodationNights?: number;
-    showAsSeparateLine?: boolean; breakoutLabel?: string;
-  }): Promise<TravelPolicy> {
-    const created = await this.db.travelPolicy.create({
-      data: {
-        id: createId("tp"),
-        organizationId: this.organizationId,
-        name: input.name,
-        description: input.description ?? "",
-        perDiemRate: input.perDiemRate ?? 0,
-        perDiemEmbedMode: input.perDiemEmbedMode ?? "separate",
-        hoursPerDay: input.hoursPerDay ?? 8,
-        travelTimeHours: input.travelTimeHours ?? 0,
-        travelTimeTrips: input.travelTimeTrips ?? 1,
-        kmToDestination: input.kmToDestination ?? 0,
-        mileageRate: input.mileageRate ?? 0,
-        fuelSurchargePercent: input.fuelSurchargePercent ?? 0,
-        fuelSurchargeAppliesTo: input.fuelSurchargeAppliesTo ?? "labour",
-        accommodationRate: input.accommodationRate ?? 0,
-        accommodationNights: input.accommodationNights ?? 0,
-        showAsSeparateLine: input.showAsSeparateLine ?? true,
-        breakoutLabel: input.breakoutLabel ?? "Travel & Per Diem",
-      },
-    });
-    return mapTravelPolicy(created);
-  }
-
-  async updateTravelPolicy(id: string, patch: {
-    name?: string; description?: string;
-    perDiemRate?: number; perDiemEmbedMode?: string; hoursPerDay?: number;
-    travelTimeHours?: number; travelTimeTrips?: number;
-    kmToDestination?: number; mileageRate?: number;
-    fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: string;
-    accommodationRate?: number; accommodationNights?: number;
-    showAsSeparateLine?: boolean; breakoutLabel?: string;
-  }): Promise<TravelPolicy> {
-    const existing = await this.db.travelPolicy.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Travel policy ${id} not found`);
-    const data: any = {};
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.description !== undefined) data.description = patch.description;
-    if (patch.perDiemRate !== undefined) data.perDiemRate = patch.perDiemRate;
-    if (patch.perDiemEmbedMode !== undefined) data.perDiemEmbedMode = patch.perDiemEmbedMode;
-    if (patch.hoursPerDay !== undefined) data.hoursPerDay = patch.hoursPerDay;
-    if (patch.travelTimeHours !== undefined) data.travelTimeHours = patch.travelTimeHours;
-    if (patch.travelTimeTrips !== undefined) data.travelTimeTrips = patch.travelTimeTrips;
-    if (patch.kmToDestination !== undefined) data.kmToDestination = patch.kmToDestination;
-    if (patch.mileageRate !== undefined) data.mileageRate = patch.mileageRate;
-    if (patch.fuelSurchargePercent !== undefined) data.fuelSurchargePercent = patch.fuelSurchargePercent;
-    if (patch.fuelSurchargeAppliesTo !== undefined) data.fuelSurchargeAppliesTo = patch.fuelSurchargeAppliesTo;
-    if (patch.accommodationRate !== undefined) data.accommodationRate = patch.accommodationRate;
-    if (patch.accommodationNights !== undefined) data.accommodationNights = patch.accommodationNights;
-    if (patch.showAsSeparateLine !== undefined) data.showAsSeparateLine = patch.showAsSeparateLine;
-    if (patch.breakoutLabel !== undefined) data.breakoutLabel = patch.breakoutLabel;
-    const updated = await this.db.travelPolicy.update({ where: { id }, data });
-    return mapTravelPolicy(updated);
-  }
-
-  async deleteTravelPolicy(id: string): Promise<{ deleted: boolean }> {
-    const existing = await this.db.travelPolicy.findFirst({ where: { id, organizationId: this.organizationId } });
-    if (!existing) throw new Error(`Travel policy ${id} not found`);
-    await this.db.travelPolicy.delete({ where: { id } });
-    return { deleted: true };
-  }
-
-  // ── Labour Cost Context (for calc engine) ──────────────────────────────────
-
-  async getLabourCostContext(): Promise<{ entries: LabourCostEntry[]; burdenPeriods: BurdenPeriod[] }> {
-    const tables = await this.db.labourCostTable.findMany({
-      where: { organizationId: this.organizationId },
-      include: { entries: { orderBy: { sortOrder: "asc" } } },
-    });
-    const entries = tables.flatMap((t) => (t.entries ?? []).map(mapLabourCostEntry));
-    const periods = await this.db.burdenPeriod.findMany({
-      where: { organizationId: this.organizationId },
-      orderBy: { startDate: "desc" },
-    });
-    return { entries, burdenPeriods: periods.map(mapBurdenPeriod) };
   }
 
   // ── Estimator Persona CRUD ──────────────────────────────────────────────

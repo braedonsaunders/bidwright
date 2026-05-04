@@ -189,9 +189,6 @@ async function main() {
           cost: i.cost,
           markup: i.markup,
           price: i.price,
-          unit1: i.unit1,
-          unit2: i.unit2,
-          unit3: i.unit3,
           lineOrder: i.lineOrder,
         },
       });

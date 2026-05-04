@@ -27,9 +27,6 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentChunk,
   KnowledgeDocumentPage,
-  LabourCostEntry,
-  LabourCostTable,
-  LabourCostTableWithEntries,
   LaborUnit,
   LaborUnitLibrary,
   Modifier,
@@ -53,10 +50,8 @@ import type {
   ScheduleTaskAssignment,
   SourceDocument,
   SummaryRow,
-  TravelPolicy,
   User,
   WorksheetItem,
-  BurdenPeriod,
 } from "@bidwright/domain";
 import { DEFAULT_UOMS, normalizeCalculationType } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
@@ -262,6 +257,31 @@ export function mapWorksheetFolder(w: any): { id: string; revisionId: string; pa
   return { id: w.id, revisionId: w.revisionId, parentId: w.parentId ?? null, name: w.name, order: w.order };
 }
 
+/**
+ * Coerces stored JSON into a CostSnapshot. Returns `undefined` for empty/
+ * malformed snapshots so the UI can render "no snapshot" cleanly.
+ */
+function normalizeCostSnapshot(raw: unknown): WorksheetItem["costSnapshot"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (!r.source || typeof r.source !== "string") return undefined;
+  const allowedSources = new Set([
+    "manual", "catalog", "rate_schedule", "effective_cost",
+    "labor_unit", "assembly", "ai", "import",
+  ]);
+  if (!allowedSources.has(r.source)) return undefined;
+  return {
+    source: r.source as any,
+    sourceId: typeof r.sourceId === "string" ? r.sourceId : null,
+    sourceLabel: typeof r.sourceLabel === "string" ? r.sourceLabel : undefined,
+    snapshotAt: typeof r.snapshotAt === "string" ? r.snapshotAt : new Date().toISOString(),
+    originalUnitCost: Number(r.originalUnitCost) || 0,
+    originalUnitPrice: typeof r.originalUnitPrice === "number" ? r.originalUnitPrice : undefined,
+    currency: typeof r.currency === "string" ? r.currency : undefined,
+    region: typeof r.region === "string" ? r.region : undefined,
+  };
+}
+
 export function mapWorksheetItem(i: any): WorksheetItem {
   const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
@@ -281,13 +301,11 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     cost: i.cost,
     markup: i.markup,
     price: i.price,
-    unit1: i.unit1,
-    unit2: i.unit2,
-    unit3: i.unit3,
     lineOrder: i.lineOrder,
     rateScheduleItemId: i.rateScheduleItemId ?? null,
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
+    costSnapshot: normalizeCostSnapshot(i.costSnapshot),
     sourceNotes: decodeHtmlEntities(i.sourceNotes ?? ""),
     costResourceId: i.costResourceId ?? null,
     effectiveCostId: i.effectiveCostId ?? null,
@@ -527,7 +545,6 @@ export function mapRateSchedule(s: any): RateSchedule {
     category: s.category, scope: s.scope as RateSchedule["scope"],
     projectId: s.projectId ?? null, revisionId: s.revisionId ?? null,
     sourceScheduleId: s.sourceScheduleId ?? null,
-    travelPolicyId: s.travelPolicyId ?? null,
     effectiveDate: s.effectiveDate ?? null, expiryDate: s.expiryDate ?? null,
     defaultMarkup: s.defaultMarkup, autoCalculate: s.autoCalculate,
     metadata: (s.metadata as Record<string, unknown>) ?? {},
@@ -540,56 +557,6 @@ export function mapRateScheduleWithChildren(s: any): RateScheduleWithChildren {
     ...mapRateSchedule(s),
     tiers: (s.tiers ?? []).map(mapRateScheduleTier),
     items: (s.items ?? []).map(mapRateScheduleItem),
-  };
-}
-
-export function mapLabourCostEntry(e: any): LabourCostEntry {
-  return {
-    id: e.id, tableId: e.tableId, code: e.code, name: e.name,
-    group: e.group, costRates: (e.costRates as Record<string, number>) ?? {},
-    metadata: (e.metadata as Record<string, unknown>) ?? {}, sortOrder: e.sortOrder,
-  };
-}
-
-export function mapLabourCostTable(t: any): LabourCostTable {
-  return {
-    id: t.id, organizationId: t.organizationId, name: t.name,
-    description: t.description, effectiveDate: t.effectiveDate ?? null,
-    expiryDate: t.expiryDate ?? null,
-    metadata: (t.metadata as Record<string, unknown>) ?? {},
-    createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
-  };
-}
-
-export function mapLabourCostTableWithEntries(t: any): LabourCostTableWithEntries {
-  return {
-    ...mapLabourCostTable(t),
-    entries: (t.entries ?? []).map(mapLabourCostEntry),
-  };
-}
-
-export function mapBurdenPeriod(b: any): BurdenPeriod {
-  return {
-    id: b.id, organizationId: b.organizationId, name: b.name,
-    group: b.group, percentage: b.percentage,
-    startDate: b.startDate, endDate: b.endDate,
-    createdAt: toISO(b.createdAt), updatedAt: toISO(b.updatedAt),
-  };
-}
-
-export function mapTravelPolicy(t: any): TravelPolicy {
-  return {
-    id: t.id, organizationId: t.organizationId, name: t.name,
-    description: t.description, perDiemRate: t.perDiemRate,
-    perDiemEmbedMode: t.perDiemEmbedMode, hoursPerDay: t.hoursPerDay,
-    travelTimeHours: t.travelTimeHours, travelTimeTrips: t.travelTimeTrips,
-    kmToDestination: t.kmToDestination, mileageRate: t.mileageRate,
-    fuelSurchargePercent: t.fuelSurchargePercent,
-    fuelSurchargeAppliesTo: t.fuelSurchargeAppliesTo,
-    accommodationRate: t.accommodationRate, accommodationNights: t.accommodationNights,
-    showAsSeparateLine: t.showAsSeparateLine, breakoutLabel: t.breakoutLabel,
-    metadata: (t.metadata as Record<string, unknown>) ?? {},
-    createdAt: toISO(t.createdAt), updatedAt: toISO(t.updatedAt),
   };
 }
 
@@ -1085,26 +1052,18 @@ const DEFAULT_ENTITY_EDITABLE_FIELDS: EntityCategory["editableFields"] = {
   cost: true,
   markup: true,
   price: true,
-  unit1: false,
-  unit2: false,
-  unit3: false,
+  tierUnits: false,
 };
 
 const EDITABLE_FIELD_PRESETS: Record<EntityCategory["calculationType"], EntityCategory["editableFields"]> = {
   manual: DEFAULT_ENTITY_EDITABLE_FIELDS,
-  unit_markup: { quantity: true, cost: true, markup: true, price: false, unit1: false, unit2: false, unit3: false },
-  quantity_markup: { quantity: true, cost: true, markup: true, price: false, unit1: false, unit2: false, unit3: false },
-  tiered_rate: { quantity: true, cost: false, markup: false, price: false, unit1: true, unit2: true, unit3: true },
-  duration_rate: { quantity: true, cost: false, markup: false, price: false, unit1: true, unit2: false, unit3: false },
-  direct_total: { quantity: false, cost: false, markup: false, price: true, unit1: false, unit2: false, unit3: false },
-  formula: { quantity: true, cost: true, markup: true, price: false, unit1: true, unit2: true, unit3: true },
+  unit_markup: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
+  quantity_markup: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
+  tiered_rate: { quantity: true, cost: false, markup: false, price: false, tierUnits: true },
+  duration_rate: { quantity: true, cost: false, markup: false, price: false, tierUnits: true },
+  direct_total: { quantity: false, cost: false, markup: false, price: true, tierUnits: false },
+  formula: { quantity: true, cost: true, markup: true, price: false, tierUnits: true },
 };
-
-const UNIT_FIELD_LEGACY_KEYS = {
-  unit1: ["unit1", "laborHourReg", "labourHourReg", "reg", "regular", "normal"],
-  unit2: ["unit2", "laborHourOver", "labourHourOver", "over", "overtime", "ot"],
-  unit3: ["unit3", "laborHourDouble", "labourHourDouble", "double", "doubletime", "dt"],
-} as const;
 
 function plainRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1125,14 +1084,6 @@ function optionalBoolean(record: Record<string, unknown>, ...keys: string[]) {
   return undefined;
 }
 
-function optionalString(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
 function normalizeEntityEditableFields(
   rawValue: unknown,
   calculationType: EntityCategory["calculationType"],
@@ -1144,29 +1095,22 @@ function normalizeEntityEditableFields(
     cost: optionalBoolean(raw, "cost") ?? preset.cost,
     markup: optionalBoolean(raw, "markup") ?? preset.markup,
     price: optionalBoolean(raw, "price") ?? preset.price,
-    unit1: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit1) ?? preset.unit1,
-    unit2: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit2) ?? preset.unit2,
-    unit3: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit3) ?? preset.unit3,
+    tierUnits: optionalBoolean(raw, "tierUnits") ?? preset.tierUnits,
   };
 }
 
 function normalizeEntityUnitLabels(
   rawValue: unknown,
-  calculationType: EntityCategory["calculationType"],
+  _calculationType: EntityCategory["calculationType"],
 ): EntityCategory["unitLabels"] {
   const raw = plainRecord(rawValue);
-  const tieredDefaults =
-    calculationType === "tiered_rate"
-      ? { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" }
-      : calculationType === "duration_rate"
-        ? { unit1: "Duration", unit2: "", unit3: "" }
-        : { unit1: "", unit2: "", unit3: "" };
-
-  return {
-    unit1: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit1) || tieredDefaults.unit1,
-    unit2: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit2) || tieredDefaults.unit2,
-    unit3: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit3) || tieredDefaults.unit3,
-  };
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string" && value.trim()) {
+      out[key] = value.trim();
+    }
+  }
+  return out;
 }
 
 function normalizeEntityItemSource(

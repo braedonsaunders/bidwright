@@ -77,9 +77,6 @@ function worksheetItem(patch: Partial<WorksheetItem>): WorksheetItem {
     cost: 600,
     markup: 0,
     price: 1000,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
     lineOrder: 0,
     rateScheduleItemId: null,
     itemId: null,
@@ -145,8 +142,8 @@ function labourCategory(patch: Partial<EntityCategory> = {}): EntityCategory {
     shortform: "LAB",
     defaultUom: "HR",
     validUoms: [],
-    editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: true, unit2: true, unit3: true },
-    unitLabels: { unit1: "", unit2: "", unit3: "" },
+    editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: true },
+    unitLabels: {},
     calculationType: "tiered_rate",
     calcFormula: "",
     itemSource: "rate_schedule",
@@ -207,8 +204,8 @@ test("calculateTotals returns resource-style cost breakdowns using analytics buc
     },
   ];
   const categories: EntityCategory[] = [
-    { id: "cat-material", name: "Material", entityType: "Material", shortform: "MAT", defaultUom: "EA", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false }, unitLabels: { unit1: "", unit2: "", unit3: "" }, calculationType: "unit_markup", calcFormula: "", itemSource: "catalog", analyticsBucket: "material", color: "", order: 0, isBuiltIn: true, enabled: true },
-    { id: "cat-labour", name: "Labour", entityType: "LaborClass", shortform: "LAB", defaultUom: "HR", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: true, unit2: true, unit3: true }, unitLabels: { unit1: "", unit2: "", unit3: "" }, calculationType: "tiered_rate", calcFormula: "", itemSource: "rate_schedule", analyticsBucket: "labour", color: "", order: 1, isBuiltIn: true, enabled: true },
+    { id: "cat-material", name: "Material", entityType: "Material", shortform: "MAT", defaultUom: "EA", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: false }, unitLabels: {}, calculationType: "unit_markup", calcFormula: "", itemSource: "catalog", analyticsBucket: "material", color: "", order: 0, isBuiltIn: true, enabled: true },
+    { id: "cat-labour", name: "Labour", entityType: "LaborClass", shortform: "LAB", defaultUom: "HR", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: true }, unitLabels: {}, calculationType: "tiered_rate", calcFormula: "", itemSource: "rate_schedule", analyticsBucket: "labour", color: "", order: 1, isBuiltIn: true, enabled: true },
   ];
 
   const totals = calculateTotals(revision(), worksheets, [], [], [], categories);
@@ -230,14 +227,14 @@ test("calculateTotals applies scoped estimate factors before quote rollups", () 
       name: "Worksheet",
       order: 0,
       items: [
-        worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", entityName: "Electrician", price: 1000, cost: 600, unit1: 10, rateScheduleItemId: "rate-test" }),
-        worksheetItem({ id: "material", category: "Material", entityType: "Material", entityName: "Wire", price: 500, cost: 300, unit1: 0 }),
+        worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", entityName: "Electrician", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" }),
+        worksheetItem({ id: "material", category: "Material", entityType: "Material", entityName: "Wire", price: 500, cost: 300, tierUnits: {} }),
       ],
     },
   ];
   const categories: EntityCategory[] = [
-    { id: "cat-material", name: "Material", entityType: "Material", shortform: "MAT", defaultUom: "EA", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false }, unitLabels: { unit1: "", unit2: "", unit3: "" }, calculationType: "unit_markup", calcFormula: "", itemSource: "catalog", analyticsBucket: "material", color: "", order: 0, isBuiltIn: true, enabled: true },
-    { id: "cat-labour", name: "Labour", entityType: "Labour", shortform: "LAB", defaultUom: "HR", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: true, unit2: true, unit3: true }, unitLabels: { unit1: "", unit2: "", unit3: "" }, calculationType: "tiered_rate", calcFormula: "", itemSource: "rate_schedule", analyticsBucket: "labour", color: "", order: 1, isBuiltIn: true, enabled: true },
+    { id: "cat-material", name: "Material", entityType: "Material", shortform: "MAT", defaultUom: "EA", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: false }, unitLabels: {}, calculationType: "unit_markup", calcFormula: "", itemSource: "catalog", analyticsBucket: "material", color: "", order: 0, isBuiltIn: true, enabled: true },
+    { id: "cat-labour", name: "Labour", entityType: "Labour", shortform: "LAB", defaultUom: "HR", validUoms: [], editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: true }, unitLabels: {}, calculationType: "tiered_rate", calcFormula: "", itemSource: "rate_schedule", analyticsBucket: "labour", color: "", order: 1, isBuiltIn: true, enabled: true },
   ];
 
   const totals = calculateTotals(revision(), worksheets, [], [], [], categories, null, [
@@ -271,8 +268,8 @@ test("calculateTotals applies explicit line factors only to targeted worksheet r
       name: "Worksheet",
       order: 0,
       items: [
-        worksheetItem({ id: "target", category: "Labour", entityType: "Labour", entityName: "Target", price: 1000, cost: 600, unit1: 10, rateScheduleItemId: "rate-test" }),
-        worksheetItem({ id: "other", category: "Labour", entityType: "Labour", entityName: "Other", price: 1000, cost: 600, unit1: 10, rateScheduleItemId: "rate-test" }),
+        worksheetItem({ id: "target", category: "Labour", entityType: "Labour", entityName: "Target", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" }),
+        worksheetItem({ id: "other", category: "Labour", entityType: "Labour", entityName: "Other", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" }),
       ],
     },
   ];
@@ -297,7 +294,7 @@ test("calculateTotals applies explicit line factors only to targeted worksheet r
 test("calculateTotals computes parameterized condition score sheet factors", () => {
   const categories = [labourCategory()];
   const worksheets: Array<Worksheet & { items: WorksheetItem[] }> = [
-    { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, unit1: 10, rateScheduleItemId: "rate-test" })] },
+    { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" })] },
   ];
   const criteria = Array.from({ length: 35 }, (_, index) => ({ condition: `Condition ${index + 1}`, score: index < 20 ? 4 : 0 }));
 
@@ -317,7 +314,7 @@ test("calculateTotals computes parameterized condition score sheet factors", () 
 test("calculateTotals composes individual labor condition score factors", () => {
   const categories = [labourCategory()];
   const worksheets: Array<Worksheet & { items: WorksheetItem[] }> = [
-    { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, unit1: 10, rateScheduleItemId: "rate-test" })] },
+    { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" })] },
   ];
 
   const totals = calculateTotals(revision(), worksheets, [], [], [], categories, null, [

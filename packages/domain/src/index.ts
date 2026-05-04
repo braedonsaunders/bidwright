@@ -1,4 +1,5 @@
 export * from "./calculation-types";
+export * from "./money";
 export * from "./models";
 export * from "./uom";
 export * from "./mock-data";

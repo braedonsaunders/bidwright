@@ -1,23 +1,18 @@
 import type { RateSchedule, WorkspaceWorksheetItem } from "@/lib/api";
 
-interface WorksheetHourBreakdown {
-  unit1: number;
-  unit2: number;
-  unit3: number;
+export interface WorksheetHourTierBreakdown {
+  tierId: string;
+  name: string;
+  multiplier: number;
+  sortOrder: number;
+  hours: number;
+}
+
+export interface WorksheetHourBreakdown {
+  /** Per-tier hours (sorted by tier sortOrder, then multiplier). */
+  tiers: WorksheetHourTierBreakdown[];
   total: number;
 }
-
-type WorksheetUnitSlot = "unit1" | "unit2" | "unit3";
-
-interface WorksheetUnitSlotLabels {
-  unit1: string;
-  unit2: string;
-  unit3: string;
-}
-
-const OVERTIME_PATTERN = /(^|[^a-z])ot([^a-z]|$)|overtime|time[\s-]*and[\s-]*half|week(?:ly)?/i;
-const DOUBLETIME_PATTERN = /double|(^|[^a-z])dt([^a-z]|$)|2x|two[\s-]*time|month(?:ly)?/i;
-const REGULAR_PATTERN = /regular|straight|base|day(?:ly)?/i;
 
 function roundHours(value: number) {
   return Math.round(value * 100) / 100;
@@ -68,156 +63,53 @@ function findTierByIdOrPrefix(schedule: RateSchedule | null, tierId: string) {
   return tiers.find((tier) => tier.id === tierId || tier.id.startsWith(tierId)) ?? null;
 }
 
-function inferSlotFromTier(tierName: string | undefined, multiplier: number | undefined) {
-  const normalizedMultiplier = toNumber(multiplier);
-  if (Math.abs(normalizedMultiplier - 2) < 0.001) {
-    return "unit3" as const;
-  }
-  if (Math.abs(normalizedMultiplier - 1.5) < 0.001) {
-    return "unit2" as const;
-  }
-  if (Math.abs(normalizedMultiplier - 1) < 0.001) {
-    return "unit1" as const;
-  }
-
-  const label = (tierName ?? "").trim();
-  if (DOUBLETIME_PATTERN.test(label)) {
-    return "unit3" as const;
-  }
-  if (OVERTIME_PATTERN.test(label)) {
-    return "unit2" as const;
-  }
-  if (REGULAR_PATTERN.test(label)) {
-    return "unit1" as const;
-  }
-
-  return "unit1" as const;
-}
-
-function sortTiers(schedule: RateSchedule | null) {
-  return [...(schedule?.tiers ?? [])].sort((left, right) => {
-    const leftSort = Number.isFinite(left.sortOrder) ? Number(left.sortOrder) : Number.POSITIVE_INFINITY;
-    const rightSort = Number.isFinite(right.sortOrder) ? Number(right.sortOrder) : Number.POSITIVE_INFINITY;
-    if (leftSort !== rightSort) {
-      return leftSort - rightSort;
-    }
-
-    return toNumber(left.multiplier) - toNumber(right.multiplier);
-  });
-}
-
-function findTierForSlot(slot: "unit1" | "unit2" | "unit3", schedule: RateSchedule | null) {
-  return sortTiers(schedule).find((tier) => inferSlotFromTier(tier.name, tier.multiplier) === slot) ?? null;
-}
-
-function getFallbackSlotLabel(
-  slot: WorksheetUnitSlot,
-  fallbackLabels?: Partial<Record<WorksheetUnitSlot, string>>,
-) {
-  const configured = fallbackLabels?.[slot]?.trim();
-  if (configured) {
-    return configured;
-  }
-
-  if (slot === "unit1") return "Unit 1";
-  if (slot === "unit2") return "Unit 2";
-  return "Unit 3";
+function compareTiers(a: { sortOrder?: number; multiplier?: number }, b: { sortOrder?: number; multiplier?: number }) {
+  const aSort = Number.isFinite(a.sortOrder) ? Number(a.sortOrder) : Number.POSITIVE_INFINITY;
+  const bSort = Number.isFinite(b.sortOrder) ? Number(b.sortOrder) : Number.POSITIVE_INFINITY;
+  if (aSort !== bSort) return aSort - bSort;
+  return toNumber(a.multiplier) - toNumber(b.multiplier);
 }
 
 export function getWorksheetHourBreakdown(row: WorkspaceWorksheetItem, schedules: RateSchedule[]): WorksheetHourBreakdown {
-  const legacy = {
-    unit1: toNumber(row.unit1),
-    unit2: toNumber(row.unit2),
-    unit3: toNumber(row.unit3),
-  };
   const tierUnits = normalizeTierUnits(row.tierUnits);
-
   if (Object.keys(tierUnits).length === 0) {
-    return {
-      ...legacy,
-      total: roundHours(legacy.unit1 + legacy.unit2 + legacy.unit3),
-    };
+    return { tiers: [], total: 0 };
   }
 
   const schedule = findMatchingSchedule(row, schedules);
+  const breakdown: WorksheetHourTierBreakdown[] = [];
+  let total = 0;
 
-  let unit1 = 0;
-  let unit2 = 0;
-  let unit3 = 0;
-
-  for (const [tierId, rawHours] of Object.entries(tierUnits)) {
+  for (const [rawTierId, rawHours] of Object.entries(tierUnits)) {
     const hours = toNumber(rawHours);
-    if (hours <= 0) {
-      continue;
-    }
-
-    const tier = findTierByIdOrPrefix(schedule, tierId);
-    const slot = inferSlotFromTier(tier?.name ?? tierId, tier?.multiplier);
-    if (slot === "unit3") {
-      unit3 += hours;
-    } else if (slot === "unit2") {
-      unit2 += hours;
-    } else {
-      unit1 += hours;
-    }
+    if (hours <= 0) continue;
+    const tier = findTierByIdOrPrefix(schedule, rawTierId);
+    breakdown.push({
+      tierId: tier?.id ?? rawTierId,
+      name: tier?.name ?? rawTierId,
+      multiplier: toNumber(tier?.multiplier) || 1,
+      sortOrder: Number.isFinite(tier?.sortOrder ?? null) ? Number(tier?.sortOrder) : Number.POSITIVE_INFINITY,
+      hours: roundHours(hours),
+    });
+    total += hours;
   }
 
-  return {
-    unit1: roundHours(unit1),
-    unit2: roundHours(unit2),
-    unit3: roundHours(unit3),
-    total: roundHours(unit1 + unit2 + unit3),
-  };
+  breakdown.sort(compareTiers);
+  return { tiers: breakdown, total: roundHours(total) };
 }
 
-export function getWorksheetUnitSlotLabels(
-  row: WorkspaceWorksheetItem,
-  schedules: RateSchedule[],
-  fallbackLabels?: Partial<Record<WorksheetUnitSlot, string>>,
-): WorksheetUnitSlotLabels {
-  const schedule = findMatchingSchedule(row, schedules);
-
-  const labels: WorksheetUnitSlotLabels = {
-    unit1: getFallbackSlotLabel("unit1", fallbackLabels),
-    unit2: getFallbackSlotLabel("unit2", fallbackLabels),
-    unit3: getFallbackSlotLabel("unit3", fallbackLabels),
-  };
-
-  for (const slot of ["unit1", "unit2", "unit3"] as const) {
-    const tier = findTierForSlot(slot, schedule);
-    const tierName = tier?.name?.trim();
-    if (tierName) {
-      labels[slot] = tierName;
-    }
+/**
+ * Buckets per-tier hours into reg / ot / dt by tier multiplier (1.0 / 1.5 / 2.0).
+ * Tiers with other multipliers fall through into total only.
+ */
+export function bucketHoursByMultiplier(breakdown: WorksheetHourBreakdown) {
+  let reg = 0;
+  let ot = 0;
+  let dt = 0;
+  for (const tier of breakdown.tiers) {
+    if (tier.multiplier === 1) reg += tier.hours;
+    else if (tier.multiplier === 1.5) ot += tier.hours;
+    else if (tier.multiplier === 2) dt += tier.hours;
   }
-
-  return labels;
-}
-
-export function mapLegacyUnitsToTierUnits(
-  row: WorkspaceWorksheetItem,
-  schedules: RateSchedule[],
-  nextUnits: Pick<WorkspaceWorksheetItem, "unit1" | "unit2" | "unit3">,
-) {
-  const schedule = findMatchingSchedule(row, schedules);
-  if (!schedule) {
-    return {};
-  }
-
-  const regularTier = findTierForSlot("unit1", schedule) ?? sortTiers(schedule)[0] ?? null;
-  const overtimeTier = findTierForSlot("unit2", schedule);
-  const doubletimeTier = findTierForSlot("unit3", schedule);
-
-  const tierUnits: Record<string, number> = {};
-  if (nextUnits.unit1 > 0 && regularTier) {
-    tierUnits[regularTier.id] = nextUnits.unit1;
-  }
-  if (nextUnits.unit2 > 0 && overtimeTier) {
-    tierUnits[overtimeTier.id] = nextUnits.unit2;
-  }
-  if (nextUnits.unit3 > 0 && doubletimeTier) {
-    tierUnits[doubletimeTier.id] = nextUnits.unit3;
-  }
-
-  return tierUnits;
+  return { reg, ot, dt, total: breakdown.total };
 }

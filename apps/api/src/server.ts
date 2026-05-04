@@ -89,9 +89,6 @@ import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
 import { assemblyRoutes } from "./routes/assembly-routes.js";
 import { laborUnitRoutes } from "./routes/labor-unit-routes.js";
-import { labourCostRoutes } from "./routes/labour-cost-routes.js";
-import { burdenRoutes } from "./routes/burden-routes.js";
-import { travelPolicyRoutes } from "./routes/travel-policy-routes.js";
 import { settingsRoutes } from "./routes/settings-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
@@ -181,9 +178,6 @@ const worksheetItemPatchSchema = z.object({
   cost: z.number().finite().optional(),
   markup: z.number().finite().optional(),
   price: z.number().finite().optional(),
-  unit1: z.number().finite().optional(),
-  unit2: z.number().finite().optional(),
-  unit3: z.number().finite().optional(),
   lineOrder: z.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
@@ -210,9 +204,6 @@ const createWorksheetItemSchema = z.object({
   cost: z.coerce.number().finite(),
   markup: z.coerce.number().finite(),
   price: z.coerce.number().finite(),
-  unit1: z.coerce.number().finite().default(0),
-  unit2: z.coerce.number().finite().default(0),
-  unit3: z.coerce.number().finite().default(0),
   lineOrder: z.coerce.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
@@ -2537,6 +2528,16 @@ export function buildServer() {
     return payload;
   });
 
+  app.post("/projects/:projectId/worksheet-items/:itemId/refresh", async (request, reply) => {
+    try {
+      const { projectId, itemId } = request.params as { projectId: string; itemId: string };
+      return await request.store!.refreshWorksheetItemFromLibrary(projectId, itemId);
+    } catch (e: any) {
+      reply.code(e.message?.includes("not found") ? 404 : 500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
   app.get("/projects/:projectId/line-item-search", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const parsed = z.object({
@@ -4704,9 +4705,6 @@ export function buildServer() {
         cost: item.estimatedCost,
         markup: 0,
         price: item.estimatedCost,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
       });
     }
 
@@ -5696,9 +5694,6 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(visionRoutes);
   app.register(modelRoutes);
   app.register(rateScheduleRoutes);
-  app.register(labourCostRoutes);
-  app.register(burdenRoutes);
-  app.register(travelPolicyRoutes);
   app.register(settingsRoutes);
   app.register(integrationsRoutes);
   app.register(webhooksRoutes);

@@ -124,9 +124,6 @@ export interface ExpandedComponent {
   description: string;
   quantity: number;
   uom: string;
-  unit1?: number;
-  unit2?: number;
-  unit3?: number;
   tierUnits?: Record<string, number>;
   unitCost: number;
   unitPrice: number;
@@ -510,8 +507,14 @@ export function expandAssembly(
           const difficulty = normalizeLaborDifficulty(component.laborDifficulty ?? laborUnit.defaultDifficulty);
           const hoursPerOutput = laborUnitHoursPerOutput(laborUnit, difficulty);
           const totalHours = roundQuantity(qty * hoursPerOutput);
-          const rates = Object.values(rsi.rates ?? {});
-          const costRates = Object.values(rsi.costRates ?? {});
+          const rateEntries = Object.entries(rsi.rates ?? {});
+          const costEntries = Object.entries(rsi.costRates ?? {});
+          // Pick the regular (lowest-keyed) tier id to load all hours into.
+          // Assemblies don't currently model OT/DT splits at expansion time.
+          const regularTierId = rateEntries[0]?.[0];
+          const rates = rateEntries.map(([, value]) => value);
+          const costRates = costEntries.map(([, value]) => value);
+          const tierUnits = regularTierId && totalHours > 0 ? { [regularTierId]: totalHours } : {};
           const outputUom = component.uomOverride || laborUnit.outputUom || "EA";
           const unitName = laborUnit.name || [laborUnit.category, laborUnit.className, laborUnit.subClassName].filter(Boolean).join(" - ");
 
@@ -526,9 +529,7 @@ export function expandAssembly(
             description: component.description || `${unitName} (${roundQuantity(qty)} ${outputUom} @ ${hoursPerOutput} hr/${outputUom})`,
             quantity: 1,
             uom: "HR",
-            unit1: totalHours,
-            unit2: 0,
-            unit3: 0,
+            tierUnits,
             unitCost: component.costOverride ?? ((costRates[0] ?? 0) * totalHours),
             unitPrice: (rates[0] ?? 0) * totalHours,
             markup: component.markupOverride ?? 0,

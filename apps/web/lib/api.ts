@@ -129,9 +129,6 @@ export interface WorkspaceWorksheetItem {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
   lineOrder: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1069,15 +1066,10 @@ export interface EntityCategory {
     cost: boolean;
     markup: boolean;
     price: boolean;
-    unit1: boolean;
-    unit2: boolean;
-    unit3: boolean;
+    tierUnits?: boolean;
   };
-  unitLabels: {
-    unit1: string;
-    unit2: string;
-    unit3: string;
-  };
+  /** Display labels keyed by RateScheduleTier id. */
+  unitLabels: Record<string, string>;
   calculationType: CalculationType;
   calcFormula: string;
   itemSource: "rate_schedule" | "catalog" | "freeform";
@@ -1555,9 +1547,6 @@ export interface WorksheetItemPatchInput {
   cost?: number;
   markup?: number;
   price?: number;
-  unit1?: number;
-  unit2?: number;
-  unit3?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1585,9 +1574,6 @@ export interface CreateWorksheetItemInput {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1630,6 +1616,22 @@ export async function createWorksheetItem(projectId: string, worksheetId: string
 export async function deleteWorksheetItem(projectId: string, itemId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-items/${itemId}`, {
     method: "DELETE",
+  });
+}
+
+/**
+ * Per-row "Refresh from library" action. Re-pulls cost from whatever library
+ * source is attached to this row (cost basis / catalog / rate schedule / labor
+ * unit), re-prices the row, and writes a fresh costSnapshot. Manual rows
+ * return unchanged. Never automatic — always user-driven.
+ */
+export async function refreshWorksheetItemFromLibrary(projectId: string, itemId: string) {
+  return apiRequest<{
+    item: WorkspaceWorksheetItem;
+    snapshot: unknown;
+    pulledFromLibrary: boolean;
+  }>(`/projects/${projectId}/worksheet-items/${itemId}/refresh`, {
+    method: "POST",
   });
 }
 
@@ -4809,202 +4811,6 @@ export function connectReviewStream(projectId: string): EventSource {
 
 export async function getReviewStatus(projectId: string) {
   return apiRequest<{ status: string; sessionId?: string; events?: any[] }>(`/api/review/${projectId}/status`);
-}
-
-// ── Labour Cost Tables ──────────────────────────────────────────────────
-
-export interface LabourCostEntry {
-  id: string;
-  tableId: string;
-  code: string;
-  name: string;
-  group: string;
-  costRates: Record<string, number>;
-  metadata: Record<string, unknown>;
-  sortOrder: number;
-}
-
-export interface LabourCostTable {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string;
-  effectiveDate: string | null;
-  expiryDate: string | null;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LabourCostTableWithEntries extends LabourCostTable {
-  entries: LabourCostEntry[];
-}
-
-export async function listLabourCostTables(): Promise<LabourCostTableWithEntries[]> {
-  return apiRequest<LabourCostTableWithEntries[]>("/api/labour-cost-tables");
-}
-
-export async function getLabourCostTable(id: string): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${id}`);
-}
-
-export async function createLabourCostTable(input: {
-  name: string; description?: string; effectiveDate?: string; expiryDate?: string; metadata?: Record<string, unknown>;
-}): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>("/api/labour-cost-tables", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateLabourCostTable(id: string, patch: {
-  name?: string; description?: string; effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
-}): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function deleteLabourCostTable(id: string): Promise<void> {
-  await apiRequest<{ deleted: boolean }>(`/api/labour-cost-tables/${id}`, { method: "DELETE" });
-}
-
-export async function createLabourCostEntry(tableId: string, input: {
-  code: string; name: string; group?: string; costRates?: Record<string, number>; metadata?: Record<string, unknown>; sortOrder?: number;
-}): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateLabourCostEntry(tableId: string, entryId: string, patch: {
-  code?: string; name?: string; group?: string; costRates?: Record<string, number>; metadata?: Record<string, unknown>; sortOrder?: number;
-}): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries/${entryId}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function deleteLabourCostEntry(tableId: string, entryId: string): Promise<LabourCostTableWithEntries> {
-  return apiRequest<LabourCostTableWithEntries>(`/api/labour-cost-tables/${tableId}/entries/${entryId}`, { method: "DELETE" });
-}
-
-// ── Burden Periods ──────────────────────────────────────────────────────
-
-export interface BurdenPeriod {
-  id: string;
-  organizationId: string;
-  name: string;
-  group: string;
-  percentage: number;
-  startDate: string;
-  endDate: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export async function listBurdenPeriods(group?: string): Promise<BurdenPeriod[]> {
-  const qs = group ? `?group=${encodeURIComponent(group)}` : "";
-  return apiRequest<BurdenPeriod[]>(`/api/burden-periods${qs}`);
-}
-
-export async function createBurdenPeriod(input: {
-  name: string; group: string; percentage: number; startDate: string; endDate: string;
-}): Promise<BurdenPeriod> {
-  return apiRequest<BurdenPeriod>("/api/burden-periods", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateBurdenPeriod(id: string, patch: {
-  name?: string; group?: string; percentage?: number; startDate?: string; endDate?: string;
-}): Promise<BurdenPeriod> {
-  return apiRequest<BurdenPeriod>(`/api/burden-periods/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function deleteBurdenPeriod(id: string): Promise<void> {
-  await apiRequest<{ deleted: boolean }>(`/api/burden-periods/${id}`, { method: "DELETE" });
-}
-
-// ── Travel Policies ─────────────────────────────────────────────────────
-
-export type PerDiemEmbedMode = "separate" | "embed_hourly" | "embed_cost_only";
-export type FuelSurchargeAppliesTo = "labour" | "all" | "none";
-
-export interface TravelPolicy {
-  id: string;
-  organizationId: string;
-  name: string;
-  description: string;
-  perDiemRate: number;
-  perDiemEmbedMode: PerDiemEmbedMode;
-  hoursPerDay: number;
-  travelTimeHours: number;
-  travelTimeTrips: number;
-  kmToDestination: number;
-  mileageRate: number;
-  fuelSurchargePercent: number;
-  fuelSurchargeAppliesTo: FuelSurchargeAppliesTo;
-  accommodationRate: number;
-  accommodationNights: number;
-  showAsSeparateLine: boolean;
-  breakoutLabel: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export async function listTravelPolicies(): Promise<TravelPolicy[]> {
-  return apiRequest<TravelPolicy[]>("/api/travel-policies");
-}
-
-export async function getTravelPolicy(id: string): Promise<TravelPolicy> {
-  return apiRequest<TravelPolicy>(`/api/travel-policies/${id}`);
-}
-
-export async function createTravelPolicy(input: {
-  name: string; description?: string; perDiemRate?: number; perDiemEmbedMode?: PerDiemEmbedMode;
-  hoursPerDay?: number; travelTimeHours?: number; travelTimeTrips?: number; kmToDestination?: number;
-  mileageRate?: number; fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: FuelSurchargeAppliesTo;
-  accommodationRate?: number; accommodationNights?: number; showAsSeparateLine?: boolean;
-  breakoutLabel?: string; metadata?: Record<string, unknown>;
-}): Promise<TravelPolicy> {
-  return apiRequest<TravelPolicy>("/api/travel-policies", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateTravelPolicy(id: string, patch: {
-  name?: string; description?: string; perDiemRate?: number; perDiemEmbedMode?: PerDiemEmbedMode;
-  hoursPerDay?: number; travelTimeHours?: number; travelTimeTrips?: number; kmToDestination?: number;
-  mileageRate?: number; fuelSurchargePercent?: number; fuelSurchargeAppliesTo?: FuelSurchargeAppliesTo;
-  accommodationRate?: number; accommodationNights?: number; showAsSeparateLine?: boolean;
-  breakoutLabel?: string; metadata?: Record<string, unknown>;
-}): Promise<TravelPolicy> {
-  return apiRequest<TravelPolicy>(`/api/travel-policies/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function deleteTravelPolicy(id: string): Promise<void> {
-  await apiRequest<{ deleted: boolean }>(`/api/travel-policies/${id}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ export const STORAGE_KEY = "bidwright-settings";
 
 export type SettingsGroup = "organization" | "data" | "integrations" | "users";
 export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
-export type DataSubTab = "uoms" | "conditions" | "costs" | "travel" | "factors";
+export type DataSubTab = "uoms" | "conditions" | "factors";
 export type IntegrationsSubTab = "agent" | "apikeys" | "email" | "plugins" | "integrations";
 
 export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
@@ -20,9 +20,7 @@ export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
 
 export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "uoms", label: "Units" },
-  { id: "costs", label: "Labour Costs" },
   { id: "factors", label: "Factors" },
-  { id: "travel", label: "Travel Policies" },
   { id: "conditions", label: "Conditions" },
 ];
 
