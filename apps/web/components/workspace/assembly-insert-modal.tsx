@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit3, Layers, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Boxes, Edit3, Layers, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   type AssemblyInstanceSummary,
@@ -70,7 +70,7 @@ export function AssemblyInsertModal({
   const [editInstanceParams, setEditInstanceParams] = useState<Record<string, string>>({});
   const [instanceBusy, setInstanceBusy] = useState(false);
 
-  const { catalogItems, rateItems } = useAssemblyAuthoringContext();
+  const { catalogItems, rateItems, laborUnits, effectiveCosts } = useAssemblyAuthoringContext();
 
   const refreshList = useCallback(async () => {
     setLoading(true);
@@ -444,15 +444,17 @@ export function AssemblyInsertModal({
                     />
                   </TabsContent>
                   <TabsContent value="components" className="m-0">
-                    <ComponentsEditor
-                      assemblyId={detail.id}
-                      components={detail.components}
-                      parameters={detail.parameters}
-                      catalogItems={catalogItems}
-                      rateItems={rateItems}
-                      otherAssemblyOptions={otherAssemblyOptions}
-                      onChange={refreshDetailAndList}
-                      onError={setError}
+	                    <ComponentsEditor
+	                      assemblyId={detail.id}
+	                      components={detail.components}
+	                      parameters={detail.parameters}
+	                      catalogItems={catalogItems}
+	                      rateItems={rateItems}
+	                      laborUnits={laborUnits}
+	                      effectiveCosts={effectiveCosts}
+	                      otherAssemblyOptions={otherAssemblyOptions}
+	                      onChange={refreshDetailAndList}
+	                      onError={setError}
                     />
                   </TabsContent>
                 </div>
@@ -517,6 +519,50 @@ export function AssemblyInsertModal({
                               <span className="font-medium text-fg">{formatCurrency(preview.totals.price)}</span>
                             </div>
                           </div>
+                        </div>
+                        {preview.resourceRollup?.length > 0 && (
+                          <div className="border-b border-fg/10">
+                            <div className="px-3 py-2 flex items-center justify-between text-[11px]">
+                              <div className="flex items-center gap-1.5 font-medium text-fg/70">
+                                <Boxes className="w-3.5 h-3.5" />
+                                Resource recipe
+                              </div>
+                              <div className="text-fg/45">
+                                {preview.resourceRollup.length} resource
+                                {preview.resourceRollup.length === 1 ? "" : "s"}
+                              </div>
+                            </div>
+                            <div className="max-h-[128px] overflow-y-auto">
+                              {preview.resourceRollup.map((resource) => (
+                                <div
+                                  key={resource.key}
+                                  className="px-3 py-1.5 text-[11px] border-t border-fg/5 first:border-t-0 grid grid-cols-[1fr_82px_76px_76px] gap-2 items-center"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate">
+                                      <span className="text-fg/40 mr-2">{resource.category}</span>
+                                      {resource.entityName}
+                                    </div>
+                                    <div className="text-[10px] text-fg/35 truncate">
+                                      {resource.componentCount} component{resource.componentCount === 1 ? "" : "s"}
+                                    </div>
+                                  </div>
+                                  <div className="text-right text-fg/55 tabular-nums">
+                                    {formatNumber(resource.quantity)} {resource.uom}
+                                  </div>
+                                  <div className="text-right text-fg/55 tabular-nums">
+                                    {formatCurrency(resource.lineCost)}
+                                  </div>
+                                  <div className="text-right text-fg/55 tabular-nums">
+                                    {formatCurrency(resource.linePrice)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        <div className="px-3 py-1.5 text-[10px] font-medium uppercase text-fg/35 border-b border-fg/10">
+                          Expanded lines
                         </div>
                         <div className="max-h-[180px] overflow-y-auto">
                           {preview.items.map((it, idx) => (
@@ -672,6 +718,11 @@ export function AssemblyInsertModal({
       </div>
     </ModalBackdrop>
   );
+}
+
+function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(n);
 }
 
 function formatCurrency(n: number): string {

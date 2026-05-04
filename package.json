@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "version": "0.1.0",
+  "author": "Braedon Saunders",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "bash scripts/dev/start-dev.sh",

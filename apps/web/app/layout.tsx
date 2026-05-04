@@ -19,6 +19,10 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Bidwright",
   description: "AI-powered construction estimating platform.",
+  icons: {
+    icon: "/bidwright-icon.png",
+    apple: "/bidwright-icon.png",
+  },
 };
 
 export default function RootLayout({

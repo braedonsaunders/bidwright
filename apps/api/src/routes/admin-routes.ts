@@ -5,7 +5,7 @@ import {
   createSuperAdminSession,
   revokeSession,
 } from "../services/auth-service.js";
-import { datasetLibrary, catalogLibrary } from "../prisma-store.js";
+import { catalogLibrary } from "../prisma-store.js";
 import { getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
 
 // ---------------------------------------------------------------------------
@@ -420,95 +420,6 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
     setSessionCookie(reply, token);
 
     return { ok: true };
-  });
-
-  // ── Dataset Library (Templates) ──────────────────────────────────────
-
-  // GET /api/admin/datasets — list all template datasets
-  fastify.get("/api/admin/datasets", async (request, reply) => {
-    if (!requireSuperAdmin(request, reply)) return;
-    try {
-      return await datasetLibrary.listTemplates();
-    } catch (error) {
-      request.log.error(error, "Failed to list dataset templates");
-      return reply.code(500).send({ error: "Failed to list dataset templates" });
-    }
-  });
-
-  // POST /api/admin/datasets — create a template dataset
-  fastify.post("/api/admin/datasets", async (request, reply) => {
-    if (!requireSuperAdmin(request, reply)) return;
-    const { name, description, category, columns, source, sourceDescription } = request.body as any;
-    if (!name || !category || !columns?.length) {
-      return reply.code(400).send({ error: "name, category, and columns are required" });
-    }
-    try {
-      const template = await datasetLibrary.createTemplate({
-        name,
-        description: description ?? "",
-        category,
-        columns,
-        source,
-        sourceDescription,
-      });
-      reply.code(201);
-      return template;
-    } catch (error) {
-      request.log.error(error, "Failed to create dataset template");
-      return reply.code(500).send({ error: "Failed to create dataset template" });
-    }
-  });
-
-  // GET /api/admin/datasets/:id — get template with paginated rows
-  fastify.get("/api/admin/datasets/:id", async (request, reply) => {
-    if (!requireSuperAdmin(request, reply)) return;
-    const { id } = request.params as { id: string };
-    const { limit, offset, filter } = request.query as { limit?: string; offset?: string; filter?: string };
-
-    try {
-      const template = await datasetLibrary.getTemplate(id);
-      if (!template) return reply.code(404).send({ error: "Template not found" });
-      const { rows, total } = await datasetLibrary.getTemplateRows(
-        id,
-        Number(limit) || 100,
-        Number(offset) || 0,
-        filter,
-      );
-      return { ...template, rows, total };
-    } catch (error) {
-      request.log.error(error, "Failed to get dataset template");
-      return reply.code(500).send({ error: "Failed to get dataset template" });
-    }
-  });
-
-  // PATCH /api/admin/datasets/:id — update template metadata
-  fastify.patch("/api/admin/datasets/:id", async (request, reply) => {
-    if (!requireSuperAdmin(request, reply)) return;
-    const { id } = request.params as { id: string };
-    const patch = request.body as any;
-
-    try {
-      return await datasetLibrary.updateTemplate(id, patch);
-    } catch (error: any) {
-      if (error.message?.includes("not found")) return reply.code(404).send({ error: error.message });
-      request.log.error(error, "Failed to update dataset template");
-      return reply.code(500).send({ error: "Failed to update dataset template" });
-    }
-  });
-
-  // DELETE /api/admin/datasets/:id — delete template + rows
-  fastify.delete("/api/admin/datasets/:id", async (request, reply) => {
-    if (!requireSuperAdmin(request, reply)) return;
-    const { id } = request.params as { id: string };
-
-    try {
-      await datasetLibrary.deleteTemplate(id);
-      return { ok: true };
-    } catch (error: any) {
-      if (error.message?.includes("not found")) return reply.code(404).send({ error: error.message });
-      request.log.error(error, "Failed to delete dataset template");
-      return reply.code(500).send({ error: "Failed to delete dataset template" });
-    }
   });
 
   // ── Admin Catalog Template Management ─────────────────────────────────

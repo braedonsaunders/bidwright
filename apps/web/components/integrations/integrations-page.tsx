@@ -156,7 +156,7 @@ export function IntegrationsPage() {
         <div className="relative flex-1 min-w-[240px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg/40" />
           <Input
-            placeholder={tab === "browse" ? "Search NetSuite, Procore, Slack…" : "Search installed integrations…"}
+            placeholder={tab === "browse" ? "Search NetSuite, Procore, Slack, QuickBooks…" : "Search installed integrations…"}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"

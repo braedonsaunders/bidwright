@@ -23,14 +23,14 @@ interface SeedItem {
   unitPrice?: number;
   description?: string;
   // Source-system fields stored in metadata.
-  netsuiteId?: number;
+  sourceId?: number;
   type?: string;
   billableTimesheet?: boolean;
   poundsPerFoot?: number;
   materialType?: string;
   calculationStyle?: string;
   pricePerPound?: number;
-  categoryNetsuiteId?: number;
+  sourceCategoryId?: number;
   dailyRate?: number;
   weeklyRate?: number;
   monthlyRate?: number;

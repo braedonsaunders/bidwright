@@ -1,15 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import * as pdfjs from "pdfjs-dist";
-
-/* Set up the PDF.js worker — webpack resolves new URL() to a static asset */
-if (typeof window !== "undefined") {
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url
-  ).toString();
-}
+import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
 
 interface PdfFocusTarget {
   key: string;
@@ -211,15 +203,15 @@ export function PdfCanvasViewer({
   canvasRef,
 }: PdfCanvasViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const pdfDocRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [basePageSize, setBasePageSize] = useState<{ width: number; height: number } | null>(null);
   const [visiblePages, setVisiblePages] = useState<number[]>([]);
   const [focusHighlight, setFocusHighlight] = useState<{ pageNumber: number; rects: HighlightRect[] } | null>(null);
-  const renderTaskRef = useRef<pdfjs.RenderTask | null>(null);
-  const continuousRenderTasksRef = useRef(new Map<number, pdfjs.RenderTask>());
+  const renderTaskRef = useRef<RenderTask | null>(null);
+  const continuousRenderTasksRef = useRef(new Map<number, RenderTask>());
   const renderedZoomRef = useRef(new Map<number, number>());
   const pageCanvasRefs = useRef(new Map<number, HTMLCanvasElement>());
   const pageHostRefs = useRef(new Map<number, HTMLDivElement>());
@@ -233,6 +225,7 @@ export function PdfCanvasViewer({
     const page = await doc.getPage(targetPageNumber);
     const viewport = page.getViewport({ scale: zoom });
     const textContent = await page.getTextContent();
+    const pdfjs = await loadPdfJs();
     let normalizedText = "";
     const entries: PageTextLayoutEntry[] = [];
 
@@ -277,6 +270,7 @@ export function PdfCanvasViewer({
   /* Load the PDF document */
   useEffect(() => {
     let cancelled = false;
+    let loadingTask: PDFDocumentLoadingTask | null = null;
 
     async function loadPdf() {
       try {
@@ -288,7 +282,10 @@ export function PdfCanvasViewer({
           pdfDocRef.current = null;
         }
 
-        const loadingTask = pdfjs.getDocument({ url: documentUrl, withCredentials: true });
+        const pdfjs = await loadPdfJs();
+        if (cancelled) return;
+
+        loadingTask = pdfjs.getDocument({ url: documentUrl, withCredentials: true });
         const doc = await loadingTask.promise;
 
         if (cancelled) {
@@ -329,6 +326,7 @@ export function PdfCanvasViewer({
 
     return () => {
       cancelled = true;
+      loadingTask?.destroy();
     };
   }, [documentUrl, mode, onPageCount]);
 

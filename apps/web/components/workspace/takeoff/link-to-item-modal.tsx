@@ -98,7 +98,7 @@ export function LinkToLineItemModal({
         <CardHeader>
           <CardTitle>Link to Line Item</CardTitle>
           <p className="mt-0.5 text-[11px] text-fg/40">
-            Connect this annotation&rsquo;s measurement to a worksheet line item
+            Connect this takeoff mark&rsquo;s measurement to a worksheet line item
           </p>
         </CardHeader>
         <CardBody className="space-y-4">

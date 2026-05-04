@@ -1,6 +1,6 @@
 import type { ArchiveEntry, ChunkStore, DocumentClassifier, IngestionReport, PackageSourceKind, SourceDocument, SourceDocumentStructuredData, TextExtractor } from './types.js';
 
-import { classifyDocument, HeuristicDocumentClassifier } from './classification.js';
+import { HeuristicDocumentClassifier } from './classification.js';
 import { chunkDocuments } from './chunking.js';
 import { createId, normalizeWhitespace } from './utils.js';
 import { extractArchiveEntries } from './zip.js';
@@ -181,7 +181,7 @@ export async function ingestCustomerPackage(
     }
 
     const trimmedText = normalizeWhitespace(extractedText);
-    const kind = classifyDocument(entry, trimmedText);
+    const kind = classifier.classify(entry, trimmedText);
 
     if (kind === 'unknown') {
       unknownFiles.push(entry.path);
@@ -192,7 +192,7 @@ export async function ingestCustomerPackage(
       id: createId('doc'),
       sourcePath: entry.path,
       title,
-      kind: classifier.classify(entry, trimmedText),
+      kind,
       sourceKind: input.sourceKind ?? 'project',
       text: trimmedText || `[${title}] no text extracted — may require OCR or vision processing`,
       metadata: {

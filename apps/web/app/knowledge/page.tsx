@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { KnowledgePage } from "@/components/knowledge-page";
 import {
@@ -37,7 +37,9 @@ export default function KnowledgeRoute() {
 
   return (
     <AppShell projects={projects}>
-      <KnowledgePage initialBooks={books} initialDocuments={documents} initialCabinets={cabinets} initialDatasets={datasets} />
+      <Suspense fallback={<div className="px-6 py-10 text-sm text-fg/40">Loading knowledge...</div>}>
+        <KnowledgePage initialBooks={books} initialDocuments={documents} initialCabinets={cabinets} initialDatasets={datasets} />
+      </Suspense>
     </AppShell>
   );
 }

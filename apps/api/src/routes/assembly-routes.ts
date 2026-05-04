@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { buildWorkspaceResponse } from "../server.js";
 
-const componentTypeSchema = z.enum(["catalog_item", "rate_schedule_item", "sub_assembly"]);
+const componentTypeSchema = z.enum(["catalog_item", "rate_schedule_item", "labor_unit", "cost_intelligence", "sub_assembly"]);
 
 const createAssemblySchema = z.object({
   name: z.string().min(1),
@@ -31,6 +31,10 @@ const componentCreateSchema = z.object({
   componentType: componentTypeSchema,
   catalogItemId: z.string().nullable().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
+  laborUnitId: z.string().nullable().optional(),
+  laborDifficulty: z.enum(["normal", "difficult", "very_difficult"]).optional(),
+  costResourceId: z.string().nullable().optional(),
+  effectiveCostId: z.string().nullable().optional(),
   subAssemblyId: z.string().nullable().optional(),
   quantityExpr: z.string().optional(),
   description: z.string().optional(),
@@ -76,7 +80,7 @@ const resyncInstanceSchema = z.object({
 function statusForError(message: string): number {
   if (!message) return 500;
   if (message.includes("not found")) return 404;
-  if (message.includes("Cycle") || message.includes("required") || message.includes("cannot")) return 400;
+  if (message.includes("Cycle") || message.includes("required") || message.includes("cannot") || message.includes("does not match")) return 400;
   return 500;
 }
 
@@ -270,9 +274,9 @@ export async function assemblyRoutes(app: FastifyInstance): Promise<void> {
   // ── Instance Operations ────────────────────────────────────────────────
 
   app.get("/projects/:projectId/worksheets/:worksheetId/assemblies/instances", async (request, reply) => {
-    const { worksheetId } = request.params as { worksheetId: string };
+    const { projectId, worksheetId } = request.params as { projectId: string; worksheetId: string };
     try {
-      return await request.store!.listAssemblyInstancesForWorksheet(worksheetId);
+      return await request.store!.listAssemblyInstancesForWorksheet(projectId, worksheetId);
     } catch (e: any) {
       reply.code(statusForError(e?.message ?? ""));
       return { error: e?.message ?? "Internal error" };

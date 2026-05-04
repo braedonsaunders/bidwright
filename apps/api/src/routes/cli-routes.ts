@@ -988,9 +988,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     // Fetch persona if provided
     let persona = null;
     if (body.personaId) {
-      persona = await prisma.estimatorPersona.findFirst({
-        where: { id: body.personaId },
-      });
+      persona = await store.getEstimatorPersona(body.personaId);
     }
 
     const projectDir = resolveProjectDir(projectId);
@@ -1059,12 +1057,12 @@ export function registerCliRoutes(app: FastifyInstance) {
         let bookNames: string[] = [];
         let knowledgeDocumentNames: string[] = [];
         if (bookIds.length > 0) {
-          const books = await prisma.knowledgeBook.findMany({ where: { id: { in: bookIds } }, select: { name: true } });
-          bookNames = books.map((b: any) => b.name);
+          const books = await Promise.all(bookIds.map((id) => store.getKnowledgeBook(id).catch(() => null)));
+          bookNames = books.flatMap((book: any) => book?.name ? [book.name] : []);
         }
         if (knowledgeDocumentIds.length > 0) {
-          const documents = await prisma.knowledgeDocument.findMany({ where: { id: { in: knowledgeDocumentIds } }, select: { title: true } });
-          knowledgeDocumentNames = documents.map((document: any) => document.title);
+          const documents = await Promise.all(knowledgeDocumentIds.map((id) => store.getKnowledgeDocument(id).catch(() => null)));
+          knowledgeDocumentNames = documents.flatMap((document: any) => document?.title ? [document.title] : []);
         }
         return {
           name: persona.name,

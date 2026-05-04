@@ -12,12 +12,9 @@ import {
   ChevronRight,
   Globe,
   KeyRound,
-  Layers,
   Loader2,
-  Lock,
   Mail,
   Plus,
-  Search,
   Star,
   Trash2,
   Upload,
@@ -27,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { DEFAULT_UOMS, normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import {
   Badge,
@@ -40,6 +38,7 @@ import {
   Label,
   Select,
   Separator,
+  Textarea,
   Toggle,
   MultiSelect,
   type MultiSelectOption,
@@ -50,28 +49,20 @@ import {
   SearchableModelSelect,
   TagInput,
 } from "@/components/settings-page-helpers";
+import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
 import {
-  getCalculationPreset,
-  getCalculationTypeOption,
-} from "@/lib/entity-category-calculation";
-import {
-  CALCULATION_TYPES,
   CURRENCIES,
   DATA_SUBTABS,
   DATE_FORMATS,
   DEFAULT_BRAND,
   DEFAULT_SETTINGS,
-  EDITABLE_FIELD_KEYS,
   GROUPS,
   INTEGRATIONS_SUBTABS,
-  ITEM_SOURCE_OPTIONS,
   MONTHS,
-  NEW_CATEGORY_TEMPLATE,
   ORG_SUBTABS,
   PROVIDER_CONFIG,
   STORAGE_KEY,
   TIMEZONES,
-  VALID_UOMS,
   maskKey,
   type AllSettings,
   type DataSubTab,
@@ -96,17 +87,6 @@ import {
   updateBrand as apiUpdateBrand,
   captureBrand as apiCaptureBrand,
   getEntityCategories as apiGetCategories,
-  createEntityCategory as apiCreateCategory,
-  updateEntityCategory as apiUpdateCategory,
-  deleteEntityCategory as apiDeleteCategory,
-  getCustomers as apiGetCustomers,
-  createCustomer as apiCreateCustomer,
-  updateCustomer as apiUpdateCustomer,
-  deleteCustomer as apiDeleteCustomer,
-  getCustomer as apiGetCustomer,
-  createCustomerContact as apiCreateContact,
-  updateCustomerContact as apiUpdateContact,
-  deleteCustomerContact as apiDeleteContact,
   getDepartments as apiGetDepartments,
   createDepartment as apiCreateDepartment,
   updateDepartment as apiUpdateDepartment,
@@ -114,21 +94,27 @@ import {
   type AppSettingsRecord,
   type BrandProfile,
   type EntityCategory,
-  type CalculationType,
-  type Customer,
-  type CustomerContact,
-  type CustomerWithContacts,
   type Department,
   testProviderKey as apiTestProviderKey,
   fetchProviderModels as apiFetchProviderModels,
   getConditionLibrary as apiGetConditionLibrary,
   createConditionLibraryEntry as apiCreateConditionLibraryEntry,
   deleteConditionLibraryEntry as apiDeleteConditionLibraryEntry,
+  listEstimateFactorLibraryEntries as apiListEstimateFactorLibraryEntries,
+  createEstimateFactorLibraryEntry as apiCreateEstimateFactorLibraryEntry,
+  updateEstimateFactorLibraryEntry as apiUpdateEstimateFactorLibraryEntry,
+  deleteEstimateFactorLibraryEntry as apiDeleteEstimateFactorLibraryEntry,
   type ConditionLibraryEntry,
-  type CatalogSummary,
-  type RateSchedule,
+  type CreateEstimateFactorInput,
   type DatasetRecord,
   type EstimatorPersona,
+  type EstimateFactorConfidence,
+  type EstimateFactorApplicationScope,
+  type EstimateFactorFormulaType,
+  type EstimateFactorScope,
+  type EstimateFactorImpact,
+  type EstimateFactorLibraryRecord,
+  type EstimateFactorSourceType,
   listPersonas as apiListPersonas,
   createPersona as apiCreatePersona,
   updatePersona as apiUpdatePersona,
@@ -140,15 +126,11 @@ import {
   type AuthUser,
 } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
-import { ItemsManager } from "@/components/items-manager";
-import { RateScheduleManager } from "@/components/rate-schedule-manager";
-import { AssemblyManager } from "@/components/assembly-manager";
 import { PluginsPage } from "@/components/plugins-page";
 import { IntegrationsPage } from "@/components/integrations/integrations-page";
 import { LabourCostManager } from "@/components/labour-cost-manager";
 import { BurdenManager } from "@/components/burden-manager";
 import { TravelPolicyManager } from "@/components/travel-policy-manager";
-import { listRateSchedules } from "@/lib/api";
 import {
   exportAllDataManagement,
   parseExportFile,
@@ -162,28 +144,56 @@ import {
   type ImportOptions,
   type ImportSectionKey,
 } from "@/lib/data-export-import";
+import { setCachedUoms } from "@/components/shared/uom-select";
 
 // ── Main Component ───────────────────────────────────────────────────────────
 
+function resolveSettingsNavigation(tabParam: string | null, groupParam: string | null) {
+  const validGroups: SettingsGroup[] = ["organization", "data", "integrations", "users"];
+  const dataTabAliases: Record<string, DataSubTab> = {
+    units: "uoms",
+    uoms: "uoms",
+    costs: "costs",
+    travel: "travel",
+    conditions: "conditions",
+    factors: "factors",
+  };
+  const removedLibraryTabs = new Set(["categories", "items", "catalogs", "assemblies", "rates", "resource-catalog", "cost-database"]);
+
+  const orgTabs = new Set<OrgSubTab>(ORG_SUBTABS.map((tab) => tab.id));
+  const integrationTabs = new Set<IntegrationsSubTab>(INTEGRATIONS_SUBTABS.map((tab) => tab.id));
+  const dataTab = tabParam ? dataTabAliases[tabParam] : undefined;
+  const orgTab = tabParam && orgTabs.has(tabParam as OrgSubTab) ? (tabParam as OrgSubTab) : undefined;
+  const integrationTab = tabParam && integrationTabs.has(tabParam as IntegrationsSubTab) ? (tabParam as IntegrationsSubTab) : undefined;
+  const removedLibraryTab = tabParam ? removedLibraryTabs.has(tabParam) : false;
+
+  const groupFromParam = validGroups.includes(groupParam as SettingsGroup) ? (groupParam as SettingsGroup) : undefined;
+  const groupFromTabParam = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : undefined;
+  const group: SettingsGroup = groupFromParam ?? (dataTab || removedLibraryTab ? "data" : orgTab ? "organization" : integrationTab ? "integrations" : groupFromTabParam ?? "organization");
+
+  return {
+    group,
+    orgSubTab: orgTab ?? "general",
+    dataSubTab: dataTab ?? "costs",
+    integrationsSubTab: integrationTab ?? "email",
+  };
+}
+
 export function SettingsPage({
-  initialCatalogs = [],
-  initialSchedules = [],
   initialPlugins = [],
   initialDatasets = [],
 }: {
-  initialCatalogs?: CatalogSummary[];
-  initialSchedules?: RateSchedule[];
   initialPlugins?: any[];
   initialDatasets?: DatasetRecord[];
 } = {}) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const validGroups: SettingsGroup[] = ["organization", "data", "integrations", "users"];
-  const initialGroup = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : "organization";
-  const [activeGroup, setActiveGroup] = useState<SettingsGroup>(initialGroup);
-  const [orgSubTab, setOrgSubTab] = useState<OrgSubTab>("general");
-  const [dataSubTab, setDataSubTab] = useState<DataSubTab>("categories");
-  const [integrationsSubTab, setIntegrationsSubTab] = useState<IntegrationsSubTab>("email");
+  const groupParam = searchParams.get("group");
+  const initialNavigation = resolveSettingsNavigation(tabParam, groupParam);
+  const [activeGroup, setActiveGroup] = useState<SettingsGroup>(initialNavigation.group);
+  const [orgSubTab, setOrgSubTab] = useState<OrgSubTab>(initialNavigation.orgSubTab);
+  const [dataSubTab, setDataSubTab] = useState<DataSubTab>(initialNavigation.dataSubTab);
+  const [integrationsSubTab, setIntegrationsSubTab] = useState<IntegrationsSubTab>(initialNavigation.integrationsSubTab);
   const [settings, setSettings] = useState<AllSettings>(DEFAULT_SETTINGS);
   const [brand, setBrand] = useState<BrandProfile>(DEFAULT_BRAND);
   const settingsLoaded = useRef(false);
@@ -195,28 +205,12 @@ export function SettingsPage({
   const [brandCapturing, setBrandCapturing] = useState(false);
   const [brandCaptureUrl, setBrandCaptureUrl] = useState("");
   const [brandCaptureError, setBrandCaptureError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<EntityCategory[]>([]);
-  const [expandedCatId, setExpandedCatId] = useState<string | null>(null);
-  const [catEdits, setCatEdits] = useState<Record<string, Partial<EntityCategory>>>({});
-  const [catSaving, setCatSaving] = useState<string | null>(null);
-  const [catDeleting, setCatDeleting] = useState<string | null>(null);
-  const [catDeleteConfirm, setCatDeleteConfirm] = useState<string | null>(null);
+  const [pluginEntityCategories, setPluginEntityCategories] = useState<EntityCategory[]>([]);
 
   // Integrations
   const [keyTestStatus, setKeyTestStatus] = useState<{ loading: boolean; result?: { success: boolean; message: string } }>({ loading: false });
   const [providerModels, setProviderModels] = useState<{ id: string; name: string }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-
-  // Customers
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [expandedCustId, setExpandedCustId] = useState<string | null>(null);
-  const [custEdits, setCustEdits] = useState<Record<string, Partial<Customer>>>({});
-  const [custSaving, setCustSaving] = useState<string | null>(null);
-  const [custDeleteConfirm, setCustDeleteConfirm] = useState<string | null>(null);
-  const [custContacts, setCustContacts] = useState<Record<string, CustomerContact[]>>({});
-  const [contactEdits, setContactEdits] = useState<Record<string, Partial<CustomerContact>>>({});
-  const [contactSaving, setContactSaving] = useState<string | null>(null);
-  const [contactDeleteConfirm, setContactDeleteConfirm] = useState<string | null>(null);
 
   // Departments
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -255,11 +249,15 @@ export function SettingsPage({
   const [newPassword, setNewPassword] = useState("");
   const [passwordResetSaving, setPasswordResetSaving] = useState(false);
 
-  const { user: currentUser } = useAuth();
+  const { user: currentUser, organization: currentOrganization } = useAuth();
 
-  // Rate schedules (for embedding)
-  const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>(initialSchedules);
-  const [ratesLoading, setRatesLoading] = useState(false);
+  useEffect(() => {
+    const next = resolveSettingsNavigation(tabParam, groupParam);
+    setActiveGroup(next.group);
+    setOrgSubTab(next.orgSubTab);
+    setDataSubTab(next.dataSubTab);
+    setIntegrationsSubTab(next.integrationsSubTab);
+  }, [groupParam, tabParam]);
 
   // Data export handler
   const handleExportAll = useCallback(async () => {
@@ -314,19 +312,6 @@ export function SettingsPage({
     if (hadResult) window.location.reload();
   }, [importResult]);
 
-  // Fetch rate schedules if initial prop is empty (e.g., auth timing issue)
-  useEffect(() => {
-    if (initialSchedules.length === 0) {
-      setRatesLoading(true);
-      listRateSchedules()
-        .then((data) => { if (Array.isArray(data)) setRateSchedules(data); })
-        .catch(() => {})
-        .finally(() => setRatesLoading(false));
-    } else {
-      setRateSchedules(initialSchedules);
-    }
-  }, [initialSchedules]);
-
   useEffect(() => {
     // Load settings from API
     apiGetSettings()
@@ -357,6 +342,7 @@ export function SettingsPage({
             defaultMarkup: apiSettings.defaults.defaultMarkup ?? prev.defaults.defaultMarkup,
             defaultBreakoutStyle: apiSettings.defaults.breakoutStyle || prev.defaults.defaultBreakoutStyle,
             defaultQuoteType: apiSettings.defaults.quoteType || prev.defaults.defaultQuoteType,
+            uoms: normalizeUomLibrary(apiSettings.defaults.uoms),
             benchmarkingEnabled: apiSettings.defaults.benchmarkingEnabled ?? prev.defaults.benchmarkingEnabled,
             benchmarkMinimumSimilarity: apiSettings.defaults.benchmarkMinimumSimilarity ?? prev.defaults.benchmarkMinimumSimilarity,
             benchmarkMaximumComparables: apiSettings.defaults.benchmarkMaximumComparables ?? prev.defaults.benchmarkMaximumComparables,
@@ -400,7 +386,7 @@ export function SettingsPage({
             setSettings((prev) => ({
               general: { ...prev.general, ...parsed.general },
               email: { ...prev.email, ...parsed.email },
-              defaults: { ...prev.defaults, ...parsed.defaults },
+              defaults: { ...prev.defaults, ...parsed.defaults, uoms: normalizeUomLibrary(parsed.defaults?.uoms) },
               users: parsed.users ?? prev.users,
               integrations: { ...prev.integrations, ...parsed.integrations },
               termsAndConditions: parsed.termsAndConditions ?? prev.termsAndConditions,
@@ -431,14 +417,9 @@ export function SettingsPage({
       .catch(() => {});
   }, []);
 
-  // Load entity categories
+  // Load entity categories for plugin authoring only. The management surface now lives in Library.
   useEffect(() => {
-    apiGetCategories().then(setCategories).catch(() => {});
-  }, []);
-
-  // Load customers
-  useEffect(() => {
-    apiGetCustomers().then(setCustomers).catch(() => {});
+    apiGetCategories().then(setPluginEntityCategories).catch(() => {});
   }, []);
 
   // Load departments
@@ -480,178 +461,6 @@ export function SettingsPage({
       setConditionLibrary((prev) => prev.filter((e) => e.id !== entryId));
     } catch {}
   };
-
-  const getCatEdit = (cat: EntityCategory): EntityCategory => ({
-    ...cat,
-    ...(catEdits[cat.id] || {}),
-    editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) },
-    unitLabels: { ...cat.unitLabels, ...(catEdits[cat.id]?.unitLabels || {}) },
-  });
-
-  const updateCatEdit = (id: string, patch: Partial<EntityCategory>) =>
-    setCatEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-
-  const applyCatCalculationPreset = (id: string, calculationType: CalculationType) => {
-    const preset = getCalculationPreset(calculationType);
-    updateCatEdit(id, preset);
-  };
-
-  const saveCat = useCallback(async (cat: EntityCategory) => {
-    const merged = { ...cat, ...(catEdits[cat.id] || {}), editableFields: { ...cat.editableFields, ...(catEdits[cat.id]?.editableFields || {}) }, unitLabels: { ...cat.unitLabels, ...(catEdits[cat.id]?.unitLabels || {}) } };
-    setCatSaving(cat.id);
-    try {
-      if (cat.id.startsWith("new-")) {
-        const { id: _id, ...rest } = merged;
-        const created = await apiCreateCategory(rest);
-        setCategories((prev) => prev.map((c) => (c.id === cat.id ? created : c)));
-        setCatEdits((prev) => { const n = { ...prev }; delete n[cat.id]; return n; });
-        setExpandedCatId(created.id);
-      } else {
-        const updated = await apiUpdateCategory(cat.id, merged);
-        setCategories((prev) => prev.map((c) => (c.id === cat.id ? updated : c)));
-        setCatEdits((prev) => { const n = { ...prev }; delete n[cat.id]; return n; });
-      }
-    } catch {
-      // keep local edits
-    } finally {
-      setCatSaving(null);
-    }
-  }, [catEdits]);
-
-  const deleteCat = useCallback(async (id: string) => {
-    setCatDeleting(id);
-    try {
-      if (!id.startsWith("new-")) await apiDeleteCategory(id);
-      setCategories((prev) => prev.filter((c) => c.id !== id));
-      setCatEdits((prev) => { const n = { ...prev }; delete n[id]; return n; });
-      if (expandedCatId === id) setExpandedCatId(null);
-    } catch {
-      // keep
-    } finally {
-      setCatDeleting(null);
-      setCatDeleteConfirm(null);
-    }
-  }, [expandedCatId]);
-
-  const addCategory = () => {
-    const tempId = `new-${Date.now()}`;
-    const newCat: EntityCategory = { ...NEW_CATEGORY_TEMPLATE, id: tempId, order: categories.length };
-    setCategories((prev) => [...prev, newCat]);
-    setExpandedCatId(tempId);
-  };
-
-  const toggleCatEnabled = useCallback(async (cat: EntityCategory, enabled: boolean) => {
-    setCategories((prev) => prev.map((c) => (c.id === cat.id ? { ...c, enabled } : c)));
-    if (!cat.id.startsWith("new-")) {
-      try { await apiUpdateCategory(cat.id, { enabled }); } catch { /* revert silently */ }
-    }
-  }, []);
-
-  // ── Customer CRUD ────────────────────────────────────────────────────────
-
-  const getCustEdit = (c: Customer): Customer => ({ ...c, ...(custEdits[c.id] || {}) });
-  const updateCustEdit = (id: string, patch: Partial<Customer>) =>
-    setCustEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-
-  const addCustomer = () => {
-    const tempId = `new-${Date.now()}`;
-    const newCust: Customer = {
-      id: tempId, organizationId: "", name: "", shortName: "", phone: "", email: "",
-      website: "", addressStreet: "", addressCity: "", addressProvince: "",
-      addressPostalCode: "", addressCountry: "", notes: "", active: true,
-      createdAt: "", updatedAt: "",
-    };
-    setCustomers((prev) => [...prev, newCust]);
-    setExpandedCustId(tempId);
-  };
-
-  const saveCustomer = useCallback(async (cust: Customer) => {
-    const merged = { ...cust, ...(custEdits[cust.id] || {}) };
-    setCustSaving(cust.id);
-    try {
-      if (cust.id.startsWith("new-")) {
-        const created = await apiCreateCustomer(merged);
-        setCustomers((prev) => prev.map((c) => (c.id === cust.id ? created : c)));
-        setCustEdits((prev) => { const n = { ...prev }; delete n[cust.id]; return n; });
-        setExpandedCustId(created.id);
-      } else {
-        const updated = await apiUpdateCustomer(cust.id, merged);
-        setCustomers((prev) => prev.map((c) => (c.id === cust.id ? updated : c)));
-        setCustEdits((prev) => { const n = { ...prev }; delete n[cust.id]; return n; });
-      }
-    } catch { /* keep edits */ } finally { setCustSaving(null); }
-  }, [custEdits]);
-
-  const deleteCustomer = useCallback(async (id: string) => {
-    try {
-      if (!id.startsWith("new-")) await apiDeleteCustomer(id);
-      setCustomers((prev) => prev.filter((c) => c.id !== id));
-      setCustEdits((prev) => { const n = { ...prev }; delete n[id]; return n; });
-      if (expandedCustId === id) setExpandedCustId(null);
-    } catch { /* keep */ } finally { setCustDeleteConfirm(null); }
-  }, [expandedCustId]);
-
-  const toggleCustActive = useCallback(async (cust: Customer, active: boolean) => {
-    setCustomers((prev) => prev.map((c) => (c.id === cust.id ? { ...c, active } : c)));
-    if (!cust.id.startsWith("new-")) {
-      try { await apiUpdateCustomer(cust.id, { active }); } catch { /* revert silently */ }
-    }
-  }, []);
-
-  // Load contacts when a customer is expanded
-  useEffect(() => {
-    if (expandedCustId && !expandedCustId.startsWith("new-") && !custContacts[expandedCustId]) {
-      apiGetCustomer(expandedCustId).then((cust) => {
-        setCustContacts((prev) => ({ ...prev, [expandedCustId]: cust.contacts }));
-      }).catch(() => {});
-    }
-  }, [expandedCustId, custContacts]);
-
-  const addContact = (customerId: string) => {
-    const tempId = `new-${Date.now()}`;
-    const newContact: CustomerContact = {
-      id: tempId, customerId, name: "", title: "", phone: "", email: "",
-      isPrimary: false, active: true, createdAt: "", updatedAt: "",
-    };
-    setCustContacts((prev) => ({ ...prev, [customerId]: [...(prev[customerId] || []), newContact] }));
-  };
-
-  const saveContact = useCallback(async (customerId: string, contact: CustomerContact) => {
-    const merged = { ...contact, ...(contactEdits[contact.id] || {}) };
-    setContactSaving(contact.id);
-    try {
-      if (contact.id.startsWith("new-")) {
-        const created = await apiCreateContact(customerId, merged);
-        setCustContacts((prev) => ({
-          ...prev,
-          [customerId]: (prev[customerId] || []).map((c) => (c.id === contact.id ? created : c)),
-        }));
-        setContactEdits((prev) => { const n = { ...prev }; delete n[contact.id]; return n; });
-      } else {
-        const updated = await apiUpdateContact(customerId, contact.id, merged);
-        setCustContacts((prev) => ({
-          ...prev,
-          [customerId]: (prev[customerId] || []).map((c) => (c.id === contact.id ? updated : c)),
-        }));
-        setContactEdits((prev) => { const n = { ...prev }; delete n[contact.id]; return n; });
-      }
-    } catch { /* keep edits */ } finally { setContactSaving(null); }
-  }, [contactEdits]);
-
-  const deleteContact = useCallback(async (customerId: string, contactId: string) => {
-    try {
-      if (!contactId.startsWith("new-")) await apiDeleteContact(customerId, contactId);
-      setCustContacts((prev) => ({
-        ...prev,
-        [customerId]: (prev[customerId] || []).filter((c) => c.id !== contactId),
-      }));
-      setContactEdits((prev) => { const n = { ...prev }; delete n[contactId]; return n; });
-    } catch { /* keep */ } finally { setContactDeleteConfirm(null); }
-  }, []);
-
-  const updateContactEdit = (id: string, patch: Partial<CustomerContact>) =>
-    setContactEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-  const getContactEdit = (c: CustomerContact): CustomerContact => ({ ...c, ...(contactEdits[c.id] || {}) });
 
   // ── Department CRUD ─────────────────────────────────────────────────────
 
@@ -827,6 +636,7 @@ export function SettingsPage({
         currency: settings.general.currency,
         dateFormat: settings.general.dateFormat,
         fiscalYearStart: settings.general.fiscalYearStart,
+        uoms: normalizeUomLibrary(settings.defaults.uoms),
         benchmarkingEnabled: settings.defaults.benchmarkingEnabled,
         benchmarkMinimumSimilarity: settings.defaults.benchmarkMinimumSimilarity,
         benchmarkMaximumComparables: settings.defaults.benchmarkMaximumComparables,
@@ -867,6 +677,10 @@ export function SettingsPage({
     return () => clearTimeout(settingsTimer.current);
   }, [save]);
 
+  useEffect(() => {
+    setCachedUoms(settings.defaults.uoms, currentOrganization?.id);
+  }, [currentOrganization?.id, settings.defaults.uoms]);
+
   // Auto-save brand on change (debounced)
   useEffect(() => {
     if (!brandLoaded.current) return;
@@ -897,6 +711,11 @@ export function SettingsPage({
     setSettings((s) => ({ ...s, email: { ...s.email, ...patch } }));
   const updateDefaults = (patch: Partial<DefaultSettings>) =>
     setSettings((s) => ({ ...s, defaults: { ...s.defaults, ...patch } }));
+  const uomLibrary = useMemo(() => normalizeUomLibrary(settings.defaults.uoms), [settings.defaults.uoms]);
+  const updateUomLibrary = useCallback(
+    (uoms: UnitOfMeasure[]) => updateDefaults({ uoms: normalizeUomLibrary(uoms) }),
+    [],
+  );
   const updateIntegrations = (patch: Partial<IntegrationSettings>) =>
     setSettings((s) => ({ ...s, integrations: { ...s.integrations, ...patch } }));
   const updateUserLocal = (id: string, patch: Partial<UserRecord>) =>
@@ -1724,553 +1543,9 @@ export function SettingsPage({
               <input ref={importFileRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
             </div>
           )}
-          {activeGroup === "data" && dataSubTab === "categories" && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Categories</CardTitle>
-                <Button variant="accent" size="xs" onClick={addCategory}>
-                  <Plus className="h-3 w-3" />
-                  Add Category
-                </Button>
-              </CardHeader>
-              <div className="divide-y divide-line">
-                {categories.length === 0 && (
-                  <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No categories configured. Click "Add Category" to get started.
-                  </div>
-                )}
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setExpandedCatId(expandedCatId === cat.id ? null : cat.id)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCatId(expandedCatId === cat.id ? null : cat.id); } }}
-                    className={cn("flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer", expandedCatId === cat.id && "bg-accent/5")}
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: cat.color || "#888" }}
-                    />
-                    <span className="font-medium text-fg truncate">{cat.name || "Untitled"}</span>
-                    <Badge className="text-[10px] shrink-0">{cat.shortform || "—"}</Badge>
-                    <Badge tone="default" className="text-[10px] shrink-0">{(cat.itemSource || "freeform").replace(/_/g, " ")}</Badge>
-                    <Badge tone="info" className="text-[10px] shrink-0">{getCalculationTypeOption(cat.calculationType).label}</Badge>
-                    <span className="flex-1" />
-                    <span onClick={(e) => e.stopPropagation()}>
-                      <Toggle checked={cat.enabled} onChange={(val) => toggleCatEnabled(cat, val)} />
-                    </span>
-                  </div>
-                ))}
-
-                {/* Category Drawer (portalled to body to escape FadeIn transform) */}
-                {typeof document !== "undefined" && createPortal(
-                <AnimatePresence>
-                  {expandedCatId && (() => {
-                    const cat = categories.find((c) => c.id === expandedCatId);
-                    if (!cat) return null;
-                    const edited = getCatEdit(cat);
-                    const calculationOption = getCalculationTypeOption(edited.calculationType);
-                    return (
-                      <motion.div
-                        key="category-drawer"
-                        initial={{ x: 420 }}
-                        animate={{ x: 0 }}
-                        exit={{ x: 420 }}
-                        transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                        className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
-                      >
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="h-3 w-3 rounded-full shrink-0" style={{ backgroundColor: edited.color || "#888" }} />
-                            <span className="text-sm font-semibold truncate">{edited.name || "New Category"}</span>
-                                  </div>
-                          <div className="flex items-center gap-1">
-                            {!cat.isBuiltIn && (
-                              <button
-                                className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
-                                onClick={() => {
-                                  if (catDeleteConfirm === cat.id) { deleteCat(cat.id); }
-                                  else { setCatDeleteConfirm(cat.id); }
-                                }}
-                                title={catDeleteConfirm === cat.id ? "Confirm delete" : "Delete category"}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            <button
-                              className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
-                              onClick={() => { saveCat(cat); setExpandedCatId(null); }}
-                              title="Close"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Body */}
-                        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                          {/* Basic Info */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Basic Info</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <Label>Name</Label>
-                                <Input value={edited.name} onChange={(e) => updateCatEdit(cat.id, { name: e.target.value })} placeholder="Category name" />
-                              </div>
-                              <div>
-                                <Label>Shortform</Label>
-                                <Input value={edited.shortform} onChange={(e) => updateCatEdit(cat.id, { shortform: e.target.value.slice(0, 2) })} placeholder="LB" maxLength={2} />
-                              </div>
-                              <div>
-                                <Label>Entity Type</Label>
-                                <Input value={edited.entityType} onChange={(e) => updateCatEdit(cat.id, { entityType: e.target.value })} placeholder="Labour, Equipment..." />
-                              </div>
-                              <div>
-                                <Label>Color</Label>
-                                <div className="flex items-center gap-2">
-                                  <input type="color" value={edited.color || "#000000"} onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })} className="h-8 w-8 cursor-pointer rounded border border-line" />
-                                  <Input value={edited.color} onChange={(e) => updateCatEdit(cat.id, { color: e.target.value })} placeholder="#000000" className="flex-1" />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          <Separator />
-
-                          {/* Item Source */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Item Source</p>
-                            <Select
-                              value={edited.itemSource || "freeform"}
-                              onValueChange={(v) => updateCatEdit(cat.id, { itemSource: v as EntityCategory["itemSource"] })}
-                              options={ITEM_SOURCE_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
-                            />
-                            <p className="mt-1 text-[11px] text-fg/40">
-                              {ITEM_SOURCE_OPTIONS.find((o) => o.value === (edited.itemSource || "freeform"))?.description}
-                            </p>
-                            {edited.itemSource === "catalog" && (
-                              <div className="mt-3">
-                                <Label>Linked Catalog</Label>
-                                <Select
-                                  value={edited.catalogId || "__any__"}
-                                  onValueChange={(v) => updateCatEdit(cat.id, { catalogId: v === "__any__" ? null : v })}
-                                  options={[
-                                    { value: "__any__", label: "Any catalog" },
-                                    ...initialCatalogs.map((c) => ({ value: c.id, label: `${c.name} (${c.kind})` })),
-                                  ]}
-                                />
-                              </div>
-                            )}
-                            {edited.itemSource === "rate_schedule" && (
-                              <p className="mt-2 text-[11px] text-fg/40">Rate schedules are imported per-quote from Settings &gt; Estimating &gt; Rate Schedules.</p>
-                            )}
-                          </div>
-
-                          <Separator />
-
-                          {/* Analytics bucket */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Analytics Bucket</p>
-                            <Select
-                              value={edited.analyticsBucket || "__none__"}
-                              onValueChange={(v) => updateCatEdit(cat.id, { analyticsBucket: v === "__none__" ? null : v })}
-                              options={[
-                                { value: "__none__", label: "(none)" },
-                                { value: "labour", label: "Labour" },
-                                { value: "material", label: "Material" },
-                                { value: "equipment", label: "Equipment" },
-                                { value: "subcontractor", label: "Subcontractor" },
-                                { value: "allowance", label: "Allowance" },
-                              ]}
-                            />
-                            <p className="mt-1 text-[11px] text-fg/40">
-                              Drives the labour / material / equipment breakout style and the per-bucket benchmark fields. Leave blank if this category isn&rsquo;t part of the analytics roll-up.
-                            </p>
-                          </div>
-
-                          <Separator />
-
-                          {/* Units */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Units</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <Label>Default UOM</Label>
-                                <Select
-                                  value={edited.defaultUom}
-                                  onValueChange={(v) => updateCatEdit(cat.id, { defaultUom: v })}
-                                  options={VALID_UOMS.map((u) => ({ value: u, label: u }))}
-                                />
-                              </div>
-                              <div>
-                                <Label>Valid UOMs</Label>
-                                <Input
-                                  value={(edited.validUoms || []).join(", ")}
-                                  onChange={(e) => updateCatEdit(cat.id, { validUoms: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
-                                  placeholder="EA, LF, SF"
-                                />
-                              </div>
-                            </div>
-                          </div>
-
-                          <Separator />
-
-                          {/* Editable Fields */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Editable Fields</p>
-                            <p className="mb-3 text-[11px] text-fg/40">
-                              These are the estimator-facing controls for this category. The calculation preset can populate a starting point, and you can still fine-tune it here.
-                            </p>
-                            <div className="flex flex-wrap gap-4">
-                              {EDITABLE_FIELD_KEYS.map((f) => (
-                                <label key={f.key} className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
-                                  <input
-                                    type="checkbox"
-                                    checked={edited.editableFields[f.key]}
-                                    onChange={(e) => updateCatEdit(cat.id, { editableFields: { ...edited.editableFields, [f.key]: e.target.checked } })}
-                                    className="rounded border-line accent-accent"
-                                  />
-                                  {f.label}
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-
-                          <Separator />
-
-                          {/* Unit Column Labels */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Unit Column Labels</p>
-                            <p className="text-[11px] text-fg/40 mb-3">
-                              Define what the three unit slots mean for this category. These labels flow into the estimator grid and can map to linked rate tiers when applicable.
-                            </p>
-                            <div className="grid grid-cols-3 gap-3">
-                              <div>
-                                <Label>Unit 1</Label>
-                                <Input value={edited.unitLabels.unit1} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit1: e.target.value } })} placeholder="Unit 1" />
-                              </div>
-                              <div>
-                                <Label>Unit 2</Label>
-                                <Input value={edited.unitLabels.unit2} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit2: e.target.value } })} placeholder="Unit 2" />
-                              </div>
-                              <div>
-                                <Label>Unit 3</Label>
-                                <Input value={edited.unitLabels.unit3} onChange={(e) => updateCatEdit(cat.id, { unitLabels: { ...edited.unitLabels, unit3: e.target.value } })} placeholder="Unit 3" />
-                              </div>
-                            </div>
-                          </div>
-
-                          <Separator />
-
-                          {/* Calculation */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Calculation</p>
-                            <div>
-                              <div className="mb-1 flex items-center justify-between gap-3">
-                                <Label>Calculation Mode</Label>
-                                <Button
-                                  variant="secondary"
-                                  size="xs"
-                                  onClick={() => applyCatCalculationPreset(cat.id, edited.calculationType)}
-                                >
-                                  Apply Preset
-                                </Button>
-                              </div>
-                              <Select
-                                value={edited.calculationType}
-                                onValueChange={(v) => updateCatEdit(cat.id, { calculationType: v as CalculationType })}
-                                options={CALCULATION_TYPES.map((ct) => ({ value: ct.value, label: ct.label }))}
-                              />
-                            </div>
-                            <div className="mt-3 rounded-lg border border-line bg-panel2/30 px-3 py-2.5">
-                              <p className="text-xs font-medium text-fg">{calculationOption.label}</p>
-                              <p className="mt-1 text-[11px] leading-relaxed text-fg/45">{calculationOption.description}</p>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                <Badge tone="default" className="text-[10px]">
-                                  {calculationOption.unitMode === "tiered"
-                                    ? "All 3 unit slots stay available"
-                                    : calculationOption.unitMode === "single"
-                                      ? "Single primary unit slot"
-                                      : "No unit slots required"}
-                                </Badge>
-                                <Badge tone="default" className="text-[10px]">
-                                  Preset updates fields + unit labels
-                                </Badge>
-                              </div>
-                            </div>
-                            {edited.calculationType === "formula" && (
-                              <div className="mt-3">
-                                <Label>Custom Formula</Label>
-                                <Input value={edited.calcFormula} onChange={(e) => updateCatEdit(cat.id, { calcFormula: e.target.value })} placeholder="qty * cost * (1 + markup)" />
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Footer */}
-                        <div className="border-t border-line px-5 py-3 flex items-center justify-end gap-2 bg-panel2/20">
-                          <Button variant="secondary" size="sm" onClick={() => setExpandedCatId(null)}>
-                            Cancel
-                          </Button>
-                          <Button variant="accent" size="sm" onClick={() => { saveCat(cat); setExpandedCatId(null); }}>
-                            Save
-                          </Button>
-                        </div>
-                      </motion.div>
-                    );
-                  })()}
-                </AnimatePresence>,
-                document.body
-                )}
-              </div>
-            </Card>
+          {activeGroup === "data" && dataSubTab === "uoms" && (
+            <UomSettingsPanel uoms={uomLibrary} onChange={updateUomLibrary} />
           )}
-
-          {/* ── Clients Tab ────────────────────────────────────────── */}
-          {activeGroup === "data" && dataSubTab === "clients" && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Clients</CardTitle>
-                <Button variant="accent" size="xs" onClick={addCustomer}>
-                  <Plus className="h-3 w-3" />
-                  Add Client
-                </Button>
-              </CardHeader>
-              <div className="divide-y divide-line">
-                {customers.length === 0 && (
-                  <div className="px-5 py-8 text-center text-xs text-fg/40">
-                    No clients yet. Click "Add Client" to get started.
-                  </div>
-                )}
-                {customers.map((cust) => (
-                  <div
-                    key={cust.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setExpandedCustId(expandedCustId === cust.id ? null : cust.id)}
-                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpandedCustId(expandedCustId === cust.id ? null : cust.id); } }}
-                    className={cn("flex w-full items-center gap-3 px-5 py-3 text-left text-sm hover:bg-panel2 transition-colors cursor-pointer", expandedCustId === cust.id && "bg-accent/5")}
-                  >
-                    <Building2 className="h-3.5 w-3.5 text-fg/30 shrink-0" />
-                    <span className="font-medium text-fg truncate">{cust.name || "Untitled"}</span>
-                    {cust.email && <span className="text-xs text-fg/40 truncate">{cust.email}</span>}
-                    {cust.phone && <span className="text-xs text-fg/40 truncate">{cust.phone}</span>}
-                    <span className="flex-1" />
-                    <span onClick={(e) => e.stopPropagation()}>
-                      <Toggle checked={cust.active} onChange={(val) => toggleCustActive(cust, val)} />
-                    </span>
-                  </div>
-                ))}
-
-                {/* Client Drawer (portalled to body to escape FadeIn transform) */}
-                {typeof document !== "undefined" && createPortal(
-                <AnimatePresence>
-                  {expandedCustId && (() => {
-                    const cust = customers.find((c) => c.id === expandedCustId);
-                    if (!cust) return null;
-                    const edited = getCustEdit(cust);
-                    const contacts = custContacts[cust.id] || [];
-                    return (
-                      <motion.div
-                        key="client-drawer"
-                        initial={{ x: 420 }}
-                        animate={{ x: 0 }}
-                        exit={{ x: 420 }}
-                        transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                        className="fixed inset-y-0 right-0 z-40 w-[420px] bg-panel border-l border-line shadow-2xl flex flex-col"
-                      >
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <Building2 className="h-3.5 w-3.5 text-fg/40 shrink-0" />
-                            <span className="text-sm font-semibold truncate">{edited.name || "New Client"}</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {!cust.id.startsWith("new-") && (
-                              <button
-                                className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
-                                onClick={() => {
-                                  if (custDeleteConfirm === cust.id) { deleteCustomer(cust.id); }
-                                  else { setCustDeleteConfirm(cust.id); }
-                                }}
-                                title={custDeleteConfirm === cust.id ? "Confirm delete" : "Delete client"}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                            <button
-                              className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
-                              onClick={() => { saveCustomer(cust); setExpandedCustId(null); }}
-                              title="Close"
-                            >
-                              <X className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Body */}
-                        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-                          {/* Basic Info */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Basic Info</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <Label>Name</Label>
-                                <Input value={edited.name} onChange={(e) => updateCustEdit(cust.id, { name: e.target.value })} placeholder="Client name" />
-                              </div>
-                              <div>
-                                <Label>Short Name</Label>
-                                <Input value={edited.shortName} onChange={(e) => updateCustEdit(cust.id, { shortName: e.target.value })} placeholder="Abbreviation" />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Contact Info */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Contact Info</p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <Label>Phone</Label>
-                                <Input value={edited.phone} onChange={(e) => updateCustEdit(cust.id, { phone: e.target.value })} placeholder="Phone number" />
-                              </div>
-                              <div>
-                                <Label>Email</Label>
-                                <Input value={edited.email} onChange={(e) => updateCustEdit(cust.id, { email: e.target.value })} placeholder="Email address" />
-                              </div>
-                            </div>
-                            <div className="mt-3">
-                              <Label>Website</Label>
-                              <Input value={edited.website} onChange={(e) => updateCustEdit(cust.id, { website: e.target.value })} placeholder="https://" />
-                            </div>
-                          </div>
-
-                          {/* Address */}
-                          <div>
-                            <p className="text-xs font-medium text-fg/60 uppercase tracking-wider mb-3">Address</p>
-                            <div className="space-y-3">
-                              <div>
-                                <Label>Street</Label>
-                                <Input value={edited.addressStreet} onChange={(e) => updateCustEdit(cust.id, { addressStreet: e.target.value })} />
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <Label>City</Label>
-                                  <Input value={edited.addressCity} onChange={(e) => updateCustEdit(cust.id, { addressCity: e.target.value })} />
-                                </div>
-                                <div>
-                                  <Label>Province / State</Label>
-                                  <Input value={edited.addressProvince} onChange={(e) => updateCustEdit(cust.id, { addressProvince: e.target.value })} />
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                  <Label>Postal / Zip</Label>
-                                  <Input value={edited.addressPostalCode} onChange={(e) => updateCustEdit(cust.id, { addressPostalCode: e.target.value })} />
-                                </div>
-                                <div>
-                                  <Label>Country</Label>
-                                  <Input value={edited.addressCountry} onChange={(e) => updateCustEdit(cust.id, { addressCountry: e.target.value })} />
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Notes */}
-                          <div>
-                            <Label>Notes</Label>
-                            <Input value={edited.notes} onChange={(e) => updateCustEdit(cust.id, { notes: e.target.value })} placeholder="Internal notes" />
-                          </div>
-
-                          {/* Contacts sub-section */}
-                          <div>
-                            <div className="flex items-center justify-between mb-3">
-                              <p className="text-xs font-medium text-fg/60 uppercase tracking-wider">Contacts</p>
-                              {!cust.id.startsWith("new-") && (
-                                <Button variant="secondary" size="xs" onClick={() => addContact(cust.id)}>
-                                  <Plus className="h-3 w-3" />
-                                  Add Contact
-                                </Button>
-                              )}
-                            </div>
-                            {cust.id.startsWith("new-") && (
-                              <p className="text-xs text-fg/40">Save the client first, then add contacts.</p>
-                            )}
-                            {contacts.length > 0 && (
-                              <div className="space-y-2">
-                                {contacts.map((contact) => {
-                                  const ce = getContactEdit(contact);
-                                  return (
-                                    <div key={contact.id} className="rounded-lg border border-line bg-panel2/30 p-3 space-y-3" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) saveContact(cust.id, contact); }}>
-                                      <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                          <Label>Name</Label>
-                                          <Input value={ce.name} onChange={(e) => updateContactEdit(contact.id, { name: e.target.value })} placeholder="Contact name" />
-                                        </div>
-                                        <div>
-                                          <Label>Title</Label>
-                                          <Input value={ce.title} onChange={(e) => updateContactEdit(contact.id, { title: e.target.value })} placeholder="Job title" />
-                                        </div>
-                                      </div>
-                                      <div className="grid grid-cols-2 gap-3">
-                                        <div>
-                                          <Label>Phone</Label>
-                                          <Input value={ce.phone} onChange={(e) => updateContactEdit(contact.id, { phone: e.target.value })} placeholder="Phone" />
-                                        </div>
-                                        <div>
-                                          <Label>Email</Label>
-                                          <Input value={ce.email} onChange={(e) => updateContactEdit(contact.id, { email: e.target.value })} placeholder="Email" />
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-3">
-                                        <label className="flex items-center gap-2 text-xs text-fg/80 cursor-pointer">
-                                          <input
-                                            type="checkbox"
-                                            checked={ce.isPrimary}
-                                            onChange={(e) => updateContactEdit(contact.id, { isPrimary: e.target.checked })}
-                                            className="rounded border-line accent-accent"
-                                          />
-                                          Primary Contact
-                                        </label>
-                                        <span className="flex-1" />
-                                        {contactDeleteConfirm === contact.id ? (
-                                          <div className="flex items-center gap-2">
-                                            <Button variant="danger" size="xs" onClick={() => deleteContact(cust.id, contact.id)}>Confirm</Button>
-                                            <Button variant="secondary" size="xs" onClick={() => setContactDeleteConfirm(null)}>Cancel</Button>
-                                          </div>
-                                        ) : (
-                                          <button
-                                            onClick={() => setContactDeleteConfirm(contact.id)}
-                                            className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors"
-                                          >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                          </button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Footer */}
-                        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-panel2/40">
-                          <Button variant="secondary" size="sm" onClick={() => setExpandedCustId(null)}>Cancel</Button>
-                          <Button variant="accent" size="sm" onClick={() => { saveCustomer(cust); setExpandedCustId(null); }}>Save</Button>
-                        </div>
-                      </motion.div>
-                    );
-                  })()}
-                </AnimatePresence>,
-                document.body
-                )}
-              </div>
-            </Card>
-          )}
-
           {/* ── Departments Tab ──────────────────────────────────────── */}
           {activeGroup === "organization" && orgSubTab === "departments" && (
             <Card>
@@ -2775,21 +2050,6 @@ export function SettingsPage({
             document.body,
           )}
 
-          {/* ── Items & Catalogs ─── */}
-          {activeGroup === "data" && dataSubTab === "catalogs" && (
-            <ItemsManager catalogs={initialCatalogs} />
-          )}
-
-          {/* ── Rate Schedules ─── */}
-          {activeGroup === "data" && dataSubTab === "rates" && (
-            <RateScheduleManager schedules={rateSchedules} setSchedules={setRateSchedules} loading={ratesLoading} catalogs={initialCatalogs} />
-          )}
-
-          {/* ── Assemblies ─── */}
-          {activeGroup === "data" && dataSubTab === "assemblies" && (
-            <AssemblyManager />
-          )}
-
           {/* ── Inclusions / Exclusions ─── */}
           {activeGroup === "data" && dataSubTab === "conditions" && (
             <Card>
@@ -2933,6 +2193,11 @@ export function SettingsPage({
             </Card>
           )}
 
+          {/* ── Factors ─── */}
+          {activeGroup === "data" && dataSubTab === "factors" && (
+            <FactorLibraryManager />
+          )}
+
           {/* ── Labour Costs & Burden ─── */}
           {activeGroup === "data" && dataSubTab === "costs" && (
             <div className="space-y-6">
@@ -2953,10 +2218,10 @@ export function SettingsPage({
 
           {/* ── Plugins ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "plugins" && (
-            <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} entityCategories={categories} />
+            <PluginsPage initialPlugins={initialPlugins} initialDatasets={initialDatasets} entityCategories={pluginEntityCategories} />
           )}
 
-          {/* ── Integrations (NetSuite, Procore, Slack, Custom REST...) ─── */}
+          {/* ── Integrations (NetSuite, Procore, Slack, QuickBooks, Custom REST...) ─── */}
           {activeGroup === "integrations" && integrationsSubTab === "integrations" && (
             <IntegrationsPage />
           )}
@@ -3194,5 +2459,537 @@ export function SettingsPage({
       )}
 
     </div>
+  );
+}
+
+const SETTINGS_FACTOR_IMPACT_OPTIONS: Array<{ value: EstimateFactorImpact; label: string }> = [
+  { value: "labor_hours", label: "Labor hours" },
+  { value: "resource_units", label: "Resource units" },
+  { value: "direct_cost", label: "Direct cost" },
+  { value: "sell_price", label: "Sell price" },
+];
+
+const SETTINGS_FACTOR_CONFIDENCE_OPTIONS: Array<{ value: EstimateFactorConfidence; label: string }> = [
+  { value: "high", label: "High" },
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" },
+];
+
+const SETTINGS_FACTOR_SOURCE_OPTIONS: Array<{ value: EstimateFactorSourceType; label: string }> = [
+  { value: "knowledge", label: "Knowledge book" },
+  { value: "library", label: "Library" },
+  { value: "labor_unit", label: "Labor unit" },
+  { value: "condition_difficulty", label: "Condition difficulty" },
+  { value: "neca_difficulty", label: "Legacy condition difficulty" },
+  { value: "agent", label: "Agent" },
+  { value: "custom", label: "Custom" },
+];
+
+const SETTINGS_FACTOR_APPLICATION_SCOPE_OPTIONS: Array<{ value: EstimateFactorApplicationScope; label: string }> = [
+  { value: "global", label: "Global" },
+  { value: "line", label: "Line" },
+  { value: "both", label: "Both" },
+];
+
+const SETTINGS_FACTOR_FORMULA_OPTIONS: Array<{ value: EstimateFactorFormulaType; label: string }> = [
+  { value: "fixed_multiplier", label: "Fixed multiplier" },
+  { value: "per_unit_scale", label: "Scaled input" },
+  { value: "condition_score", label: "Condition score" },
+  { value: "temperature_productivity", label: "Temperature productivity" },
+  { value: "neca_condition_score", label: "Condition score sheet" },
+  { value: "extended_duration", label: "Extended duration" },
+];
+
+const SETTINGS_FACTOR_SCOPE_OPTIONS = [
+  { value: "all", label: "Entire estimate" },
+  { value: "bucket:labour", label: "Labour bucket" },
+  { value: "bucket:material", label: "Material bucket" },
+  { value: "bucket:equipment", label: "Equipment bucket" },
+  { value: "bucket:subcontract", label: "Subcontract bucket" },
+];
+
+type SettingsFactorDrawer =
+  | { mode: "create" }
+  | { mode: "edit"; entry: EstimateFactorLibraryRecord };
+
+interface SettingsFactorDraft {
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  percent: string;
+  applicationScope: EstimateFactorApplicationScope;
+  scopeValue: string;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId: string;
+  basis: string;
+  locator: string;
+  tags: string;
+}
+
+function settingsFactorPercent(value: number) {
+  return Number.isFinite(value) ? (value - 1) * 100 : 0;
+}
+
+function settingsFactorMultiplier(percent: string) {
+  const parsed = Number(percent);
+  const safe = Number.isFinite(parsed) ? parsed : 0;
+  return Math.max(0.05, Math.min(10, Math.round((1 + safe / 100) * 10_000) / 10_000));
+}
+
+function settingsFactorSourceText(sourceRef: Record<string, unknown> | undefined, key: string) {
+  const value = sourceRef?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function settingsFactorSourceLabel(value: EstimateFactorSourceType | string | undefined) {
+  switch (value) {
+    case "knowledge":
+      return "Knowledge";
+    case "library":
+      return "Library";
+    case "labor_unit":
+      return "Labor unit";
+    case "condition_difficulty":
+    case "neca_difficulty":
+      return "Condition difficulty";
+    case "agent":
+      return "Agent";
+    default:
+      return "Custom";
+  }
+}
+
+function settingsFactorScopeValue(entry?: EstimateFactorLibraryRecord) {
+  const scope = entry?.scope ?? {};
+  if (Array.isArray(scope.analyticsBuckets) && scope.analyticsBuckets[0]) return `bucket:${scope.analyticsBuckets[0]}`;
+  return "all";
+}
+
+function settingsFactorScope(scopeValue: string): { appliesTo: string; scope: EstimateFactorScope } {
+  if (scopeValue.startsWith("bucket:")) {
+    const bucket = scopeValue.slice("bucket:".length);
+    return {
+      appliesTo: bucket === "labour" ? "Labour" : bucket,
+      scope: { mode: "category" as const, analyticsBuckets: [bucket, bucket === "labour" ? "labor" : bucket] },
+    };
+  }
+  return { appliesTo: "Entire estimate", scope: { mode: "all" as const } };
+}
+
+function settingsFactorDraft(entry?: EstimateFactorLibraryRecord): SettingsFactorDraft {
+  return {
+    name: entry?.name ?? "Custom Factor",
+    code: entry?.code ?? "CUSTOM",
+    description: entry?.description ?? "",
+    category: entry?.category ?? "Productivity",
+    impact: entry?.impact ?? "labor_hours",
+    percent: String(Math.round(settingsFactorPercent(entry?.value ?? 1) * 100) / 100),
+    applicationScope: entry?.applicationScope ?? "both",
+    scopeValue: settingsFactorScopeValue(entry),
+    formulaType: entry?.formulaType ?? "fixed_multiplier",
+    parameters: entry?.parameters ?? {},
+    confidence: entry?.confidence ?? "medium",
+    sourceType: entry?.sourceType ?? "custom",
+    sourceId: entry?.sourceId ?? "",
+    basis: settingsFactorSourceText(entry?.sourceRef, "basis"),
+    locator: settingsFactorSourceText(entry?.sourceRef, "locator"),
+    tags: (entry?.tags ?? ["custom"]).join(", "),
+  };
+}
+
+function settingsFactorInput(draft: SettingsFactorDraft, baseSourceRef?: Record<string, unknown>): CreateEstimateFactorInput {
+  const scoped = settingsFactorScope(draft.scopeValue);
+  return {
+    name: draft.name.trim() || "Factor",
+    code: draft.code.trim(),
+    description: draft.description.trim(),
+    category: draft.category.trim() || "Productivity",
+    impact: draft.impact,
+    value: settingsFactorMultiplier(draft.percent),
+    appliesTo: scoped.appliesTo,
+    applicationScope: draft.applicationScope,
+    scope: scoped.scope,
+    formulaType: draft.formulaType,
+    parameters: draft.parameters,
+    confidence: draft.confidence,
+    sourceType: draft.sourceType,
+    sourceId: draft.sourceId.trim() || null,
+    sourceRef: {
+      ...(baseSourceRef ?? {}),
+      ...(draft.basis.trim() ? { basis: draft.basis.trim() } : {}),
+      ...(draft.locator.trim() ? { locator: draft.locator.trim() } : {}),
+    },
+    tags: draft.tags.split(",").map((entry) => entry.trim()).filter(Boolean),
+  };
+}
+
+function FactorLibraryManager() {
+  const [entries, setEntries] = useState<EstimateFactorLibraryRecord[]>([]);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [drawer, setDrawer] = useState<SettingsFactorDrawer | null>(null);
+  const [draft, setDraft] = useState<SettingsFactorDraft | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setEntries((await apiListEstimateFactorLibraryEntries()).filter((entry) => !entry.builtIn));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to load factor library");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    setDraft(drawer?.mode === "edit" ? settingsFactorDraft(drawer.entry) : drawer ? settingsFactorDraft() : null);
+  }, [drawer]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return entries;
+    return entries.filter((entry) => `${entry.name} ${entry.code} ${entry.category} ${entry.description} ${entry.tags.join(" ")}`.toLowerCase().includes(needle));
+  }, [entries, query]);
+
+  const orgCount = entries.length;
+
+  async function saveDrawer() {
+    if (!drawer || !draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const base = drawer.mode === "edit" ? drawer.entry.sourceRef : {};
+      const input = settingsFactorInput(draft, base);
+      const saved = drawer.mode === "edit"
+        ? await apiUpdateEstimateFactorLibraryEntry(drawer.entry.id, input)
+        : await apiCreateEstimateFactorLibraryEntry(input);
+      setEntries((current) => [saved, ...current.filter((entry) => entry.id !== saved.id)]);
+      setDrawer(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to save factor");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteEntry(entry: EstimateFactorLibraryRecord) {
+    if (!window.confirm(`Delete ${entry.name}?`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await apiDeleteEstimateFactorLibraryEntry(entry.id);
+      setEntries((current) => current.filter((candidate) => candidate.id !== entry.id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to delete factor");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>Factor Library</CardTitle>
+          <p className="mt-1 text-xs text-fg/45">Reusable labor, cost, and productivity factors available inside estimate workspaces.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge tone="info" className="text-[10px]">{orgCount} editable</Badge>
+          <Button variant="accent" size="xs" onClick={() => setDrawer({ mode: "create" })}>
+            <Plus className="h-3.5 w-3.5" />
+            Add Factor
+          </Button>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-3">
+        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search factor library" className="max-w-md text-xs" />
+        {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div> : null}
+        {loading ? (
+          <div className="flex items-center gap-2 py-8 text-xs text-fg/45"><Loader2 className="h-4 w-4 animate-spin" /> Loading factors...</div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-line">
+            <div className="grid grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_96px] bg-panel2/60 px-3 py-2 text-[10px] font-medium uppercase text-fg/35">
+              <div>Factor</div>
+              <div>Category</div>
+              <div>Impact</div>
+              <div>Multiplier</div>
+              <div>Evidence</div>
+              <div />
+            </div>
+            {filtered.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-fg/40">No matching factors.</div>
+            ) : filtered.map((entry) => {
+              const criteriaCount = Array.isArray((entry.sourceRef as any)?.scoreSheet?.criteria) ? (entry.sourceRef as any).scoreSheet.criteria.length : 0;
+              return (
+                <div key={entry.id} className="grid grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_96px] items-center gap-2 border-t border-line px-3 py-2 text-xs">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="truncate text-left font-medium text-fg hover:text-accent"
+                        onClick={() => setDrawer({ mode: "edit", entry })}
+                      >
+                        {entry.name}
+                      </button>
+                      <Badge tone="default">Org</Badge>
+                    </div>
+                    <div className="mt-1 truncate font-mono text-[10px] text-fg/40">{entry.code || entry.id}</div>
+                  </div>
+                  <div className="truncate text-fg/60">{entry.category}</div>
+                  <div className="truncate text-fg/60">{SETTINGS_FACTOR_IMPACT_OPTIONS.find((option) => option.value === entry.impact)?.label ?? entry.impact}</div>
+                  <div className={cn("font-mono text-[11px]", entry.value >= 1 ? "text-warning" : "text-success")}>
+                    {settingsFactorPercent(entry.value) >= 0 ? "+" : ""}{Math.round(settingsFactorPercent(entry.value) * 100) / 100}%
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-fg/55">{settingsFactorSourceText(entry.sourceRef, "locator") || settingsFactorSourceText(entry.sourceRef, "title") || settingsFactorSourceLabel(entry.sourceType)}</div>
+                    {criteriaCount ? <div className="mt-0.5 text-[10px] text-fg/35">{criteriaCount} criteria</div> : null}
+                  </div>
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="xs" className="h-8 px-2" onClick={() => setDrawer({ mode: "edit", entry })}>Edit</Button>
+                    <Button variant="ghost" size="xs" className="h-8 px-2" onClick={() => deleteEntry(entry)} disabled={saving}>
+                      <Trash2 className="h-3.5 w-3.5 text-danger" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardBody>
+
+      {drawer && draft && typeof document !== "undefined" && createPortal(
+        <AnimatePresence>
+          <motion.div key="factor-library-drawer-backdrop" className="fixed inset-0 z-40 bg-black/25" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setDrawer(null)} />
+          <motion.aside
+            key="factor-library-drawer-panel"
+            className="fixed bottom-0 right-0 top-0 z-50 flex w-full max-w-[560px] flex-col border-l border-line bg-panel shadow-2xl"
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+          >
+            <div className="flex items-center justify-between border-b border-line px-5 py-4">
+              <div>
+                <div className="text-sm font-semibold text-fg">{drawer.mode === "edit" ? "Edit Factor" : "Create Factor"}</div>
+                <div className="mt-1 text-[11px] text-fg/45">{draft.code || "Organization library"}</div>
+              </div>
+              <button className="rounded p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg" onClick={() => setDrawer(null)}><X className="h-4 w-4" /></button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>Name</Label>
+                  <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Code</Label>
+                  <Input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Category</Label>
+                  <Input value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>Description</Label>
+                  <Textarea rows={3} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Impact</Label>
+                  <Select value={draft.impact} onValueChange={(impact) => setDraft({ ...draft, impact: impact as EstimateFactorImpact })} options={SETTINGS_FACTOR_IMPACT_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Percent</Label>
+                  <Input value={draft.percent} onChange={(event) => setDraft({ ...draft, percent: event.target.value })} className="text-right font-mono" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Scope</Label>
+                  <Select value={draft.scopeValue} onValueChange={(scopeValue) => setDraft({ ...draft, scopeValue })} options={SETTINGS_FACTOR_SCOPE_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Apply As</Label>
+                  <Select value={draft.applicationScope} onValueChange={(applicationScope) => setDraft({ ...draft, applicationScope: applicationScope as EstimateFactorApplicationScope })} options={SETTINGS_FACTOR_APPLICATION_SCOPE_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Formula</Label>
+                  <Select value={draft.formulaType} onValueChange={(formulaType) => setDraft({ ...draft, formulaType: formulaType as EstimateFactorFormulaType })} options={SETTINGS_FACTOR_FORMULA_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Confidence</Label>
+                  <Select value={draft.confidence} onValueChange={(confidence) => setDraft({ ...draft, confidence: confidence as EstimateFactorConfidence })} options={SETTINGS_FACTOR_CONFIDENCE_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Source</Label>
+                  <Select value={draft.sourceType} onValueChange={(sourceType) => setDraft({ ...draft, sourceType: sourceType as EstimateFactorSourceType })} options={SETTINGS_FACTOR_SOURCE_OPTIONS} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Source ID</Label>
+                  <Input value={draft.sourceId} onChange={(event) => setDraft({ ...draft, sourceId: event.target.value })} />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label>Evidence</Label>
+                  <Textarea rows={3} value={draft.basis} onChange={(event) => setDraft({ ...draft, basis: event.target.value })} />
+                </div>
+                {draft.formulaType !== "fixed_multiplier" ? (
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label>Parameters</Label>
+                    <FactorParameterEditor
+                      formulaType={draft.formulaType}
+                      parameters={draft.parameters}
+                      onChange={(parameters) => setDraft({ ...draft, parameters })}
+                    />
+                  </div>
+                ) : null}
+                <div className="space-y-1.5">
+                  <Label>Locator</Label>
+                  <Input value={draft.locator} onChange={(event) => setDraft({ ...draft, locator: event.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Tags</Label>
+                  <Input value={draft.tags} onChange={(event) => setDraft({ ...draft, tags: event.target.value })} />
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
+              <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
+              <Button variant="accent" size="sm" onClick={saveDrawer} disabled={saving}>
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Save
+              </Button>
+            </div>
+          </motion.aside>
+        </AnimatePresence>,
+        document.body,
+      )}
+    </Card>
+  );
+}
+
+function UomSettingsPanel({ uoms, onChange }: { uoms: UnitOfMeasure[]; onChange: (uoms: UnitOfMeasure[]) => void }) {
+  const [newCode, setNewCode] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const defaultCodes = useMemo(() => new Set(DEFAULT_UOMS.map((unit) => unit.code)), []);
+
+  const normalized = useMemo(() => normalizeUomLibrary(uoms), [uoms]);
+  const activeCount = normalized.filter((unit) => unit.active).length;
+
+  const replace = (code: string, patch: Partial<UnitOfMeasure>) => {
+    onChange(normalized.map((unit) => (unit.code === code ? { ...unit, ...patch } : unit)));
+  };
+
+  const addUnit = () => {
+    const code = normalizeUomCode(newCode);
+    if (!code) return;
+    const existing = normalized.find((unit) => unit.code === code);
+    if (existing) {
+      replace(code, {
+        label: newLabel.trim() || existing.label || code,
+        description: newDescription.trim(),
+        active: true,
+      });
+    } else {
+      onChange([
+        ...normalized,
+        {
+          code,
+          label: newLabel.trim() || code,
+          description: newDescription.trim(),
+          active: true,
+          order: normalized.length,
+        },
+      ]);
+    }
+    setNewCode("");
+    setNewLabel("");
+    setNewDescription("");
+  };
+
+  const removeUnit = (code: string) => {
+    if (defaultCodes.has(code)) {
+      replace(code, { active: false });
+      return;
+    }
+    onChange(normalized.filter((unit) => unit.code !== code));
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>Units of Measure</CardTitle>
+          <p className="mt-1 text-xs text-fg/45">
+            Organization-scoped UOMs used by assemblies, catalogs, rate tiers, and estimate rows.
+          </p>
+        </div>
+        <Badge tone="info" className="text-[10px]">{activeCount} active</Badge>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        <div className="grid grid-cols-[110px_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-end gap-2 rounded-lg border border-line bg-panel2/35 p-3">
+          <div>
+            <Label>Code</Label>
+            <Input
+              value={newCode}
+              onChange={(event) => setNewCode(normalizeUomCode(event.target.value))}
+              placeholder="EA"
+              className="font-mono text-xs"
+            />
+          </div>
+          <div>
+            <Label>Label</Label>
+            <Input value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder="Each" className="text-xs" />
+          </div>
+          <div>
+            <Label>Description</Label>
+            <Input value={newDescription} onChange={(event) => setNewDescription(event.target.value)} placeholder="How this unit is used" className="text-xs" />
+          </div>
+          <Button variant="accent" size="sm" onClick={addUnit} disabled={!normalizeUomCode(newCode)}>
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </Button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border border-line">
+          <div className="grid grid-cols-[90px_minmax(0,1fr)_minmax(0,1.5fr)_84px_54px] gap-2 border-b border-line bg-panel2/45 px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-fg/35">
+            <div>Code</div>
+            <div>Label</div>
+            <div>Description</div>
+            <div>Status</div>
+            <div />
+          </div>
+          <div className="divide-y divide-line">
+            {normalized.map((unit) => (
+              <div key={unit.code} className="grid grid-cols-[90px_minmax(0,1fr)_minmax(0,1.5fr)_84px_54px] items-center gap-2 px-3 py-2">
+                <div className="font-mono text-xs font-semibold text-fg/70">{unit.code}</div>
+                <Input value={unit.label} onChange={(event) => replace(unit.code, { label: event.target.value })} className="h-8 text-xs" />
+                <Input value={unit.description ?? ""} onChange={(event) => replace(unit.code, { description: event.target.value })} className="h-8 text-xs" />
+                <div className="flex items-center justify-start">
+                  <Toggle checked={unit.active} onChange={(active) => replace(unit.code, { active })} />
+                </div>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => removeUnit(unit.code)}
+                  title={defaultCodes.has(unit.code) ? "Disable built-in unit" : "Delete unit"}
+                  className="px-2 text-fg/45 hover:text-danger"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardBody>
+    </Card>
   );
 }

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./bidwright-social.png" alt="Bidwright AI-driven construction estimating platform" width="100%" />
+  <img src="./bidwright-readme.png" alt="Bidwright construction estimating platform" width="100%" />
 </p>
 
 <h1 align="center">Bidwright</h1>
@@ -18,9 +18,9 @@
 
 ## Features
 
-### 1. An agent with 150+ real tools — not a chat box bolted on
+### 1. Unified agent orchestration — not a chat box bolted on
 
-The agent layer ships with **150 typed tools across 13 modules** (`packages/agent/src/tools/`): quote construction, estimate strategy, knowledge retrieval, project files, datasets, pricing, rate schedules, scheduling, web research, plugin execution, and dynamic tool registration. It can read a worksheet, propose phases, edit line items, pull a chunk from a knowledge book, query a rate schedule, and write a note — in one session, with audit trail.
+Bidwright keeps the LLM provider adapter in `packages/agent`, while estimating actions live in the API, MCP server, and quote workspace services where they share the same cost intelligence, worksheet provenance, labor units, assemblies, review records, and audit trail. The agent can read a worksheet, search current market sources, pull structured cost candidates, validate labor and resource basis, propose phases, edit line items, and write review notes without drifting onto a separate legacy tool path.
 
 Multi-provider out of the box: **Anthropic, OpenAI, OpenRouter, Gemini, LM Studio**. Local embeddings via **Ollama**. Hybrid retrieval over **pgvector**.
 
@@ -199,4 +199,6 @@ Bidwright is a working platform for AI-assisted construction estimating. Core es
 
 ## License
 
-[MIT](LICENSE)
+Bidwright is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
+
+Copyright (C) 2026 Braedon Saunders.

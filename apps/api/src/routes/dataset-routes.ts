@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { datasetService } from "../services/dataset-service.js";
-import { datasetLibrary } from "../prisma-store.js";
 
 /**
  * Dataset generation API routes — Fastify plugin.
@@ -131,49 +130,6 @@ export async function datasetRoutes(app: FastifyInstance) {
         message: "Import failed",
         error: message,
       });
-    }
-  });
-
-  // ── Dataset Library (browse + adopt) ────────────────────────────────
-
-  // GET /datasets/library — list available template datasets
-  app.get("/datasets/library", async (request, reply) => {
-    try {
-      return await datasetLibrary.listTemplates();
-    } catch (err) {
-      request.log.error(err, "Failed to list dataset library");
-      return reply.code(500).send({ error: "Failed to list dataset library" });
-    }
-  });
-
-  // GET /datasets/library/:templateId — preview template with sample rows
-  app.get("/datasets/library/:templateId", async (request, reply) => {
-    const { templateId } = request.params as { templateId: string };
-    try {
-      const template = await datasetLibrary.getTemplate(templateId);
-      if (!template) return reply.code(404).send({ error: "Template not found" });
-      const { rows, total } = await datasetLibrary.getTemplateRows(templateId, 50, 0);
-      return { ...template, rows, total };
-    } catch (err) {
-      request.log.error(err, "Failed to get dataset template");
-      return reply.code(500).send({ error: "Failed to get dataset template" });
-    }
-  });
-
-  // POST /datasets/library/:templateId/adopt — clone template into org
-  app.post("/datasets/library/:templateId/adopt", async (request, reply) => {
-    const { templateId } = request.params as { templateId: string };
-    const organizationId = request.user?.organizationId;
-    if (!organizationId) return reply.code(401).send({ error: "Not authenticated" });
-
-    try {
-      const dataset = await datasetLibrary.adoptTemplate(templateId, organizationId);
-      reply.code(201);
-      return dataset;
-    } catch (err: any) {
-      if (err.message?.includes("not found")) return reply.code(404).send({ error: err.message });
-      request.log.error(err, "Failed to adopt dataset template");
-      return reply.code(500).send({ error: "Failed to adopt dataset template" });
     }
   });
 }

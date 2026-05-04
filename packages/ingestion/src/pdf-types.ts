@@ -54,6 +54,15 @@ export interface ParsedDocument {
     hasOcr: boolean;
     /** Key-value pairs extracted by Azure Document Intelligence. */
     keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+    /** Normalized fields extracted by Azure's prebuilt document models. */
+    documentFields?: Array<{
+      documentType: string;
+      fieldName: string;
+      value: string;
+      confidence: number;
+      pageNumber?: number;
+      currencyCode?: string;
+    }>;
     /** Selection marks (checkboxes, radio buttons) extracted by Azure Document Intelligence. */
     selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
   };

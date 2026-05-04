@@ -1,13 +1,13 @@
 import { Building2, Layers, Users, Zap } from "lucide-react";
+import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
-import type { BrandProfile, CalculationType, EntityCategory } from "@/lib/api";
-import { CALCULATION_TYPE_OPTIONS } from "@/lib/entity-category-calculation";
+import type { BrandProfile } from "@/lib/api";
 
 export const STORAGE_KEY = "bidwright-settings";
 
 export type SettingsGroup = "organization" | "data" | "integrations" | "users";
 export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
-export type DataSubTab = "categories" | "clients" | "conditions" | "catalogs" | "assemblies" | "rates" | "costs" | "travel";
+export type DataSubTab = "uoms" | "conditions" | "costs" | "travel" | "factors";
 export type IntegrationsSubTab = "agent" | "apikeys" | "email" | "plugins" | "integrations";
 
 export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
@@ -16,17 +16,13 @@ export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "departments", label: "Departments" },
   { id: "defaults", label: "Defaults" },
   { id: "terms", label: "Terms & Conditions" },
-  { id: "personas", label: "Estimator Personas" },
 ];
 
 export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
-  { id: "categories", label: "Categories" },
-  { id: "catalogs", label: "Items & Catalogs" },
-  { id: "assemblies", label: "Assemblies" },
-  { id: "rates", label: "Rate Schedules" },
+  { id: "uoms", label: "Units" },
   { id: "costs", label: "Labour Costs" },
+  { id: "factors", label: "Factors" },
   { id: "travel", label: "Travel Policies" },
-  { id: "clients", label: "Clients" },
   { id: "conditions", label: "Conditions" },
 ];
 
@@ -62,6 +58,7 @@ export interface DefaultSettings {
   defaultMarkup: number;
   defaultBreakoutStyle: string;
   defaultQuoteType: string;
+  uoms: UnitOfMeasure[];
   benchmarkingEnabled: boolean;
   benchmarkMinimumSimilarity: number;
   benchmarkMaximumComparables: number;
@@ -143,6 +140,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
     defaultMarkup: 15,
     defaultBreakoutStyle: "category",
     defaultQuoteType: "Firm",
+    uoms: DEFAULT_UOMS,
     benchmarkingEnabled: true,
     benchmarkMinimumSimilarity: 0.55,
     benchmarkMaximumComparables: 5,
@@ -207,53 +205,12 @@ export const CURRENCIES = ["USD", "CAD", "EUR", "GBP", "AUD", "NZD", "CHF", "JPY
 export const DATE_FORMATS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
 export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
-export const CALCULATION_TYPES: { value: CalculationType; label: string }[] = CALCULATION_TYPE_OPTIONS.map(
-  ({ value, label }) => ({ value, label }),
-);
-
-export const VALID_UOMS = ["EA", "LF", "SF", "SY", "CY", "TON", "LB", "GAL", "HR", "DAY", "WK", "MO", "LS", "MH", "CF", "BF", "PC", "SET", "BAG", "BOX", "ROLL"];
-
 export const PROVIDER_CONFIG: Record<string, { label: string; keyField: keyof IntegrationSettings; placeholder: string; keyLabel: string }> = {
   anthropic: { label: "Anthropic", keyField: "anthropicApiKey", placeholder: "sk-ant-***", keyLabel: "Anthropic API Key" },
   openai: { label: "OpenAI", keyField: "openaiApiKey", placeholder: "sk-***", keyLabel: "OpenAI API Key" },
   openrouter: { label: "OpenRouter", keyField: "openrouterApiKey", placeholder: "sk-or-***", keyLabel: "OpenRouter API Key" },
   gemini: { label: "Google Gemini", keyField: "geminiApiKey", placeholder: "AI***", keyLabel: "Gemini API Key" },
   lmstudio: { label: "LM Studio (Local)", keyField: "lmstudioBaseUrl", placeholder: "http://localhost:1234/v1", keyLabel: "LM Studio Base URL" },
-};
-
-export const ITEM_SOURCE_OPTIONS: { value: EntityCategory["itemSource"]; label: string; description: string }[] = [
-  { value: "freeform", label: "Freeform", description: "User types item name directly" },
-  { value: "rate_schedule", label: "Rate Schedule", description: "Items come from rate schedules" },
-  { value: "catalog", label: "Catalog", description: "Items come from a catalog" },
-];
-
-export const EDITABLE_FIELD_KEYS: { key: keyof EntityCategory["editableFields"]; label: string }[] = [
-  { key: "quantity", label: "Quantity" },
-  { key: "cost", label: "Cost" },
-  { key: "markup", label: "Markup" },
-  { key: "price", label: "Price" },
-  { key: "unit1", label: "Unit 1" },
-  { key: "unit2", label: "Unit 2" },
-  { key: "unit3", label: "Unit 3" },
-];
-
-export const NEW_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
-  name: "",
-  entityType: "",
-  shortform: "",
-  defaultUom: "EA",
-  validUoms: ["EA"],
-  editableFields: { quantity: true, cost: true, markup: true, price: true, unit1: false, unit2: false, unit3: false },
-  unitLabels: { unit1: "Unit 1", unit2: "Unit 2", unit3: "Unit 3" },
-  calculationType: "manual",
-  calcFormula: "",
-  itemSource: "freeform",
-  catalogId: null,
-  analyticsBucket: null,
-  color: "#6366f1",
-  order: 999,
-  isBuiltIn: false,
-  enabled: true,
 };
 
 export function maskKey(value: string) {

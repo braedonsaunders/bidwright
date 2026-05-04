@@ -140,7 +140,7 @@ async function main() {
           freightOnBoard: r.freightOnBoard,
           status: r.status,
           defaultMarkup: r.defaultMarkup,
-          necaDifficulty: r.necaDifficulty,
+          laborDifficulty: r.laborDifficulty,
           followUpNote: r.followUpNote,
           printEmptyNotesColumn: r.printEmptyNotesColumn,
           printCategory: r.printCategory,
@@ -201,7 +201,18 @@ async function main() {
     // 10. Phases
     for (const p of store.phases) {
       await tx.phase.create({
-        data: { id: p.id, revisionId: p.revisionId, number: p.number, name: p.name, description: p.description, order: p.order },
+        data: {
+          id: p.id,
+          revisionId: p.revisionId,
+          parentId: p.parentId ?? null,
+          number: p.number,
+          name: p.name,
+          description: p.description,
+          order: p.order,
+          startDate: p.startDate ?? null,
+          endDate: p.endDate ?? null,
+          color: p.color ?? "",
+        },
       });
     }
     console.log(`[seed] ${store.phases.length} phases`);

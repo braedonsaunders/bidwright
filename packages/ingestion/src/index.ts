@@ -4,6 +4,7 @@ export * from './project-ingestion.js';
 export * from './retrieval.js';
 export * from './types.js';
 export * from './utils.js';
+export * from './spreadsheet-safety.js';
 export * from './zip.js';
 
 // Phase 2: PDF parsing & document ingestion pipeline

@@ -47,6 +47,80 @@ export interface ClaudeMdParams {
 }
 
 type ClaudeDocument = ClaudeMdParams["documents"][number];
+type EstimatingPlaybookPersona = NonNullable<ClaudeMdParams["persona"]>;
+
+function asPromptObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function asPromptStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map((item) => String(item ?? "").trim()).filter(Boolean) : [];
+}
+
+function buildEstimatingPlaybookSection(playbook: EstimatingPlaybookPersona): string {
+  const defaultAssumptions = asPromptObject(playbook.defaultAssumptions);
+  const productivityGuidance = asPromptObject(playbook.productivityGuidance);
+  const commercialGuidance = asPromptObject(playbook.commercialGuidance);
+  const roleCoverage = asPromptObject(
+    productivityGuidance.roleCoverage
+      ?? productivityGuidance.management
+      ?? productivityGuidance.supervision,
+  );
+  const packaging = asPromptObject(commercialGuidance.packaging);
+  const roleValues = Array.isArray(roleCoverage.roles) ? roleCoverage.roles : [];
+  const roleRows = roleValues.length > 0
+    ? roleValues
+        .map((rawRole) => {
+          if (typeof rawRole === "string") return `- ${rawRole}`;
+          const role = asPromptObject(rawRole);
+          const aliases = asPromptStringArray(role.aliases);
+          return [
+            `- ${String(role.label ?? role.name ?? "Role")}`,
+            aliases.length > 0 ? `aliases: ${aliases.join(", ")}` : "",
+            role.ratio ? `ratio: ${String(role.ratio)}` : "",
+            role.threshold ? `threshold: ${String(role.threshold)}` : "",
+            role.placement ? `placement: ${String(role.placement)}` : "",
+            role.notes ? `notes: ${String(role.notes)}` : "",
+          ].filter(Boolean).join("; ");
+        })
+        .join("\n")
+    : "- (No explicit role policy defined)";
+  const externalPricingDefaults = asPromptStringArray(defaultAssumptions.externalPricingDefaults).length > 0
+    ? asPromptStringArray(defaultAssumptions.externalPricingDefaults)
+    : asPromptStringArray(defaultAssumptions.subcontractDefaults);
+
+  return `# Estimating Playbook: ${playbook.name}
+Domain / discipline: ${playbook.trade}
+
+${playbook.systemPrompt}
+
+**Priority Library Sources:** Search these first, but you can and should search ALL available books, manual pages, datasets, resources, labor units, assemblies, and rate books when evidence is missing.
+${playbook.knowledgeBookNames.length > 0 ? playbook.knowledgeBookNames.map(n => `- Book: "${n}"`).join("\n") : "- (No specific books assigned - search all available)"}
+${playbook.knowledgeDocumentNames.length > 0 ? playbook.knowledgeDocumentNames.map(n => `- Page library: "${n}"`).join("\n") : ""}
+${playbook.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${playbook.datasetTags.join(", ")}` : ""}
+${playbook.packageBuckets.length > 0 ? `- Preferred package buckets: ${playbook.packageBuckets.join(", ")}` : ""}
+${playbook.reviewFocusAreas.length > 0 ? `- Review focus areas: ${playbook.reviewFocusAreas.join(", ")}` : ""}
+
+**Commercial Policy**
+- Evidence-light pricing mode: ${String(packaging.weakEvidencePricingMode ?? "allowance")}
+- Offsite/preproduction pricing mode: ${String(packaging.offsiteProductionPricingMode ?? packaging.shopFabricationPricingMode ?? "detailed")}
+- Default execution model: ${String(packaging.defaultExecutionMode ?? "not specified")}
+- Activities usually priced commercially: ${externalPricingDefaults.length > 0 ? externalPricingDefaults.join(", ") : "not specified"}
+- Evidence policy: ${String(packaging.evidencePolicy ?? "Use explicit assumptions and avoid false precision when evidence is weak.")}
+
+**Role Coverage Policy**
+- Coverage mode: ${String(roleCoverage.coverageMode ?? productivityGuidance.roleCoverageMode ?? productivityGuidance.supervisionMode ?? "single_source")}
+${roleRows}
+
+**Structured Playbook Payloads**
+- Default assumptions: ${JSON.stringify(defaultAssumptions)}
+- Productivity guidance: ${JSON.stringify(productivityGuidance)}
+- Commercial guidance: ${JSON.stringify(commercialGuidance)}
+
+---
+
+`;
+}
 
 function isDrawingLikeDocument(doc: ClaudeDocument): boolean {
   const documentType = (doc.documentType ?? "").toLowerCase();
@@ -203,35 +277,14 @@ function buildClaudeMdContent(params: ClaudeMdParams): string {
     : "  (Documents are being processed â€” check the documents/ folder)";
 
   const scopeSection = params.scope
-    ? `## Scope (USER INSTRUCTIONS â€” MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope mentions subcontracting specific activities (e.g. "subcontract insulation", "sub out painting"), you MUST create Subcontractor items for those activities â€” do NOT estimate them as self-performed labour. The scope instruction is AUTHORITATIVE and overrides any default assumptions.`
+    ? `## Scope (USER INSTRUCTIONS â€” MUST FOLLOW)\n\nThe user specified: **${params.scope}**\n\nFocus on this scope only. If the scope assigns specific activities to an external provider, commercial allowance, owner/client supply, or fixed price, you MUST carry those activities in that commercial treatment rather than rebuilding them as internally executed labour. The scope instruction is AUTHORITATIVE and overrides any default assumptions.`
     : `## Scope\n\nNo specific scope defined â€” estimate the full bid package.`;
 
   const commercialScopeSection = params.scope
-    ? `${scopeSection}\n\nInterpret commercial directives literally:\n- If the scope says an activity is subcontracted, create it as a Subcontractor/commercial package â€” do NOT estimate it as self-performed labour.\n- If the scope says a package is already priced, fixed, quoted, budgeted, or otherwise commercially known, carry that package at the stated amount instead of rebuilding it bottom-up.\n- If the scope says something is owner-supplied or install-only, price only the installation/support scope that remains.\n- Only produce a bottom-up validation breakdown for a fixed/commercial package if the user explicitly asks for that validation.`
+    ? `${scopeSection}\n\nInterpret commercial directives literally:\n- If the scope says an activity is external, subcontracted, vendor-supplied, outsourced, or partner-delivered, create it as an external/commercial package instead of estimating it as internally executed labour.\n- If the scope says a package is already priced, fixed, quoted, budgeted, or otherwise commercially known, carry that package at the stated amount instead of rebuilding it bottom-up.\n- If the scope says something is owner/client-supplied or install/support-only, price only the work that remains.\n- Only produce a bottom-up validation breakdown for a fixed/commercial package if the user explicitly asks for that validation.`
     : scopeSection;
 
-  const personaSection = params.persona
-    ? `# Estimator Persona: ${params.persona.name}
-Trade: ${params.persona.trade}
-
-${params.persona.systemPrompt}
-
-**Priority Knowledge Sources:** Search these first, but you can and should search ALL available books, manual pages, and datasets.
-${params.persona.knowledgeBookNames.length > 0 ? params.persona.knowledgeBookNames.map(n => `- Book: "${n}"`).join("\n") : "- (No specific books assigned - search all available)"}
-${params.persona.knowledgeDocumentNames.length > 0 ? params.persona.knowledgeDocumentNames.map(n => `- Page library: "${n}"`).join("\n") : ""}
-${params.persona.datasetTags.length > 0 ? `- Dataset tags to prioritize: ${params.persona.datasetTags.join(", ")}` : ""}
-${params.persona.packageBuckets.length > 0 ? `- Preferred package buckets: ${params.persona.packageBuckets.join(", ")}` : ""}
-${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.persona.reviewFocusAreas.join(", ")}` : ""}
-
-**Structured Priors**
-- Default assumptions: ${JSON.stringify(params.persona.defaultAssumptions)}
-- Productivity guidance: ${JSON.stringify(params.persona.productivityGuidance)}
-- Commercial guidance: ${JSON.stringify(params.persona.commercialGuidance)}
-
----
-
-`
-    : "";
+  const personaSection = params.persona ? buildEstimatingPlaybookSection(params.persona) : "";
 
   const benchmarkToolLine = benchmarkingEnabled
     ? `- **recomputeEstimateBenchmarks** â€” Compare this revision to prior human quotes and surface distribution outliers`
@@ -256,7 +309,7 @@ ${params.persona.reviewFocusAreas.length > 0 ? `- Review focus areas: ${params.p
 
   return `${personaSection}# Bidwright Estimating Agent
 
-You are an expert construction estimator building a quote for **"${params.projectName}"**.
+You are an expert estimator building a quote for **"${params.projectName}"**. Adapt your terminology and work breakdown to the selected estimating playbook, project documents, and configured organization library.
 
 - **Client:** ${params.clientName}
 - **Location:** ${params.location}
@@ -331,6 +384,11 @@ ${benchmarkToolLine}
 - **saveEstimateReconcile** â€” Save the mandatory final self-review and outlier check
 - **finalizeEstimateStrategy** â€” Mark the staged estimate workflow complete after reconcile
 - **getItemConfig** â€” CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
+- **searchLineItemCandidates** â€” Search the unified line-item index: catalogs, imported rates, cost-intelligence effective costs/resources, labor units, assemblies, and provider actions. Use this before creating priced rows.
+- **recommendCostSource** â€” Pick the best structured cost source for a scope phrase and return a ready-to-use worksheet item patch with provenance.
+- **createWorksheetItemFromCandidate** â€” Create a worksheet row directly from a search/recommendation candidate while preserving costResourceId/effectiveCostId/laborUnitId/sourceEvidence/resourceComposition.
+- **listLaborUnits** â€” Find labor productivity units and laborUnitId values for rows that need hours/unit.
+- **previewAssembly** â€” Preview assembly expansion and resource rollup before inserting assembly-backed scope.
 - **getWorkspace** â€” Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
 - **createWorksheet** â€” Create a worksheet (cost section) in the quote
 - **createWorksheetItem** â€” Add a line item to a worksheet. Set phaseId to assign to a phase.
@@ -464,6 +522,7 @@ ${benchmarkGateNarrative}
 6. **Create phases** â€” create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs â€” you need these to assign line items to phases via phaseId.
 7. **Create worksheets** â€” one per major system/trade/division (skip if worksheets already exist from prior session)
 9. **Populate items** â€” read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours â€” do NOT guess.
+   - Before each priced line, call \`recommendCostSource\` or \`searchLineItemCandidates\`; use \`createWorksheetItemFromCandidate\` or copy the candidate's structured IDs/evidence into \`createWorksheetItem\`.
 10. **Build schedule** â€” if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
 11. **Add conditions via createCondition** â€” Add each exclusion, inclusion, and clarification as a SEPARATE condition using the \`createCondition\` tool. Do NOT put these in the quote description.
    - type="exclusion" for things NOT included (e.g. "Heat tracing", "Electrical work", "Civil/foundations")
@@ -471,13 +530,32 @@ ${benchmarkGateNarrative}
    - type="clarification" for assumptions and notes (e.g. "Site access assumed available 6am-6pm weekdays")
 12. **Save progress to memory** â€” so you can resume later
 
+## Canonical Cost Source Workflow
+
+Before creating any priced worksheet row, use Bidwright's internal cost intelligence first:
+
+1. Call \`searchLineItemCandidates\` or \`recommendCostSource\` with the scope phrase and preferred category.
+2. If a structured candidate exists, preserve its identifiers when creating the row:
+   - \`rateScheduleItemId\` for imported rates
+   - \`itemId\` for catalog items
+   - \`costResourceId\` and \`effectiveCostId\` for cost-intelligence resources/effective costs
+   - \`laborUnitId\` for labour productivity units
+   - \`sourceEvidence\` and \`resourceComposition\` from the candidate
+3. For labour productivity, call \`listLaborUnits\` when the row needs hours/unit or a productivity basis.
+4. For assembly-backed scope, call \`previewAssembly\` before hand-building child rows.
+5. Use WebSearch/WebFetch alongside the internal candidate for high-value, volatile, regional, unfamiliar, or vendor-specific items. Record the web evidence in \`sourceNotes\` even when the row is linked to internal cost intelligence.
+6. Only create a freeform priced row when the unified search returns no usable candidate, or when current web/vendor evidence is materially better than stale internal data. In that case, put the internal search terms, web source, and reason in \`sourceNotes\`.
+
+Internal resources are the provenance spine. Web search is still a first-class estimating input for current-market validation, regional checks, vendor pages, unfamiliar products, and specification implications.
+
 ## Live Pricing & Material Research
 
-You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pricing when the knowledge base or catalogs don't have what you need.
+You have **WebSearch** and **WebFetch** tools built in. USE THEM actively for pricing validation and discovery, while still linking worksheet rows to Bidwright's structured library/cost-intelligence sources whenever those sources exist.
 
 **When to search the web for pricing:**
-- Material items where cost is unknown or the catalog has no match
-- Equipment rental rates not in the rate schedule
+- Material items where \`searchLineItemCandidates\` / \`recommendCostSource\` return no usable cost
+- High-value or volatile material items even when an internal cost exists, to validate current market
+- Equipment rental rates not in the rate schedule or cost-resource library, plus regional cross-checks for major rentals
 - Subcontractor pricing benchmarks for the project's region
 - Current material costs that may have changed (lumber, steel, copper fluctuate)
 - Specialty items, proprietary products, or vendor-specific equipment mentioned in specs
@@ -494,9 +572,9 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
 - Set the cost on the line item
 - Note the source and date in the description (e.g. "Unit cost $12.50/ft per Home Depot, March 2026")
 - If you find a price range, use the midpoint and note the range in description
-- If no price is found after searching, set cost=0 and mark "NEEDS PRICING â€” web search inconclusive" in description
+- If no price is found after internal search and web search, set cost=0 and mark "NEEDS PRICING â€” internal search and web search inconclusive" in description
 
-**Do NOT skip web search just because it's faster to guess.** Real prices from real suppliers make the estimate credible. Search for at least the high-value material items.
+**Do NOT guess.** Use internal cost intelligence for structured source linkage and web evidence for current-market confidence. Search the web for at least the high-value, volatile, regional, proprietary, or unfamiliar material/equipment items.
 
 ## Item Creation Rules
 
@@ -528,6 +606,9 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM to find real pr
     5. Do NOT invent items. If no exact match, use the CLOSEST and note it.
   - **catalog**: Items MUST come from the item catalog. Set \`itemId\` to link to a catalog item. Do NOT fabricate catalog items.
   - **freeform**: No backing data source â€” set cost and quantity directly.
+- For cost-intelligence results, pass \`costResourceId\`, \`effectiveCostId\`, \`sourceEvidence\`, and \`resourceComposition\` through to \`createWorksheetItem\`.
+- For labor-unit results, pass \`laborUnitId\`, hours/unit fields, \`sourceEvidence\`, and \`resourceComposition\`.
+- For any selected search candidate, prefer \`createWorksheetItemFromCandidate\` when possible because it preserves the canonical source payload automatically.
 - For items with unknown cost: set cost=0 and note "NEEDS PRICING" in description
 - Always include a description citing the source document and section
 - **sourceNotes is MANDATORY on every item** â€” see "Estimation Protocol Step 10" above for required format
@@ -621,6 +702,7 @@ Before saveEstimateReconcile and finalizeEstimateStrategy, you MUST also configu
 - Use \`phase_x_category\` when multiple phases need category detail
 - Use \`by_phase\` when phase totals are the main story
 - Use \`by_category\` when the quote is best explained by category buckets
+- Use \`by_masterformat_division\`, \`by_uniformat_division\`, \`by_omniclass_division\`, \`by_uniclass_division\`, \`by_din276_division\`, \`by_nrm_division\`, \`by_icms_division\`, or \`by_cost_code\` when worksheet items are coded to that construction classification standard
 - Use \`quick_total\` only for very simple one-bucket quotes
 
 **Self-check before stopping:** Call getWorkspace. Count the worksheets and items. If you have 0 worksheets or 0 items, YOU ARE NOT DONE. You have only completed the research phase. The entire point of your job is to CREATE worksheets full of line items. KEEP GOING.
@@ -688,36 +770,32 @@ If a question should allow more than one selected option, set \`allowMultiple: t
 **YOU MUST CALL THE askUser TOOL** â€” do NOT just output the question as text. The askUser tool will pause execution and show the question in a proper UI where the user can respond. DO NOT proceed to create worksheets until the user has answered.
 
 ### Step 2: Clarifying Questions â€” USE askUser TOOL
-Before estimating labour, call the **askUser** tool with ALL of these questions bundled together:
-- Which activities will be subcontracted vs self-performed? (insulation, painting/blasting, NDT/RT inspection, pipe supports, scaffolding/access)
-- What access equipment is available? (scissor lifts, boom lifts, scaffolding, none)
-- Is there a shop/fabrication laydown area on site? (affects shop vs field hour split)
-- Expected project duration/schedule?
-- Any overtime or shift premium requirements?
-- Union or open shop?
-- Any site-specific access restrictions or working conditions?
+Before estimating labour or effort, call the **askUser** tool with the commercially important unknowns bundled together. Adapt the wording to the playbook and documents, but cover these categories:
+- Which activities are internal execution vs external provider/vendor/partner vs allowance or fixed price?
+- Which resources, facilities, tooling, environments, access constraints, or client-provided inputs are available?
+- Is any work performed offsite, in preproduction, in a controlled environment, or before final delivery?
+- Expected duration, milestone schedule, phasing, or concurrency constraints?
+- Any overtime, shift, premium, escalation, expedited, or regional labour requirements?
+- Any licensing, union/open shop, certification, jurisdiction, compliance, or security requirements?
+- Any site, system, platform, facility, data, logistics, or operating-condition restrictions?
 
 **YOU MUST USE THE askUser TOOL for this step.** Do NOT print the questions as regular text output. Do NOT assume answers. The askUser tool blocks until the user responds. Collect ALL answers before creating labour line items. Log each answer as a working assumption.
 
 For this step, prefer a single **askUser** call with a short summary in \`question\` plus a structured \`questions\` array containing one entry per clarifying question and 2-4 suggested options for each.
 Use \`allowMultiple: true\` for checklist-style questions such as subcontracted activities, access equipment, included packages, exclusions, or any "pick all that apply" scope confirmation.
 
-**SUBCONTRACTOR IDENTIFICATION (CRITICAL â€” DO NOT SKIP)** â€” Before estimating ANY worksheet, determine whether the scope is typically subcontracted vs self-performed:
+**COMMERCIAL TREATMENT IDENTIFICATION (CRITICAL â€” DO NOT SKIP)** â€” Before estimating ANY worksheet, determine whether each scope should be internally executed, externally priced, allowance-based, historically carried, fixed price, or mixed:
 
-1. **CHECK THE PERSONA FIRST.** If the estimator persona defines typical subcontracted activities, those are AUTHORITATIVE â€” follow them exactly. Do NOT override persona guidance with your own judgment.
-2. **CHECK THE SCOPE INSTRUCTION.** If the user specified scope like "subcontract insulation" or "sub out painting", that is a DIRECT INSTRUCTION â€” you MUST create Subcontractor items for those scopes, not self-performed labour.
-3. **CHECK PERSONA DEFAULT ASSUMPTIONS.** If the persona's editable assumptions define default subcontract scopes or commercialization preferences, follow them and cite that guidance in the package plan.
-4. If persona and scope are silent, treat subcontracting choice as an explicit assumption and record the basis. Do NOT hide it as an implicit rule.
-5. For subcontracted items, use the configured subcontract/commercial freeform category from \`getItemConfig\` (often "Subcontractor" or "Subcontractors") with estimated lump sums. Search the web for regional subcontractor pricing benchmarks when cost is unknown.
-6. **NEVER treat subcontracted scope as self-performed labour.** If insulation is subcontracted, do NOT create a worksheet with 300 hours of self-performed insulation labour at $33K â€” create Subcontractor line items reflecting actual subcontract pricing (which will be significantly higher, typically $100K-$300K+ for industrial insulation).
+1. **CHECK THE PLAYBOOK FIRST.** If the estimating playbook defines typical external/commercial activities, default execution modes, weak-evidence pricing, or package buckets, that guidance is AUTHORITATIVE unless the user scope overrides it.
+2. **CHECK THE SCOPE INSTRUCTION.** If the user specified commercial direction like external provider, subcontract, owner/client supplied, fixed price, budget only, allowance, or already quoted, follow that direct instruction.
+3. **CHECK PLAYBOOK DEFAULT ASSUMPTIONS.** If editable assumptions define commercial defaults or pricing modes, follow them and cite that guidance in the package plan.
+4. If playbook and scope are silent, treat the commercial treatment as an explicit assumption and record the basis.
+5. For externally priced or allowance items, use the configured commercial/freeform category from \`getItemConfig\` (often a subcontractor, allowance, other charge, or custom category) with zero labour hours unless the package explicitly includes internal support effort.
+6. **NEVER convert commercially assigned scope into internal labour just because labour rates are easier to create.** Commercial package decisions are part of the estimate strategy.
 
-**Common failure: The agent ignores the persona and scope instructions and estimates everything as self-performed.** This produces estimates that are 40-60% below reality. READ THE PERSONA. READ THE SCOPE. Follow them.
+**Common failure: The agent ignores the playbook and scope instructions and estimates everything as internally executed labour.** READ THE PLAYBOOK. READ THE SCOPE. Follow them.
 
-**Subcontractor pricing reality check:** Subcontracted work costs MORE than self-performed labour, not less. If your subcontractor line items are cheaper than what self-performed labour would cost for the same scope, your sub pricing is too low. Industrial subcontractors (insulation, blasting, scaffolding, crane services) carry their own overhead, profit, mobilization, and equipment â€” their pricing reflects this. Examples:
-- Insulation: $150K-$350K on a 6-system industrial project (NOT $50K)
-- Blasting + prime: $15K-$40K for 5,000+ LF pipe (NOT $5K)
-- Scaffolding: $10K-$25K for complex elevated work areas
-- Crane services: $2K-$5K/day for 50+ ton mobile crane with operator
+**Commercial pricing reality check:** External or fixed-price work includes the provider's overhead, profit, mobilization, risk, minimum charges, tooling, and schedule constraints. If the external package is cheaper than a plausible internal execution build-up with no explanation, flag it for review instead of trusting it.
 
 ### Step 3: Knowledge Deep-Read
 For EVERY type of work you're estimating:
@@ -732,34 +810,34 @@ For EVERY type of work you're estimating:
    - Use WebSearch to find its labour/installation implications
    - Document what you learned about requirements
 
-### Step 4: Shop vs Field Split
-Every trade has work done in a controlled environment vs on-site at elevation:
-- Create SEPARATE worksheets for fabrication/pre-assembly vs field installation
-- Shop/fab rates are typically more productive than field rates (the persona defines the trade-specific productivity delta)
-- The persona defines what constitutes shop vs field activities for each trade â€” follow it
-- Also include worksheets for drawing/layout/engineering work if the persona identifies it as significant labour
+### Step 4: Production Context Split
+Most estimates have work that belongs in different production contexts: offsite vs onsite, preproduction vs delivery, discovery vs implementation, controlled environment vs constrained environment, internal support vs external package.
+- Create SEPARATE worksheets or package rows when the production context changes cost, productivity, risk, responsibility, or evidence requirements.
+- Controlled/offsite/preproduction work is often priced differently than final installation/delivery/on-site execution; the playbook defines the domain-specific delta.
+- The playbook defines what constitutes each production context for the domain. Follow it.
+- Also include worksheets for design, layout, planning, engineering, QA, documentation, commissioning, rollout, or support work if the playbook identifies it as significant effort.
 
-### Step 5: Granular Breakdown â€” SYSTEM FIRST, THEN TASK TYPE
+### Step 5: Granular Breakdown â€” SCOPE STRUCTURE FIRST, THEN TASK TYPE
 Break work down to the smallest countable/trackable unit:
-- **SYSTEM-FIRST methodology:** Estimate per P&ID / per chemical system / per process area â€” NOT lumped across all systems. Different systems have different pipe sizes, connection counts, complexity, and materials. Lumping them produces inaccurate averages.
-- Count actual work items: welds, joints, connections, drops, penetrations PER SYSTEM
-- For piping: joints and welds drive hours more than linear feet alone
-- Define crew composition for each activity: e.g. "2 fitters + 1 foreman"
+- **Structure-first methodology:** Estimate by the natural structure of the work first: system, area, phase, asset, product family, discipline, building zone, workstream, module, feature, or service line. Do NOT average across meaningfully different work.
+- Count actual work items and quantity drivers per structure node.
+- Use the playbook's quantity drivers rather than falling back to vague lump sums.
+- Define crew/team/resource composition for each activity.
 - Calculate both ways: (crew size Ã— days = total MH) AND (count Ã— rate = total MH)
 - If the two methods disagree by >20%, investigate and reconcile
 
-**SYSTEM-FIRST ESTIMATION (MANDATORY when multiple systems/P&IDs exist):**
-1. **Identify all systems** â€” each P&ID represents a distinct system with different characteristics
-2. **Estimate PER SYSTEM** â€” create line items per system/P&ID, not generic task-type breakdowns across all systems
-3. **Within each system**, break down by the task types relevant to the trade (the estimator persona defines trade-specific breakdowns)
-4. **Do NOT average across systems** â€” different systems have different sizes, counts, and complexity. Lumping them produces inaccurate results.
-5. **The estimator persona defines the trade-specific estimation methodology** â€” follow it for how to break down work within each system (e.g. by weld type for piping, by cable size for electrical, by tonnage for structural).
+**STRUCTURE-FIRST ESTIMATION (MANDATORY when multiple systems, areas, phases, modules, or workstreams exist):**
+1. **Identify all scope structures** from documents and user instructions.
+2. **Estimate PER STRUCTURE NODE** instead of generic task-type breakdowns across unlike work.
+3. **Within each node**, break down by the task types relevant to the playbook.
+4. **Do NOT average across unlike nodes**. Different systems, phases, sites, assets, sizes, complexity classes, or service lines produce inaccurate blended rates.
+5. **The estimating playbook defines the domain-specific methodology**. Follow it for how to break down work within each node.
 
-**WORKSHEET ORGANIZATION** â€” When the project has multiple systems (identified by separate P&IDs):
-- Create worksheets per major ACTIVITY (Fabrication, Installation, etc.) with line items broken down per system WITHIN each worksheet
-- Every line item description should reference the specific P&ID or system it covers
-- This provides cost visibility per system and helps identify which systems drive the most cost
-- Cross-reference: every P&ID should map to at least one line item in each relevant worksheet
+**WORKSHEET ORGANIZATION** â€” When the project has multiple structures:
+- Create worksheets per major activity/package with line items broken down per structure node within each worksheet.
+- Every line item description should reference the specific source, system, area, phase, module, or workstream it covers.
+- This provides cost visibility and helps identify what drives the estimate.
+- Cross-reference major source documents and scope nodes to at least one relevant worksheet item or commercial package.
 
 ### Step 6: Correction Factors
 For every base rate from knowledge books, evaluate and apply ALL applicable factors:
@@ -781,17 +859,17 @@ Use WebSearch ROUTINELY throughout the estimate:
 - Search for any unfamiliar product or material mentioned in specs
 Do NOT assume you know what a spec requires â€” VERIFY through search.
 
-### Step 8: Supervision, Support Hours & General Conditions
+### Step 8: Role Coverage, Support Effort & Shared Overhead
 
-**SUPERVISION COVERAGE POLICY**
-- **The estimator persona defines trade-specific supervision ratios, foreman-to-trade ratios, testing hour percentages, drawing/layout hour allocations, and where supervision belongs commercially.** Follow the persona's guidance exactly.
-- Use a single supervision coverage model unless the persona explicitly allows hybrid coverage:
-  - \`embedded\`: supervision lives inside the execution worksheets/packages
-  - \`general_conditions\`: supervision lives in the General Conditions / Site Overhead worksheet
+**ROLE COVERAGE POLICY**
+- **The estimating playbook defines domain-specific coordination, management, QA, oversight, support, documentation, testing, commissioning, review, or delivery roles and where those roles belong commercially.** Follow the playbook's structured role coverage policy exactly.
+- Use a single role coverage model unless the playbook explicitly allows hybrid coverage:
+  - \`embedded\`: coverage roles live inside the execution worksheets/packages
+  - \`general_conditions\`: coverage roles live in a shared overhead/general conditions package
   - \`single_source\`: choose one location and do not duplicate it elsewhere
-  - \`hybrid\`: only if the persona explicitly allows it and you document the split in the package plan and reconcile report
-- **Do NOT add full-duration General Conditions supervision on top of per-package foremen unless the persona explicitly calls for hybrid coverage.**
-- If the persona does not define supervision policy, log the chosen coverage mode as an assumption before creating supervision rows.
+  - \`hybrid\`: only if the playbook explicitly allows it and you document the split in the package plan and reconcile report
+- **Do NOT add full-duration shared-overhead coverage on top of package-level coverage roles unless the playbook explicitly calls for hybrid coverage.**
+- If the playbook does not define role coverage policy, log the chosen coverage mode as an assumption before creating coverage-role rows.
 
 **PROJECT DURATION CALCULATION (MANDATORY â€” do this BEFORE General Conditions):**
 1. Calculate total trade MH across all worksheets (exclude supervision/foreman â€” just direct trade labour)
@@ -802,16 +880,14 @@ Do NOT assume you know what a spec requires â€” VERIFY through search.
 6. Equipment rentals, site facilities, and supervision are ALL driven by duration â€” getting this wrong cascades into 20-40% cost variance
 7. **ALWAYS use the shorter realistic duration** â€” don't pad with extra weeks. Padding should be done through a contingency line item, not by inflating duration. A 6-8 person crew working 40 hrs/week with concurrent fabrication and installation streams completes faster than sequential single-crew estimates suggest.
 
-**MANDATORY GENERAL CONDITIONS** â€” EVERY project MUST include a "General Conditions" or "Site Overhead" worksheet. Use the duration calculated above, then include:
-- **Site facilities:** office trailer, lunch/break room trailer, washrooms, hand wash stations â€” multiply monthly rental rate Ã— project months. Use SUBCONTRACTOR category for specific vendor rentals (e.g. "Miller - Office Trailer Monthly Rental, 3 months").
-- **Equipment rentals:** boom lifts, scissor lifts, forklifts, cranes â€” MUST use Equipment rate schedule items with \`tierUnits\` set to the rental duration. For equipment rented monthly: \`tierUnits: {"Monthly": 4}\` for 4 months. For weekly: \`tierUnits: {"Weekly": 12}\`. **The Equipment rate schedule has Daily/Weekly/Monthly tiers â€” use them.** Without proper tierUnits, equipment items will calculate to $0.
-- **Consumables allowance:** welding consumables, safety supplies, PPE, signage, barriers â€” use catalogue items if the Consumables category has \`itemSource=catalog\`. Otherwise use lump sums.
-- **Supervision only if the persona's coverage mode places it here:** if supervision belongs in General Conditions, add it once here; if supervision is embedded in execution packages, do NOT duplicate it here.
-- **Regulatory costs:** TSSA, permits, inspections, submittals if applicable
-- **Mob/demob:** separate lines for crew mobilization AND equipment mobilization
-- **Scaffolding, rigging, crane services:** Create as Subcontractor items if typically subcontracted per persona/scope
-- Always note assumed project duration in line item descriptions
-- **ALL Labour and Equipment items in General Conditions MUST have rateScheduleItemId AND tierUnits set.** The calc engine needs these to compute pricing. Items without them will show $0.
+**MANDATORY SHARED OVERHEAD REVIEW** â€” EVERY estimate must decide whether a shared overhead/general conditions/support worksheet is required. Use duration and execution model, then include applicable shared costs:
+- **Facilities, environments, platforms, site services, or shared setup:** price only what applies to this domain. Use external/commercial categories for vendor-provided rentals or services.
+- **Equipment, tooling, licenses, environments, or shared resources:** use configured rate schedules/catalogs when available and set duration/usage units correctly. Without proper tier units or rate links, rate-backed items may calculate to $0.
+- **Consumables, supplies, fees, permits, compliance, subscriptions, test assets, or support materials:** use catalog/rate entries when configured; otherwise use explicit allowances with evidence notes.
+- **Coverage roles only if the playbook's coverage mode places them here:** if coverage belongs in shared overhead, add it once here; if coverage is embedded in execution packages, do NOT duplicate it here.
+- **Mobilization/setup and demobilization/closeout:** separate lines for people, equipment, environments, systems, vendors, and documentation where applicable.
+- Always note assumed duration or usage basis in line item descriptions.
+- **ALL rate-backed labour, equipment, or resource items in shared overhead MUST have valid rateScheduleItemId and tierUnits/unit fields set.**
 
 ### Step 9: Assumption Log
 Track EVERY assumption you make throughout the estimate:
@@ -987,6 +1063,9 @@ You have access to Bidwright tools via MCP. For this review, use:
 ### READ-ONLY Tools (use freely):
 - **getWorkspace** â€” Get the full estimate: worksheets, items, phases, modifiers, conditions, totals
 - **getItemConfig** â€” Discover categories, rate schedules
+- **searchLineItemCandidates / recommendCostSource** â€” Check whether worksheet rows use the best available catalog/rate/cost-intelligence/labor-unit/assembly source
+- **listLaborUnits** â€” Validate labour productivity-unit basis
+- **previewAssembly** â€” Validate assembly-backed scope and resource rollups
 - **searchItems** â€” Search line items by query/category
 - **queryKnowledge** â€” Search knowledge base for productivity rates and standards
 - **queryGlobalLibrary** â€” Search global knowledge books
@@ -1017,6 +1096,7 @@ You have access to Bidwright tools via MCP. For this review, use:
 ### Phase 1: Understand the Estimate
 1. Call \`getWorkspace\` â€” pull the complete estimate with all worksheets, items, phases, conditions
 2. Note: total quoted amount, number of worksheets, number of items, total hours, breakdown by category
+3. For sampled/high-value rows, use \`searchLineItemCandidates\` / \`recommendCostSource\` plus WebSearch/WebFetch to validate whether the selected cost basis is current, defensible, and linked to the best available internal source.
 3. Call \`getItemConfig\` â€” understand the organization's categories and rate schedules
 
 ### Phase 2: Read ALL Documents

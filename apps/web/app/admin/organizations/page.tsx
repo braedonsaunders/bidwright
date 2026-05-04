@@ -5,12 +5,15 @@ import { useAuth } from "@/components/auth-provider";
 import {
   adminListOrganizations,
   adminCreateOrganization,
+  adminUpdateOrganization,
   adminDeleteOrganization,
   adminListOrgUsers,
   adminUpdateOrgLimits,
   adminCreateOrgUser,
   adminUpdateUser,
   adminDeleteUser,
+  seedEssentials,
+  seedSampleData,
   type AdminOrg,
   type AuthUser,
   type OrgLimits,
@@ -47,6 +50,8 @@ export default function OrganizationsPage() {
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<AdminOrg | null>(null);
+  const [busyOrgAction, setBusyOrgAction] = useState<string | null>(null);
   const [expandedOrg, setExpandedOrg] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<"users" | "limits">("users");
   const [orgUsers, setOrgUsers] = useState<Record<string, AuthUser[]>>({});
@@ -83,6 +88,28 @@ export default function OrganizationsPage() {
       setOrgs((prev) => prev.filter((o) => o.id !== orgId));
     } catch { /* ignore */ }
   }, []);
+
+  const handleSeedEssentials = useCallback(async (orgId: string) => {
+    setBusyOrgAction(`${orgId}:essentials`);
+    try {
+      await seedEssentials(orgId);
+    } catch { /* ignore */ }
+    finally {
+      setBusyOrgAction(null);
+    }
+  }, []);
+
+  const handleSeedSampleData = useCallback(async (orgId: string, orgName: string) => {
+    if (!confirm(`Load sample data into "${orgName}"?`)) return;
+    setBusyOrgAction(`${orgId}:sample`);
+    try {
+      await seedSampleData(orgId);
+      await fetchOrgs();
+    } catch { /* ignore */ }
+    finally {
+      setBusyOrgAction(null);
+    }
+  }, [fetchOrgs]);
 
   const refreshOrgUsers = useCallback(async (orgId: string) => {
     try {
@@ -156,6 +183,25 @@ export default function OrganizationsPage() {
                         <LogIn className="mr-1 h-3 w-3" />
                         Enter
                       </Button>
+                      <Button variant="ghost" size="xs" onClick={() => setEditingOrg(org)}>
+                        <Edit3 className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => handleSeedEssentials(org.id)}
+                        disabled={busyOrgAction === `${org.id}:essentials`}
+                      >
+                        Essentials
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => handleSeedSampleData(org.id, org.name)}
+                        disabled={busyOrgAction === `${org.id}:sample`}
+                      >
+                        Sample
+                      </Button>
                       <Button variant="danger" size="xs" onClick={() => handleDelete(org.id, org.name)}>
                         <Trash2 className="h-3 w-3" />
                       </Button>
@@ -192,6 +238,14 @@ export default function OrganizationsPage() {
         <CreateOrgModal
           onClose={() => setShowCreate(false)}
           onCreated={() => { setShowCreate(false); fetchOrgs(); }}
+        />
+      )}
+
+      {editingOrg && (
+        <EditOrgModal
+          org={editingOrg}
+          onClose={() => setEditingOrg(null)}
+          onSaved={() => { setEditingOrg(null); fetchOrgs(); }}
         />
       )}
     </div>
@@ -588,6 +642,60 @@ function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated
             <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
             <Button variant="accent" type="submit" disabled={loading || !name.trim()}>
               {loading ? "Creating..." : "Create"}
+            </Button>
+          </div>
+        </form>
+      </CardBody>
+    </ModalBackdrop>
+  );
+}
+
+function EditOrgModal({ org, onClose, onSaved }: { org: AdminOrg; onClose: () => void; onSaved: () => void }) {
+  const [name, setName] = useState(org.name);
+  const [slug, setSlug] = useState(org.slug);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      await adminUpdateOrganization(org.id, { name, slug });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update org");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <ModalBackdrop open={true} onClose={onClose} size="md">
+      <CardHeader>
+        <CardTitle>Edit Organization</CardTitle>
+      </CardHeader>
+      <CardBody>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
+              {error}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="editOrgName">Organization Name</Label>
+              <Input id="editOrgName" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+            </div>
+            <div>
+              <Label htmlFor="editOrgSlug">Slug</Label>
+              <Input id="editOrgSlug" value={slug} onChange={(e) => setSlug(e.target.value)} required />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button variant="accent" type="submit" disabled={loading || !name.trim() || !slug.trim()}>
+              {loading ? "Saving..." : "Save"}
             </Button>
           </div>
         </form>

@@ -21,6 +21,14 @@ const FILE_HINTS: Array<{ kind: DocumentKind; patterns: RegExp[] }> = [
       /elevation/i,
       /permit set/i,
       /bid set/i,
+      /p\s*&\s*id/i,
+      /p\s+and\s+id/i,
+      /\bpids?\b/i,
+      /\bpid[-_\s]/i,
+      /piping\s+and\s+instrumentation/i,
+      /process\s+flow\s+diagram/i,
+      /block\s+flow\s+diagram/i,
+      /flow\s+diagram/i,
     ],
   },
   {
@@ -79,7 +87,7 @@ function inferFromText(text: string | undefined): DocumentKind | null {
   if (/division\s+\d+|section\s+\d+|part\s+\d+/i.test(sample)) {
     return 'spec';
   }
-  if (/drawing no\.?|sheet\s+[a-z0-9-]+|scale:/i.test(sample)) {
+  if (/drawing no\.?|sheet\s+[a-z0-9-]+|scale:|p\s*&\s*id|piping\s+and\s+instrumentation|process\s+flow\s+diagram|block\s+flow\s+diagram/i.test(sample)) {
     return 'drawing';
   }
   if (/estimate book|pipefitting|labor unit|manual/i.test(sample)) {

@@ -36,8 +36,15 @@ model Organization {
   burdenPeriods            BurdenPeriod[]
   travelPolicies           TravelPolicy[]
   estimatorPersonas        EstimatorPersona[]
+  estimateFactorLibrary    EstimateFactorLibraryEntry[]
   assemblies               Assembly[]
   integrations             Integration[]
+  resourceCatalogItems     ResourceCatalogItem[]
+  laborUnitLibraries       LaborUnitLibrary[]
+  costVendors              CostVendor[]
+  costVendorProducts       CostVendorProduct[]
+  priceObservations        PriceObservation[]
+  effectiveCosts           EffectiveCost[]
 }
 
 model OrganizationSettings {
@@ -177,6 +184,8 @@ model Project {
   quoteReviews                QuoteReview[]
   estimateStrategies          EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
+  priceObservations           PriceObservation[]
+  effectiveCosts              EffectiveCost[]
 
   @@index([organizationId])
 }
@@ -198,6 +207,7 @@ model SourceDocument {
 
   citations   Citation[]
   modelAssets ModelAsset[]
+  priceObservations PriceObservation[]
 
   @@index([projectId])
 }
@@ -256,7 +266,7 @@ model QuoteRevision {
   freightOnBoard           String   @default("")
   status                   String   @default("Open")
   defaultMarkup            Float    @default(0)
-  necaDifficulty           String   @default("")
+  laborDifficulty           String   @default("")
   followUpNote             String   @default("")
   printEmptyNotesColumn    Boolean  @default(false)
   printCategory            String[] @default([])
@@ -273,13 +283,16 @@ model QuoteRevision {
   totalHours               Float    @default(0)
   breakoutPackage          Json     @default("[]")
   calculatedCategoryTotals Json     @default("[]")
+  pricingLadder            Json     @default("{}")
   summaryLayoutPreset      String   @default("custom")
   pdfPreferences           Json     @default("{}")
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
   worksheets                  Worksheet[]
+  worksheetFolders            WorksheetFolder[]
   phases                      Phase[]
+  estimateFactors             EstimateFactor[]
   adjustments                 Adjustment[]
   modifiers                   Modifier[]
   additionalLineItems         AdditionalLineItem[]
@@ -299,10 +312,28 @@ model QuoteRevision {
 
 // ── Worksheets & Items ────────────────────────────────────────────────────
 
+model WorksheetFolder {
+  id         String        @id @default(cuid())
+  revisionId String
+  revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  parentId   String?
+  parent     WorksheetFolder?  @relation("WorksheetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children   WorksheetFolder[] @relation("WorksheetFolderTree")
+  name       String        @default("Folder")
+  order      Int           @default(0)
+
+  worksheets Worksheet[]
+
+  @@index([revisionId])
+  @@index([parentId])
+}
+
 model Worksheet {
   id         String        @id @default(cuid())
   revisionId String
   revision   QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  folderId   String?
+  folder     WorksheetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   name       String        @default("Worksheet 1")
   order      Int           @default(0)
 
@@ -310,6 +341,7 @@ model Worksheet {
   assemblyInstances AssemblyInstance[]
 
   @@index([revisionId])
+  @@index([folderId])
 }
 
 model WorksheetItem {
@@ -317,9 +349,13 @@ model WorksheetItem {
   worksheetId        String
   worksheet          Worksheet         @relation(fields: [worksheetId], references: [id], onDelete: Cascade)
   phaseId            String?
+  categoryId         String
+  entityCategory     EntityCategory    @relation("WorksheetItemEntityCategory", fields: [categoryId], references: [id], onDelete: Restrict)
   category           String            @default("Material")
   entityType         String            @default("Material")
   entityName         String            @default("")
+  classification     Json              @default("{}")
+  costCode           String?
   vendor             String?
   description        String            @default("")
   quantity           Float             @default(0)
@@ -335,6 +371,14 @@ model WorksheetItem {
   itemId             String? // FK to CatalogItem (for catalog-backed categories)
   tierUnits          Json              @default("{}")
   sourceNotes        String            @default("")
+  costResourceId     String?
+  costResource       ResourceCatalogItem? @relation("WorksheetItemCostResource", fields: [costResourceId], references: [id], onDelete: SetNull)
+  effectiveCostId    String?
+  effectiveCost      EffectiveCost?    @relation("WorksheetItemEffectiveCost", fields: [effectiveCostId], references: [id], onDelete: SetNull)
+  laborUnitId        String?
+  laborUnit          LaborUnit?        @relation("WorksheetItemLaborUnit", fields: [laborUnitId], references: [id], onDelete: SetNull)
+  resourceComposition Json             @default("{}")
+  sourceEvidence     Json              @default("{}")
   sourceAssemblyId   String?
   sourceAssembly     Assembly?         @relation("WorksheetItemSourceAssembly", fields: [sourceAssemblyId], references: [id], onDelete: SetNull)
   assemblyInstanceId String?
@@ -345,6 +389,11 @@ model WorksheetItem {
 
   @@index([worksheetId])
   @@index([phaseId])
+  @@index([categoryId])
+  @@index([costCode])
+  @@index([costResourceId])
+  @@index([effectiveCostId])
+  @@index([laborUnitId])
   @@index([sourceAssemblyId])
   @@index([assemblyInstanceId])
 }
@@ -355,6 +404,9 @@ model Phase {
   id          String        @id @default(cuid())
   revisionId  String
   revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  parentId    String?
+  parent      Phase?        @relation("PhaseTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Phase[]       @relation("PhaseTree")
   number      String        @default("")
   name        String        @default("")
   description String        @default("")
@@ -364,6 +416,7 @@ model Phase {
   color       String        @default("")
 
   @@index([revisionId])
+  @@index([parentId])
 }
 
 // ── Schedule Tasks ──────────────────────────────────────────────────────
@@ -566,6 +619,9 @@ model Adjustment {
   name        String        @default("")
   description String        @default("")
   type        String        @default("")
+  financialCategory String  @default("other")
+  calculationBase   String  @default("selected_scope")
+  active      Boolean       @default(true)
   appliesTo   String        @default("All")
   percentage  Float?
   amount      Float?
@@ -574,6 +630,63 @@ model Adjustment {
   updatedAt   DateTime      @updatedAt
 
   @@index([revisionId])
+}
+
+model EstimateFactor {
+  id          String        @id @default(cuid())
+  revisionId  String
+  revision    QuoteRevision @relation(fields: [revisionId], references: [id], onDelete: Cascade)
+  order       Int           @default(0)
+  name        String        @default("")
+  code        String        @default("")
+  description String        @default("")
+  category    String        @default("Productivity")
+  impact      String        @default("labor_hours")
+  value       Float         @default(1)
+  active      Boolean       @default(true)
+  appliesTo   String        @default("Labour")
+  applicationScope String    @default("global")
+  scope       Json          @default("{}")
+  formulaType String        @default("fixed_multiplier")
+  parameters  Json          @default("{}")
+  confidence  String        @default("medium")
+  sourceType  String        @default("custom")
+  sourceId    String?
+  sourceRef   Json          @default("{}")
+  tags        String[]      @default([])
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([revisionId])
+  @@index([sourceType])
+}
+
+model EstimateFactorLibraryEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  order          Int          @default(0)
+  name           String       @default("")
+  code           String       @default("")
+  description    String       @default("")
+  category       String       @default("Productivity")
+  impact         String       @default("labor_hours")
+  value          Float        @default(1)
+  appliesTo      String       @default("Labour")
+  applicationScope String      @default("both")
+  scope          Json         @default("{}")
+  formulaType    String       @default("fixed_multiplier")
+  parameters     Json         @default("{}")
+  confidence     String       @default("medium")
+  sourceType     String       @default("custom")
+  sourceId       String?
+  sourceRef      Json         @default("{}")
+  tags           String[]     @default([])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([sourceType])
 }
 
 model SummaryRow {
@@ -592,6 +705,10 @@ model SummaryRow {
   sourceCategoryId    String?
   sourceCategoryLabel String?
   sourcePhaseId       String?
+  sourceWorksheetId   String?
+  sourceWorksheetLabel String?
+  sourceClassificationId String?
+  sourceClassificationLabel String?
   sourceAdjustmentId  String?
 
   // Computed (filled by recalculate)
@@ -1224,10 +1341,187 @@ model CatalogItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  assemblyComponents AssemblyComponent[]
-  rateScheduleItems  RateScheduleItem[]
+  assemblyComponents   AssemblyComponent[]
+  rateScheduleItems    RateScheduleItem[]
+  resourceCatalogItems ResourceCatalogItem[]
+  laborUnits           LaborUnit[]
 
   @@index([catalogId])
+}
+
+// ── Cost Intelligence ───────────────────────────────────────────────────
+
+model CostVendor {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  normalizedName String       @default("")
+  aliases        String[]     @default([])
+  website        String       @default("")
+  contactInfo    Json         @default("{}")
+  metadata       Json         @default("{}")
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  products          CostVendorProduct[]
+  priceObservations PriceObservation[]
+  effectiveCosts    EffectiveCost[]
+
+  @@unique([organizationId, normalizedName])
+  @@index([organizationId])
+  @@index([organizationId, name])
+}
+
+model CostVendorProduct {
+  id             String               @id @default(cuid())
+  organizationId String
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  vendorId       String
+  vendor         CostVendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  resourceId     String?
+  resource       ResourceCatalogItem? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  sku            String               @default("")
+  name           String
+  normalizedName String               @default("")
+  description    String               @default("")
+  defaultUom     String               @default("EA")
+  metadata       Json                 @default("{}")
+  active         Boolean              @default(true)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  priceObservations PriceObservation[]
+  effectiveCosts    EffectiveCost[]
+
+  @@unique([vendorId, sku, normalizedName, defaultUom])
+  @@index([organizationId])
+  @@index([vendorId])
+  @@index([resourceId])
+  @@index([organizationId, sku])
+}
+
+model ResourceCatalogItem {
+  id                     String        @id @default(cuid())
+  organizationId         String
+  organization           Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  catalogItemId          String?
+  catalogItem            CatalogItem?   @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  resourceType           String        @default("material")
+  category               String        @default("")
+  code                   String        @default("")
+  name                   String
+  normalizedName         String        @default("")
+  description            String        @default("")
+  manufacturer           String        @default("")
+  manufacturerPartNumber String        @default("")
+  defaultUom             String        @default("EA")
+  aliases                String[]      @default([])
+  tags                   String[]      @default([])
+  metadata               Json          @default("{}")
+  active                 Boolean       @default(true)
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  priceObservations PriceObservation[]
+  effectiveCosts    EffectiveCost[]
+  vendorProducts    CostVendorProduct[]
+  assemblyComponents AssemblyComponent[]
+  worksheetItems    WorksheetItem[] @relation("WorksheetItemCostResource")
+
+  @@index([organizationId])
+  @@index([organizationId, resourceType])
+  @@index([organizationId, code])
+  @@index([catalogItemId])
+}
+
+model PriceObservation {
+  id               String               @id @default(cuid())
+  organizationId   String
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  resourceId       String?
+  resource         ResourceCatalogItem? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  vendorId         String?
+  vendor           CostVendor?          @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorProductId  String?
+  vendorProduct    CostVendorProduct?   @relation(fields: [vendorProductId], references: [id], onDelete: SetNull)
+  projectId        String?
+  project          Project?             @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  sourceDocumentId String?
+  sourceDocument   SourceDocument?      @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  vendorName       String               @default("")
+  vendorSku        String               @default("")
+  documentType     String               @default("manual")
+  observedAt       DateTime             @default(now())
+  effectiveDate    String?
+  quantity         Float                @default(1)
+  observedUom      String               @default("EA")
+  unitCost         Float                @default(0)
+  unitPrice        Float?
+  currency         String               @default("USD")
+  freight          Float                @default(0)
+  tax              Float                @default(0)
+  discount         Float                @default(0)
+  confidence       Float                @default(0)
+  fingerprint      String               @default("")
+  sourceRef        Json                 @default("{}")
+  rawText          String               @default("")
+  metadata         Json                 @default("{}")
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  effectiveCostCitations EffectiveCost[] @relation("EffectiveCostSourceObservation")
+
+  @@index([organizationId])
+  @@index([resourceId, observedAt])
+  @@index([vendorId])
+  @@index([vendorProductId])
+  @@index([projectId])
+  @@index([sourceDocumentId])
+  @@index([organizationId, vendorName])
+  @@index([organizationId, fingerprint])
+}
+
+model EffectiveCost {
+  id                  String              @id @default(cuid())
+  organizationId      String
+  organization        Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  resourceId          String?
+  resource            ResourceCatalogItem? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+  vendorId            String?
+  vendor              CostVendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  vendorProductId     String?
+  vendorProduct       CostVendorProduct?  @relation(fields: [vendorProductId], references: [id], onDelete: SetNull)
+  projectId           String?
+  project             Project?            @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  vendorName          String              @default("")
+  region              String              @default("")
+  uom                 String              @default("EA")
+  unitCost            Float               @default(0)
+  unitPrice           Float?
+  currency            String              @default("USD")
+  effectiveDate       String?
+  expiresAt           String?
+  sourceObservationId String?
+  sourceObservation   PriceObservation?   @relation("EffectiveCostSourceObservation", fields: [sourceObservationId], references: [id], onDelete: SetNull)
+  method              String              @default("latest_observation")
+  sampleSize          Int                 @default(0)
+  confidence          Float               @default(0)
+  metadata            Json                @default("{}")
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  assemblyComponents AssemblyComponent[]
+  worksheetItems      WorksheetItem[] @relation("WorksheetItemEffectiveCost")
+
+  @@index([organizationId])
+  @@index([resourceId])
+  @@index([vendorId])
+  @@index([vendorProductId])
+  @@index([projectId])
+  @@index([sourceObservationId])
+  @@index([organizationId, resourceId, uom, currency])
 }
 
 // ── Assemblies ────────────────────────────────────────────────────────────
@@ -1300,6 +1594,13 @@ model AssemblyComponent {
   catalogItem        CatalogItem?      @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
   rateScheduleItemId String?
   rateScheduleItem   RateScheduleItem? @relation(fields: [rateScheduleItemId], references: [id], onDelete: SetNull)
+  laborUnitId        String?
+  laborUnit          LaborUnit?        @relation(fields: [laborUnitId], references: [id], onDelete: SetNull)
+  laborDifficulty    String            @default("normal")
+  costResourceId     String?
+  costResource       ResourceCatalogItem? @relation(fields: [costResourceId], references: [id], onDelete: SetNull)
+  effectiveCostId    String?
+  effectiveCost      EffectiveCost?    @relation(fields: [effectiveCostId], references: [id], onDelete: SetNull)
   subAssemblyId      String?
   subAssembly        Assembly?         @relation("AssemblyComponentSubAssembly", fields: [subAssemblyId], references: [id], onDelete: Restrict)
   quantityExpr       String            @default("1")
@@ -1315,6 +1616,9 @@ model AssemblyComponent {
   @@index([assemblyId])
   @@index([catalogItemId])
   @@index([rateScheduleItemId])
+  @@index([laborUnitId])
+  @@index([costResourceId])
+  @@index([effectiveCostId])
   @@index([subAssemblyId])
 }
 
@@ -1382,6 +1686,35 @@ model PluginExecution {
 
   @@index([projectId])
   @@index([pluginId])
+}
+
+model LineItemSearchDocument {
+  id             String   @id
+  organizationId String
+  projectId      String?
+  sourceType     String
+  sourceId       String
+  actionType     String   @default("select")
+  category       String   @default("")
+  entityType     String   @default("")
+  title          String
+  subtitle       String   @default("")
+  code           String   @default("")
+  vendor         String   @default("")
+  uom            String   @default("EA")
+  unitCost       Float?
+  unitPrice      Float?
+  searchText     String   @default("")
+  searchVector   Unsupported("tsvector") @default(dbgenerated("''::tsvector"))
+  payload        Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([organizationId, projectId])
+  @@index([organizationId, sourceType])
+  @@index([organizationId, category])
+  @@index([organizationId, entityType])
 }
 
 // ── Knowledge ─────────────────────────────────────────────────────────────
@@ -1506,6 +1839,7 @@ model KnowledgeLibraryCabinet {
   books     KnowledgeBook[]     @relation("KnowledgeBookCabinet")
   documents KnowledgeDocument[] @relation("KnowledgeDocumentCabinet")
   datasets  Dataset[]           @relation("DatasetCabinet")
+  laborUnitLibraries LaborUnitLibrary[] @relation("LaborUnitLibraryCabinet")
 
   @@index([organizationId])
   @@index([parentId])
@@ -1557,6 +1891,73 @@ model DatasetRow {
   @@index([datasetId])
 }
 
+// ── Labor Units ───────────────────────────────────────────────────────────
+
+model LaborUnitLibrary {
+  id                String                   @id @default(cuid())
+  organizationId    String?
+  organization      Organization?            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  cabinetId         String?
+  cabinet           KnowledgeLibraryCabinet? @relation("LaborUnitLibraryCabinet", fields: [cabinetId], references: [id], onDelete: SetNull)
+  name              String
+  description       String                   @default("")
+  provider          String                   @default("")
+  discipline        String                   @default("")
+  source            String                   @default("manual")
+  sourceDescription String                   @default("")
+  sourceDatasetId   String?
+  tags              String[]                 @default([])
+  isTemplate        Boolean                  @default(false)
+  sourceTemplateId  String?
+  metadata          Json                     @default("{}")
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  units LaborUnit[]
+
+  @@index([organizationId])
+  @@index([cabinetId])
+  @@index([isTemplate])
+  @@index([provider])
+}
+
+model LaborUnit {
+  id                 String           @id @default(cuid())
+  libraryId          String
+  library            LaborUnitLibrary @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  catalogItemId      String?
+  catalogItem        CatalogItem?     @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  code               String           @default("")
+  name               String
+  description        String           @default("")
+  discipline         String           @default("")
+  category           String           @default("")
+  className          String           @default("")
+  subClassName       String           @default("")
+  outputUom          String           @default("EA")
+  hoursNormal        Float            @default(0)
+  hoursDifficult     Float?
+  hoursVeryDifficult Float?
+  defaultDifficulty  String           @default("normal")
+  entityCategoryType String           @default("Labour")
+  tags               String[]         @default([])
+  sourceRef          Json             @default("{}")
+  metadata           Json             @default("{}")
+  sortOrder          Int              @default(0)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  assemblyComponents AssemblyComponent[]
+  worksheetItems      WorksheetItem[] @relation("WorksheetItemLaborUnit")
+
+  @@index([libraryId])
+  @@index([catalogItemId])
+  @@index([category])
+  @@index([className])
+  @@index([subClassName])
+  @@index([entityCategoryType])
+}
+
 // ── Entity Categories ─────────────────────────────────────────────────────
 
 model EntityCategory {
@@ -1583,6 +1984,8 @@ model EntityCategory {
   order           Int          @default(0)
   isBuiltIn       Boolean      @default(false)
   enabled         Boolean      @default(true)
+
+  worksheetItems  WorksheetItem[] @relation("WorksheetItemEntityCategory")
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -1711,7 +2114,7 @@ model Department {
 
 // ── Integrations ──────────────────────────────────────────────────────────
 //
-// Manifest-driven framework for connecting external systems (NetSuite, Procore,
+// Manifest-driven framework for connecting external systems (legacy source, Procore,
 // QuickBooks, Slack, custom REST, ...). Distinct from Plugin — Plugins produce
 // estimate artifacts, Integrations talk to outside systems. Tools surfaced to
 // the agent and MCP under namespace `integration.{slug}.{action}`.
@@ -1720,7 +2123,7 @@ model Integration {
   id                String       @id @default(cuid())
   organizationId    String
   organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  manifestId        String       // e.g. "netsuite", "procore", "generic-rest"
+  manifestId        String       // e.g. "legacy-source", "procore", "generic-rest"
   manifestVersion   String       // semver of installed manifest
   manifestSource    String       @default("builtin") // builtin | community | custom
   manifestSnapshot  Json         // frozen manifest at install time (audit + offline)

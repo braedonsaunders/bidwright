@@ -36,6 +36,7 @@ interface AgentChatProps {
   projectId: string;
   open: boolean;
   onClose: () => void;
+  prefill?: string | null;
   autoStartIntake?: boolean;
   initialPersonaId?: string | null;
   onIntakeStarted?: () => void;
@@ -1051,7 +1052,7 @@ interface IngestionDoc {
   hasText: boolean;
 }
 
-export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated }: AgentChatProps) {
+export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated }: AgentChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1109,7 +1110,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPe
     });
   }, []);
 
-  // Load CLI runtime and personas from org settings
+  // Load CLI runtime and estimating playbooks from the org library
   useEffect(() => {
     let active = true;
 
@@ -1266,6 +1267,12 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPe
       inputRef.current.focus();
     }
   }, [open]);
+
+  useEffect(() => {
+    if (open) {
+      setInput(prefill ?? "");
+    }
+  }, [open, prefill]);
 
   // Auto-scroll only when user hasn't manually scrolled up
   useEffect(() => {
@@ -1864,7 +1871,7 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPe
                       Estimate Setup
                     </div>
                     <div className="text-[10px] text-fg/30">
-                      Persona and scope instructions used for AI estimating.
+                      Playbook and scope instructions used for AI estimating.
                     </div>
                   </div>
                   {(isIntakeRunning || intakeLoading) && (
@@ -1873,18 +1880,18 @@ export function AgentChat({ projectId, open, onClose, autoStartIntake, initialPe
                     </Badge>
                   )}
                 </div>
-                {/* Persona selection */}
+                {/* Playbook selection */}
                 {personas.length > 0 && (
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                      Estimator Persona
+                      Estimating Playbook
                     </label>
                     <Select
                       size="sm"
                       value={selectedPersonaId ?? "__none__"}
                       onValueChange={(v) => setSelectedPersonaId(v === "__none__" ? null : v)}
                       options={[
-                        { value: "__none__", label: "No persona (generic estimator)" },
+                        { value: "__none__", label: "No playbook (generic estimator)" },
                         ...personas.map((p) => ({ value: p.id, label: `${p.name} - ${p.trade}` })),
                       ]}
                     />

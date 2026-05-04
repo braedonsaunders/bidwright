@@ -25,11 +25,11 @@ export {
   hubspotManifest,
   slackManifest,
   microsoft365Manifest,
+  netsuiteManifest,
   quickbooksManifest,
   procoreManifest,
   salesforceManifest,
   googleWorkspaceManifest,
-  netsuiteManifest,
   sftpCsvManifest,
 } from "./manifests/index.js";
 

@@ -16,6 +16,8 @@ import type {
   Department,
   EntityCategory,
   EstimateCalibrationFeedback,
+  EstimateFactor,
+  EstimateFactorLibraryEntry,
   EstimateStrategy,
   FileNode,
   Job,
@@ -28,6 +30,8 @@ import type {
   LabourCostEntry,
   LabourCostTable,
   LabourCostTableWithEntries,
+  LaborUnit,
+  LaborUnitLibrary,
   Modifier,
   Phase,
   Plugin,
@@ -54,7 +58,7 @@ import type {
   WorksheetItem,
   BurdenPeriod,
 } from "@bidwright/domain";
-import { normalizeCalculationType } from "@bidwright/domain";
+import { DEFAULT_UOMS, normalizeCalculationType } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 
 import { relativeWorkspacePath } from "../paths.js";
@@ -80,6 +84,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     dateFormat: "MM/DD/YYYY",
     fiscalYearStart: 1,
     maxAgentIterations: 200,
+    uoms: DEFAULT_UOMS,
     benchmarkingEnabled: true,
     benchmarkMinimumSimilarity: 0.55,
     benchmarkMaximumComparables: 5,
@@ -224,7 +229,7 @@ export function mapRevision(r: any): QuoteRevision {
     freightOnBoard: r.freightOnBoard,
     status: r.status as QuoteRevision["status"],
     defaultMarkup: r.defaultMarkup,
-    necaDifficulty: r.necaDifficulty,
+    laborDifficulty: r.laborDifficulty,
     followUpNote: r.followUpNote,
     printEmptyNotesColumn: r.printEmptyNotesColumn,
     printCategory: r.printCategory ?? [],
@@ -237,6 +242,7 @@ export function mapRevision(r: any): QuoteRevision {
     calculatedCategoryTotals: (r.calculatedCategoryTotals as unknown[]) ?? [],
     summaryLayoutPreset: (r.summaryLayoutPreset ?? "custom") as QuoteRevision["summaryLayoutPreset"],
     pdfPreferences: (r.pdfPreferences as Record<string, unknown>) ?? {},
+    pricingLadder: (r.pricingLadder as QuoteRevision["pricingLadder"]) ?? { version: 1, directCost: 0, lineSubtotal: 0, adjustmentTotal: 0, netTotal: 0, grandTotal: 0, internalProfit: 0, internalMargin: 0, rows: [] },
     subtotal: r.subtotal,
     cost: r.cost,
     estimatedProfit: r.estimatedProfit,
@@ -248,18 +254,26 @@ export function mapRevision(r: any): QuoteRevision {
   };
 }
 
-export function mapWorksheet(w: any): { id: string; revisionId: string; name: string; order: number } {
-  return { id: w.id, revisionId: w.revisionId, name: w.name, order: w.order };
+export function mapWorksheet(w: any): { id: string; revisionId: string; folderId: string | null; name: string; order: number } {
+  return { id: w.id, revisionId: w.revisionId, folderId: w.folderId ?? null, name: w.name, order: w.order };
+}
+
+export function mapWorksheetFolder(w: any): { id: string; revisionId: string; parentId: string | null; name: string; order: number } {
+  return { id: w.id, revisionId: w.revisionId, parentId: w.parentId ?? null, name: w.name, order: w.order };
 }
 
 export function mapWorksheetItem(i: any): WorksheetItem {
+  const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
     id: i.id,
     worksheetId: i.worksheetId,
     phaseId: i.phaseId ?? null,
-    category: i.category,
-    entityType: i.entityType,
+    categoryId: i.categoryId ?? categoryRef?.id ?? null,
+    category: categoryRef?.name ?? i.category,
+    entityType: categoryRef?.entityType ?? i.entityType,
     entityName: decodeHtmlEntities(i.entityName ?? ""),
+    classification: (i.classification as Record<string, unknown>) ?? {},
+    costCode: i.costCode ?? null,
     vendor: i.vendor ? decodeHtmlEntities(i.vendor) : undefined,
     description: decodeHtmlEntities(i.description ?? ""),
     quantity: i.quantity,
@@ -275,13 +289,18 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
     sourceNotes: decodeHtmlEntities(i.sourceNotes ?? ""),
+    costResourceId: i.costResourceId ?? null,
+    effectiveCostId: i.effectiveCostId ?? null,
+    laborUnitId: i.laborUnitId ?? null,
+    resourceComposition: (i.resourceComposition as Record<string, unknown>) ?? {},
+    sourceEvidence: (i.sourceEvidence as Record<string, unknown>) ?? {},
     sourceAssemblyId: i.sourceAssemblyId ?? null,
     assemblyInstanceId: i.assemblyInstanceId ?? null,
   };
 }
 
 export function mapPhase(p: any): Phase {
-  return { id: p.id, revisionId: p.revisionId, number: p.number, name: p.name, description: p.description, order: p.order, startDate: p.startDate ?? null, endDate: p.endDate ?? null, color: p.color ?? "" };
+  return { id: p.id, revisionId: p.revisionId, parentId: p.parentId ?? null, number: p.number, name: p.name, description: p.description, order: p.order, startDate: p.startDate ?? null, endDate: p.endDate ?? null, color: p.color ?? "" };
 }
 
 export function mapScheduleTask(t: any): ScheduleTask {
@@ -390,10 +409,64 @@ export function mapAdjustment(a: any): Adjustment {
     name: a.name,
     description: a.description ?? "",
     type: a.type ?? "",
+    financialCategory: a.financialCategory ?? "other",
+    calculationBase: a.calculationBase ?? "selected_scope",
+    active: a.active ?? true,
     appliesTo: a.appliesTo ?? "All",
     percentage: a.percentage ?? null,
     amount: a.amount ?? null,
     show: (a.show ?? "Yes") as Adjustment["show"],
+  };
+}
+
+export function mapEstimateFactor(f: any): EstimateFactor {
+  return {
+    id: f.id,
+    revisionId: f.revisionId,
+    order: f.order ?? 0,
+    name: f.name ?? "",
+    code: f.code ?? "",
+    description: f.description ?? "",
+    category: f.category ?? "Productivity",
+    impact: (f.impact ?? "labor_hours") as EstimateFactor["impact"],
+    value: f.value ?? 1,
+    active: f.active ?? true,
+    appliesTo: f.appliesTo ?? "Labour",
+    applicationScope: (f.applicationScope ?? "global") as EstimateFactor["applicationScope"],
+    scope: (f.scope as EstimateFactor["scope"]) ?? {},
+    formulaType: (f.formulaType ?? "fixed_multiplier") as EstimateFactor["formulaType"],
+    parameters: (f.parameters as Record<string, unknown>) ?? {},
+    confidence: (f.confidence ?? "medium") as EstimateFactor["confidence"],
+    sourceType: (f.sourceType ?? "custom") as EstimateFactor["sourceType"],
+    sourceId: f.sourceId ?? null,
+    sourceRef: (f.sourceRef as Record<string, unknown>) ?? {},
+    tags: Array.isArray(f.tags) ? f.tags : [],
+  };
+}
+
+export function mapEstimateFactorLibraryEntry(f: any): EstimateFactorLibraryEntry {
+  return {
+    id: f.id,
+    organizationId: f.organizationId,
+    order: f.order ?? 0,
+    name: f.name ?? "",
+    code: f.code ?? "",
+    description: f.description ?? "",
+    category: f.category ?? "Productivity",
+    impact: (f.impact ?? "labor_hours") as EstimateFactorLibraryEntry["impact"],
+    value: f.value ?? 1,
+    appliesTo: f.appliesTo ?? "Labour",
+    applicationScope: (f.applicationScope ?? "both") as EstimateFactorLibraryEntry["applicationScope"],
+    scope: (f.scope as EstimateFactorLibraryEntry["scope"]) ?? {},
+    formulaType: (f.formulaType ?? "fixed_multiplier") as EstimateFactorLibraryEntry["formulaType"],
+    parameters: (f.parameters as Record<string, unknown>) ?? {},
+    confidence: (f.confidence ?? "medium") as EstimateFactorLibraryEntry["confidence"],
+    sourceType: (f.sourceType ?? "custom") as EstimateFactorLibraryEntry["sourceType"],
+    sourceId: f.sourceId ?? null,
+    sourceRef: (f.sourceRef as Record<string, unknown>) ?? {},
+    tags: Array.isArray(f.tags) ? f.tags : [],
+    createdAt: toISO(f.createdAt),
+    updatedAt: toISO(f.updatedAt),
   };
 }
 
@@ -417,6 +490,10 @@ export function mapSummaryRow(r: any): SummaryRow {
     sourceCategoryId: r.sourceCategoryId ?? null,
     sourceCategoryLabel: r.sourceCategoryLabel ?? r.sourceCategory ?? null,
     sourcePhaseId: r.sourcePhaseId ?? null,
+    sourceWorksheetId: r.sourceWorksheetId ?? null,
+    sourceWorksheetLabel: r.sourceWorksheetLabel ?? null,
+    sourceClassificationId: r.sourceClassificationId ?? null,
+    sourceClassificationLabel: r.sourceClassificationLabel ?? null,
     sourceAdjustmentId: r.sourceAdjustmentId ?? null,
     computedValue: r.computedValue ?? 0,
     computedCost: r.computedCost ?? 0,
@@ -550,6 +627,55 @@ export function mapCatalogItem(i: any): CatalogItem {
   return { id: i.id, catalogId: i.catalogId, code: i.code, name: i.name, unit: i.unit, unitCost: i.unitCost, unitPrice: i.unitPrice, metadata: (i.metadata as Record<string, unknown>) ?? {} };
 }
 
+export function mapLaborUnitLibrary(row: any): LaborUnitLibrary {
+  return {
+    id: row.id,
+    organizationId: row.organizationId ?? null,
+    cabinetId: row.cabinetId ?? null,
+    name: row.name,
+    description: row.description ?? "",
+    provider: row.provider ?? "",
+    discipline: row.discipline ?? "",
+    source: row.source ?? "manual",
+    sourceDescription: row.sourceDescription ?? "",
+    sourceDatasetId: row.sourceDatasetId ?? null,
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    isTemplate: row.isTemplate ?? false,
+    sourceTemplateId: row.sourceTemplateId ?? null,
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    unitCount: row._count?.units ?? row.units?.length ?? undefined,
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
+  };
+}
+
+export function mapLaborUnit(row: any): LaborUnit {
+  return {
+    id: row.id,
+    libraryId: row.libraryId,
+    catalogItemId: row.catalogItemId ?? null,
+    code: row.code ?? "",
+    name: row.name,
+    description: row.description ?? "",
+    discipline: row.discipline ?? "",
+    category: row.category ?? "",
+    className: row.className ?? "",
+    subClassName: row.subClassName ?? "",
+    outputUom: row.outputUom ?? "EA",
+    hoursNormal: row.hoursNormal ?? 0,
+    hoursDifficult: row.hoursDifficult ?? null,
+    hoursVeryDifficult: row.hoursVeryDifficult ?? null,
+    defaultDifficulty: row.defaultDifficulty === "difficult" || row.defaultDifficulty === "very_difficult" ? row.defaultDifficulty : "normal",
+    entityCategoryType: row.entityCategoryType ?? "Labour",
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    sourceRef: (row.sourceRef as Record<string, unknown>) ?? {},
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    sortOrder: row.sortOrder ?? 0,
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
+  };
+}
+
 export function mapAssemblyParameter(p: any): import("@bidwright/domain").AssemblyParameter {
   return {
     id: p.id,
@@ -571,6 +697,10 @@ export function mapAssemblyComponent(c: any): import("@bidwright/domain").Assemb
     componentType: c.componentType,
     catalogItemId: c.catalogItemId ?? null,
     rateScheduleItemId: c.rateScheduleItemId ?? null,
+    laborUnitId: c.laborUnitId ?? null,
+    laborDifficulty: c.laborDifficulty === "difficult" || c.laborDifficulty === "very_difficult" ? c.laborDifficulty : "normal",
+    costResourceId: c.costResourceId ?? null,
+    effectiveCostId: c.effectiveCostId ?? null,
     subAssemblyId: c.subAssemblyId ?? null,
     quantityExpr: c.quantityExpr ?? "1",
     description: c.description ?? "",
@@ -950,7 +1080,115 @@ export function mapDatasetRow(r: any): DatasetRow {
   };
 }
 
+const DEFAULT_ENTITY_EDITABLE_FIELDS: EntityCategory["editableFields"] = {
+  quantity: true,
+  cost: true,
+  markup: true,
+  price: true,
+  unit1: false,
+  unit2: false,
+  unit3: false,
+};
+
+const EDITABLE_FIELD_PRESETS: Record<EntityCategory["calculationType"], EntityCategory["editableFields"]> = {
+  manual: DEFAULT_ENTITY_EDITABLE_FIELDS,
+  unit_markup: { quantity: true, cost: true, markup: true, price: false, unit1: false, unit2: false, unit3: false },
+  quantity_markup: { quantity: true, cost: true, markup: true, price: false, unit1: false, unit2: false, unit3: false },
+  tiered_rate: { quantity: true, cost: false, markup: false, price: false, unit1: true, unit2: true, unit3: true },
+  duration_rate: { quantity: true, cost: false, markup: false, price: false, unit1: true, unit2: false, unit3: false },
+  direct_total: { quantity: false, cost: false, markup: false, price: true, unit1: false, unit2: false, unit3: false },
+  formula: { quantity: true, cost: true, markup: true, price: false, unit1: true, unit2: true, unit3: true },
+};
+
+const UNIT_FIELD_LEGACY_KEYS = {
+  unit1: ["unit1", "laborHourReg", "labourHourReg", "reg", "regular", "normal"],
+  unit2: ["unit2", "laborHourOver", "labourHourOver", "over", "overtime", "ot"],
+  unit3: ["unit3", "laborHourDouble", "labourHourDouble", "double", "doubletime", "dt"],
+} as const;
+
+function plainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function optionalBoolean(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === "true") return true;
+      if (normalized === "false") return false;
+    }
+  }
+  return undefined;
+}
+
+function optionalString(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function normalizeEntityEditableFields(
+  rawValue: unknown,
+  calculationType: EntityCategory["calculationType"],
+): EntityCategory["editableFields"] {
+  const raw = plainRecord(rawValue);
+  const preset = EDITABLE_FIELD_PRESETS[calculationType] ?? DEFAULT_ENTITY_EDITABLE_FIELDS;
+  return {
+    quantity: optionalBoolean(raw, "quantity") ?? preset.quantity,
+    cost: optionalBoolean(raw, "cost") ?? preset.cost,
+    markup: optionalBoolean(raw, "markup") ?? preset.markup,
+    price: optionalBoolean(raw, "price") ?? preset.price,
+    unit1: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit1) ?? preset.unit1,
+    unit2: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit2) ?? preset.unit2,
+    unit3: optionalBoolean(raw, ...UNIT_FIELD_LEGACY_KEYS.unit3) ?? preset.unit3,
+  };
+}
+
+function normalizeEntityUnitLabels(
+  rawValue: unknown,
+  calculationType: EntityCategory["calculationType"],
+): EntityCategory["unitLabels"] {
+  const raw = plainRecord(rawValue);
+  const tieredDefaults =
+    calculationType === "tiered_rate"
+      ? { unit1: "Reg Hrs", unit2: "OT Hrs", unit3: "DT Hrs" }
+      : calculationType === "duration_rate"
+        ? { unit1: "Duration", unit2: "", unit3: "" }
+        : { unit1: "", unit2: "", unit3: "" };
+
+  return {
+    unit1: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit1) || tieredDefaults.unit1,
+    unit2: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit2) || tieredDefaults.unit2,
+    unit3: optionalString(raw, ...UNIT_FIELD_LEGACY_KEYS.unit3) || tieredDefaults.unit3,
+  };
+}
+
+function normalizeEntityItemSource(
+  rawValue: unknown,
+  rawCalculationType: unknown,
+  calculationType: EntityCategory["calculationType"],
+): EntityCategory["itemSource"] {
+  const raw = typeof rawValue === "string" ? rawValue.trim() : "";
+  const rawCalc = typeof rawCalculationType === "string" ? rawCalculationType.trim().toLowerCase() : "";
+  if (rawCalc === "auto_labour" || rawCalc === "auto_labor" || rawCalc === "labour" || rawCalc === "labor") {
+    return "rate_schedule";
+  }
+  if (raw === "rate_schedule" || raw === "catalog" || raw === "freeform") {
+    return raw;
+  }
+  if (calculationType === "tiered_rate") return "rate_schedule";
+  if (calculationType === "duration_rate") return "catalog";
+  return "freeform";
+}
+
 export function mapEntityCategory(e: any): EntityCategory {
+  const calculationType = normalizeCalculationType(e.calculationType);
   return {
     id: e.id,
     name: e.name,
@@ -958,11 +1196,11 @@ export function mapEntityCategory(e: any): EntityCategory {
     shortform: e.shortform,
     defaultUom: e.defaultUom,
     validUoms: e.validUoms ?? [],
-    editableFields: (e.editableFields as any) ?? {},
-    unitLabels: (e.unitLabels as any) ?? {},
-    calculationType: normalizeCalculationType(e.calculationType),
+    editableFields: normalizeEntityEditableFields(e.editableFields, calculationType),
+    unitLabels: normalizeEntityUnitLabels(e.unitLabels, calculationType),
+    calculationType,
     calcFormula: e.calcFormula ?? "",
-    itemSource: (e.itemSource as EntityCategory["itemSource"]) ?? "freeform",
+    itemSource: normalizeEntityItemSource(e.itemSource, e.calculationType, calculationType),
     catalogId: e.catalogId ?? null,
     analyticsBucket: e.analyticsBucket ?? null,
     color: e.color ?? "#6b7280",

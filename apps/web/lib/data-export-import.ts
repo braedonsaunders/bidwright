@@ -1010,6 +1010,9 @@ export async function importAllDataManagement(
             category: rsData.category,
             defaultMarkup: rsData.defaultMarkup,
             autoCalculate: rsData.autoCalculate,
+            effectiveDate: rsData.effectiveDate ?? null,
+            expiryDate: rsData.expiryDate ?? null,
+            metadata: rsData.metadata ?? {},
           });
           updated.rateSchedules++;
 
@@ -1049,6 +1052,9 @@ export async function importAllDataManagement(
             category: rsData.category,
             defaultMarkup: rsData.defaultMarkup,
             autoCalculate: rsData.autoCalculate,
+            effectiveDate: rsData.effectiveDate ?? null,
+            expiryDate: rsData.expiryDate ?? null,
+            metadata: rsData.metadata ?? {},
           });
           created.rateSchedules++;
 

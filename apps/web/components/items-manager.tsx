@@ -21,8 +21,9 @@ import {
 import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent } from "@/lib/format";
-import type { CatalogSummary, CatalogItem } from "@/lib/api";
+import type { CatalogSummary, CatalogItem, EntityCategory } from "@/lib/api";
 import { CatalogImportModal } from "@/components/catalog-import-modal";
+import { ConfirmModal } from "@/components/workspace/modals";
 import {
   createCatalog,
   updateCatalog,
@@ -31,6 +32,7 @@ import {
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,
+  getEntityCategories,
   listCatalogLibrary,
   getCatalogLibraryItem,
   adoptCatalogTemplate,
@@ -46,42 +48,32 @@ import {
   Input,
   Select,
 } from "@/components/ui";
+import { UomSelect } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */
 
-const CATALOG_KINDS = [
-  { value: "labor", label: "Labor" },
-  { value: "equipment", label: "Equipment" },
-  { value: "materials", label: "Materials" },
-  { value: "knowledge_library", label: "Knowledge Library" },
-  { value: "rate_book", label: "Rate Book" },
-] as const;
-
-const CATALOG_SCOPES = [
-  { value: "global", label: "Global" },
-  { value: "project", label: "Project" },
-] as const;
-
-const ITEM_CATEGORIES = [
-  "Labour",
-  "Equipment",
-  "Material",
-  "Consumable",
-  "Stock Item",
-  "Subcontract",
-  "Other Charges",
-] as const;
-
-const ITEM_UNITS = [
-  "EA", "LF", "FT", "HR", "DAY", "WK", "MO", "SF", "SY",
-  "CY", "TON", "GAL", "LB", "LS", "LOT", "SET", "PR", "PKG",
-] as const;
+const LEGACY_CATALOG_KIND_LABELS: Record<string, string> = {
+  labor: "Labour",
+  labour: "Labour",
+  equipment: "Equipment",
+  materials: "Material",
+  material: "Material",
+  knowledge_library: "Knowledge Library",
+  rate_book: "Rate Book",
+  subcontract: "Subcontract",
+};
 
 const KIND_BADGE_TONE: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
   labor: "warning",
+  labour: "warning",
+  labourclass: "warning",
   equipment: "info",
+  equipmentrate: "info",
+  rentalequipment: "info",
   materials: "success",
-  knowledge_library: "default",
+  material: "success",
+  stockitem: "success",
+  consumable: "success",
   rate_book: "danger",
 };
 
@@ -92,15 +84,56 @@ function computeMargin(cost: number, price: number): number {
   return (price - cost) / price;
 }
 
+function normalizeToken(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function humanizeToken(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function catalogKindValue(category: EntityCategory) {
+  return category.entityType?.trim() || category.name.trim();
+}
+
+function catalogKindLabel(kind: string, categories: EntityCategory[]) {
+  const normalizedKind = normalizeToken(kind);
+  const matchedCategory = categories.find((category) => {
+    return [category.entityType, category.name, category.id].some((candidate) => normalizeToken(candidate) === normalizedKind);
+  });
+  return matchedCategory?.name ?? LEGACY_CATALOG_KIND_LABELS[kind] ?? LEGACY_CATALOG_KIND_LABELS[normalizedKind] ?? humanizeToken(kind);
+}
+
+function catalogKindTone(kind: string, categories: EntityCategory[]): "default" | "success" | "warning" | "danger" | "info" {
+  const label = catalogKindLabel(kind, categories);
+  const normalized = normalizeToken(`${kind} ${label}`);
+  if (KIND_BADGE_TONE[normalizeToken(kind)]) return KIND_BADGE_TONE[normalizeToken(kind)];
+  if (normalized.includes("labour") || normalized.includes("labor")) return "warning";
+  if (normalized.includes("equipment") || normalized.includes("rental")) return "info";
+  if (normalized.includes("material") || normalized.includes("stock") || normalized.includes("consumable")) return "success";
+  if (normalized.includes("ratebook")) return "danger";
+  return "default";
+}
+
+function isCatalogNotFoundError(error: unknown) {
+  return error instanceof Error && /catalog not found|404 not found/i.test(error.message);
+}
+
 /* ─── Item Detail Drawer ─── */
 
 function CatalogItemDrawer({
+  categoryOptions,
   item,
   catalogId,
   onSave,
   onDelete,
   onClose,
 }: {
+  categoryOptions: string[];
   item: CatalogItem;
   catalogId: string;
   onSave: (updated: CatalogItem) => void;
@@ -225,7 +258,7 @@ function CatalogItemDrawer({
               onValueChange={(v) => setForm({ ...form, category: v === "__none__" ? "" : v })}
               options={[
                 { value: "__none__", label: "None" },
-                ...ITEM_CATEGORIES.map((cat) => ({ value: cat, label: cat })),
+                ...categoryOptions.map((cat) => ({ value: cat, label: cat })),
               ]}
             />
           </div>
@@ -234,11 +267,10 @@ function CatalogItemDrawer({
             <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
               Unit
             </label>
-            <Select
+            <UomSelect
               className="mt-1"
               value={form.unit}
               onValueChange={(v) => setForm({ ...form, unit: v })}
-              options={ITEM_UNITS.map((u) => ({ value: u, label: u }))}
             />
           </div>
         </div>
@@ -310,26 +342,70 @@ function CatalogItemDrawer({
 
 export function ItemsManager({
   catalogs: initialCatalogs,
+  embedded = false,
+  onCatalogsChange,
 }: {
   catalogs: CatalogSummary[];
+  embedded?: boolean;
+  onCatalogsChange?: (catalogs: CatalogSummary[]) => void;
 }) {
   const [catalogs, setCatalogs] = useState(initialCatalogs);
   const [selectedCatalogId, setSelectedCatalogId] = useState<string | null>(
     initialCatalogs[0]?.id ?? null
   );
   const [deletedCatalogIds, setDeletedCatalogIds] = useState<Set<string>>(new Set());
+  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
 
   // Sync when parent finishes fetching catalogs (but exclude locally deleted ones)
   useEffect(() => {
-    setCatalogs(initialCatalogs.filter((c) => !deletedCatalogIds.has(c.id)));
-    setSelectedCatalogId((prev) => prev ?? initialCatalogs[0]?.id ?? null);
+    const visibleCatalogs = initialCatalogs.filter((c) => !deletedCatalogIds.has(c.id));
+    setCatalogs(visibleCatalogs);
+    setSelectedCatalogId((prev) => (
+      prev && visibleCatalogs.some((catalog) => catalog.id === prev)
+        ? prev
+        : visibleCatalogs[0]?.id ?? null
+    ));
   }, [initialCatalogs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    getEntityCategories()
+      .then((categories) => setEntityCategories(categories.filter((category) => category.enabled !== false)))
+      .catch(() => setEntityCategories([]));
+  }, []);
+
+  const publishCatalogs = useCallback((nextCatalogs: CatalogSummary[]) => {
+    setCatalogs(nextCatalogs);
+    onCatalogsChange?.(nextCatalogs);
+  }, [onCatalogsChange]);
+
+  const updateCatalogs = useCallback((updater: (current: CatalogSummary[]) => CatalogSummary[]) => {
+    publishCatalogs(updater(catalogs));
+  }, [catalogs, publishCatalogs]);
+
+  const updateCatalogItemCount = useCallback((
+    catalogId: string,
+    delta: number,
+    updateItems?: (items: CatalogItem[]) => CatalogItem[],
+  ) => {
+    updateCatalogs((current) =>
+      current.map((catalog) => {
+        if (catalog.id !== catalogId) return catalog;
+        const currentCount = catalog.itemCount ?? catalog.items?.length ?? 0;
+        return {
+          ...catalog,
+          itemCount: Math.max(0, currentCount + delta),
+          items: catalog.items && updateItems ? updateItems(catalog.items) : catalog.items,
+        };
+      }),
+    );
+  }, [updateCatalogs]);
+
   const [items, setItems] = useState<CatalogItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [page, setPage] = useState(0);
-  const pageSize = 50;
+  const pageSize = 25;
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [drawerItemId, setDrawerItemId] = useState<string | null>(null);
 
@@ -340,14 +416,16 @@ export function ItemsManager({
   const [showNewCatalog, setShowNewCatalog] = useState(false);
   const [newCatalog, setNewCatalog] = useState({
     name: "",
-    kind: "materials",
-    scope: "global",
+    category: "",
     description: "",
   });
 
   // Edit catalog
   const [editingCatalogId, setEditingCatalogId] = useState<string | null>(null);
   const [editCatalogName, setEditCatalogName] = useState("");
+  const [deleteCatalogId, setDeleteCatalogId] = useState<string | null>(null);
+  const [deletingCatalogId, setDeletingCatalogId] = useState<string | null>(null);
+  const [deleteCatalogError, setDeleteCatalogError] = useState<string | null>(null);
 
   // Library browser
   const [showLibrary, setShowLibrary] = useState(false);
@@ -358,6 +436,7 @@ export function ItemsManager({
   const [adoptingId, setAdoptingId] = useState<string | null>(null);
 
   const selectedCatalog = catalogs.find((c) => c.id === selectedCatalogId);
+  const deleteCatalogTarget = catalogs.find((c) => c.id === deleteCatalogId) ?? null;
   const drawerItem = drawerItemId ? items.find((i) => i.id === drawerItemId) : null;
 
   // Load items when catalog changes
@@ -395,6 +474,42 @@ export function ItemsManager({
     return filtered;
   }, [items, search, categoryFilter]);
 
+  const catalogCategoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return entityCategories
+      .map((category) => ({
+        value: catalogKindValue(category),
+        label: category.name.trim(),
+      }))
+      .filter((option) => {
+        const key = normalizeToken(option.value);
+        if (!option.value || !option.label || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [entityCategories]);
+
+  const itemCategoryOptions = useMemo(() => {
+    const ordered = new Map<string, string>();
+    for (const category of entityCategories) {
+      const label = category.name.trim();
+      if (label) ordered.set(normalizeToken(label), label);
+    }
+    for (const item of items) {
+      const label = typeof item.metadata?.category === "string" ? item.metadata.category.trim() : "";
+      if (label && !ordered.has(normalizeToken(label))) ordered.set(normalizeToken(label), label);
+    }
+    return Array.from(ordered.values());
+  }, [entityCategories, items]);
+
+  useEffect(() => {
+    if (catalogCategoryOptions.length === 0) return;
+    setNewCatalog((current) => {
+      if (catalogCategoryOptions.some((option) => option.value === current.category)) return current;
+      return { ...current, category: catalogCategoryOptions[0].value };
+    });
+  }, [catalogCategoryOptions]);
+
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [search, categoryFilter, selectedCatalogId]);
 
@@ -403,22 +518,23 @@ export function ItemsManager({
 
   // Catalog CRUD
   const handleCreateCatalog = useCallback(async () => {
-    if (!newCatalog.name.trim()) return;
+    const category = newCatalog.category || catalogCategoryOptions[0]?.value || "";
+    if (!newCatalog.name.trim() || !category) return;
     try {
       const created = await createCatalog({
         name: newCatalog.name.trim(),
-        kind: newCatalog.kind,
-        scope: newCatalog.scope,
+        kind: category,
+        scope: "global",
         description: newCatalog.description,
       });
-      setCatalogs((prev) => [...prev, { ...created, items: [] }]);
+      publishCatalogs([...catalogs, { ...created, items: [] }]);
       setSelectedCatalogId(created.id);
-      setNewCatalog({ name: "", kind: "materials", scope: "global", description: "" });
+      setNewCatalog({ name: "", category, description: "" });
       setShowNewCatalog(false);
     } catch (err) {
       console.error("Failed to create catalog:", err);
     }
-  }, [newCatalog]);
+  }, [catalogCategoryOptions, catalogs, newCatalog, publishCatalogs]);
 
   const handleUpdateCatalogName = useCallback(async () => {
     if (!editingCatalogId || !editCatalogName.trim()) return;
@@ -426,28 +542,47 @@ export function ItemsManager({
       const updated = await updateCatalog(editingCatalogId, {
         name: editCatalogName.trim(),
       });
-      setCatalogs((prev) =>
-        prev.map((c) => (c.id === editingCatalogId ? { ...c, name: updated.name } : c))
-      );
+      publishCatalogs(catalogs.map((c) => (c.id === editingCatalogId ? { ...c, name: updated.name } : c)));
     } catch (err) {
       console.error("Failed to update catalog:", err);
     }
     setEditingCatalogId(null);
-  }, [editingCatalogId, editCatalogName]);
+  }, [catalogs, editingCatalogId, editCatalogName, publishCatalogs]);
 
-  const handleDeleteCatalog = useCallback(async (catalogId: string) => {
+  const handleDeleteCatalog = useCallback(async () => {
+    const target = deleteCatalogTarget;
+    if (!target) return;
+    const catalogId = target.id;
+    setDeletingCatalogId(catalogId);
+    setDeleteCatalogError(null);
     try {
       await deleteCatalog(catalogId);
       setDeletedCatalogIds((prev) => new Set(prev).add(catalogId));
-      setCatalogs((prev) => prev.filter((c) => c.id !== catalogId));
+      const nextCatalogs = catalogs.filter((c) => c.id !== catalogId);
+      publishCatalogs(nextCatalogs);
       if (selectedCatalogId === catalogId) {
-        setSelectedCatalogId(null);
+        setSelectedCatalogId(nextCatalogs[0]?.id ?? null);
         setItems([]);
       }
+      setDeleteCatalogId(null);
     } catch (err) {
+      if (isCatalogNotFoundError(err)) {
+        setDeletedCatalogIds((prev) => new Set(prev).add(catalogId));
+        const nextCatalogs = catalogs.filter((c) => c.id !== catalogId);
+        publishCatalogs(nextCatalogs);
+        if (selectedCatalogId === catalogId) {
+          setSelectedCatalogId(nextCatalogs[0]?.id ?? null);
+          setItems([]);
+        }
+        setDeleteCatalogId(null);
+        return;
+      }
       console.error("Failed to delete catalog:", err);
+      setDeleteCatalogError(err instanceof Error ? err.message : "Failed to delete catalog.");
+    } finally {
+      setDeletingCatalogId(null);
     }
-  }, [selectedCatalogId]);
+  }, [catalogs, deleteCatalogTarget, publishCatalogs, selectedCatalogId]);
 
   // Item CRUD
   const handleAddItem = useCallback(async () => {
@@ -462,17 +597,19 @@ export function ItemsManager({
         category: "",
       });
       setItems((prev) => [...prev, created]);
+      updateCatalogItemCount(selectedCatalogId, 1, (catalogItems) => [...catalogItems, created]);
       setDrawerItemId(created.id);
     } catch (err) {
       console.error("Failed to create item:", err);
     }
-  }, [selectedCatalogId]);
+  }, [selectedCatalogId, updateCatalogItemCount]);
 
   const handleDeleteItem = useCallback(async (itemId: string) => {
     if (!selectedCatalogId) return;
     try {
       await deleteCatalogItem(selectedCatalogId, itemId);
       setItems((prev) => prev.filter((i) => i.id !== itemId));
+      updateCatalogItemCount(selectedCatalogId, -1, (catalogItems) => catalogItems.filter((item) => item.id !== itemId));
       setSelectedItems((prev) => {
         const next = new Set(prev);
         next.delete(itemId);
@@ -482,7 +619,7 @@ export function ItemsManager({
     } catch (err) {
       console.error("Failed to delete item:", err);
     }
-  }, [selectedCatalogId, drawerItemId]);
+  }, [selectedCatalogId, drawerItemId, updateCatalogItemCount]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedCatalogId || selectedItems.size === 0) return;
@@ -490,12 +627,13 @@ export function ItemsManager({
     try {
       await Promise.all(ids.map((id) => deleteCatalogItem(selectedCatalogId, id)));
       setItems((prev) => prev.filter((i) => !selectedItems.has(i.id)));
+      updateCatalogItemCount(selectedCatalogId, -ids.length, (catalogItems) => catalogItems.filter((item) => !selectedItems.has(item.id)));
       setSelectedItems(new Set());
       if (drawerItemId && ids.includes(drawerItemId)) setDrawerItemId(null);
     } catch (err) {
       console.error("Failed to delete items:", err);
     }
-  }, [selectedCatalogId, selectedItems, drawerItemId]);
+  }, [selectedCatalogId, selectedItems, drawerItemId, updateCatalogItemCount]);
 
   const handleDrawerSave = useCallback((updated: CatalogItem) => {
     setItems((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
@@ -534,7 +672,7 @@ export function ItemsManager({
     setAdoptingId(templateId);
     try {
       const adopted = await adoptCatalogTemplate(templateId);
-      setCatalogs((prev) => [...prev, adopted]);
+      publishCatalogs([...catalogs, adopted]);
       setSelectedCatalogId(adopted.id);
       setShowLibrary(false);
       setLibraryPreview(null);
@@ -543,7 +681,7 @@ export function ItemsManager({
     } finally {
       setAdoptingId(null);
     }
-  }, []);
+  }, [catalogs, publishCatalogs]);
 
   const toggleSelectItem = (e: React.MouseEvent, itemId: string) => {
     e.stopPropagation();
@@ -572,9 +710,21 @@ export function ItemsManager({
     { key: "unitPrice", label: "Unit Price", className: "w-28 text-right" },
     { key: "margin", label: "Margin", className: "w-24 text-right" },
   ];
+  const deleteTargetItemCount = deleteCatalogTarget?.itemCount ?? deleteCatalogTarget?.items?.length ?? 0;
+  const deleteCatalogMessage = deleteCatalogTarget
+    ? deleteCatalogError
+      ? `Could not delete "${deleteCatalogTarget.name}": ${deleteCatalogError}`
+      : `Delete "${deleteCatalogTarget.name}" and ${deleteTargetItemCount} catalog item${deleteTargetItemCount === 1 ? "" : "s"}? This cannot be undone.`
+    : "";
+  const catalogItemCount = (catalog: CatalogSummary) => {
+    const savedCount = catalog.itemCount ?? catalog.items?.length ?? 0;
+    if (catalog.id !== selectedCatalogId) return savedCount;
+    return loadingItems ? savedCount : items.length;
+  };
 
   return (
-    <div className="space-y-5">
+    <div className={cn(embedded ? "flex h-full min-h-0 flex-col gap-3" : "space-y-5")}>
+      {!embedded && (
       <FadeIn>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
@@ -591,12 +741,13 @@ export function ItemsManager({
           </CardHeader>
         </Card>
       </FadeIn>
+      )}
 
-      <div className="flex gap-5">
+      <div className={cn("flex", embedded ? "min-h-0 flex-1 gap-3" : "gap-5")}>
         {/* ─── Catalog Sidebar ─── */}
-        <FadeIn delay={0.05} className="w-60 shrink-0">
-          <Card className="overflow-hidden">
-            <CardHeader className="flex flex-row items-center justify-between">
+        <FadeIn delay={0.05} className={cn("w-60 shrink-0", embedded && "min-h-0")}>
+          <Card className={cn("overflow-hidden", embedded && "flex h-full min-h-0 flex-col")}>
+            <CardHeader className="flex shrink-0 flex-row items-center justify-between px-3 py-2.5">
               <CardTitle>Catalogs</CardTitle>
               <button
                 onClick={() => setShowNewCatalog(true)}
@@ -605,7 +756,7 @@ export function ItemsManager({
                 <Plus className="h-4 w-4" />
               </button>
             </CardHeader>
-            <div className="p-2 space-y-0.5">
+            <div className={cn("space-y-0.5 p-2", embedded && "min-h-0 flex-1 overflow-y-auto")}>
               <AnimatePresence>
                 {showNewCatalog && (
                   <motion.div
@@ -627,30 +778,25 @@ export function ItemsManager({
                       }}
                       autoFocus
                     />
-                    <div className="flex gap-1">
-                      <Select
-                        className="flex-1"
-                        size="xs"
-                        value={newCatalog.kind}
-                        onValueChange={(v) =>
-                          setNewCatalog((p) => ({ ...p, kind: v }))
-                        }
-                        options={CATALOG_KINDS.map((k) => ({ value: k.value, label: k.label }))}
-                      />
-                      <Select
-                        className="w-20"
-                        size="xs"
-                        value={newCatalog.scope}
-                        onValueChange={(v) =>
-                          setNewCatalog((p) => ({ ...p, scope: v }))
-                        }
-                        options={CATALOG_SCOPES.map((s) => ({ value: s.value, label: s.label }))}
-                      />
-                    </div>
+                    <Select
+                      size="xs"
+                      value={newCatalog.category}
+                      onValueChange={(v) =>
+                        setNewCatalog((p) => ({ ...p, category: v }))
+                      }
+                      options={
+                        catalogCategoryOptions.length > 0
+                          ? catalogCategoryOptions
+                          : [{ value: "__no_categories__", label: "No categories available", disabled: true }]
+                      }
+                      placeholder="Category"
+                      disabled={catalogCategoryOptions.length === 0}
+                    />
                     <div className="flex justify-end gap-1">
                       <button
                         onClick={handleCreateCatalog}
-                        className="text-success hover:text-success/80"
+                        disabled={!newCatalog.name.trim() || !newCatalog.category}
+                        className="text-success hover:text-success/80 disabled:pointer-events-none disabled:opacity-35"
                       >
                         <Check className="h-3.5 w-3.5" />
                       </button>
@@ -671,80 +817,95 @@ export function ItemsManager({
                 </p>
               )}
 
-              {catalogs.map((catalog) => (
-                <div
-                  key={catalog.id}
-                  className={cn(
-                    "group flex items-center gap-1 rounded-lg px-2 py-2 text-left text-xs transition-colors",
-                    selectedCatalogId === catalog.id
-                      ? "bg-accent/10 text-accent font-medium"
-                      : "text-fg/60 hover:bg-panel2 hover:text-fg/80"
-                  )}
-                >
-                  {editingCatalogId === catalog.id ? (
-                    <Input
-                      className="h-6 text-xs flex-1"
-                      value={editCatalogName}
-                      onChange={(e) => setEditCatalogName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleUpdateCatalogName();
-                        if (e.key === "Escape") setEditingCatalogId(null);
-                      }}
-                      onBlur={handleUpdateCatalogName}
-                      autoFocus
-                    />
-                  ) : (
-                    <button
-                      onClick={() => setSelectedCatalogId(catalog.id)}
-                      className="flex-1 truncate text-left"
-                    >
-                      {catalog.name}
-                    </button>
-                  )}
-
-                  <Badge
-                    tone={KIND_BADGE_TONE[catalog.kind] ?? "default"}
-                    className="shrink-0 text-[9px]"
+              {catalogs.map((catalog) => {
+                const isSelected = selectedCatalogId === catalog.id;
+                const itemCount = catalogItemCount(catalog);
+                return (
+                  <div
+                    key={catalog.id}
+                    className={cn(
+                      "group flex items-center gap-1 rounded-lg px-2 py-2 text-left text-xs transition-colors",
+                      isSelected
+                        ? "bg-accent/10 text-accent font-medium"
+                        : "text-fg/60 hover:bg-panel2 hover:text-fg/80"
+                    )}
                   >
-                    {catalog.kind}
-                  </Badge>
+                    {editingCatalogId === catalog.id ? (
+                      <Input
+                        className="h-6 text-xs flex-1"
+                        value={editCatalogName}
+                        onChange={(e) => setEditCatalogName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleUpdateCatalogName();
+                          if (e.key === "Escape") setEditingCatalogId(null);
+                        }}
+                        onBlur={handleUpdateCatalogName}
+                        autoFocus
+                      />
+                    ) : (
+                      <button
+                        onClick={() => setSelectedCatalogId(catalog.id)}
+                        className="min-w-0 flex-1 truncate text-left"
+                      >
+                        {catalog.name}
+                      </button>
+                    )}
 
-                  {catalog.scope === "project" && (
-                    <span className="shrink-0 text-[9px] text-fg/30">PRJ</span>
-                  )}
+                    <div className="ml-auto flex min-w-0 shrink-0 items-center justify-end gap-1">
+                      <span
+                        className={cn(
+                          "inline-flex h-5 min-w-[1.25rem] shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
+                          isSelected ? "bg-accent/15 text-accent" : "bg-panel2 text-fg/45"
+                        )}
+                        title={`${itemCount} item${itemCount === 1 ? "" : "s"}`}
+                      >
+                        {itemCount}
+                      </span>
 
-                  <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingCatalogId(catalog.id);
-                        setEditCatalogName(catalog.name);
-                      }}
-                      className="text-fg/30 hover:text-fg/60"
-                    >
-                      <Edit3 className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteCatalog(catalog.id);
-                      }}
-                      className="text-fg/30 hover:text-danger"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                      <Badge
+                        tone={catalogKindTone(catalog.kind, entityCategories)}
+                        className="max-w-20 shrink-0 truncate text-[9px]"
+                      >
+                        {catalogKindLabel(catalog.kind, entityCategories)}
+                      </Badge>
+                    </div>
+
+                    <div className="flex w-0 shrink-0 justify-end overflow-hidden opacity-0 transition-all group-hover:w-8 group-hover:opacity-100">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingCatalogId(catalog.id);
+                          setEditCatalogName(catalog.name);
+                        }}
+                        className="text-fg/30 hover:text-fg/60"
+                      >
+                        <Edit3 className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteCatalogError(null);
+                          setDeleteCatalogId(catalog.id);
+                        }}
+                        title="Delete catalog"
+                        aria-label={`Delete ${catalog.name}`}
+                        className="text-fg/30 hover:text-danger"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
         </FadeIn>
 
         {/* ─── Items Table ─── */}
-        <FadeIn delay={0.1} className="min-w-0 flex-1">
-          <Card>
+        <FadeIn delay={0.1} className={cn("min-w-0 flex-1", embedded && "min-h-0")}>
+          <Card className={cn(embedded && "flex h-full min-h-0 flex-col overflow-hidden")}>
             {/* Toolbar */}
-            <div className="flex items-center gap-2 border-b border-line px-5 py-3">
+            <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
                 <Input
@@ -769,7 +930,7 @@ export function ItemsManager({
                         <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
                         <RadixSelect.ItemText>All</RadixSelect.ItemText>
                       </RadixSelect.Item>
-                      {ITEM_CATEGORIES.map((cat) => (
+                      {itemCategoryOptions.map((cat) => (
                         <RadixSelect.Item key={cat} value={cat} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
                           <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
                           <RadixSelect.ItemText>{cat}</RadixSelect.ItemText>
@@ -822,9 +983,9 @@ export function ItemsManager({
               </div>
             ) : (
               <>
-              <div className="overflow-x-auto">
+              <div className={cn("overflow-x-auto", embedded && "min-h-0 flex-1 overflow-auto")}>
                 <table className="w-full text-sm">
-                  <thead>
+                  <thead className={cn(embedded && "sticky top-0 z-10 bg-panel")}>
                     <tr className="border-b border-line">
                       <th className="w-10 px-3 py-3">
                         <input
@@ -957,8 +1118,8 @@ export function ItemsManager({
               </div>
 
               {/* Pagination */}
-              {filteredItems.length > pageSize && (
-                <div className="flex items-center justify-between border-t border-line px-5 py-2.5">
+              {filteredItems.length > 0 && (
+                <div className="flex shrink-0 items-center justify-between border-t border-line px-3 py-2.5">
                   <span className="text-[11px] text-fg/40">
                     {page * pageSize + 1}–{Math.min((page + 1) * pageSize, filteredItems.length)} of {filteredItems.length} items
                   </span>
@@ -1004,6 +1165,7 @@ export function ItemsManager({
               />
               <CatalogItemDrawer
                 key={drawerItem.id}
+                categoryOptions={itemCategoryOptions}
                 item={drawerItem}
                 catalogId={selectedCatalogId}
                 onSave={handleDrawerSave}
@@ -1079,8 +1241,8 @@ export function ItemsManager({
                       >
                         <div className="text-sm font-medium text-fg truncate">{template.name}</div>
                         <div className="flex items-center gap-2 mt-1">
-                          <Badge tone={KIND_BADGE_TONE[template.kind] ?? "default"} className="text-[10px]">
-                            {template.kind}
+                          <Badge tone={catalogKindTone(template.kind, entityCategories)} className="text-[10px]">
+                            {catalogKindLabel(template.kind, entityCategories)}
                           </Badge>
                           {template.itemCount != null && (
                             <span className="text-[10px] text-fg/40">{template.itemCount} items</span>
@@ -1185,12 +1347,30 @@ export function ItemsManager({
       document.body
       )}
 
+      <ConfirmModal
+        open={Boolean(deleteCatalogTarget)}
+        onClose={() => {
+          if (deletingCatalogId) return;
+          setDeleteCatalogId(null);
+          setDeleteCatalogError(null);
+        }}
+        title="Delete Catalog"
+        message={deleteCatalogMessage}
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        onConfirm={handleDeleteCatalog}
+        isPending={Boolean(deletingCatalogId)}
+      />
+
       <CatalogImportModal
         open={showImport}
         onClose={() => setShowImport(false)}
         catalogs={catalogs}
         defaultCatalogId={selectedCatalogId ?? undefined}
         onImported={(info) => {
+          if (info.created > 0) {
+            updateCatalogItemCount(info.catalogId, info.created);
+          }
           // Re-trigger the items load by clearing then re-setting the
           // selectedCatalogId — the useEffect on line 378 reloads.
           if (selectedCatalogId === info.catalogId) {

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import * as pdfjs from "pdfjs-dist";
 import {
   AlertTriangle,
   ArrowDown,
@@ -26,14 +25,8 @@ import {
 } from "lucide-react";
 import { Button, Input, Label, Select, Toggle } from "@/components/ui";
 import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
+import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
 import { cn } from "@/lib/utils";
-
-if (typeof window !== "undefined") {
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/build/pdf.worker.min.mjs",
-    import.meta.url
-  ).toString();
-}
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -1115,9 +1108,9 @@ interface PdfPagePreviewProps {
 function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePreviewProps) {
   const [pageNumbers, setPageNumbers] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const pdfDocRef = useRef<pdfjs.PDFDocumentProxy | null>(null);
+  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const canvasRefs = useRef(new Map<number, HTMLCanvasElement>());
-  const renderTasksRef = useRef(new Map<number, pdfjs.RenderTask>());
+  const renderTasksRef = useRef(new Map<number, RenderTask>());
 
   const cancelRenderTasks = useCallback(() => {
     for (const task of renderTasksRef.current.values()) {
@@ -1128,7 +1121,7 @@ function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePrevi
 
   useEffect(() => {
     let cancelled = false;
-    const loadingTask = pdfjs.getDocument({ url, withCredentials: true });
+    let loadingTask: PDFDocumentLoadingTask | null = null;
 
     async function loadPdf() {
       try {
@@ -1142,6 +1135,10 @@ function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePrevi
           pdfDocRef.current = null;
         }
 
+        const pdfjs = await loadPdfJs();
+        if (cancelled) return;
+
+        loadingTask = pdfjs.getDocument({ url, withCredentials: true });
         const doc = await loadingTask.promise;
         if (cancelled) {
           doc.destroy();
@@ -1166,7 +1163,7 @@ function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePrevi
 
     return () => {
       cancelled = true;
-      loadingTask.destroy();
+      loadingTask?.destroy();
       cancelRenderTasks();
     };
   }, [cancelRenderTasks, onLoadingChange, refreshKey, url]);

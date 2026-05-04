@@ -3,21 +3,17 @@
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ProjectDashboard } from "@/components/project-dashboard";
-import { getAiRuns, getCatalogs, getProjects } from "@/lib/api";
-import type { AiRun, CatalogSummary, ProjectListItem } from "@/lib/api";
+import { getProjects } from "@/lib/api";
+import type { ProjectListItem } from "@/lib/api";
 
 export default function HomePage() {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
-  const [aiRuns, setAiRuns] = useState<AiRun[]>([]);
-  const [catalogs, setCatalogs] = useState<CatalogSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.allSettled([getProjects(), getAiRuns(), getCatalogs()])
-      .then(([p, a, c]) => {
+    Promise.allSettled([getProjects()])
+      .then(([p]) => {
         if (p.status === "fulfilled") setProjects(p.value);
-        if (a.status === "fulfilled") setAiRuns(a.value);
-        if (c.status === "fulfilled") setCatalogs(c.value);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -34,7 +30,7 @@ export default function HomePage() {
 
   return (
     <AppShell projects={projects}>
-      <ProjectDashboard projects={projects} aiRuns={aiRuns} catalogs={catalogs} />
+      <ProjectDashboard projects={projects} />
     </AppShell>
   );
 }

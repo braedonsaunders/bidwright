@@ -1,12 +1,31 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEvent, type InputHTMLAttributes } from "react";
-import { ChevronDown, FileUp, Loader2, Plus, UploadCloud, X, Check } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import {
+  ArrowRight,
+  CalendarClock,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  FileText,
+  FileUp,
+  FolderOpen,
+  Loader2,
+  Mail,
+  MapPin,
+  Plus,
+  Sparkles,
+  Target,
+  UploadCloud,
+  X,
+  Zap,
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 import * as RadixSelect from "@radix-ui/react-select";
 import type { Customer, EstimatorPersona, PackageIngestFile, ProjectListItem } from "@/lib/api";
 import { submitPackageIngest, getCustomers, createCustomer, listPersonas } from "@/lib/api";
-import { Badge, Button, Card, CardBody, Input, Label, Textarea } from "@/components/ui";
+import { Badge, Button, Input, Label, Textarea } from "@/components/ui";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 import { cn } from "@/lib/utils";
 
@@ -785,86 +804,219 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     });
   }
 
+  const totalBytes = files.reduce((sum, current) => sum + current.file.size, 0);
+  const totalSizeLabel = totalBytes > 0
+    ? totalBytes >= 1024 * 1024
+      ? `${(totalBytes / 1024 / 1024).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(totalBytes / 1024))} KB`
+    : "0 MB";
+  const selectedPersona = personas.find((persona) => persona.id === personaId) ?? null;
+  const intakeState = isPending ? "Uploading" : files.length ? "Package loaded" : dragActive ? "Release" : "Waiting";
+
   return (
-    <form className="space-y-4" onSubmit={handleSubmit}>
-      <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-        {/* Drop zone */}
-        <div
-          className={cn(
-            "relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-12 transition-colors",
-            dragActive
-              ? "border-accent bg-accent/5"
+    <form className="flex min-h-0 w-full flex-1" onSubmit={handleSubmit}>
+      <div className="grid min-h-0 w-full gap-4 lg:grid-cols-[minmax(0,1.06fr)_minmax(340px,0.82fr)]">
+        <motion.div
+          className="relative flex min-h-[390px] flex-col overflow-hidden rounded-lg border border-line/70 bg-panel/90 shadow-sm backdrop-blur-xl lg:min-h-0"
+          animate={{
+            borderColor: dragActive
+              ? "hsl(var(--accent))"
               : files.length > 0
-                ? "border-success/30 bg-success/5"
-                : "border-line bg-panel2/30 hover:border-fg/20"
-          )}
+                ? "hsl(152 50% 44% / 0.5)"
+                : "hsl(var(--fg) / 0.12)",
+            scale: dragActive ? 1.006 : 1,
+          }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
           onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
           onDragOver={(e) => { e.preventDefault(); setDragActive(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={() => setDragActive(false)}
           onDrop={(e) => { void handleDrop(e); }}
         >
-          {files.length > 0 ? (
-            <div className="w-full max-w-2xl">
-              <div className="flex items-start gap-3">
-                <FileUp className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="text-sm font-medium">
-                      {files.length === 1 ? files[0].relativePath : `${files.length} files selected`}
-                    </div>
-                    <Badge tone="success">
-                      {files.length === 1
-                        ? (files[0].relativePath.includes("/") ? "Folder file" : "Single file")
-                        : `${files.length} files`}
-                    </Badge>
-                  </div>
-                  <div className="mt-1 text-xs text-fg/40">
-                    {(files.reduce((sum, current) => sum + current.file.size, 0) / 1024 / 1024).toFixed(1)} MB total
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {files.slice(0, 8).map((selectedFile) => (
-                      <Badge key={`${selectedFile.relativePath}-${selectedFile.file.size}-${selectedFile.file.lastModified}`}>
-                        {selectedFile.relativePath}
-                      </Badge>
-                    ))}
-                    {files.length > 8 ? <Badge>+{files.length - 8} more</Badge> : null}
-                  </div>
+          <motion.div
+            aria-hidden
+            className="absolute inset-0 opacity-45 [background-image:linear-gradient(hsl(var(--fg)/0.08)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.06)_1px,transparent_1px)] [background-size:30px_30px]"
+            animate={{ backgroundPosition: ["0px 0px", "60px 60px"] }}
+            transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
+          />
+          <motion.div
+            aria-hidden
+            className="absolute inset-x-0 top-[18%] h-px bg-[linear-gradient(90deg,transparent,hsl(var(--accent)),hsl(169_62%_44%),transparent)]"
+            animate={{ top: dragActive ? ["10%", "90%"] : ["18%", "78%", "18%"], opacity: dragActive ? [0.72, 0.35] : [0.24, 0.6, 0.24] }}
+            transition={{ duration: dragActive ? 0.9 : 6.5, repeat: Infinity, ease: "easeInOut" }}
+          />
+          <div className="relative z-10 flex items-center justify-between border-b border-line/70 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-fg">Intake package</div>
+                  <div className="text-xs text-fg/45">{totalSizeLabel} loaded</div>
                 </div>
-                <button
-                  type="button"
-                  onClick={clearFiles}
-                  className="ml-2 rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60"
-                >
-                  <X className="h-4 w-4" />
-                </button>
               </div>
+              <Badge tone={files.length ? "success" : "info"}>{intakeState}</Badge>
             </div>
-          ) : (
-            <>
-              <UploadCloud className="h-8 w-8 text-fg/20" />
-              <p className="mt-3 text-sm text-fg/50">
-                Drop a folder, ZIP, loose bid files, or an Outlook email (.msg or .eml) here,{" "}
-                <button
-                  type="button"
-                  className="text-accent hover:underline"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  browse files
-                </button>
-                , or{" "}
-                <button
-                  type="button"
-                  className="text-accent hover:underline"
-                  onClick={() => folderInputRef.current?.click()}
-                >
-                  browse a folder
-                </button>
-              </p>
-              <p className="mt-2 text-center text-xs text-fg/35">
-                Multiple files and folder drops are supported. PDF, XLSX, DWG, DXF, DOCX, ZIP, and Outlook .msg/.eml all work.
-              </p>
-            </>
-          )}
+
+          <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center p-5">
+              <motion.svg
+                aria-hidden
+                className="pointer-events-none absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] opacity-70"
+                viewBox="0 0 680 430"
+                preserveAspectRatio="none"
+              >
+                <defs>
+                  <linearGradient id="drop-pane-energy" x1="0" x2="1" y1="0" y2="1">
+                    <stop stopColor="hsl(var(--accent) / 0.02)" />
+                    <stop offset="0.52" stopColor="hsl(169 62% 45% / 0.28)" />
+                    <stop offset="1" stopColor="hsl(214 84% 56% / 0.04)" />
+                  </linearGradient>
+                  <linearGradient id="drop-pane-line" x1="0" x2="1" y1="0" y2="0">
+                    <stop stopColor="hsl(var(--accent) / 0)" />
+                    <stop offset="0.35" stopColor="hsl(var(--accent) / 0.52)" />
+                    <stop offset="0.7" stopColor="hsl(169 62% 45% / 0.42)" />
+                    <stop offset="1" stopColor="hsl(214 84% 56% / 0)" />
+                  </linearGradient>
+                </defs>
+                <path d="M36 314 C138 236 210 250 302 182 C402 108 490 122 640 52" fill="none" stroke="url(#drop-pane-line)" strokeWidth="1.4" strokeDasharray="10 18" />
+                <path d="M50 95 C176 126 220 72 324 118 C446 172 482 288 634 308" fill="none" stroke="url(#drop-pane-line)" strokeWidth="1.2" strokeDasharray="6 20" />
+                <path d="M86 350 L198 254 L332 298 L474 164 L612 202" fill="none" stroke="hsl(var(--fg) / 0.1)" strokeWidth="1" />
+                <motion.path
+                  d="M36 314 C138 236 210 250 302 182 C402 108 490 122 640 52"
+                  fill="none"
+                  stroke="url(#drop-pane-line)"
+                  strokeLinecap="round"
+                  strokeWidth="3"
+                  strokeDasharray="42 240"
+                  animate={{ strokeDashoffset: [0, -520] }}
+                  transition={{ duration: 4.8, repeat: Infinity, ease: "linear" }}
+                />
+                <motion.path
+                  d="M50 95 C176 126 220 72 324 118 C446 172 482 288 634 308"
+                  fill="none"
+                  stroke="url(#drop-pane-line)"
+                  strokeLinecap="round"
+                  strokeWidth="2.4"
+                  strokeDasharray="34 220"
+                  animate={{ strokeDashoffset: [0, -460] }}
+                  transition={{ duration: 5.7, repeat: Infinity, ease: "linear" }}
+                />
+                {[110, 218, 342, 468, 578].map((x, index) => (
+                  <motion.rect
+                    key={x}
+                    x={x}
+                    y={index % 2 === 0 ? 86 : 286}
+                    width="54"
+                    height="34"
+                    rx="8"
+                    fill="url(#drop-pane-energy)"
+                    stroke="hsl(var(--fg) / 0.1)"
+                    animate={{ y: [index % 2 === 0 ? 86 : 286, index % 2 === 0 ? 96 : 276, index % 2 === 0 ? 86 : 286] }}
+                    transition={{ duration: 4 + index * 0.35, repeat: Infinity, ease: "easeInOut" }}
+                  />
+                ))}
+              </motion.svg>
+              <AnimatePresence mode="wait">
+                {files.length > 0 ? (
+                  <motion.div
+                    key="selected"
+                    initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="w-full max-w-2xl"
+                  >
+                    <div className="flex flex-col items-center text-center">
+                      <motion.div
+                        className="relative flex h-24 w-24 items-center justify-center rounded-lg border border-success/30 bg-success/10 text-success shadow-sm"
+                        animate={{ y: [0, -4, 0] }}
+                        transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+                      >
+                        <CheckCircle2 className="h-10 w-10" />
+                        <motion.span
+                          className="absolute inset-x-3 bottom-3 h-1 rounded-full bg-success/35"
+                          animate={{ scaleX: [0.35, 1, 0.35] }}
+                          transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                      </motion.div>
+                      <h2 className="mt-5 max-w-xl text-2xl font-semibold leading-tight text-fg">
+                        {files.length === 1 ? files[0].relativePath : `${files.length} package files captured`}
+                      </h2>
+                      <p className="mt-2 text-sm text-fg/50">{totalSizeLabel} total</p>
+                      <div className="mt-5 flex max-h-28 flex-wrap justify-center gap-1.5 overflow-hidden">
+                        {files.slice(0, 10).map((selectedFile) => (
+                          <Badge key={`${selectedFile.relativePath}-${selectedFile.file.size}-${selectedFile.file.lastModified}`} className="max-w-[220px] truncate">
+                            {selectedFile.relativePath}
+                          </Badge>
+                        ))}
+                        {files.length > 10 ? <Badge>+{files.length - 10} more</Badge> : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={clearFiles}
+                        className="mt-5 inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg/70 px-3 py-2 text-xs font-medium text-fg/60 transition-colors hover:border-danger/30 hover:bg-danger/10 hover:text-danger"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Clear package
+                      </button>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="empty"
+                    initial={{ opacity: 0, y: 14, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="flex max-w-2xl flex-col items-center text-center"
+                  >
+                    <motion.div
+                      className={cn(
+                        "relative flex h-28 w-28 items-center justify-center rounded-lg border bg-bg/75 shadow-sm",
+                        dragActive ? "border-accent text-accent" : "border-line/80 text-fg/35",
+                      )}
+                      animate={{ y: dragActive ? [0, -8, 0] : [0, -5, 0], scale: dragActive ? [1, 1.05, 1] : 1 }}
+                      transition={{ duration: dragActive ? 0.9 : 3.3, repeat: Infinity, ease: "easeInOut" }}
+                    >
+                      <UploadCloud className="h-11 w-11" />
+                      <motion.span
+                        className="absolute inset-x-5 bottom-5 h-1 rounded-full bg-accent/35"
+                        animate={{ scaleX: dragActive ? [0.4, 1, 0.4] : [0.2, 0.75, 0.2], opacity: [0.25, 0.75, 0.25] }}
+                        transition={{ duration: 1.7, repeat: Infinity, ease: "easeInOut" }}
+                      />
+                    </motion.div>
+                    <h2 className="mt-6 text-3xl font-semibold leading-tight text-fg">
+                      {dragActive ? "Release to attach package" : "Drop files or folder"}
+                    </h2>
+                    <p className="mt-3 max-w-lg text-sm leading-6 text-fg/55">
+                      Upload drawings, specifications, spreadsheets, addenda, images, ZIP archives, and Outlook messages.
+                    </p>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm font-medium text-fg/70 transition-colors hover:border-accent/40 hover:text-fg"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <FileText className="h-4 w-4 text-accent" />
+                        Select files
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-sm font-medium text-fg/70 transition-colors hover:border-accent/40 hover:text-fg"
+                        onClick={() => folderInputRef.current?.click()}
+                      >
+                        <FolderOpen className="h-4 w-4 text-accent" />
+                        Select folder
+                      </button>
+                      <span className="inline-flex h-10 items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-3 text-sm font-medium text-fg/45">
+                        <Mail className="h-4 w-4" />
+                        .msg and .eml
+                      </span>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+          </div>
+
           <input
             ref={fileInputRef}
             className="hidden"
@@ -884,27 +1036,47 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             } satisfies DirectoryInputProps)}
             onChange={(e) => handleFiles(e.target.files, { append: true })}
           />
-        </div>
+        </motion.div>
 
-        {/* Form fields */}
-        <div className="space-y-3">
-          <div>
-            <Label>Destination</Label>
-            <StyledSelect value={projectId || "__new__"} onValueChange={(v) => setProjectId(v === "__new__" ? "" : v)} placeholder="New project">
-              <SelectItem value="__new__">New project</SelectItem>
-              {projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}{(p as any).quote ? ` (${(p as any).quote.quoteNumber})` : ""}
-                </SelectItem>
-              ))}
-            </StyledSelect>
+        <motion.div
+          initial={{ opacity: 0, x: 12 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.3, ease: "easeOut" }}
+          className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line/70 bg-panel/90 shadow-sm backdrop-blur-xl"
+        >
+          <div className="flex items-start justify-between gap-3 border-b border-line/70 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-semibold text-fg">
+                <Target className="h-4 w-4 text-accent" />
+                Project context
+              </div>
+              <p className="mt-1 text-xs leading-5 text-fg/45">
+                Capture the minimum context required to create the estimate workspace.
+              </p>
+            </div>
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success">
+              <Zap className="h-4 w-4" />
+            </div>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            <div>
+              <Label>Destination</Label>
+              <StyledSelect value={projectId || "__new__"} onValueChange={(v) => setProjectId(v === "__new__" ? "" : v)} placeholder="New project">
+                <SelectItem value="__new__">New project</SelectItem>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}{(p as any).quote ? ` (${(p as any).quote.quoteNumber})` : ""}
+                  </SelectItem>
+                ))}
+              </StyledSelect>
+            </div>
+
             <div>
               <Label>Project name</Label>
               <Input value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder="e.g. North Campus Boiler Upgrade" />
             </div>
+
             <div>
               <Label>Client</Label>
               {quickAddOpen ? (
@@ -947,75 +1119,86 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                 </div>
               )}
             </div>
-          </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <Label>Location</Label>
-              <Input placeholder="City, State" value={location} onChange={(e) => setLocation(e.target.value)} />
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1 2xl:grid-cols-2">
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <MapPin className="h-3 w-3" />
+                  Location
+                </Label>
+                <Input placeholder="City, State" value={location} onChange={(e) => setLocation(e.target.value)} />
+              </div>
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <CalendarClock className="h-3 w-3" />
+                  Bid due
+                </Label>
+                <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              </div>
             </div>
+
             <div>
-              <Label>Bid due</Label>
-              <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <Label>Scope</Label>
+              <Textarea
+                placeholder="Full package, trade split, building area, alternate, or discipline."
+                value={scope}
+                onChange={(e) => setScope(e.target.value)}
+                className="min-h-16 resize-none"
+              />
             </div>
-          </div>
 
-          <div>
-            <Label>Scope</Label>
-            <Textarea
-              placeholder="What portion of this bid to estimate (e.g. 'Electrical only', 'HVAC for Building B'). Leave blank for full scope."
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              className="min-h-16"
-            />
-          </div>
-
-          {personas.length > 0 && (
-            <div>
-              <Label>Estimator persona</Label>
-              <StyledSelect
-                value={personaId || "__auto__"}
-                onValueChange={(v) => setPersonaId(v === "__auto__" ? "" : v)}
-                placeholder="Auto-detect (let agent choose)"
-              >
-                <SelectItem value="__auto__">Auto-detect (let agent choose)</SelectItem>
-                {personas.map((persona) => (
-                  <SelectItem key={persona.id} value={persona.id}>
-                    {persona.name}{persona.trade ? ` — ${persona.trade}` : ""}
-                  </SelectItem>
-                ))}
-              </StyledSelect>
-              {personaId && (
-                <div className="mt-1 text-[10px] text-fg/40 leading-tight">
-                  {personas.find((p) => p.id === personaId)?.description || ""}
-                </div>
-              )}
-            </div>
-          )}
-
-          <div>
-            <Label>Notes</Label>
-            <Textarea placeholder="Optional notes" value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-16" />
-          </div>
-
-          <Button className="w-full" type="submit" disabled={isPending || files.length === 0}>
-            {isPending ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              "Submit package"
+            {personas.length > 0 && (
+              <div>
+                <Label>Estimating playbook</Label>
+                <StyledSelect
+                  value={personaId || "__auto__"}
+                  onValueChange={(v) => setPersonaId(v === "__auto__" ? "" : v)}
+                  placeholder="Auto-detect"
+                >
+                  <SelectItem value="__auto__">Auto-detect</SelectItem>
+                  {personas.map((persona) => (
+                    <SelectItem key={persona.id} value={persona.id}>
+                      {persona.name}{persona.trade ? ` - ${persona.trade}` : ""}
+                    </SelectItem>
+                  ))}
+                </StyledSelect>
+                {personaId && (
+                  <div className="mt-1 text-[10px] leading-tight text-fg/40">
+                    {selectedPersona?.description || ""}
+                  </div>
+                )}
+              </div>
             )}
-          </Button>
 
-          {status && (
-            <div className="rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success">{status}</div>
-          )}
-          {error && (
-            <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>
-          )}
-        </div>
+            <div>
+              <Label>Notes</Label>
+              <Textarea placeholder="Optional notes" value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-16 resize-none" />
+            </div>
+          </div>
+
+          <div className="border-t border-line/70 px-4 py-3">
+            {status && (
+              <div className="mb-2 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success">{status}</div>
+            )}
+            {error && (
+              <div className="mb-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>
+            )}
+            <Button className="h-11 w-full gap-2" type="submit" disabled={isPending || files.length === 0}>
+              {isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <FileUp className="h-4 w-4" />
+                  Create intake workspace
+                  <ArrowRight className="h-4 w-4" />
+                </>
+              )}
+            </Button>
+          </div>
+        </motion.div>
       </div>
     </form>
   );

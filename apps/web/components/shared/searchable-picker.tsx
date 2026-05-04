@@ -79,14 +79,14 @@ export function SearchablePicker({
         <button
           type="button"
           className={cn(
-            "flex items-center justify-between gap-1 h-7 w-full rounded-md border border-line bg-bg/45 px-2 text-[11px] text-fg outline-none transition-colors",
+            "flex h-7 w-full min-w-0 items-center justify-between gap-1 rounded-md border border-line bg-bg/45 px-2 text-[11px] text-fg outline-none transition-colors",
             "hover:border-accent/30 focus-visible:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/20",
             disabled && "opacity-40 pointer-events-none",
             triggerClassName,
             className,
           )}
         >
-          <span className={cn("truncate", !selected && "text-fg/40")}>{selected ? selected.label : placeholder}</span>
+          <span className={cn("min-w-0 truncate", !selected && "text-fg/40")}>{selected ? selected.label : placeholder}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fg/35" />
         </button>
       </Popover.Trigger>

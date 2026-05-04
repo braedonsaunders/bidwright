@@ -386,42 +386,82 @@ export function CreateJobModal({
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const BOM_TARGET_COLUMNS = [
-  "Vendor",
-  "Description",
-  "Quantity",
-  "Cost",
-  "Markup",
-  "Price",
-  "LabourHourReg",
-  "LabourHourOver",
-  "LabourHourDouble",
-  "LineOrder",
-  "(skip)",
+  { value: "entityName", label: "Line Item" },
+  { value: "description", label: "Description" },
+  { value: "quantity", label: "Quantity" },
+  { value: "uom", label: "Unit" },
+  { value: "cost", label: "Unit Cost" },
+  { value: "markup", label: "Markup" },
+  { value: "price", label: "Unit Price" },
+  { value: "category", label: "Category" },
+  { value: "entityType", label: "Entity Type" },
+  { value: "vendor", label: "Vendor" },
+  { value: "unit1", label: "Regular Hours" },
+  { value: "unit2", label: "Overtime Hours" },
+  { value: "unit3", label: "Double Time Hours" },
+  { value: "lineOrder", label: "Line Order" },
+  { value: "skip", label: "Skip" },
 ] as const;
+
+type ImportTargetColumn = (typeof BOM_TARGET_COLUMNS)[number]["value"];
+
+const IMPORT_COLUMN_ALIASES: Record<Exclude<ImportTargetColumn, "skip">, RegExp[]> = {
+  entityName: [/^item$/i, /item\s*name/i, /line\s*item/i, /material/i, /product/i, /name/i],
+  description: [/description/i, /scope/i, /work\s*description/i],
+  quantity: [/^qty$/i, /quantity/i, /count/i, /amount/i],
+  uom: [/^uom$/i, /^unit$/i, /unit\s*of\s*measure/i, /^um$/i],
+  cost: [/unit\s*cost/i, /^cost$/i, /our\s*cost/i, /each\s*cost/i],
+  markup: [/markup/i, /margin/i],
+  price: [/unit\s*price/i, /^price$/i, /sell/i, /rate/i],
+  category: [/category/i, /cost\s*type/i, /class/i, /trade/i],
+  entityType: [/entity\s*type/i, /resource\s*type/i, /item\s*type/i],
+  vendor: [/vendor/i, /supplier/i, /manufacturer/i],
+  unit1: [/regular\s*hours/i, /^reg/i, /straight\s*time/i],
+  unit2: [/overtime/i, /^ot/i],
+  unit3: [/double\s*time/i, /^dt/i],
+  lineOrder: [/line\s*order/i, /^order$/i, /sort/i],
+};
+
+function inferImportTarget(header: string): ImportTargetColumn {
+  for (const [target, patterns] of Object.entries(IMPORT_COLUMN_ALIASES) as Array<[Exclude<ImportTargetColumn, "skip">, RegExp[]]>) {
+    if (patterns.some((pattern) => pattern.test(header))) {
+      return target;
+    }
+  }
+  return "skip";
+}
 
 export function ImportBOMModal({
   open,
   onClose,
+  onPreview,
   onImport,
   isPending = false,
 }: {
   open: boolean;
   onClose: () => void;
-  onImport: (file: File, mapping: Record<string, string>) => void;
+  onPreview: (file: File) => Promise<{ headers: string[]; sampleRows: string[][]; fileId: string }>;
+  onImport: (fileId: string, mapping: Record<string, string>) => void;
   isPending?: boolean;
 }) {
   const [file, setFile] = useState<File | null>(null);
+  const [fileId, setFileId] = useState<string | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [previewRows, setPreviewRows] = useState<string[][]>([]);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setFile(null);
+      setFileId(null);
       setHeaders([]);
       setMapping({});
       setPreviewRows([]);
+      setPreviewing(false);
+      setPreviewError(null);
       if (fileRef.current) fileRef.current.value = "";
     }
   }, [open]);
@@ -430,37 +470,34 @@ export function ImportBOMModal({
     const f = e.target.files?.[0];
     if (!f) return;
     setFile(f);
+    setFileId(null);
+    setHeaders([]);
+    setMapping({});
+    setPreviewRows([]);
+    setPreviewError(null);
+    setPreviewing(true);
 
-    // Parse headers from CSV
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      if (!text) return;
-      const firstLine = text.split("\n")[0];
-      const cols = firstLine.split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-      setHeaders(cols);
-      // Auto-map by name match
-      const autoMap: Record<string, string> = {};
-      cols.forEach((col) => {
-        const match = BOM_TARGET_COLUMNS.find(
-          (t) => t.toLowerCase() === col.toLowerCase()
-        );
-        autoMap[col] = match ?? "(skip)";
-      });
-      setMapping(autoMap);
-
-      // Parse first 5 data rows for preview
-      const lines = text.split("\n").slice(1, 6);
-      const rows = lines.filter(l => l.trim()).map(l => l.split(",").map(c => c.trim().replace(/^"|"$/g, "")));
-      setPreviewRows(rows);
-    };
-    reader.readAsText(f);
-  }, []);
+    onPreview(f)
+      .then((preview) => {
+        setFileId(preview.fileId);
+        setHeaders(preview.headers);
+        setPreviewRows(preview.sampleRows);
+        const autoMap: Record<string, string> = {};
+        preview.headers.forEach((header) => {
+          autoMap[header] = inferImportTarget(header);
+        });
+        setMapping(autoMap);
+      })
+      .catch((error) => {
+        setPreviewError(error instanceof Error ? error.message : "Could not preview this file.");
+      })
+      .finally(() => setPreviewing(false));
+  }, [onPreview]);
 
   return (
     <ModalBackdrop open={open} onClose={onClose} size="xl">
       <CardHeader className="relative">
-        <CardTitle>Import Bill of Materials</CardTitle>
+        <CardTitle>Import Line Items</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
       <CardBody>
@@ -476,6 +513,18 @@ export function ImportBOMModal({
               className="block w-full text-sm text-fg/70 file:mr-3 file:rounded-lg file:border file:border-line file:bg-panel2 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-fg/70 hover:file:bg-panel2/80"
             />
           </div>
+
+          {previewing && (
+            <div className="rounded-lg border border-line bg-panel2/30 px-3 py-2 text-xs text-fg/50">
+              Reading columns...
+            </div>
+          )}
+
+          {previewError && (
+            <div className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
+              {previewError}
+            </div>
+          )}
 
           {headers.length > 0 && (
             <div>
@@ -494,12 +543,12 @@ export function ImportBOMModal({
                         <td className="px-3 py-2 text-fg/70">{header}</td>
                         <td className="px-3 py-2">
                           <Select
-                            value={mapping[header] ?? "(skip)"}
+                            value={mapping[header] ?? "skip"}
                             onValueChange={(v) =>
                               setMapping((prev) => ({ ...prev, [header]: v }))
                             }
                             size="xs"
-                            options={BOM_TARGET_COLUMNS.map((col) => ({ value: col, label: col }))}
+                            options={BOM_TARGET_COLUMNS.map((col) => ({ value: col.value, label: col.label }))}
                           />
                         </td>
                       </tr>
@@ -518,18 +567,18 @@ export function ImportBOMModal({
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="bg-panel2/40">
-                      {BOM_TARGET_COLUMNS.filter(c => c !== "(skip)" && Object.values(mapping).includes(c)).map(col => (
-                        <th key={col} className="px-2 py-1 text-left font-medium text-fg/50">{col}</th>
+                      {BOM_TARGET_COLUMNS.filter(c => c.value !== "skip" && Object.values(mapping).includes(c.value)).map(col => (
+                        <th key={col.value} className="px-2 py-1 text-left font-medium text-fg/50">{col.label}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {previewRows.map((row, i) => (
                       <tr key={i} className="border-t border-line/50">
-                        {BOM_TARGET_COLUMNS.filter(c => c !== "(skip)" && Object.values(mapping).includes(c)).map(col => {
-                          const sourceCol = Object.entries(mapping).find(([_, target]) => target === col)?.[0];
+                        {BOM_TARGET_COLUMNS.filter(c => c.value !== "skip" && Object.values(mapping).includes(c.value)).map(col => {
+                          const sourceCol = Object.entries(mapping).find(([_, target]) => target === col.value)?.[0];
                           const colIdx = headers.indexOf(sourceCol ?? "");
-                          return <td key={col} className="px-2 py-1 text-fg/70">{colIdx >= 0 ? row[colIdx] : "\u2014"}</td>;
+                          return <td key={col.value} className="px-2 py-1 text-fg/70">{colIdx >= 0 ? row[colIdx] : "-"}</td>;
                         })}
                       </tr>
                     ))}
@@ -546,8 +595,8 @@ export function ImportBOMModal({
           </Button>
           <Button
             size="sm"
-            onClick={() => file && onImport(file, mapping)}
-            disabled={!file || isPending}
+            onClick={() => fileId && onImport(fileId, mapping)}
+            disabled={!file || !fileId || previewing || isPending}
           >
             {isPending ? "Importing..." : "Import"}
           </Button>

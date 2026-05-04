@@ -49,8 +49,8 @@ export interface PdfDataPackage {
   }>;
   summaryBuilder?: {
     mode: "total" | "grouped" | "pivot";
-    rowDimension: "none" | "phase" | "category" | "worksheet";
-    columnDimension: "none" | "phase" | "category" | "worksheet";
+    rowDimension: "none" | "phase" | "category" | "worksheet" | "classification";
+    columnDimension: "none" | "phase" | "category" | "worksheet" | "classification";
     rows: Array<{ key: string; sourceId: string | null; label: string; visible: boolean; order: number }>;
     columns: Array<{ key: string; sourceId: string | null; label: string; visible: boolean; order: number }>;
     totals: { label: string; visible: boolean };
@@ -62,6 +62,10 @@ export interface PdfDataPackage {
     worksheetTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
     worksheetCategoryTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
     worksheetPhaseTotals?: Array<{ id: string; phaseId?: string | null; label: string; value: number; cost: number; margin: number }>;
+    classificationTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
+    phaseClassificationTotals?: Array<{ id: string; phaseId?: string | null; label: string; value: number; cost: number; margin: number }>;
+    worksheetClassificationTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
+    categoryClassificationTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
     adjustmentTotals: Array<{ id: string; label: string; show: string; value: number; cost: number; margin: number }>;
   };
   summaryRows: Array<{
@@ -268,6 +272,10 @@ export function buildPdfDataPackage(
       worksheetTotals: workspace.estimate?.totals?.worksheetTotals ?? [],
       worksheetCategoryTotals: workspace.estimate?.totals?.worksheetCategoryTotals ?? [],
       worksheetPhaseTotals: workspace.estimate?.totals?.worksheetPhaseTotals ?? [],
+      classificationTotals: workspace.estimate?.totals?.classificationTotals ?? [],
+      phaseClassificationTotals: workspace.estimate?.totals?.phaseClassificationTotals ?? [],
+      worksheetClassificationTotals: workspace.estimate?.totals?.worksheetClassificationTotals ?? [],
+      categoryClassificationTotals: workspace.estimate?.totals?.categoryClassificationTotals ?? [],
       adjustmentTotals: workspace.estimate?.totals?.adjustmentTotals ?? [],
     },
     summaryRows: (workspace.summaryRows ?? []).map((r: any) => ({
@@ -438,13 +446,15 @@ export function generatePdfHtml(
     const summaryTotals = data.summaryTotals;
 
     if (builder && summaryTotals) {
-      const axisTotal = (dimension: "none" | "phase" | "category" | "worksheet", sourceId: string | null) => {
+      const axisTotal = (dimension: "none" | "phase" | "category" | "worksheet" | "classification", sourceId: string | null) => {
         if (!sourceId) return null;
         if (dimension === "phase") return summaryTotals.phaseTotals.find((entry) => entry.id === sourceId) ?? null;
         if (dimension === "category") return summaryTotals.categoryTotals.find((entry) => entry.id === sourceId) ?? null;
         if (dimension === "worksheet") return (summaryTotals.worksheetTotals ?? []).find((entry) => entry.id === sourceId) ?? null;
+        if (dimension === "classification") return (summaryTotals.classificationTotals ?? []).find((entry) => entry.id === sourceId) ?? null;
         return null;
       };
+      const pairKey = (leftId: string | null | undefined, rightId: string | null | undefined) => `${leftId ?? "__unphased__"}::${rightId ?? ""}`;
       const adjustmentTotals = summaryTotals.adjustmentTotals.filter((entry) => entry.show !== "No");
 
       if (builder.mode === "pivot") {
@@ -457,23 +467,27 @@ export function generatePdfHtml(
         const resolveCell = (rowSourceId: string | null, columnSourceId: string | null) => {
           const empty = { value: 0, cost: 0, margin: 0 };
           const dims = [builder.rowDimension, builder.columnDimension];
+          const sourceFor = (dimension: typeof builder.rowDimension) => (builder.rowDimension === dimension ? rowSourceId : columnSourceId);
           if (dims.includes("worksheet") && dims.includes("category")) {
-            const worksheetId = builder.rowDimension === "worksheet" ? rowSourceId : columnSourceId;
-            const categoryId = builder.rowDimension === "category" ? rowSourceId : columnSourceId;
-            return (summaryTotals.worksheetCategoryTotals ?? []).find((entry) => entry.id === `${worksheetId}::${categoryId ?? ""}`) ?? empty;
+            return (summaryTotals.worksheetCategoryTotals ?? []).find((entry) => entry.id === pairKey(sourceFor("worksheet"), sourceFor("category"))) ?? empty;
           }
           if (dims.includes("worksheet") && dims.includes("phase")) {
-            const worksheetId = builder.rowDimension === "worksheet" ? rowSourceId : columnSourceId;
-            const phaseId = builder.rowDimension === "phase" ? rowSourceId : columnSourceId;
-            return (summaryTotals.worksheetPhaseTotals ?? []).find((entry) => entry.id === `${worksheetId}::${phaseId ?? "__unphased__"}`) ?? empty;
+            return (summaryTotals.worksheetPhaseTotals ?? []).find((entry) => entry.id === pairKey(sourceFor("worksheet"), sourceFor("phase"))) ?? empty;
           }
-          const phaseId = builder.rowDimension === "phase" ? rowSourceId : columnSourceId;
-          const categoryId = builder.rowDimension === "category" ? rowSourceId : columnSourceId;
-          const key = `${phaseId ?? "__unphased__"}::${categoryId ?? ""}`;
-          return summaryTotals.phaseCategoryTotals.find((entry) => entry.id === key) ?? empty;
+          if (dims.includes("worksheet") && dims.includes("classification")) {
+            return (summaryTotals.worksheetClassificationTotals ?? []).find((entry) => entry.id === pairKey(sourceFor("worksheet"), sourceFor("classification"))) ?? empty;
+          }
+          if (dims.includes("category") && dims.includes("classification")) {
+            return (summaryTotals.categoryClassificationTotals ?? []).find((entry) => entry.id === pairKey(sourceFor("category"), sourceFor("classification"))) ?? empty;
+          }
+          if (dims.includes("phase") && dims.includes("classification")) {
+            return (summaryTotals.phaseClassificationTotals ?? []).find((entry) => entry.id === pairKey(sourceFor("phase"), sourceFor("classification"))) ?? empty;
+          }
+          return summaryTotals.phaseCategoryTotals.find((entry) => entry.id === pairKey(sourceFor("phase"), sourceFor("category"))) ?? empty;
         };
 
-        const dimensionLabel = (d: typeof builder.rowDimension) => d === "phase" ? "Phase" : d === "category" ? "Category" : d === "worksheet" ? "Worksheet" : "";
+        const dimensionLabel = (d: typeof builder.rowDimension) =>
+          d === "phase" ? "Phase" : d === "category" ? "Category" : d === "worksheet" ? "Worksheet" : d === "classification" ? "Construction Code" : "";
         let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">${escapeHtml(dimensionLabel(builder.rowDimension))}</th>`;
         for (const column of columns) {
           result += `<th class="num">${escapeHtml(column.label)}</th>`;

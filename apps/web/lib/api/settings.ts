@@ -1,4 +1,5 @@
 import { apiRequest } from "./client";
+import type { UnitOfMeasure } from "@bidwright/domain";
 
 export interface BrandProfile {
   companyName: string;
@@ -26,6 +27,7 @@ export interface AppSettingsRecord {
     currency: string;
     dateFormat: string;
     fiscalYearStart: number;
+    uoms?: UnitOfMeasure[];
     benchmarkingEnabled?: boolean;
     benchmarkMinimumSimilarity?: number;
     benchmarkMaximumComparables?: number;

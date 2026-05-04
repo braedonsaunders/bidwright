@@ -3,7 +3,17 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-export const apiDataRoot = process.env.DATA_DIR || path.join(process.cwd(), "data", "bidwright-api");
+function resolveDataRoot() {
+  const configuredDataRoot = process.env.DATA_DIR?.trim();
+  if (!configuredDataRoot) {
+    return path.join(repoRoot, "data", "bidwright-api");
+  }
+  return path.isAbsolute(configuredDataRoot)
+    ? configuredDataRoot
+    : path.resolve(repoRoot, configuredDataRoot);
+}
+
+export const apiDataRoot = resolveDataRoot();
 
 export function resolveApiPath(...segments: string[]) {
   return path.resolve(apiDataRoot, ...segments);
@@ -99,4 +109,3 @@ export function sanitizeFileName(value: string) {
 
   return `${safeBase || "file"}${safeExt}`;
 }
-

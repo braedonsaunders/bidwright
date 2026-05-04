@@ -15,7 +15,7 @@
 // is configured.
 
 import * as XLSX from "xlsx";
-import { createPdfParser } from "@bidwright/ingestion";
+import { assertSafeSpreadsheetArchive, createPdfParser } from "@bidwright/ingestion";
 import { createLLMAdapter } from "@bidwright/agent";
 
 export interface SpreadsheetTable {
@@ -58,6 +58,7 @@ function parseCsv(buffer: Buffer): SpreadsheetTable[] {
 }
 
 function parseXlsx(buffer: Buffer): SpreadsheetTable[] {
+  assertSafeSpreadsheetArchive(buffer);
   const wb = XLSX.read(buffer, { type: "buffer" });
   return parseWorkbook(wb);
 }

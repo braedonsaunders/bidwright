@@ -43,6 +43,7 @@ interface AnnotationCanvasProps {
   onCalibrationRequest?: (points: [Point, Point]) => void;
   /** Source canvas the loupe samples from when calibrating. */
   pdfCanvas?: HTMLCanvasElement | null;
+  snapEnabled?: boolean;
 }
 
 /* ─── Drawing Helpers ─── */
@@ -367,6 +368,7 @@ export function AnnotationCanvas({
   onAnnotationComplete,
   onCalibrationRequest,
   pdfCanvas,
+  snapEnabled = true,
 }: AnnotationCanvasProps) {
   // Scale the stored (zoom-1) calibration by the current zoom for use in math.
   const effectiveCalibration = useMemo<Calibration | null>(
@@ -528,6 +530,24 @@ export function AnnotationCanvas({
         ctx.fill();
       }
     }
+
+    if (snapEnabled && snapPoint && activeTool && activeTool !== "select") {
+      ctx.save();
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.fillStyle = "rgba(34, 197, 94, 0.18)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(snapPoint.x, snapPoint.y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(snapPoint.x - 11, snapPoint.y);
+      ctx.lineTo(snapPoint.x + 11, snapPoint.y);
+      ctx.moveTo(snapPoint.x, snapPoint.y - 11);
+      ctx.lineTo(snapPoint.x, snapPoint.y + 11);
+      ctx.stroke();
+      ctx.restore();
+    }
   }, [
     width,
     height,
@@ -538,6 +558,8 @@ export function AnnotationCanvas({
     activeColor,
     activeThickness,
     calibration,
+    snapEnabled,
+    snapPoint,
   ]);
 
   useEffect(() => {
@@ -559,6 +581,67 @@ export function AnnotationCanvas({
   function getCanvasPoint(e: React.MouseEvent<HTMLCanvasElement>): Point {
     const rect = canvasRef.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  function findPdfSnapPoint(point: Point): Point | null {
+    if (!pdfCanvas) return null;
+    const searchRadius = 8;
+    const darknessThreshold = 112;
+    const srcX = Math.max(0, Math.round(point.x - searchRadius));
+    const srcY = Math.max(0, Math.round(point.y - searchRadius));
+    const size = searchRadius * 2 + 1;
+    try {
+      const ctx = pdfCanvas.getContext("2d");
+      if (!ctx) return null;
+      const data = ctx.getImageData(srcX, srcY, size, size).data;
+      let bestScore = -Infinity;
+      let best: Point | null = null;
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const dx = srcX + x - point.x;
+          const dy = srcY + y - point.y;
+          const dist2 = dx * dx + dy * dy;
+          if (dist2 > searchRadius * searchRadius) continue;
+          const idx = (y * size + x) * 4;
+          const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          if (lum > darknessThreshold) continue;
+          const score = (255 - lum) * 4 - Math.sqrt(dist2);
+          if (score > bestScore) {
+            bestScore = score;
+            best = { x: srcX + x, y: srcY + y };
+          }
+        }
+      }
+      return best;
+    } catch {
+      return null;
+    }
+  }
+
+  function findAnnotationSnapPoint(point: Point): Point | null {
+    const snapDistance = 10;
+    let best: { point: Point; distance: number } | null = null;
+    for (const annotation of annotations) {
+      for (const candidate of annotation.points) {
+        const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+        if (distance <= snapDistance && (!best || distance < best.distance)) {
+          best = { point: candidate, distance };
+        }
+      }
+    }
+    return best?.point ?? null;
+  }
+
+  function findSnapPoint(point: Point): Point | null {
+    if (!snapEnabled || !activeTool || activeTool === "select") return null;
+    return findAnnotationSnapPoint(point) ?? findPdfSnapPoint(point);
+  }
+
+  function commitPoint(point: Point): Point {
+    if (!snapEnabled) return point;
+    const candidate = snapPointRef.current ?? findSnapPoint(point);
+    if (!candidate) return point;
+    return Math.hypot(candidate.x - point.x, candidate.y - point.y) <= 14 ? candidate : point;
   }
 
   /* Determine if the active tool needs multi-click (polyline/polygon) */
@@ -650,7 +733,7 @@ export function AnnotationCanvas({
     }
 
     if (!activeTool || activeTool === "select") return;
-    const pt = getCanvasPoint(e);
+    const pt = commitPoint(getCanvasPoint(e));
 
     if (isDragTool(activeTool)) {
       dragStartRef.current = pt;
@@ -664,7 +747,9 @@ export function AnnotationCanvas({
     if (panStateRef.current) return; // window listener handles it
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
-    setCursorPos(pt);
+    const snap = activeTool === "calibrate" ? snapPointRef.current : findSnapPoint(pt);
+    if (activeTool !== "calibrate") setSnapPoint(snap);
+    setCursorPos(snap ?? pt);
     if (activeTool === "calibrate") {
       setScreenCursor({ x: e.clientX, y: e.clientY });
     }
@@ -831,7 +916,7 @@ export function AnnotationCanvas({
       return;
     }
     if (!activeTool || activeTool === "select") return;
-    const pt = getCanvasPoint(e);
+    const pt = commitPoint(getCanvasPoint(e));
 
     if (isDraggingRef.current && isDragTool(activeTool) && dragStartRef.current) {
       isDraggingRef.current = false;
@@ -852,7 +937,7 @@ export function AnnotationCanvas({
     if (!activeTool || activeTool === "select") return;
     if (isDragging || isDraggingRef.current) return;
 
-    const pt = getCanvasPoint(e);
+    const pt = commitPoint(getCanvasPoint(e));
 
     /* Count tools: each click = one point, complete on each click */
     if (activeTool === "count") {
@@ -884,20 +969,10 @@ export function AnnotationCanvas({
     }
 
     if (isTwoPointTool(activeTool)) {
-      // Honour any active snap target — if the loupe is suggesting a snap
-      // point AND it's close to the click (so we don't commit a stale
-      // snap from a previous mouse position or session), use the snap.
-      const SNAP_DISTANCE_LIMIT = 14;
-      let commitPoint = pt;
-      if (activeTool === "calibrate" && snapPointRef.current) {
-        const sp = snapPointRef.current;
-        const d = Math.hypot(sp.x - pt.x, sp.y - pt.y);
-        if (d <= SNAP_DISTANCE_LIMIT) commitPoint = sp;
-      }
       if (drawingPoints.length === 0) {
-        setDrawingPoints([commitPoint]);
+        setDrawingPoints([pt]);
       } else {
-        const finalPoints = [drawingPoints[0], commitPoint];
+        const finalPoints = [drawingPoints[0], pt];
         if (activeTool === "calibrate") {
           onCalibrationRequest?.(finalPoints as [Point, Point]);
           setDrawingPoints([]);
@@ -949,6 +1024,7 @@ export function AnnotationCanvas({
 
     setDrawingPoints([]);
     setCursorPos(null);
+    setSnapPoint(null);
   }
 
   /* Cancel drawing with Escape */
@@ -957,6 +1033,7 @@ export function AnnotationCanvas({
       if (e.key === "Escape") {
         setDrawingPoints([]);
         setCursorPos(null);
+        setSnapPoint(null);
         setIsDragging(false);
         isDraggingRef.current = false;
         dragStartRef.current = null;
@@ -984,7 +1061,10 @@ export function AnnotationCanvas({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={() => setScreenCursor(null)}
+        onMouseLeave={() => {
+          setScreenCursor(null);
+          setSnapPoint(null);
+        }}
       />
       {showLoupe && screenCursor && (
         <div

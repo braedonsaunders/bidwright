@@ -1,5 +1,6 @@
 import type {
   DatasetColumn,
+  LaborUnit,
   Plugin,
   PluginOutput,
   PluginOutputLineItem,
@@ -7,18 +8,16 @@ import type {
   PluginToolOutputTemplate,
 } from "@bidwright/domain";
 import {
-  computeNecaExtendedDuration,
-  computeNecaTemperatureAdjustment,
   computeShopPipeEstimate,
   computeShopWeldEstimate,
-  getDatasetCellValue,
-  getDatasetCellString,
   sumTableHours,
 } from "@bidwright/domain";
 
 interface RateScheduleSelection {
   id: string;
   name: string;
+  category?: string;
+  entityCategoryType?: string;
 }
 
 export interface BuiltinPluginExecutionContext {
@@ -30,6 +29,7 @@ export interface BuiltinPluginExecutionContext {
   lookupDatasetRows: (datasetRef: string) => Promise<Array<Record<string, unknown>>>;
   lookupDatasetColumns: (datasetRef: string) => Promise<DatasetColumn[]>;
   resolveRateScheduleItem: (rateScheduleItemId: string) => Promise<RateScheduleSelection | null>;
+  lookupLaborUnit: (providerLabel: string, input: Record<string, unknown>) => Promise<LaborUnit | null>;
 }
 
 function toNumber(value: unknown): number {
@@ -204,26 +204,6 @@ function renderDeclarativeOutput(template: PluginToolOutputTemplate | undefined,
   return output;
 }
 
-function getRowString(row: Record<string, unknown>, keys: string[], columns?: DatasetColumn[]) {
-  for (const key of keys) {
-    const value = getDatasetCellString(row, key, columns);
-    if (value) {
-      return value;
-    }
-  }
-  return "";
-}
-
-function getRowNumber(row: Record<string, unknown>, keys: string[], columns?: DatasetColumn[]) {
-  for (const key of keys) {
-    const value = Number(getDatasetCellValue(row, key, columns));
-    if (Number.isFinite(value)) {
-      return value;
-    }
-  }
-  return 0;
-}
-
 function normalizeDifficulty(value: string) {
   const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
   if (normalized === "difficult") return "Difficult";
@@ -232,41 +212,19 @@ function normalizeDifficulty(value: string) {
   return "Normal";
 }
 
-function findLabourDatasetRow(
-  rows: Array<Record<string, unknown>>,
-  input: Record<string, unknown>,
-  columns?: DatasetColumn[],
-) {
-  const category = toStringValue(input.category);
-  const labourClass = toStringValue(input.class);
-  const subClass = toStringValue(input.subClass);
-
-  const matches = rows.filter((row) =>
-    getRowString(row, ["category"], columns) === category &&
-    getRowString(row, ["class"], columns) === labourClass,
-  );
-
-  if (subClass) {
-    const exact = matches.find((row) => getRowString(row, ["subClass"], columns) === subClass);
-    if (exact) {
-      return exact;
-    }
-  }
-
-  return matches[0] ?? null;
-}
-
 function buildLabourLineItem(args: {
   rateScheduleItemId: string;
   entityName: string;
+  category?: string;
+  entityType?: string;
   description: string;
   hours: number;
   sourceNotes: string;
 }) {
   const hours = roundHours(args.hours);
   const lineItem: PluginOutputLineItem = {
-    category: "Labour",
-    entityType: "LabourClass",
+    category: args.category || args.entityType || "Labour",
+    entityType: args.entityType || args.category || "Labour",
     entityName: args.entityName,
     description: args.description,
     quantity: 1,
@@ -283,9 +241,18 @@ function buildLabourLineItem(args: {
   return lineItem;
 }
 
-async function executeDatasetBackedLabourTool(
+function laborUnitHours(unit: LaborUnit, difficultyLabel: string) {
+  if (difficultyLabel === "Difficult") {
+    return unit.hoursDifficult ?? unit.hoursNormal;
+  }
+  if (difficultyLabel === "Very Difficult" || difficultyLabel === "Extreme") {
+    return unit.hoursVeryDifficult ?? unit.hoursDifficult ?? unit.hoursNormal;
+  }
+  return unit.hoursNormal;
+}
+
+async function executeLaborUnitsTool(
   ctx: BuiltinPluginExecutionContext,
-  datasetRef: string,
   providerLabel: string,
 ) {
   const serviceItemId = toStringValue(ctx.input.serviceItemId ?? ctx.input.serviceItem);
@@ -294,28 +261,24 @@ async function executeDatasetBackedLabourTool(
     throw new Error("Select a valid labor rate from the current revision rate schedule.");
   }
 
-  const datasetRows = await ctx.lookupDatasetRows(datasetRef);
-  const datasetColumns = await ctx.lookupDatasetColumns(datasetRef);
-  const row = findLabourDatasetRow(datasetRows, ctx.input, datasetColumns);
-  if (!row) {
+  const laborUnit = await ctx.lookupLaborUnit(providerLabel, ctx.input);
+  if (!laborUnit) {
     throw new Error(`No ${providerLabel} labor unit matched the selected category/class/sub-class.`);
   }
 
   const difficulty = normalizeDifficulty(
-    toStringValue(ctx.input.difficulty) || ctx.revisionDifficulty || "Normal",
+    toStringValue(ctx.input.difficulty) || ctx.revisionDifficulty || laborUnit.defaultDifficulty || "Normal",
   );
   const quantity = toNumber(ctx.input.quantity);
-  const hoursPerUnit =
-    difficulty === "Difficult"
-      ? getRowNumber(row, ["hourDifficult"], datasetColumns)
-      : difficulty === "Very Difficult" || difficulty === "Extreme"
-        ? getRowNumber(row, ["hourVeryDifficult"], datasetColumns)
-        : getRowNumber(row, ["hourNormal"], datasetColumns);
+  const hoursPerUnit = laborUnitHours(laborUnit, difficulty);
   const totalHours = roundHours(quantity * hoursPerUnit);
-  const category = getRowString(row, ["category"], datasetColumns);
-  const labourClass = getRowString(row, ["class"], datasetColumns);
-  const subClass = getRowString(row, ["subClass"], datasetColumns);
-  const description = [providerLabel, category, labourClass, subClass].filter(Boolean).join(" - ");
+  const description = [
+    providerLabel,
+    laborUnit.category,
+    laborUnit.className,
+    laborUnit.subClassName,
+  ].filter(Boolean).join(" - ");
+  const outputUom = laborUnit.outputUom || "EA";
 
   const output: PluginOutput = {
     type: "line_items",
@@ -323,21 +286,24 @@ async function executeDatasetBackedLabourTool(
       buildLabourLineItem({
         rateScheduleItemId: serviceItem.id,
         entityName: serviceItem.name,
+        category: serviceItem.category || laborUnit.entityCategoryType || "Labour",
+        entityType: serviceItem.entityCategoryType || laborUnit.entityCategoryType || serviceItem.category || "Labour",
         description,
         hours: totalHours,
-      sourceNotes: `${providerLabel} labor unit ${hoursPerUnit.toFixed(2)} hrs per unit x ${quantity} @ ${difficulty}.`,
+        sourceNotes: `${providerLabel} labor unit ${laborUnit.code || laborUnit.id}: ${hoursPerUnit.toFixed(2)} hrs/${outputUom} x ${quantity} @ ${difficulty}.`,
       }),
     ],
     summary: {
       title: `${providerLabel} Labor Units`,
       sections: [
+        { label: "Labor Unit", value: laborUnit.name, format: "text" },
         { label: "Hours / Unit", value: hoursPerUnit, format: "hours" },
         { label: "Quantity", value: quantity, format: "number" },
         { label: "Difficulty", value: difficulty, format: "text" },
         { label: "Total Hours", value: totalHours, format: "hours" },
       ],
     },
-    displayText: `Prepared ${providerLabel} labour hours for ${serviceItem.name}.`,
+    displayText: `Prepared ${providerLabel} labor hours for ${serviceItem.name}.`,
   };
 
   return output;
@@ -358,8 +324,8 @@ export async function executeBuiltinPluginTool(
   }
 
   switch (execution.type) {
-    case "dataset_labour_units":
-      return executeDatasetBackedLabourTool(ctx, execution.datasetId, execution.providerLabel);
+    case "labor_units":
+      return executeLaborUnitsTool(ctx, execution.providerLabel);
 
     case "scoring_result_patch": {
       const scores = getFormScores(ctx.formState, execution.scoringId);
@@ -396,80 +362,6 @@ export async function executeBuiltinPluginTool(
           ],
         },
         displayText: `Set ${execution.revisionField} to ${resultBand.value}.`,
-      };
-    }
-
-    case "neca_temperature_adjustment": {
-      const serviceItemId = toStringValue(ctx.input.serviceItemId);
-      const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
-      if (!serviceItem) {
-        throw new Error("Select a valid labor rate from the current revision rate schedule.");
-      }
-
-      const result = computeNecaTemperatureAdjustment({
-        temperature: toNumber(ctx.input.temperature),
-        temperatureUnit: toStringValue(ctx.input.temperatureUnit) || "C",
-        humidity: toNumber(ctx.input.humidity),
-        baseHours: toNumber(ctx.input.baseHours),
-      });
-
-      const lineItem = buildLabourLineItem({
-        rateScheduleItemId: serviceItem.id,
-        entityName: serviceItem.name,
-        description: "NECA temperature productivity adjustment",
-        hours: result.additionalHours,
-        sourceNotes: `Temperature adjustment from ${toNumber(ctx.input.baseHours).toFixed(2)} base hours with ${result.lostProductivityPercent.toFixed(2)}% lost productivity.`,
-      });
-
-      return {
-        type: "line_items",
-        lineItems: [lineItem],
-        summary: {
-          title: "NECA Temperature Adjustment",
-          sections: [
-            { label: "Lost Productivity", value: result.lostProductivityPercent, format: "percentage" },
-            { label: "Additional Hours", value: result.additionalHours, format: "hours" },
-          ],
-        },
-        displayText: `Prepared ${result.additionalHours.toFixed(2)} additional temperature hours.`,
-      };
-    }
-
-    case "neca_extended_duration": {
-      const serviceItemId = toStringValue(ctx.input.serviceItemId);
-      const serviceItem = await ctx.resolveRateScheduleItem(serviceItemId);
-      if (!serviceItem) {
-        throw new Error("Select a valid labor rate from the current revision rate schedule.");
-      }
-
-      const result = computeNecaExtendedDuration({
-        baseHours: toNumber(ctx.input.baseHours),
-        workers: toNumber(ctx.input.workers),
-        monthsExtended: toNumber(ctx.input.monthsExtended),
-      });
-      const selectedWorkers = result.selectedWorkers ?? result.recommendedWorkers ?? 0;
-
-      const lineItem = buildLabourLineItem({
-        rateScheduleItemId: serviceItem.id,
-        entityName: serviceItem.name,
-        description: "NECA extended duration adjustment",
-        hours: result.totalAdditionalHours,
-        sourceNotes: `Extended duration adjustment using ${selectedWorkers.toFixed(2)} workers over ${toNumber(ctx.input.monthsExtended)} months.`,
-      });
-
-      return {
-        type: "line_items",
-        lineItems: [lineItem],
-        summary: {
-          title: "NECA Extended Duration",
-          sections: [
-            { label: "Recommended Crew", value: result.recommendedWorkers, format: "number" },
-            { label: "Normal Duration", value: result.normalDurationMonths, format: "number" },
-            { label: "Hours / Month", value: result.extraHoursPerMonth, format: "hours" },
-            { label: "Total Hours", value: result.totalAdditionalHours, format: "hours" },
-          ],
-        },
-        displayText: `Prepared ${result.totalAdditionalHours.toFixed(2)} extended duration hours.`,
       };
     }
 

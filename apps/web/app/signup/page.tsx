@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import Link from "next/link";
 import { useAuth } from "@/components/auth-provider";
+import { BidwrightLogo } from "@/components/brand-logo";
 import { Button, Input, Label, Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
 
 export default function SignupPage() {
@@ -51,7 +52,7 @@ export default function SignupPage() {
     <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-fg">Bidwright</h1>
+          <BidwrightLogo className="mx-auto h-24 w-auto max-w-[240px]" />
           <p className="mt-1 text-sm text-fg/40">Create your organization</p>
         </div>
 

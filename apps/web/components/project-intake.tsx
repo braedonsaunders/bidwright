@@ -2,7 +2,7 @@
 
 import type { ProjectListItem } from "@/lib/api";
 import { ZipDropzone } from "@/components/zip-dropzone";
-import { Card, CardBody, CardHeader, CardTitle, FadeIn } from "@/components/ui";
+import { motion } from "motion/react";
 
 export function ProjectIntake({
   projects,
@@ -10,17 +10,15 @@ export function ProjectIntake({
   projects: ProjectListItem[];
 }) {
   return (
-    <div className="flex flex-1 flex-col gap-5 min-h-0 overflow-hidden">
-      <FadeIn>
-      <Card className="flex flex-1 flex-col min-h-0">
-        <CardHeader>
-          <CardTitle>Upload bid package</CardTitle>
-        </CardHeader>
-        <CardBody className="flex-1 min-h-0">
-          <ZipDropzone projects={projects} />
-        </CardBody>
-      </Card>
-      </FadeIn>
-    </div>
+    <section className="relative flex min-h-[calc(100vh-2.5rem)] flex-1 overflow-y-auto text-fg xl:min-h-0 xl:overflow-hidden">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.34, ease: "easeOut" }}
+        className="relative z-10 flex min-h-[760px] min-w-0 flex-1 xl:min-h-0"
+      >
+        <ZipDropzone projects={projects} />
+      </motion.div>
+    </section>
   );
 }

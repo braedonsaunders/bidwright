@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "next dev --turbopack",
+    "dev:webpack": "next dev --webpack",
     "dev:turbo": "next dev --turbopack",
     "build": "next build",
     "start": "next start",

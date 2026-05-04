@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Layers, X } from "lucide-react";
 import { saveSelectionAsAssembly } from "@/lib/api";
 import { Button, Input, Label, ModalBackdrop } from "@/components/ui";
+import { UomSelect } from "@/components/shared/uom-select";
 
 interface Props {
   open: boolean;
@@ -89,7 +90,7 @@ export function SaveSelectionAsAssemblyModal({ open, onClose, projectId, workshe
             </div>
             <div>
               <Label className="text-[10px]">Unit (per assembly)</Label>
-              <Input value={unit} onChange={(e) => setUnit(e.target.value)} className="text-xs" />
+              <UomSelect value={unit} onValueChange={setUnit} size="sm" />
             </div>
             <div className="col-span-2">
               <Label className="text-[10px]">Category</Label>

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
-import { createPdfParser } from "@bidwright/ingestion";
+import { assertSafeSpreadsheetArchive, createPdfParser } from "@bidwright/ingestion";
 import { prisma } from "@bidwright/db";
 import { resolveApiPath } from "../paths.js";
 import { readFile } from "node:fs/promises";
@@ -76,7 +76,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       });
 
       // Return the newly created book so the UI can display it
-      const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
+      const book = await request.store!.getKnowledgeBook(bookId);
       reply.code(201);
       return book;
     } catch (err) {
@@ -160,6 +160,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
       if (!query.q) {
         return reply.code(400).send({ message: "Query parameter 'q' is required" });
+      }
+      if (query.projectId) {
+        const project = await request.store!.getProject(query.projectId);
+        if (!project) return reply.code(404).send({ message: "Project not found" });
       }
 
       const results = await knowledgeService.search(query.q, {
@@ -436,8 +440,14 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       // Try to find the document as a KnowledgeBook first, then as a SourceDocument
       let fileBuffer: Buffer | undefined;
       let fileName = "document.pdf";
+      const organizationId = request.user?.organizationId;
+      if (!organizationId) {
+        return reply.code(401).send({ message: "Organization context required" });
+      }
 
-      const book = await prisma.knowledgeBook.findUnique({ where: { id: body.documentId } });
+      const book = await prisma.knowledgeBook.findFirst({
+        where: { id: body.documentId, organizationId },
+      });
       if (book?.storagePath) {
         const absPath = resolveApiPath(book.storagePath);
         fileBuffer = await readFile(absPath);
@@ -445,7 +455,13 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
 
       if (!fileBuffer) {
-        const sourceDoc = await prisma.sourceDocument.findUnique({ where: { id: body.documentId } });
+        const sourceDoc = await prisma.sourceDocument.findFirst({
+          where: {
+            id: body.documentId,
+            ...(body.projectId ? { projectId: body.projectId } : {}),
+            project: { organizationId },
+          },
+        });
         if (sourceDoc?.storagePath) {
           const absPath = resolveApiPath(sourceDoc.storagePath);
           fileBuffer = await readFile(absPath);
@@ -469,18 +485,12 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
       // Optionally update the stored document with richer extraction
       if (body.updateDocument && book) {
-        const enrichedText = doc.pages.map((p) => p.content).join("\n\n--- Page Break ---\n\n");
-        await prisma.knowledgeBook.update({
-          where: { id: book.id },
-          data: {
-            metadata: {
-              ...(typeof book.metadata === "object" && book.metadata !== null ? book.metadata : {}),
-              azureExtracted: true,
-              keyValuePairs: doc.metadata.keyValuePairs ?? [],
-              selectionMarks: doc.metadata.selectionMarks ?? [],
-              tableCount: doc.tables.length,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            } as any,
+        await request.store!.updateKnowledgeBook(book.id, {
+          metadata: {
+            azureExtracted: true,
+            keyValuePairs: doc.metadata.keyValuePairs ?? [],
+            selectionMarks: doc.metadata.selectionMarks ?? [],
+            tableCount: doc.tables.length,
           },
         });
       }
@@ -522,8 +532,14 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       // Find the document (project SourceDocument or KnowledgeBook)
       let fileBuffer: Buffer | undefined;
       let fileName = "spreadsheet.xlsx";
+      const organizationId = request.user?.organizationId;
+      if (!organizationId) {
+        return reply.code(401).send({ message: "Organization context required" });
+      }
 
-      const sourceDoc = await prisma.sourceDocument.findUnique({ where: { id: documentId } });
+      const sourceDoc = await prisma.sourceDocument.findFirst({
+        where: { id: documentId, project: { organizationId } },
+      });
       if (sourceDoc?.storagePath) {
         const absPath = resolveApiPath(sourceDoc.storagePath);
         fileBuffer = await readFile(absPath);
@@ -531,7 +547,9 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
 
       if (!fileBuffer) {
-        const book = await prisma.knowledgeBook.findUnique({ where: { id: documentId } });
+        const book = await prisma.knowledgeBook.findFirst({
+          where: { id: documentId, organizationId },
+        });
         if (book?.storagePath) {
           const absPath = resolveApiPath(book.storagePath);
           fileBuffer = await readFile(absPath);
@@ -544,6 +562,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
 
       // Parse the spreadsheet
+      assertSafeSpreadsheetArchive(fileBuffer);
       const workbook = XLSX.read(fileBuffer, { type: "buffer" });
       const sheetNames = workbook.SheetNames;
 
@@ -600,7 +619,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       };
     } catch (err) {
       request.log.error(err, "Spreadsheet reading failed");
-      return reply.code(500).send({
+      const statusCode = typeof (err as { statusCode?: unknown }).statusCode === "number"
+        ? (err as { statusCode: number }).statusCode
+        : 500;
+      return reply.code(statusCode).send({
         message: "Spreadsheet reading failed",
         error: err instanceof Error ? err.message : String(err),
       });
@@ -614,7 +636,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
   app.post("/knowledge/books/:bookId/analyze-import", async (request, reply) => {
     const { bookId } = request.params as { bookId: string };
     try {
-      const book = await prisma.knowledgeBook.findUnique({ where: { id: bookId } });
+      const book = await request.store!.getKnowledgeBook(bookId);
       if (!book?.storagePath) {
         return reply.code(404).send({ message: "Source file not available for this book" });
       }
@@ -631,7 +653,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       return analysis;
     } catch (err) {
       request.log.error(err, "Knowledge book analyze-import failed");
-      return reply.code(500).send({ message: err instanceof Error ? err.message : "Analyze failed" });
+      const statusCode = typeof (err as { statusCode?: unknown }).statusCode === "number"
+        ? (err as { statusCode: number }).statusCode
+        : 500;
+      return reply.code(statusCode).send({ message: err instanceof Error ? err.message : "Analyze failed" });
     }
   });
 }
