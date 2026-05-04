@@ -2804,7 +2804,7 @@ export class CostIntelligenceService {
     ] = await Promise.all([
       db.resourceCatalogItem.count({ where: { organizationId } }),
       db.priceObservation.count({ where: { organizationId } }),
-      db.effectiveCost.count({ where: { organizationId } }),
+      db.effectiveCost.count({ where: { organizationId, vendorName: "", vendorProductId: null } }),
       db.costVendor?.count ? db.costVendor.count({ where: { organizationId } }) : Promise.resolve(0),
       db.priceObservation.groupBy({
         by: ["vendorName"],
