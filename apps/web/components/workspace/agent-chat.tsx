@@ -1050,6 +1050,36 @@ interface IngestionDoc {
   documentType: string;
   pageCount: number;
   hasText: boolean;
+  /** "azure_di" | "local" | other future providers, or null if pending. */
+  extractionProvider: string | null;
+  /** "pending" | "extracted" | "text_only". */
+  extractionState: "pending" | "extracted" | "text_only";
+}
+
+interface IngestionSummary {
+  total: number;
+  extracted: number;
+  pending: number;
+  failed: number;
+}
+
+const READY_INGESTION_STATUSES: ReadonlySet<string> = new Set([
+  "ready",
+  "review",
+  "quoted",
+  "estimating",
+]);
+
+function ingestionProviderLabel(provider: string | null): string {
+  if (!provider) return "Pending";
+  if (provider === "azure_di") return "Azure DI";
+  if (provider === "local") return "Local PDF parser";
+  // Future providers (textract, llamaparse, ocr, …) get a Title Cased label.
+  return provider
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated }: AgentChatProps) {
@@ -1064,6 +1094,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const [liveToolCalls, setLiveToolCalls] = useState<ToolCallEntry[]>([]);
   const [ingestionStatus, setIngestionStatus] = useState<string | null>(null);
   const [ingestionDocs, setIngestionDocs] = useState<IngestionDoc[]>([]);
+  const [ingestionSummary, setIngestionSummary] = useState<IngestionSummary>({ total: 0, extracted: 0, pending: 0, failed: 0 });
   const [docsExpanded, setDocsExpanded] = useState(false);
   const [cliRuntimeMap, setCliRuntimeMap] = useState<CliRuntimeMap | null>(null);
   const [cliRuntime, setCliRuntime] = useState<CliRuntime | null>(null);
@@ -1204,6 +1235,14 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         if (active) {
           setIngestionStatus(data.status);
           setIngestionDocs(data.documents ?? []);
+          if (data.summary && typeof data.summary === "object") {
+            setIngestionSummary({
+              total: Number(data.summary.total) || 0,
+              extracted: Number(data.summary.extracted) || 0,
+              pending: Number(data.summary.pending) || 0,
+              failed: Number(data.summary.failed) || 0,
+            });
+          }
         }
       } catch {}
     };
@@ -1803,6 +1842,13 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const isIntakeComplete = intakeStatus?.status === "completed";
   const isIntakeFailed = intakeStatus?.status === "failed";
   const isWaitingForUser = intakeStatus?.status === "waiting_for_user";
+  // Treat the project as ready for an AI run only after ingestion has reached
+  // a "ready" lifecycle status. Starting earlier wedges the agent on a stale
+  // CLAUDE.md/AGENTS.md/GEMINI.md manifest because the worker re-issues
+  // SourceDocument IDs at the end of extraction.
+  const ingestionReady = !ingestionStatus
+    ? true
+    : READY_INGESTION_STATUSES.has(ingestionStatus);
   const showIntakeSetupCard = messages.length === 0 || Boolean(intakeStatus) || intakeLoading;
   const timelineEvents: any[] = (intakeStatus as any)?.events ?? [];
   const hasInlineCliPendingQuestion = Boolean(
@@ -1958,21 +2004,29 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                 ) : (
                   <button
                     onClick={handleStartIntake}
-                    disabled={intakeLoading || !cliRuntime}
+                    disabled={intakeLoading || !cliRuntime || !ingestionReady}
                     className="w-full rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-left transition-colors hover:bg-accent/10 disabled:opacity-50"
                   >
                     <div className="flex items-center gap-2">
                       {intakeLoading ? (
                         <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                      ) : !ingestionReady ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-fg/40" />
                       ) : (
                         <Sparkles className="h-4 w-4 text-accent" />
                       )}
                       <span className="text-sm font-medium text-accent">
-                        {intakeStatus ? "Start New AI Run" : "Start AI Estimating"}
+                        {!ingestionReady
+                          ? "Waiting for document extraction..."
+                          : intakeStatus
+                            ? "Start New AI Run"
+                            : "Start AI Estimating"}
                       </span>
                     </div>
                     <div className="mt-1 text-[11px] text-fg/40">
-                      Automatically review bid documents and build a complete estimate
+                      {!ingestionReady
+                        ? `Extracted ${ingestionSummary.extracted}/${ingestionSummary.total || ingestionDocs.length} documents — the agent can't run until extraction finishes.`
+                        : "Automatically review bid documents and build a complete estimate"}
                     </div>
                   </button>
                 )}
@@ -1989,30 +2043,49 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               <div className="rounded-lg border border-line px-3 py-2 text-xs">
                 <button className="flex w-full items-center gap-2 text-left" onClick={() => setDocsExpanded(!docsExpanded)}>
                   {docsExpanded ? <ChevronDown className="h-3 w-3 text-fg/30 shrink-0" /> : <ChevronRight className="h-3 w-3 text-fg/30 shrink-0" />}
-                  {ingestionStatus === "processing" ? (
+                  {!ingestionReady ? (
                     <Loader2 className="h-3 w-3 animate-spin text-accent shrink-0" />
                   ) : (
                     <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
                   )}
                   <span className="font-medium text-fg/60">
-                    {ingestionStatus === "processing" ? "Extracting documents..." : `${ingestionDocs.length} documents extracted`}
+                    {!ingestionReady
+                      ? `Extracting documents (${ingestionSummary.extracted}/${ingestionSummary.total || ingestionDocs.length})`
+                      : `${ingestionDocs.length} documents extracted`}
                   </span>
                   <span className="ml-auto text-[9px] text-fg/25">{ingestionDocs.filter(d => d.hasText).length}/{ingestionDocs.length} with text</span>
                 </button>
                 {docsExpanded && (
                 <div className="mt-1.5 space-y-0.5">
-                  {ingestionDocs.map((doc) => (
-                    <div key={doc.id} className="flex items-center gap-1.5 text-[10px] text-fg/40">
-                      {doc.hasText ? (
-                        <CheckCircle2 className="h-2.5 w-2.5 text-success/60 shrink-0" />
-                      ) : (
-                        <XCircle className="h-2.5 w-2.5 text-fg/20 shrink-0" />
-                      )}
-                      <span className="truncate flex-1">{doc.fileName}</span>
-                      <span className="text-[9px] text-fg/25 shrink-0">{doc.documentType}</span>
-                      <span className="text-[9px] text-fg/20 shrink-0">{doc.pageCount}p</span>
-                    </div>
-                  ))}
+                  {ingestionDocs.map((doc) => {
+                    const providerLabel = ingestionProviderLabel(doc.extractionProvider);
+                    const isExtracted = doc.extractionState === "extracted";
+                    return (
+                      <div key={doc.id} className="flex items-center gap-1.5 text-[10px] text-fg/40">
+                        {isExtracted ? (
+                          <CheckCircle2 className="h-2.5 w-2.5 text-success/60 shrink-0" />
+                        ) : (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin text-fg/30 shrink-0" />
+                        )}
+                        <span className="truncate flex-1">{doc.fileName}</span>
+                        <span
+                          className={cn(
+                            "rounded border px-1 py-0.5 text-[9px] font-medium shrink-0",
+                            doc.extractionProvider === "azure_di"
+                              ? "border-accent/25 bg-accent/8 text-accent"
+                              : doc.extractionProvider === "local"
+                                ? "border-line bg-panel2 text-fg/55"
+                                : "border-warning/25 bg-warning/8 text-warning"
+                          )}
+                          title={isExtracted ? `Extracted via ${providerLabel}` : "Pending extraction"}
+                        >
+                          {providerLabel}
+                        </span>
+                        <span className="text-[9px] text-fg/25 shrink-0">{doc.documentType}</span>
+                        <span className="text-[9px] text-fg/20 shrink-0">{doc.pageCount}p</span>
+                      </div>
+                    );
+                  })}
                 </div>
                 )}
               </div>

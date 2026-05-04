@@ -1955,23 +1955,88 @@ export function buildServer() {
   });
 
   // ── Ingestion Status (for polling from AI drawer) ────────────────
+  // Returns the project-level ingestion status plus a per-document
+  // breakdown. The UI uses this to:
+  //   - Disable the "Start AI Estimating" button while ingestion runs
+  //   - Show which extraction provider produced each doc's content
+  //     (Azure DI signals: structuredData carries tables / keyValuePairs /
+  //     selectionMarks; pure local parsing leaves only extractedText)
+  //   - Surface an aggregate summary (extracted vs pending vs failed)
+  //
+  // Provider derivation is shape-based so we don't require a schema column
+  // for every supported extractor — adding a new provider only needs the
+  // ingestion path to populate `structuredData` (or extractedText) so the
+  // status endpoint and UI light up automatically.
   app.get("/projects/:projectId/ingestion-status", async (request) => {
     const { projectId } = request.params as { projectId: string };
     const project = await request.store!.getProject(projectId);
-    if (!project) return { status: "unknown", documents: [] };
+    if (!project) {
+      return {
+        status: "unknown",
+        documents: [],
+        documentCount: 0,
+        summary: { extracted: 0, pending: 0, failed: 0, total: 0 },
+      };
+    }
 
     const documents = await request.store!.listDocuments(projectId);
-    return {
-      status: (project as any).ingestionStatus ?? "unknown",
-      documentCount: documents.length,
-      documents: documents.map((d: any) => ({
+    const enriched = documents.map((d: any) => {
+      const hasText = !!(d.extractedText && String(d.extractedText).length > 50);
+      const structured = d.structuredData ?? null;
+      const structuredObj =
+        structured && typeof structured === "object" && !Array.isArray(structured)
+          ? (structured as Record<string, unknown>)
+          : null;
+      // Treat the document as Azure-extracted whenever its structuredData
+      // carries one of the Azure DI artifacts. Anything else with text is
+      // local-parsed; anything without is still pending.
+      const azureSignals =
+        !!structuredObj &&
+        ((Array.isArray((structuredObj as any).tables) && (structuredObj as any).tables.length > 0) ||
+          Array.isArray((structuredObj as any).keyValuePairs) ||
+          Array.isArray((structuredObj as any).selectionMarks) ||
+          Array.isArray((structuredObj as any).documentFields));
+      let extractionProvider: string | null = null;
+      let extractionState: "pending" | "extracted" | "text_only" = "pending";
+      if (azureSignals) {
+        extractionProvider = "azure_di";
+        extractionState = "extracted";
+      } else if (hasText) {
+        extractionProvider = "local";
+        extractionState = hasText ? "extracted" : "text_only";
+      } else {
+        extractionProvider = null;
+        extractionState = "pending";
+      }
+      return {
         id: d.id,
         fileName: d.fileName,
         fileType: d.fileType,
         documentType: d.documentType,
         pageCount: d.pageCount,
-        hasText: !!(d.extractedText && d.extractedText.length > 50),
-      })),
+        hasText,
+        extractionProvider,
+        extractionState,
+      };
+    });
+
+    let extracted = 0;
+    let pending = 0;
+    for (const doc of enriched) {
+      if (doc.extractionState === "extracted") extracted += 1;
+      else pending += 1;
+    }
+
+    return {
+      status: (project as any).ingestionStatus ?? "unknown",
+      documentCount: enriched.length,
+      documents: enriched,
+      summary: {
+        total: enriched.length,
+        extracted,
+        pending,
+        failed: 0,
+      },
     };
   });
 
