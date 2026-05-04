@@ -6324,6 +6324,7 @@ export async function listEffectiveCosts(input: {
   resourceId?: string;
   projectId?: string;
   vendorName?: string;
+  scope?: "aggregate" | "per_vendor" | "all";
   limit?: number;
 } = {}): Promise<EffectiveCostRecord[]> {
   const params = new URLSearchParams();

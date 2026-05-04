@@ -13,6 +13,7 @@ const listQuerySchema = z.object({
   projectId: z.string().optional(),
   sourceDocumentId: z.string().optional(),
   vendorName: z.string().optional(),
+  scope: z.enum(["aggregate", "per_vendor", "all"]).optional(),
   limit: z.coerce.number().int().positive().max(50000).optional(),
 });
 
@@ -496,6 +497,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       resourceId: parsed.data.resourceId,
       projectId: parsed.data.projectId,
       vendorName: parsed.data.vendorName,
+      scope: parsed.data.scope,
       limit: parsed.data.limit,
     });
   });
