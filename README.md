@@ -2,8 +2,6 @@
   <img src="./bidwright-readme.png" alt="Bidwright construction estimating platform" width="100%" />
 </p>
 
-<h1 align="center">Bidwright</h1>
-
 <p align="center">
   <a href="https://github.com/braedonsaunders/codeflow"><img src=".github/codeflow-card.svg" alt="Bidwright codebase stats — powered by codeflow" width="100%" /></a>
 </p>
