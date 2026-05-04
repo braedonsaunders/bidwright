@@ -88,6 +88,18 @@ wait_for_postgres() {
   return 1
 }
 
+run_schema_preflight() {
+  local preflight_sql="${APP_DIR}/scripts/db/preflight-worksheet-item-category-id.sql"
+  if [[ -f "${preflight_sql}" ]]; then
+    echo "Running deploy schema preflight..."
+    compose exec -T postgres psql \
+      -v ON_ERROR_STOP=1 \
+      -U "${POSTGRES_USER:-bidwright}" \
+      -d "${POSTGRES_DB:-bidwright}" \
+      < "${preflight_sql}"
+  fi
+}
+
 wait_for_url() {
   local url="$1"
   local service="${2:-}"
@@ -131,6 +143,7 @@ fi
 
 compose up -d postgres redis
 wait_for_postgres
+run_schema_preflight
 
 if is_local_embeddings; then
   compose_up_profiles up -d ollama
