@@ -159,6 +159,14 @@ export async function adminCreateOrganization(data: {
   });
 }
 
+export async function adminUpdateOrganization(orgId: string, patch: { name?: string; slug?: string }): Promise<OrgInfo & { updatedAt: string }> {
+  return apiRequest(`/api/admin/organizations/${orgId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
 export async function adminDeleteOrganization(orgId: string): Promise<{ ok: boolean }> {
   return apiRequest(`/api/admin/organizations/${orgId}`, { method: "DELETE" });
 }

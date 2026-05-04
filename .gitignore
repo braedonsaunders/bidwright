@@ -12,9 +12,12 @@ playwright-report/
 test-results/
 .turbo
 .prisma
+.codex/
+.playwright-cli/
 *.log
 *.tsbuildinfo
 *-extract-output.txt
+output/
 backups/
 tmp/
 temp/

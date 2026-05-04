@@ -566,7 +566,7 @@ export function CreatePluginModal({
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <Label>Plugin Name *</Label>
-                  <Input value={name} onChange={(e) => autoSlug(e.target.value)} placeholder="e.g., NECA Labour Units" />
+                  <Input value={name} onChange={(e) => autoSlug(e.target.value)} placeholder="e.g., Company Labor Units" />
                 </div>
                 <div>
                   <Label>Slug</Label>

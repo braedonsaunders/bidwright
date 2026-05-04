@@ -75,24 +75,25 @@ function formatGroupTotal(items: TakeoffAnnotation[]): string {
   if (items.length === 0) return "";
   const measurements = items.filter((a) => a.measurement && a.measurement.value > 0);
   if (measurements.length === 0) return `${items.length} items`;
-  const units = new Set(measurements.map((a) => a.measurement!.unit));
-  if (units.size === 1) {
-    const unit = measurements[0]!.measurement!.unit;
+  const totals = new Map<string, number>();
+  for (const item of measurements) {
+    const unit = item.measurement!.unit;
+    const value = unit === "count" && item.type === "count"
+      ? item.points?.length ?? item.measurement!.value ?? 0
+      : item.measurement!.value ?? 0;
+    totals.set(unit, (totals.get(unit) ?? 0) + value);
+  }
+  if (totals.size === 1) {
+    const [[unit, total]] = Array.from(totals.entries());
     if (unit === "count") {
-      // For count tools, sum the points (each annotation is a single click for "count" tool;
-      // count-by-distance produces a value per annotation).
-      const total = items.reduce((s, a) => {
-        if (a.measurement?.unit === "count") return s + (a.measurement.value || 0);
-        if (a.type === "count") return s + (a.points?.length ?? 0);
-        return s;
-      }, 0);
       return `${total} count`;
     }
-    const total = measurements.reduce((s, a) => s + (a.measurement!.value || 0), 0);
     const fmt = total >= 1000 ? total.toFixed(0) : total.toFixed(2);
     return `${fmt} ${unit}`;
   }
-  return `${items.length} items`;
+  return Array.from(totals.entries())
+    .map(([unit, total]) => `${total >= 1000 ? total.toFixed(0) : total.toFixed(2)} ${unit}`)
+    .join(" · ");
 }
 
 /* Pretty label for annotation type */
@@ -387,7 +388,7 @@ export function AnnotationSidebar({
     <>
       {totalCount === 0 ? (
         <EmptyState className="py-6 border-none">
-          <p className="text-xs">No annotations yet</p>
+          <p className="text-xs">No takeoff marks yet</p>
           <p className="mt-1 text-[11px] text-fg/30">
             Select a tool and click on the drawing to start measuring
           </p>
@@ -574,7 +575,7 @@ export function AnnotationSidebar({
             <Separator className="mt-auto" />
             <div className="rounded-md bg-panel2/50 px-3 py-2 mt-1">
               <p className="text-xs font-medium text-fg/60">
-                {totalCount} annotation{totalCount !== 1 ? "s" : ""}
+                {totalCount} takeoff mark{totalCount !== 1 ? "s" : ""}
               </p>
             </div>
           </>
@@ -586,7 +587,7 @@ export function AnnotationSidebar({
     return (
       <div className="flex h-full flex-col overflow-hidden">
         <div className="shrink-0 border-b border-line px-4 py-3">
-          <p className="text-sm font-semibold text-fg">Annotations</p>
+          <p className="text-sm font-semibold text-fg">Takeoff Marks</p>
           <p className="mt-0.5 text-[11px] text-fg/40">
             {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
           </p>
@@ -601,7 +602,7 @@ export function AnnotationSidebar({
   return (
     <Card className="flex h-full w-72 shrink-0 flex-col overflow-hidden">
       <CardHeader className="py-3">
-        <CardTitle>Annotations</CardTitle>
+        <CardTitle>Takeoff Marks</CardTitle>
         <p className="mt-0.5 text-[11px] text-fg/40">
           {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
         </p>

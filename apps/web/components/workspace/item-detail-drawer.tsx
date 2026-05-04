@@ -10,10 +10,15 @@ import type {
   WorkspaceWorksheetItem,
 } from "@/lib/api";
 import { listPluginExecutions } from "@/lib/api";
-import { getCalculationTypeOption } from "@/lib/entity-category-calculation";
+import {
+  categoryAllowsEditingUnitSlot,
+  getCalculationTypeOption,
+  getCategoryUnitLabel,
+} from "@/lib/entity-category-calculation";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
+import { UomSelect } from "@/components/shared/uom-select";
 import { ItemPluginTab } from "./item-plugin-tab";
 
 export interface ItemDetailDrawerProps {
@@ -55,6 +60,8 @@ export function ItemDetailDrawer({
     unit2: item.unit2,
     unit3: item.unit3,
     phaseId: item.phaseId ?? "",
+    masterFormatCode: typeof item.classification?.masterformat === "string" ? item.classification.masterformat : "",
+    costCode: item.costCode ?? "",
     sourceNotes: item.sourceNotes ?? "",
   });
 
@@ -72,6 +79,8 @@ export function ItemDetailDrawer({
       unit2: item.unit2,
       unit3: item.unit3,
       phaseId: item.phaseId ?? "",
+      masterFormatCode: typeof item.classification?.masterformat === "string" ? item.classification.masterformat : "",
+      costCode: item.costCode ?? "",
       sourceNotes: item.sourceNotes ?? "",
     });
     setShowSources(!!item.sourceNotes);
@@ -115,6 +124,23 @@ export function ItemDetailDrawer({
       ? ((item.price - extCost) / item.price * 100).toFixed(1) + "%"
       : "--";
 
+  function nextClassification(key: string, value: string) {
+    const next = { ...(item.classification ?? {}) };
+    if (form.masterFormatCode.trim()) {
+      next.masterformat = form.masterFormatCode.trim();
+    }
+    if (form.costCode.trim()) {
+      next.costCode = form.costCode.trim();
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      next[key] = trimmed;
+    } else {
+      delete next[key];
+    }
+    return next;
+  }
+
   function handleFieldBlur(field: string, value: string | number) {
     let patch: Record<string, unknown> = {};
 
@@ -135,6 +161,13 @@ export function ItemDetailDrawer({
       patch = { [field]: num };
     } else if (field === "phaseId") {
       patch = { phaseId: value || null };
+    } else if (field === "masterFormatCode") {
+      patch = { classification: nextClassification("masterformat", String(value)) };
+    } else if (field === "costCode") {
+      patch = {
+        costCode: String(value).trim() || null,
+        classification: nextClassification("costCode", String(value)),
+      };
     } else {
       patch = { [field]: value };
     }
@@ -142,8 +175,13 @@ export function ItemDetailDrawer({
     onPatchItem(item.id, patch);
   }
 
-  const isEditable = (field: string) =>
-    catDef?.editableFields?.[field as keyof typeof catDef.editableFields] !== false;
+  const isEditable = (field: string) => {
+    if (!catDef) return true;
+    if (field === "unit1" || field === "unit2" || field === "unit3") {
+      return categoryAllowsEditingUnitSlot(catDef, field);
+    }
+    return catDef.editableFields?.[field as keyof typeof catDef.editableFields] !== false;
+  };
 
   function renderNumericField(
     field: keyof typeof form,
@@ -277,7 +315,7 @@ export function ItemDetailDrawer({
 
             <div>
               <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
-                Entity Name
+                Line Item Name
               </label>
               <Input
                 className="mt-1"
@@ -329,11 +367,13 @@ export function ItemDetailDrawer({
                     options={catDef.validUoms.map((u) => ({ value: u, label: u }))}
                   />
                 ) : (
-                  <Input
+                  <UomSelect
                     className="mt-1"
                     value={form.uom}
-                    onChange={(e) => setForm({ ...form, uom: e.target.value })}
-                    onBlur={() => handleFieldBlur("uom", form.uom)}
+                    onValueChange={(v) => {
+                      setForm({ ...form, uom: v });
+                      handleFieldBlur("uom", v);
+                    }}
                   />
                 )}
               </div>
@@ -365,17 +405,17 @@ export function ItemDetailDrawer({
             <div className="grid grid-cols-3 gap-3">
               {renderNumericField(
                 "unit1",
-                catDef?.unitLabels.unit1 || "Unit 1",
+                getCategoryUnitLabel(catDef, "unit1", "Unit 1"),
                 form.unit1,
               )}
               {renderNumericField(
                 "unit2",
-                catDef?.unitLabels.unit2 || "Unit 2",
+                getCategoryUnitLabel(catDef, "unit2", "Unit 2"),
                 form.unit2,
               )}
               {renderNumericField(
                 "unit3",
-                catDef?.unitLabels.unit3 || "Unit 3",
+                getCategoryUnitLabel(catDef, "unit3", "Unit 3"),
                 form.unit3,
               )}
             </div>
@@ -397,6 +437,33 @@ export function ItemDetailDrawer({
                   ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
                 ]}
               />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                  MasterFormat
+                </label>
+                <Input
+                  className="mt-1"
+                  value={form.masterFormatCode}
+                  onChange={(e) => setForm({ ...form, masterFormatCode: e.target.value })}
+                  onBlur={() => handleFieldBlur("masterFormatCode", form.masterFormatCode)}
+                  placeholder="03 30 00"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
+                  Cost Code
+                </label>
+                <Input
+                  className="mt-1"
+                  value={form.costCode}
+                  onChange={(e) => setForm({ ...form, costCode: e.target.value })}
+                  onBlur={() => handleFieldBlur("costCode", form.costCode)}
+                  placeholder="03-0330"
+                />
+              </div>
             </div>
 
             <div className="border border-line rounded-lg overflow-hidden">

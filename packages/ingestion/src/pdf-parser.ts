@@ -606,6 +606,7 @@ interface AzureAnalyzeResult {
   tables?: AzureTable[];
   keyValuePairs?: AzureKeyValuePair[];
   paragraphs?: AzureParagraph[];
+  documents?: AzureDocument[];
 }
 
 interface AzurePage {
@@ -638,6 +639,123 @@ interface AzureParagraph {
   content: string;
   role?: 'title' | 'sectionHeading' | 'footnote' | 'pageHeader' | 'pageFooter' | 'pageNumber';
   boundingRegions?: Array<{ pageNumber: number }>;
+}
+
+interface AzureDocument {
+  docType?: string;
+  boundingRegions?: Array<{ pageNumber: number }>;
+  fields?: Record<string, AzureDocumentField>;
+  confidence?: number;
+}
+
+interface AzureDocumentField {
+  type?: string;
+  content?: string;
+  valueString?: string;
+  valueDate?: string;
+  valueTime?: string;
+  valuePhoneNumber?: string;
+  valueNumber?: number;
+  valueInteger?: number;
+  valueCurrency?: {
+    amount?: number;
+    currencyCode?: string;
+    currencySymbol?: string;
+  };
+  valueArray?: AzureDocumentField[];
+  valueObject?: Record<string, AzureDocumentField>;
+  confidence?: number;
+  boundingRegions?: Array<{ pageNumber: number }>;
+}
+
+function azureFieldText(field: AzureDocumentField | undefined): string {
+  if (!field) return '';
+  if (field.valueString) return field.valueString;
+  if (field.valueDate) return field.valueDate;
+  if (field.valueTime) return field.valueTime;
+  if (field.valuePhoneNumber) return field.valuePhoneNumber;
+  if (field.valueNumber != null) return String(field.valueNumber);
+  if (field.valueInteger != null) return String(field.valueInteger);
+  if (field.valueCurrency) {
+    const amount = field.valueCurrency.amount;
+    const code = field.valueCurrency.currencyCode || field.valueCurrency.currencySymbol || '';
+    return [amount != null ? String(amount) : '', code].filter(Boolean).join(' ');
+  }
+  return field.content ?? '';
+}
+
+function azureFieldPageNumber(field: AzureDocumentField | undefined, fallbackPageNumber?: number): number | undefined {
+  return field?.boundingRegions?.[0]?.pageNumber ?? fallbackPageNumber;
+}
+
+function azureDocumentPageNumber(document: AzureDocument): number | undefined {
+  return document.boundingRegions?.[0]?.pageNumber;
+}
+
+function buildRawMarkdown(headers: string[], rows: string[][]): string {
+  return (
+    `| ${headers.join(' | ')} |\n` +
+    `| ${headers.map(() => '---').join(' | ')} |\n` +
+    rows.map((row) => `| ${row.join(' | ')} |`).join('\n')
+  );
+}
+
+function mapAzureInvoiceItemTables(documents: AzureDocument[]): ExtractedTable[] {
+  const tables: ExtractedTable[] = [];
+  const preferredHeaders = ['ProductCode', 'Description', 'Quantity', 'Unit', 'UnitPrice', 'Amount'];
+
+  for (const document of documents) {
+    const items = document.fields?.Items?.valueArray ?? [];
+    if (items.length === 0) continue;
+
+    const rowObjects = items
+      .map((item) => item.valueObject ?? null)
+      .filter((item): item is Record<string, AzureDocumentField> => Boolean(item));
+    if (rowObjects.length === 0) continue;
+
+    const discoveredHeaders = Array.from(new Set(rowObjects.flatMap((row) => Object.keys(row))));
+    const headers = [
+      ...preferredHeaders.filter((header) => discoveredHeaders.includes(header)),
+      ...discoveredHeaders.filter((header) => !preferredHeaders.includes(header)).sort((a, b) => a.localeCompare(b)),
+    ];
+    if (headers.length === 0) continue;
+
+    const rows = rowObjects.map((row) => headers.map((header) => azureFieldText(row[header])));
+    const pageNumber = azureFieldPageNumber(items[0], azureDocumentPageNumber(document)) ?? 1;
+    tables.push({
+      pageNumber,
+      title: 'Azure invoice items',
+      headers,
+      rows,
+      rawMarkdown: buildRawMarkdown(headers, rows),
+    });
+  }
+
+  return tables;
+}
+
+function mapAzureDocumentFields(documents: AzureDocument[]) {
+  const fields: NonNullable<ParsedDocument['metadata']['documentFields']> = [];
+
+  for (const document of documents) {
+    const documentType = document.docType ?? '';
+    const documentPageNumber = azureDocumentPageNumber(document);
+    for (const [fieldName, field] of Object.entries(document.fields ?? {})) {
+      if (field.valueArray || field.valueObject) continue;
+      const value = azureFieldText(field).trim();
+      if (!value && !field.valueCurrency?.currencyCode) continue;
+      fields.push({
+        documentType,
+        fieldName,
+        value,
+        confidence: field.confidence ?? document.confidence ?? 0,
+        pageNumber: azureFieldPageNumber(field, documentPageNumber),
+        currencyCode: field.valueCurrency?.currencyCode,
+      });
+    }
+  }
+
+  return fields;
 }
 
 /**
@@ -704,6 +822,7 @@ function mapAzureResult(
 
     tables.push({ pageNumber, headers, rows, rawMarkdown });
   }
+  tables.push(...mapAzureInvoiceItemTables(result.documents ?? []));
 
   // Extract key-value pairs
   const keyValuePairs = (result.keyValuePairs ?? []).map((kv) => ({
@@ -711,6 +830,8 @@ function mapAzureResult(
     value: kv.value?.content ?? '',
     confidence: kv.confidence,
   }));
+
+  const documentFields = mapAzureDocumentFields(result.documents ?? []);
 
   // Extract selection marks across all pages
   const selectionMarks: Array<{ state: string; pageNumber: number; confidence: number }> = [];
@@ -746,6 +867,7 @@ function mapAzureResult(
       hasImages: false,
       hasOcr: true,
       keyValuePairs: keyValuePairs.length > 0 ? keyValuePairs : undefined,
+      documentFields: documentFields.length > 0 ? documentFields : undefined,
       selectionMarks: selectionMarks.length > 0 ? selectionMarks : undefined,
     },
     warnings,
@@ -836,6 +958,9 @@ async function hybridParsePdf(
         }
         if (azureResult.metadata.keyValuePairs) {
           localResult.metadata.keyValuePairs = azureResult.metadata.keyValuePairs;
+        }
+        if (azureResult.metadata.documentFields) {
+          localResult.metadata.documentFields = azureResult.metadata.documentFields;
         }
         if (azureResult.metadata.selectionMarks) {
           localResult.metadata.selectionMarks = azureResult.metadata.selectionMarks;

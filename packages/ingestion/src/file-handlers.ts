@@ -14,6 +14,7 @@ import type {
   ParsedDocument,
   ParsedPage,
 } from './pdf-types.js';
+import { assertSafeSpreadsheetArchive } from './spreadsheet-safety.js';
 
 // ---------------------------------------------------------------------------
 // MIME type helpers
@@ -78,6 +79,7 @@ const excelCsvHandler: FileHandler = {
       );
     }
 
+    assertSafeSpreadsheetArchive(input);
     const workbook = XLSX.read(input, { type: 'buffer' });
     const pages: ParsedPage[] = [];
     const tables: ExtractedTable[] = [];

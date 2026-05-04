@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 export default function RatesPage() {
   const router = useRouter();
   useEffect(() => {
-    router.replace("/settings?tab=rates");
+    router.replace("/library?surface=rates");
   }, [router]);
   return null;
 }

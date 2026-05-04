@@ -38,11 +38,12 @@ import {
 } from "@/components/ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { FileBrowser, type FileBrowserProps } from "@/components/workspace/file-browser";
+import { ScheduleTab } from "@/components/workspace/schedule-tab";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
-type SubTab = "knowledge" | "report" | "lead-letter" | "scratchpad";
+type SubTab = "knowledge" | "schedule" | "report" | "lead-letter" | "scratchpad";
 
 interface DocumentationTabProps {
   workspace: ProjectWorkspaceData;
@@ -56,7 +57,8 @@ interface DocumentationTabProps {
 /* ─── Sub-tab config ─── */
 
 const subTabs: { id: SubTab; label: string }[] = [
-  { id: "knowledge", label: "Knowledge" },
+  { id: "knowledge", label: "Files" },
+  { id: "schedule", label: "Schedule" },
   { id: "report", label: "Report" },
   { id: "lead-letter", label: "Lead Letter" },
   { id: "scratchpad", label: "Scratchpad" },
@@ -123,6 +125,9 @@ export function DocumentationTab({
             selectedWorksheet={selectedWorksheet}
             modelEditorChannelName={modelEditorChannelName}
           />
+        )}
+        {activeTab === "schedule" && (
+          <ScheduleTab workspace={workspace} apply={apply} />
         )}
         {activeTab === "report" && (
           <ReportTab workspace={workspace} apply={apply} setError={setError} />

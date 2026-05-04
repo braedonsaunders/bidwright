@@ -1,18 +1,18 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ArrowRight,
   Download,
   Expand,
   Shrink,
   ExternalLink,
   RefreshCw,
-  Box,
-  FileText,
   Scan,
   Minus,
   MousePointer2,
@@ -34,6 +34,10 @@ import {
   BrainCircuit,
   Wand2,
   FileJson,
+  FileSpreadsheet,
+  Files,
+  FolderOpen,
+  GitCompare,
   Search,
   AlertCircle,
   Pentagon,
@@ -46,9 +50,15 @@ import {
   Highlighter,
   StretchHorizontal,
   Trash2,
+  Puzzle,
+  UploadCloud,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
+  FileNode,
+  ImportPreviewResponse,
   ProjectWorkspaceData,
   VisionMatch,
   VisionBoundingBox,
@@ -89,6 +99,10 @@ import {
   detectTitleBlockScale,
   extractLegendFromPage,
   suggestLineItemsForAnnotation,
+  getFileTree,
+  importPreview,
+  importProcess,
+  uploadFile,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type EntityCategory,
@@ -108,6 +122,7 @@ import {
 } from "@/components/ui";
 import * as RadixSelect from "@radix-ui/react-select";
 import dynamic from "next/dynamic";
+import { buildCsv } from "@/lib/csv";
 import { cn } from "@/lib/utils";
 import { postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
@@ -123,6 +138,10 @@ const PdfCanvasViewer = dynamic(
 );
 const CadViewer = dynamic(
   () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
+  { ssr: false }
+);
+const DwgTakeoffSurface = dynamic(
+  () => import("./dwg-takeoff-surface").then((m) => ({ default: m.DwgTakeoffSurface })),
   { ssr: false }
 );
 const BidwrightModelEditor = dynamic(
@@ -141,11 +160,34 @@ import {
   type AnnotationConfig,
 } from "./takeoff/create-annotation-modal";
 
-const CAD_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "dwg", "dxf", "rvt"]);
+const DWG_EXTENSIONS = new Set(["dwg", "dxf"]);
+const MODEL_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
+const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
+const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
+
+type TakeoffHistoryCommand =
+  | { kind: "create"; annotation: TakeoffAnnotation }
+  | { kind: "delete"; annotation: TakeoffAnnotation }
+  | { kind: "clear"; annotations: TakeoffAnnotation[] };
+
+function getFileExtension(fileName: string): string {
+  return fileName.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function isDwgFile(fileName: string): boolean {
+  return DWG_EXTENSIONS.has(getFileExtension(fileName));
+}
 
 function isCadFile(fileName: string): boolean {
-  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-  return CAD_EXTENSIONS.has(ext);
+  return CAD_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isPdfSource(fileName: string, fileType?: string | null): boolean {
+  return fileName.toLowerCase().endsWith(".pdf") || fileType === "pdf" || fileType === "application/pdf";
+}
+
+function isSpreadsheetFile(fileName: string): boolean {
+  return SPREADSHEET_EXTENSIONS.has(getFileExtension(fileName));
 }
 
 /* ─── Tool definitions ─── */
@@ -220,7 +262,7 @@ const TOOL_GROUPS = [
 /* ─── Status bar text for each tool ─── */
 
 const TOOL_STATUS_TEXT: Record<string, string> = {
-  select: "Click to select annotations. Press Escape to deselect.",
+  select: "Click to select takeoff marks. Press Escape to deselect.",
   calibrate: "Click two points on a known distance, then enter the real measurement.",
   linear: "Click two points to measure distance.",
   "linear-polyline": "Click to add points. Double-click to finish.",
@@ -247,7 +289,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "model";
+  kind: "pdf" | "model" | "dwg";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -260,6 +302,10 @@ interface TakeoffDocument {
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
+  onOpenImportLineItems?: () => void;
+  onOpenDocuments?: () => void;
+  onOpenPluginTools?: () => void;
+  onOpenRevisionDiff?: () => void;
   onWorkspaceMutated?: () => void;
   initialDocumentId?: string | null;
   initialPage?: number;
@@ -292,7 +338,88 @@ function takeoffChannelName(projectId: string): string {
 }
 
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
+  if (isDwgFile(fileName)) return "dwg";
   return isCadFile(fileName) ? "model" : "pdf";
+}
+
+function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
+  if (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name)) {
+    return null;
+  }
+  return {
+    id: `file-${node.id}`,
+    label: node.name,
+    fileName: node.name,
+    kind: getTakeoffDocumentKind(node.name),
+    source: "project",
+    projectId,
+    fileNodeId: node.id,
+  };
+}
+
+function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
+  if (kind === "dwg") return "DWG/DXF";
+  if (kind === "model") return "Model";
+  return "PDF";
+}
+
+function sourceCountText(count: number, singular: string, plural = `${singular}s`) {
+  return count ? `${count} ${count === 1 ? singular : plural}` : null;
+}
+
+const SPREADSHEET_IMPORT_TARGETS = [
+  { value: "skip", label: "Skip" },
+  { value: "entityName", label: "Item name" },
+  { value: "description", label: "Description" },
+  { value: "quantity", label: "Quantity" },
+  { value: "uom", label: "UOM" },
+  { value: "cost", label: "Unit cost" },
+  { value: "markup", label: "Markup" },
+  { value: "price", label: "Unit price" },
+  { value: "category", label: "Category" },
+  { value: "entityType", label: "Type" },
+  { value: "vendor", label: "Vendor" },
+  { value: "unit1", label: "Unit 1" },
+  { value: "unit2", label: "Unit 2" },
+  { value: "unit3", label: "Unit 3" },
+  { value: "lineOrder", label: "Line order" },
+] as const;
+
+type SpreadsheetImportTarget = typeof SPREADSHEET_IMPORT_TARGETS[number]["value"];
+type SpreadsheetPanelView = "preview" | "pivot" | "map";
+
+function inferSpreadsheetImportTarget(header: string): SpreadsheetImportTarget {
+  const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  if (!normalized) return "skip";
+  if (/(^|\s)(item|item name|name|material|part|line item|scope)(\s|$)/.test(normalized)) return "entityName";
+  if (/desc|scope|notes|work description/.test(normalized)) return "description";
+  if (/(^|\s)(qty|quantity|count|hours|hrs)(\s|$)/.test(normalized)) return "quantity";
+  if (/(^|\s)(uom|unit of measure|unit)(\s|$)/.test(normalized)) return "uom";
+  if (/unit cost|cost each|cost|material cost|labou?r cost/.test(normalized)) return "cost";
+  if (/markup|margin|gross margin/.test(normalized)) return "markup";
+  if (/unit price|sell|price|extension|amount|total/.test(normalized)) return "price";
+  if (/category|class|division/.test(normalized)) return "category";
+  if (/type|resource/.test(normalized)) return "entityType";
+  if (/vendor|supplier|manufacturer/.test(normalized)) return "vendor";
+  if (/unit 1|unit1/.test(normalized)) return "unit1";
+  if (/unit 2|unit2/.test(normalized)) return "unit2";
+  if (/unit 3|unit3/.test(normalized)) return "unit3";
+  if (/order|line no|line number|sequence/.test(normalized)) return "lineOrder";
+  return "skip";
+}
+
+function buildInitialSpreadsheetMapping(headers: string[]) {
+  return Object.fromEntries(headers.map((header) => [header, inferSpreadsheetImportTarget(header)]));
+}
+
+function numericFormat(value: number) {
+  return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
+}
+
+function mergeFileNodes(current: FileNode[], nextNodes: FileNode[]) {
+  const byId = new Map(current.map((node) => [node.id, node]));
+  for (const node of nextNodes) byId.set(node.id, node);
+  return Array.from(byId.values());
 }
 
 function formatModelSelectionQuantity(value: number, unit: string): string {
@@ -315,14 +442,16 @@ function buildModelSelectionLineItem(
   options: {
     fileName?: string;
     markup: number;
+    category?: EntityCategory | null;
   },
 ): CreateWorksheetItemInput {
   const primary = primaryModelSelectionQuantity(selection);
   const selectedNames = selection.nodes.map((node) => node.name).filter(Boolean).slice(0, 8);
 
   return {
-    category: "Model Takeoff",
-    entityType: "Model Quantity",
+    categoryId: options.category?.id ?? null,
+    category: options.category?.name ?? "Model Takeoff",
+    entityType: options.category?.entityType ?? "Model Quantity",
     entityName: selectedNames[0] || `${selection.selectedCount} model elements`,
     description: options.fileName ?? "",
     quantity: primary.quantity,
@@ -370,7 +499,7 @@ function selectionFromDraft(
 
 function buildModelSelectionObjectDrafts(
   selection: BidwrightModelSelectionMessage,
-  options: { fileName?: string; markup: number },
+  options: { fileName?: string; markup: number; category?: EntityCategory | null },
 ): BidwrightModelLineItemDraft[] {
   const basis = selection.quantityBasis ?? "count";
   const sourceFile = selection.documentName ?? selection.fileName ?? options.fileName ?? "selected model";
@@ -381,7 +510,7 @@ function buildModelSelectionObjectDrafts(
     const payload = buildModelSelectionLineItem(nodeSelection, options);
     return {
       ...payload,
-      entityType: node.kind || payload.entityType,
+      entityType: payload.entityType || node.kind,
       entityName: node.name || payload.entityName,
       sourceNotes: payload.sourceNotes ?? "",
       worksheetId: undefined,
@@ -410,6 +539,7 @@ function normalizeModelLineItemDraft(
 
   return {
     phaseId: null,
+    categoryId: draft.categoryId === undefined ? fallback.categoryId : draft.categoryId,
     category: draft.category || fallback.category,
     entityType: draft.entityType || fallback.entityType,
     entityName: draft.entityName || fallback.entityName,
@@ -475,14 +605,15 @@ function formatElementQuantity(element: ModelElementWithQuantities, basis: Model
 function buildModelElementLineItem(
   element: ModelElementWithQuantities,
   primary: ReturnType<typeof getModelElementTakeoffQuantity>,
-  options: { fileName?: string; markup: number },
+  options: { fileName?: string; markup: number; category?: EntityCategory | null },
 ): CreateWorksheetItemInput {
   const allQuantities = (element.quantities ?? [])
     .map((quantity) => `${quantity.quantityType}: ${formatModelSelectionQuantity(quantity.value, quantity.unit || "")}`)
     .join("\n");
   return {
-    category: "Model Takeoff",
-    entityType: element.elementClass || "Model Element",
+    categoryId: options.category?.id ?? null,
+    category: options.category?.name ?? "Model Takeoff",
+    entityType: options.category?.entityType ?? element.elementClass ?? "Model Element",
     entityName: element.name || element.externalId || element.id,
     description: options.fileName ?? "",
     quantity: primary.quantity,
@@ -551,12 +682,12 @@ function exportAnnotationsCsv(annotations: TakeoffAnnotation[], calibration: Cal
     rows.push(["Calibration", `1 ${calibration.unit} = ${calibration.pixelsPerUnit.toFixed(2)} px`]);
   }
 
-  const csv = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(",")).join("\n");
+  const csv = buildCsv(rows[0] ?? [], rows.slice(1));
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "takeoff-annotations.csv";
+  a.download = "takeoff-marks.csv";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -586,7 +717,7 @@ function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Ca
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "takeoff-annotations.json";
+  a.download = "takeoff-marks.json";
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -596,6 +727,9 @@ function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Ca
 export function TakeoffTab({
   workspace,
   onOpenAgentChat,
+  onOpenDocuments,
+  onOpenPluginTools,
+  onOpenRevisionDiff,
   onWorkspaceMutated,
   initialDocumentId,
   initialPage = 1,
@@ -630,7 +764,7 @@ export function TakeoffTab({
 
   /* Project source documents that are PDFs or CAD files */
   const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
-    .filter((d) => d.documentType === "drawing" || d.fileType === "application/pdf" || isCadFile(d.fileName))
+    .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
     .map((d) => ({
       id: d.id,
       label: d.fileName,
@@ -672,12 +806,34 @@ export function TakeoffTab({
 
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
+  const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
+  type IntakeOptionId = "spreadsheet" | "source" | "extract" | "tools";
+  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId>("source");
+  const sourceUploadInputRef = useRef<HTMLInputElement>(null);
+  const spreadsheetUploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploadedTakeoffDocuments, setUploadedTakeoffDocuments] = useState<TakeoffDocument[]>([]);
+  const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
+  const [uploadingTakeoffSource, setUploadingTakeoffSource] = useState(false);
+  const [uploadingSpreadsheetSource, setUploadingSpreadsheetSource] = useState(false);
+  const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
+  const [spreadsheetImporting, setSpreadsheetImporting] = useState(false);
+  const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
+  const [spreadsheetPreview, setSpreadsheetPreview] = useState<(ImportPreviewResponse & { sourceName: string; sourceNodeId?: string }) | null>(null);
+  const [spreadsheetMapping, setSpreadsheetMapping] = useState<Record<string, SpreadsheetImportTarget>>({});
+  const [spreadsheetPanelView, setSpreadsheetPanelView] = useState<SpreadsheetPanelView>("preview");
+  const [pivotGroupBy, setPivotGroupBy] = useState("");
+  const [pivotMeasure, setPivotMeasure] = useState("__count");
 
   useEffect(() => {
     if (!selectedDocId && drawings.length > 0) {
       setSelectedDocId(drawings[0].id);
     }
   }, [drawings.length, selectedDocId]);
+  useEffect(() => {
+    if (detached || initialDocumentId) {
+      setShowLanding(false);
+    }
+  }, [detached, initialDocumentId]);
   const [page, setPage] = useState(safeInitialPage);
   const [zoom, setZoom] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -688,6 +844,10 @@ export function TakeoffTab({
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const undoStackRef = useRef<TakeoffHistoryCommand[]>([]);
+  const redoStackRef = useRef<TakeoffHistoryCommand[]>([]);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   /* ─── Takeoff Link state ─── */
   const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
@@ -854,13 +1014,15 @@ export function TakeoffTab({
     [modelAssets, projectId, projectPdfs],
   );
   const takeoffDocuments = useMemo(
-    () => [...drawings, ...fileManagerModelDocuments],
-    [drawings, fileManagerModelDocuments],
+    () => [...drawings, ...fileManagerModelDocuments, ...uploadedTakeoffDocuments],
+    [drawings, fileManagerModelDocuments, uploadedTakeoffDocuments],
   );
   const selectedDoc = takeoffDocuments.find((d) => d.id === selectedDocId);
   const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
-  const modelDocuments = takeoffDocuments.filter((d) => d.kind === "model");
-  const isCadDocument = selectedDoc?.kind === "model";
+  const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
+  const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
+  const isCadDocument = selectedDocumentKind === "model";
+  const isDwgDocument = selectedDocumentKind === "dwg";
   const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const selectedModelAsset = isCadDocument
     ? modelAssets.find((asset) =>
@@ -891,6 +1053,19 @@ export function TakeoffTab({
   useEffect(() => {
     void refreshModelAssets(false);
   }, [refreshModelAssets]);
+
+  const refreshFileTree = useCallback(async () => {
+    try {
+      setFileTreeNodes(await getFileTree(projectId));
+    } catch (error) {
+      console.error("[takeoff] Failed to load project files:", error);
+      setFileTreeNodes([]);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void refreshFileTree();
+  }, [refreshFileTree]);
 
   useEffect(() => {
     if (!selectedDocId && takeoffDocuments.length > 0) {
@@ -1268,7 +1443,7 @@ export function TakeoffTab({
   useEffect(() => {
     const container = viewerContainerRef.current;
     if (!container) return;
-    if (isCadDocument) return;
+    if (isCadDocument || isDwgDocument) return;
 
     function onWheel(e: WheelEvent) {
       // Ignore horizontal-wheel devices and keep ctrl-zoom intact (browser default).
@@ -1288,7 +1463,7 @@ export function TakeoffTab({
 
     container.addEventListener("wheel", onWheel, { passive: false });
     return () => container.removeEventListener("wheel", onWheel);
-  }, [isCadDocument, selectedDocId]);
+  }, [isCadDocument, isDwgDocument, selectedDocId]);
 
   /* ─── Handlers ─── */
 
@@ -1436,6 +1611,118 @@ export function TakeoffTab({
     setShowCreateModal(false);
   }
 
+  function updateTakeoffHistoryVersion() {
+    setHistoryVersion((value) => value + 1);
+  }
+
+  function pushTakeoffHistory(command: TakeoffHistoryCommand) {
+    undoStackRef.current = [...undoStackRef.current.slice(-49), command];
+    redoStackRef.current = [];
+    updateTakeoffHistoryVersion();
+  }
+
+  function annotationToApiPayload(annotation: TakeoffAnnotation) {
+    return {
+      documentId: selectedDocId,
+      pageNumber: page,
+      annotationType: annotation.type || activeTool || "unknown",
+      label: annotation.label || "",
+      color: annotation.color || "#3b82f6",
+      lineThickness: annotation.thickness ?? 4,
+      visible: annotation.visible ?? true,
+      groupName: annotation.groupName || "",
+      points: annotation.points || [],
+      measurement: annotation.measurement ?? {},
+      metadata: annotation.opts ?? {},
+    };
+  }
+
+  function mapSavedAnnotation(saved: any, fallback: TakeoffAnnotation): TakeoffAnnotation {
+    return {
+      ...fallback,
+      id: String(saved?.id ?? fallback.id),
+      type: String(saved?.annotationType ?? saved?.type ?? fallback.type),
+      label: String(saved?.label ?? fallback.label ?? ""),
+      color: String(saved?.color ?? fallback.color ?? "#3b82f6"),
+      thickness: Number(saved?.lineThickness ?? saved?.thickness ?? fallback.thickness ?? 4),
+      visible: saved?.visible !== false,
+      groupName: String(saved?.groupName ?? fallback.groupName ?? ""),
+      points: Array.isArray(saved?.points) ? saved.points : fallback.points,
+      measurement: saved?.measurement ?? fallback.measurement,
+      opts: saved?.metadata ?? fallback.opts,
+      canvasWidth: fallback.canvasWidth,
+      canvasHeight: fallback.canvasHeight,
+    };
+  }
+
+  async function recreateTakeoffAnnotation(annotation: TakeoffAnnotation): Promise<TakeoffAnnotation> {
+    const local = { ...annotation, id: crypto.randomUUID() };
+    try {
+      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(local));
+      const next = mapSavedAnnotation(saved, local);
+      setAnnotations((prev) => [...prev, next]);
+      notifyAnnotationsMutated();
+      return next;
+    } catch {
+      setAnnotations((prev) => [...prev, local]);
+      notifyAnnotationsMutated();
+      return local;
+    }
+  }
+
+  async function deleteTakeoffAnnotationLocal(id: string) {
+    setAnnotations((prev) => prev.filter((annotation) => annotation.id !== id));
+    try {
+      await deleteTakeoffAnnotation(projectId, id);
+    } catch {
+      /* Ignore optimistic local delete failures. */
+    }
+    notifyAnnotationsMutated();
+  }
+
+  async function undoTakeoffAction() {
+    const command = undoStackRef.current.pop();
+    if (!command) return;
+    try {
+      if (command.kind === "create") {
+        await deleteTakeoffAnnotationLocal(command.annotation.id);
+        redoStackRef.current.push(command);
+      } else if (command.kind === "delete") {
+        const restored = await recreateTakeoffAnnotation(command.annotation);
+        redoStackRef.current.push({ kind: "delete", annotation: restored });
+      } else {
+        const restored: TakeoffAnnotation[] = [];
+        for (const annotation of command.annotations) {
+          restored.push(await recreateTakeoffAnnotation(annotation));
+        }
+        redoStackRef.current.push({ kind: "clear", annotations: restored });
+      }
+    } finally {
+      updateTakeoffHistoryVersion();
+    }
+  }
+
+  async function redoTakeoffAction() {
+    const command = redoStackRef.current.pop();
+    if (!command) return;
+    try {
+      if (command.kind === "create") {
+        const recreated = await recreateTakeoffAnnotation(command.annotation);
+        undoStackRef.current.push({ kind: "create", annotation: recreated });
+      } else if (command.kind === "delete") {
+        await deleteTakeoffAnnotationLocal(command.annotation.id);
+        undoStackRef.current.push(command);
+      } else {
+        for (const annotation of command.annotations) {
+          await deleteTakeoffAnnotationLocal(annotation.id);
+        }
+        undoStackRef.current.push(command);
+      }
+    } finally {
+      updateTakeoffHistoryVersion();
+    }
+  }
+
   /* When annotation drawing is complete */
   async function handleAnnotationComplete(data: Partial<TakeoffAnnotation>) {
     const newAnnotation: TakeoffAnnotation = {
@@ -1467,28 +1754,16 @@ export function TakeoffTab({
 
     /* Persist to API */
     try {
-      const payload = {
-        documentId: selectedDocId,
-        pageNumber: page,
-        annotationType: newAnnotation.type || activeTool || "unknown",
-        label: newAnnotation.label || "",
-        color: newAnnotation.color || "#3b82f6",
-        lineThickness: newAnnotation.thickness ?? 4,
-        visible: newAnnotation.visible ?? true,
-        groupName: newAnnotation.groupName || "",
-        points: newAnnotation.points || [],
-        measurement: newAnnotation.measurement ?? {},
-        metadata: newAnnotation.opts ?? {},
-      };
-      const saved = await createTakeoffAnnotation(projectId, payload);
-      if (saved?.id) {
-        setAnnotations((prev) =>
-          prev.map((a) => (a.id === newAnnotation.id ? { ...a, id: saved.id } : a))
-        );
-      }
+      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(newAnnotation));
+      const savedAnnotation = mapSavedAnnotation(saved, newAnnotation);
+      setAnnotations((prev) =>
+        prev.map((a) => (a.id === newAnnotation.id ? savedAnnotation : a))
+      );
+      pushTakeoffHistory({ kind: "create", annotation: savedAnnotation });
       notifyAnnotationsMutated();
     } catch {
       /* Keep local annotation even if API fails */
+      pushTakeoffHistory({ kind: "create", annotation: newAnnotation });
     }
   }
 
@@ -2100,6 +2375,7 @@ export function TakeoffTab({
   }
 
   async function handleDeleteAnnotation(id: string) {
+    const annotation = annotations.find((a) => a.id === id);
     const nextAnnotations = annotations.filter((a) => a.id !== id);
     setAnnotations(nextAnnotations);
     try {
@@ -2107,6 +2383,7 @@ export function TakeoffTab({
     } catch {
       /* Ignore */
     }
+    if (annotation) pushTakeoffHistory({ kind: "delete", annotation });
     notifyAnnotationsMutated();
   }
 
@@ -2128,8 +2405,10 @@ export function TakeoffTab({
 
   /* Clear all annotations */
   function handleClearAll() {
+    const removed = [...annotations];
     const deletions = annotations.map((ann) => deleteTakeoffAnnotation(projectId, ann.id).catch(() => {}));
     setAnnotations([]);
+    if (removed.length > 0) pushTakeoffHistory({ kind: "clear", annotations: removed });
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
 
@@ -2176,6 +2455,7 @@ export function TakeoffTab({
         return;
       }
       const result = await createWorksheetItem(projectId, targetWs.id, {
+        categoryId: defaultCategory.id,
         category: defaultCategory.name,
         entityType: defaultCategory.entityType,
         entityName: ann.label || `${ann.type} Measurement`,
@@ -2261,6 +2541,7 @@ export function TakeoffTab({
       // categories require itemId. Without these the create-item
       // endpoint rejects with 400 and the Add action silently fails.
       const result = await createWorksheetItem(projectId, targetWs.id, {
+        categoryId: targetCat.id,
         category,
         entityType: targetCat.entityType,
         entityName,
@@ -2327,6 +2608,7 @@ export function TakeoffTab({
           : buildModelSelectionObjectDrafts(selection, {
               fileName: selectedDoc?.fileName,
               markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+              category: defaultCategory,
             })
       ).slice(0, 250);
       const modelAsset = await resolveSelectedModelAsset();
@@ -2350,6 +2632,7 @@ export function TakeoffTab({
         const fallbackPayload = buildModelSelectionLineItem(draftSelection, {
           fileName: selectedDoc?.fileName,
           markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+          category: defaultCategory,
         });
         const payload = normalizeModelLineItemDraft(draft, fallbackPayload);
         const result = await createWorksheetItem(projectId, targetWs.id, payload);
@@ -2407,6 +2690,11 @@ export function TakeoffTab({
       setToastMessage("Create a worksheet before sending model quantities.");
       return null;
     }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before creating model line items.");
+      return null;
+    }
     const modelAsset = await resolveSelectedModelAsset();
     if (!modelAsset) {
       setToastType("error");
@@ -2418,6 +2706,7 @@ export function TakeoffTab({
     const payload = buildModelElementLineItem(element, primary, {
       fileName: selectedDoc?.fileName,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      category: defaultCategory,
     });
     const result = await createWorksheetItem(projectId, selectedWorksheet.id, payload);
     const createdItem = result.workspace.worksheets
@@ -2542,19 +2831,6 @@ export function TakeoffTab({
 
   const zoomPercent = Math.round(zoom * 100);
 
-  function handleTakeoffModeSwitch(kind: TakeoffDocument["kind"]) {
-    const nextDoc = kind === "model" ? modelDocuments[0] : pdfDocuments[0];
-    if (!nextDoc || nextDoc.id === selectedDocId) return;
-    setSelectedDocId(nextDoc.id);
-    setPage(1);
-    setZoom(1);
-    fitOnLoadRef.current = true;
-    setAnnotations([]);
-    setSelectedAnnotationId(null);
-    setAutoCountResults(null);
-    setAutoCountSnippet(null);
-  }
-
   /* Determine if special tools are active */
   const isAutoCountActive = activeTool === "auto-count";
 
@@ -2571,8 +2847,755 @@ export function TakeoffTab({
   const isAskAiActive = activeTool === "ask-ai";
   const isSmartCountActive = activeTool === "smart-count";
   const isRectSelectTool = isAutoCountActive || isAskAiActive || isSmartCountActive;
+  const activeToolDef = TOOLS.find((tool) => tool.id === activeTool) ?? TOOLS[0];
+  const canUndoTakeoff = historyVersion >= 0 && undoStackRef.current.length > 0;
+  const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
+  const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
+  const dwgDocumentCount = dwgDocuments.length;
+  const sourceCountLabel = [
+    sourceCountText(pdfDocuments.length, "PDF", "PDFs"),
+    sourceCountText(dwgDocumentCount, "DWG/DXF", "DWG/DXF files"),
+    sourceCountText(modelDocuments.length, "model", "models"),
+  ].filter(Boolean).join(" · ");
+  const selectedSourceLabel = selectedDoc?.label ?? takeoffDocuments[0]?.label ?? "";
+  const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
+  const extractableDocuments = (workspace.sourceDocuments ?? [])
+    .filter((doc) => !isCadFile(doc.fileName))
+    .slice(0, 8);
+  const spreadsheetProfiles = spreadsheetPreview?.columnProfiles?.length
+    ? spreadsheetPreview.columnProfiles
+    : (spreadsheetPreview?.headers ?? []).map((header, index) => {
+        const values = spreadsheetPreview?.sampleRows.map((row) => row[index] ?? "").filter(Boolean) ?? [];
+        const numericValues = values
+          .map((value) => Number(String(value).replace(/[$,%\s,]/g, "")))
+          .filter((value) => Number.isFinite(value));
+        return {
+          header,
+          nonEmptyCount: values.length,
+          numericCount: numericValues.length,
+          distinctCount: new Set(values.map((value) => String(value).toLowerCase())).size,
+          sampleValues: Array.from(new Set(values.map(String))).slice(0, 5),
+          sum: numericValues.length ? numericValues.reduce((sum, value) => sum + value, 0) : undefined,
+          min: numericValues.length ? Math.min(...numericValues) : undefined,
+          max: numericValues.length ? Math.max(...numericValues) : undefined,
+        };
+      });
+  const spreadsheetGroupOptions = spreadsheetProfiles
+    .filter((profile) => profile.nonEmptyCount > 0 && profile.numericCount < profile.nonEmptyCount)
+    .map((profile) => ({ value: profile.header, label: profile.header }));
+  const spreadsheetMeasureOptions = [
+    { value: "__count", label: "Row count" },
+    ...spreadsheetProfiles
+      .filter((profile) => profile.numericCount > 0)
+      .map((profile) => ({ value: profile.header, label: profile.header })),
+  ];
+  const activePivotSummary =
+    spreadsheetPreview?.pivotSummaries?.find((summary) => summary.groupBy === pivotGroupBy && summary.measure === pivotMeasure) ??
+    spreadsheetPreview?.pivotSummaries?.find((summary) => summary.groupBy === pivotGroupBy) ??
+    spreadsheetPreview?.pivotSummaries?.[0];
+  const maxPivotTotal = Math.max(...(activePivotSummary?.rows.map((row) => row.total) ?? [0]), 1);
+  const mappedTargetCount = Object.values(spreadsheetMapping).filter((target) => target !== "skip").length;
+
+  async function previewSpreadsheetFile(file: File, source: { nodeId?: string; name: string }) {
+    setSpreadsheetPreviewLoading(true);
+    setSelectedSpreadsheetNodeId(source.nodeId ?? null);
+    try {
+      const preview = await importPreview(projectId, file);
+      const nextPreview = { ...preview, sourceName: source.name, sourceNodeId: source.nodeId };
+      setSpreadsheetPreview(nextPreview);
+      setSpreadsheetMapping(buildInitialSpreadsheetMapping(preview.headers));
+      setSpreadsheetPanelView("preview");
+      const firstPivot = preview.pivotSummaries?.[0];
+      setPivotGroupBy(firstPivot?.groupBy ?? preview.headers[0] ?? "");
+      setPivotMeasure(firstPivot?.measure ?? "__count");
+    } catch (error) {
+      console.error("[takeoff] Spreadsheet preview failed:", error);
+      setToastType("error");
+      setToastMessage("Could not preview that spreadsheet or CSV.");
+    } finally {
+      setSpreadsheetPreviewLoading(false);
+    }
+  }
+
+  async function previewSpreadsheetNode(node: FileNode) {
+    try {
+      setSpreadsheetPreviewLoading(true);
+      setSelectedSpreadsheetNodeId(node.id);
+      const response = await fetch(getFileDownloadUrl(projectId, node.id, true), {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const file = new File([blob], node.name, { type: blob.type || node.fileType || "application/octet-stream" });
+      await previewSpreadsheetFile(file, { nodeId: node.id, name: node.name });
+    } catch (error) {
+      console.error("[takeoff] Spreadsheet source load failed:", error);
+      setToastType("error");
+      setToastMessage("Could not open that spreadsheet source.");
+    } finally {
+      setSpreadsheetPreviewLoading(false);
+    }
+  }
+
+  async function handleSpreadsheetSourceUpload(files: FileList | null) {
+    const spreadsheetFiles = Array.from(files ?? []).filter((file) => isSpreadsheetFile(file.name));
+    if (spreadsheetUploadInputRef.current) spreadsheetUploadInputRef.current.value = "";
+    if (spreadsheetFiles.length === 0) {
+      setToastType("error");
+      setToastMessage("Choose a CSV, XLS, or XLSX file.");
+      return;
+    }
+
+    setUploadingSpreadsheetSource(true);
+    try {
+      const nodes = await Promise.all(spreadsheetFiles.map((file) => uploadFile(projectId, file)));
+      setFileTreeNodes((current) => mergeFileNodes(current, nodes));
+      setToastType("success");
+      setToastMessage(`Uploaded ${nodes.length} spreadsheet source${nodes.length === 1 ? "" : "s"} to Documents.`);
+      const firstNode = nodes.find((node) => isSpreadsheetFile(node.name));
+      if (firstNode) {
+        await previewSpreadsheetNode(firstNode);
+      }
+      void refreshFileTree();
+    } catch (error) {
+      console.error("[takeoff] Spreadsheet upload failed:", error);
+      setToastType("error");
+      setToastMessage("Could not upload that spreadsheet or CSV.");
+    } finally {
+      setUploadingSpreadsheetSource(false);
+    }
+  }
+
+  async function handleImportSpreadsheetPreview() {
+    if (!spreadsheetPreview || !selectedWorksheet) return;
+    const fieldMapping = Object.fromEntries(
+      Object.entries(spreadsheetMapping)
+        .filter(([, target]) => target && target !== "skip")
+        .map(([header, target]) => [target, header])
+    );
+    if (!fieldMapping.entityName && !fieldMapping.description) {
+      setToastType("error");
+      setToastMessage("Map at least an item name or description column before importing.");
+      setSpreadsheetPanelView("map");
+      return;
+    }
+
+    setSpreadsheetImporting(true);
+    try {
+      await importProcess(projectId, {
+        fileId: spreadsheetPreview.fileId,
+        worksheetId: selectedWorksheet.id,
+        mapping: fieldMapping,
+      });
+      setToastType("success");
+      setToastMessage(`Imported ${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows into ${selectedWorksheet.name}.`);
+      notifyWorkspaceMutated();
+    } catch (error) {
+      console.error("[takeoff] Spreadsheet import failed:", error);
+      setToastType("error");
+      setToastMessage("Could not import that spreadsheet.");
+    } finally {
+      setSpreadsheetImporting(false);
+    }
+  }
+
+  function openTakeoffSurface(docId?: string) {
+    const nextDocId = docId ?? selectedDocId ?? takeoffDocuments[0]?.id;
+    if (nextDocId) {
+      setSelectedDocId(nextDocId);
+    }
+    if (!nextDocId) {
+      onOpenDocuments?.();
+      return;
+    }
+    setShowLanding(false);
+  }
+
+  function openDocumentExtractor(sourceName?: string) {
+    onOpenAgentChat?.(
+      [
+        sourceName ? `Use ${sourceName} as the starting source.` : "Review the project documents.",
+        "Extract estimate-ready line items, quantities, vendor BOM rows, equipment schedules, alternates, and allowances.",
+        "Stage the results by worksheet with source references before applying anything.",
+      ].join(" ")
+    );
+  }
+
+  async function handleTakeoffSourceUpload(files: FileList | null) {
+    const sourceFiles = Array.from(files ?? []).filter((file) => file.name.toLowerCase().endsWith(".pdf") || isCadFile(file.name));
+    if (sourceUploadInputRef.current) sourceUploadInputRef.current.value = "";
+    if (sourceFiles.length === 0) {
+      setToastType("error");
+      setToastMessage("Choose a PDF, DWG/DXF, or model file.");
+      return;
+    }
+
+    setUploadingTakeoffSource(true);
+    try {
+      const nodes = await Promise.all(sourceFiles.map((file) => uploadFile(projectId, file)));
+      const docs = nodes
+        .map((node) => fileNodeToTakeoffDocument(projectId, node))
+        .filter((doc): doc is TakeoffDocument => Boolean(doc));
+      if (docs.length === 0) {
+        setToastType("error");
+        setToastMessage("No takeoff-ready source was uploaded.");
+        return;
+      }
+      setUploadedTakeoffDocuments((current) => [...current, ...docs]);
+      setSelectedDocId(docs[0]!.id);
+      setShowLanding(false);
+      setToastType("success");
+      setToastMessage(`Uploaded ${docs.length} takeoff source${docs.length === 1 ? "" : "s"}.`);
+      if (docs.some((doc) => doc.kind === "model")) {
+        void refreshModelAssets(true);
+      }
+    } catch (error) {
+      console.error("[takeoff] Source upload failed:", error);
+      setToastType("error");
+      setToastMessage("Could not upload that takeoff source.");
+    } finally {
+      setUploadingTakeoffSource(false);
+    }
+  }
+
+  const intakeOptions = [
+    {
+      id: "spreadsheet",
+      title: "Import Spreadsheet/CSV",
+      detail: spreadsheetSources.length ? `${spreadsheetSources.length} file${spreadsheetSources.length === 1 ? "" : "s"} found` : "CSV, XLSX, XLS",
+      icon: FileSpreadsheet,
+      disabled: false,
+    },
+    {
+      id: "source",
+      title: "Use Drawing or Model",
+      detail: sourceCountLabel || "PDF, DWG/DXF, 3D model",
+      icon: Files,
+      disabled: false,
+    },
+    {
+      id: "extract",
+      title: "Extract From Document",
+      detail: extractableDocuments.length ? `${extractableDocuments.length} source${extractableDocuments.length === 1 ? "" : "s"} available` : "Specs, RFQs, quotes",
+      icon: FolderOpen,
+      disabled: !onOpenAgentChat,
+    },
+    {
+      id: "tools",
+      title: "Use Trade Tool",
+      detail: "Configured calculators and plugins",
+      icon: Puzzle,
+      disabled: !onOpenPluginTools,
+    },
+  ] satisfies Array<{
+    id: IntakeOptionId;
+    title: string;
+    detail: string;
+    icon: typeof Ruler;
+    disabled: boolean;
+  }>;
 
   /* ─── Render ─── */
+
+  if (showLanding && !detached) {
+    return (
+      <div
+        ref={cardRef}
+        className="relative flex h-full flex-1 min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel"
+      >
+        <div className="border-b border-line px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg/35">Takeoff</p>
+              <h2 className="mt-1 text-lg font-semibold text-fg">Choose intake source</h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {onOpenRevisionDiff && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onOpenRevisionDiff}
+                  title="Compare drawing revisions and re-takeoff"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  Compare Drawings
+                </Button>
+              )}
+              {selectedSourceLabel && (
+                <Button variant="secondary" size="sm" onClick={() => openTakeoffSurface()}>
+                  <Ruler className="h-3.5 w-3.5" />
+                  Open Current Source
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          <input
+            ref={sourceUploadInputRef}
+            type="file"
+            multiple
+            accept=".pdf,.dwg,.dxf,.ifc,.rvt,.step,.stp,.iges,.igs,.brep,.stl,.obj,.fbx,.gltf,.glb,.3ds,.dae"
+            className="hidden"
+            onChange={(event) => void handleTakeoffSourceUpload(event.target.files)}
+          />
+          <input
+            ref={spreadsheetUploadInputRef}
+            type="file"
+            multiple
+            accept=".csv,.tsv,.xls,.xlsx,.xlsm"
+            className="hidden"
+            onChange={(event) => void handleSpreadsheetSourceUpload(event.target.files)}
+          />
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {intakeOptions.map((option) => {
+              const Icon = option.icon;
+              const active = activeIntakeOption === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={option.disabled}
+                  onClick={() => setActiveIntakeOption(option.id)}
+                  className={cn(
+                    "group relative flex min-h-20 items-center gap-3 overflow-hidden rounded-lg border p-3 text-left transition-colors",
+                    active
+                      ? "border-accent/45 bg-accent/8"
+                      : "border-line bg-bg/45 hover:border-accent/40 hover:bg-accent/5",
+                    "disabled:cursor-not-allowed disabled:opacity-50"
+                  )}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId="takeoff-intake-card"
+                      className="absolute inset-x-0 top-0 h-0.5 bg-accent"
+                      transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                    />
+                  )}
+                  <span className={cn(
+                    "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-panel2 transition-colors",
+                    active ? "border-accent/35 text-accent" : "border-line text-fg/60 group-hover:border-accent/30 group-hover:text-accent"
+                  )}>
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold text-fg">{option.title}</span>
+                    <span className="mt-0.5 block truncate text-xs text-fg/45">{option.detail}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeIntakeOption}
+              initial={{ opacity: 0, y: -8, height: 0 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, y: -6, height: 0 }}
+              transition={{ duration: 0.22, ease: "easeOut" }}
+              className="mt-4 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm"
+            >
+              {activeIntakeOption === "spreadsheet" && (
+                <div className="grid gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
+                  <div className="min-w-0 rounded-md border border-line bg-panel/65 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-semibold text-fg/75">Spreadsheet/CSV sources</p>
+                        <p className="mt-1 text-xs text-fg/40">Persisted in Documents.</p>
+                      </div>
+                      <Button variant="accent" size="sm" onClick={() => spreadsheetUploadInputRef.current?.click()} disabled={uploadingSpreadsheetSource}>
+                        {uploadingSpreadsheetSource ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
+                        Upload
+                      </Button>
+                    </div>
+
+                    <div className="mt-3 max-h-80 space-y-1.5 overflow-y-auto pr-1">
+                      {spreadsheetSources.length > 0 ? spreadsheetSources.map((node) => {
+                        const active = selectedSpreadsheetNodeId === node.id;
+                        return (
+                          <button
+                            key={node.id}
+                            type="button"
+                            onClick={() => void previewSpreadsheetNode(node)}
+                            className={cn(
+                              "flex w-full min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors",
+                              active
+                                ? "border-accent/40 bg-accent/8 text-accent"
+                                : "border-transparent bg-bg/45 text-fg/65 hover:border-accent/30 hover:bg-accent/5 hover:text-accent"
+                            )}
+                          >
+                            <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{node.name}</span>
+                              <span className="mt-0.5 block truncate text-[10px] text-fg/35">{node.fileType || getFileExtension(node.name).toUpperCase() || "file"}</span>
+                            </span>
+                            {spreadsheetPreviewLoading && active ? (
+                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+                            ) : (
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fg/30" />
+                            )}
+                          </button>
+                        );
+                      }) : (
+                        <button
+                          type="button"
+                          onClick={() => spreadsheetUploadInputRef.current?.click()}
+                          className="flex w-full flex-col items-center justify-center rounded-md border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/40 transition-colors hover:border-accent/30 hover:text-accent"
+                        >
+                          <UploadCloud className="mb-2 h-5 w-5" />
+                          Add a CSV, XLS, or XLSX file
+                        </button>
+                      )}
+                    </div>
+
+                    <Button variant="ghost" size="sm" className="mt-3 w-full justify-center" onClick={onOpenDocuments}>
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      Open Documents
+                    </Button>
+                  </div>
+
+                  <div className="relative min-w-0 overflow-hidden rounded-md border border-line bg-panel/70">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-fg">{spreadsheetPreview?.sourceName ?? "Select a spreadsheet or CSV"}</p>
+                        <p className="mt-1 text-xs text-fg/40">
+                          {spreadsheetPreview
+                            ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
+                            : "Preview, pivot, summarize, then import into the active worksheet."}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {spreadsheetPreview && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => onOpenAgentChat?.(
+                              `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks before import.`
+                            )}
+                          >
+                            <BrainCircuit className="h-3.5 w-3.5" />
+                            Summarize
+                          </Button>
+                        )}
+                        <Button variant="accent" size="sm" onClick={() => void handleImportSpreadsheetPreview()} disabled={!spreadsheetPreview || spreadsheetImporting}>
+                          {spreadsheetImporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                          Import
+                        </Button>
+                      </div>
+                    </div>
+
+                    {spreadsheetPreview ? (
+                      <div className="p-4">
+                        <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-bg/40 p-1">
+                          {(["preview", "pivot", "map"] as const).map((view) => (
+                            <button
+                              key={view}
+                              type="button"
+                              onClick={() => setSpreadsheetPanelView(view)}
+                              className={cn(
+                                "rounded px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
+                                spreadsheetPanelView === view ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
+                              )}
+                            >
+                              {view}
+                            </button>
+                          ))}
+                          <div className="ml-auto px-2 text-[10px] text-fg/35">
+                            Target: {selectedWorksheet?.name ?? "first worksheet"}
+                          </div>
+                        </div>
+
+                        {spreadsheetPanelView === "preview" && (
+                          <div className="mt-4 space-y-4">
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Rows</p>
+                                <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length}</p>
+                              </div>
+                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Numeric Fields</p>
+                                <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetProfiles.filter((profile) => profile.numericCount > 0).length}</p>
+                              </div>
+                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
+                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Mapped Fields</p>
+                                <p className="mt-1 text-lg font-semibold text-fg">{mappedTargetCount}</p>
+                              </div>
+                            </div>
+
+                            <div className="max-h-56 overflow-auto rounded-md border border-line">
+                              <table className="min-w-full text-left text-xs">
+                                <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">
+                                  <tr>
+                                    {spreadsheetPreview.headers.map((header) => (
+                                      <th key={header} className="whitespace-nowrap border-b border-line px-3 py-2 font-semibold">{header}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {spreadsheetPreview.sampleRows.map((row, rowIndex) => (
+                                    <tr key={rowIndex} className="odd:bg-bg/25">
+                                      {spreadsheetPreview.headers.map((header, colIndex) => (
+                                        <td key={`${rowIndex}-${header}`} className="max-w-56 truncate border-b border-line/60 px-3 py-2 text-fg/65">
+                                          {row[colIndex] ?? ""}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                        {spreadsheetPanelView === "pivot" && (
+                          <div className="mt-4 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+                            <div className="space-y-3 rounded-md border border-line bg-bg/35 p-3">
+                              <div>
+                                <Label>Group by</Label>
+                                <Select
+                                  value={pivotGroupBy || activePivotSummary?.groupBy || ""}
+                                  onValueChange={setPivotGroupBy}
+                                  options={spreadsheetGroupOptions.length ? spreadsheetGroupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
+                                  size="sm"
+                                />
+                              </div>
+                              <div>
+                                <Label>Measure</Label>
+                                <Select
+                                  value={pivotMeasure}
+                                  onValueChange={setPivotMeasure}
+                                  options={spreadsheetMeasureOptions}
+                                  size="sm"
+                                />
+                              </div>
+                              <p className="text-xs text-fg/40">Pivot is built from the parsed file, not just the visible sample rows.</p>
+                            </div>
+
+                            <div className="max-h-72 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
+                              {activePivotSummary?.rows.length ? activePivotSummary.rows.map((row) => (
+                                <div key={row.label} className="mb-1.5 rounded-md bg-panel/70 p-2 last:mb-0">
+                                  <div className="flex items-center justify-between gap-3 text-xs">
+                                    <span className="min-w-0 flex-1 truncate font-medium text-fg/75">{row.label}</span>
+                                    <span className="font-mono text-fg/50">{numericFormat(row.total)}</span>
+                                  </div>
+                                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line/70">
+                                    <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(4, Math.min(100, (row.total / maxPivotTotal) * 100))}%` }} />
+                                  </div>
+                                  <div className="mt-1 flex justify-between text-[10px] text-fg/35">
+                                    <span>{row.count} rows</span>
+                                    <span>Avg {numericFormat(row.average)}</span>
+                                  </div>
+                                </div>
+                              )) : (
+                                <div className="flex h-40 items-center justify-center text-xs text-fg/40">No pivotable fields were detected.</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {spreadsheetPanelView === "map" && (
+                          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+                            <div className="max-h-72 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
+                              {spreadsheetPreview.headers.map((header) => (
+                                <div key={header} className="grid gap-2 border-b border-line/60 px-2 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_210px]">
+                                  <div className="min-w-0">
+                                    <p className="truncate text-xs font-medium text-fg/75">{header}</p>
+                                    <p className="mt-0.5 truncate text-[10px] text-fg/35">
+                                      {spreadsheetProfiles.find((profile) => profile.header === header)?.sampleValues.join(", ") || "No sample values"}
+                                    </p>
+                                  </div>
+                                  <Select
+                                    value={spreadsheetMapping[header] ?? "skip"}
+                                    onValueChange={(value) => setSpreadsheetMapping((current) => ({ ...current, [header]: value as SpreadsheetImportTarget }))}
+                                    options={[...SPREADSHEET_IMPORT_TARGETS]}
+                                    size="sm"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                            <div className="rounded-md border border-line bg-bg/35 p-3">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Import Target</p>
+                              <p className="mt-2 text-sm font-semibold text-fg/80">{selectedWorksheet?.name ?? "First worksheet"}</p>
+                              <p className="mt-1 text-xs text-fg/40">{mappedTargetCount} mapped column{mappedTargetCount === 1 ? "" : "s"}</p>
+                              <Button variant="accent" size="sm" className="mt-4 w-full justify-center" onClick={() => void handleImportSpreadsheetPreview()} disabled={spreadsheetImporting}>
+                                {spreadsheetImporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
+                                Import Rows
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex min-h-80 items-center justify-center p-6">
+                        <div className="max-w-sm text-center">
+                          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-line bg-bg/45 text-fg/45">
+                            <FileSpreadsheet className="h-6 w-6" />
+                          </div>
+                          <p className="mt-4 text-sm font-semibold text-fg/75">No spreadsheet selected</p>
+                          <p className="mt-1 text-xs text-fg/40">Upload a CSV/XLSX or choose a persisted source to preview, pivot, map, and import.</p>
+                          <Button variant="accent" size="sm" className="mt-4" onClick={() => spreadsheetUploadInputRef.current?.click()}>
+                            <UploadCloud className="h-3.5 w-3.5" />
+                            Upload CSV/XLSX
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {spreadsheetPreviewLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-panel/70 backdrop-blur-sm">
+                        <div className="flex items-center gap-2 rounded-lg border border-line bg-bg px-3 py-2 text-xs text-fg/60 shadow-sm">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                          Reading source
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {activeIntakeOption === "source" && (
+                <div className="p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-fg/75">Drawing and model sources</p>
+                      <p className="mt-1 text-xs text-fg/40">{sourceCountLabel || "Upload or add a source."}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="secondary" size="sm" onClick={() => sourceUploadInputRef.current?.click()} disabled={uploadingTakeoffSource}>
+                        {uploadingTakeoffSource ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
+                        Upload Source
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={onOpenDocuments}>
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        Documents
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    {[
+                      { label: "PDF", docs: pdfDocuments },
+                      { label: "DWG/DXF", docs: dwgDocuments },
+                      { label: "Model", docs: modelDocuments },
+                    ].map((group) => (
+                      <div key={group.label} className="rounded-md border border-line bg-panel/60 p-2">
+                        <div className="flex items-center justify-between px-1 pb-2">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">{group.label}</p>
+                          <span className="text-[10px] text-fg/30">{group.docs.length}</span>
+                        </div>
+                        <div className={cn("space-y-1.5", group.docs.length > 0 && "max-h-72 overflow-y-auto pr-1")}>
+                          {group.docs.length > 0 ? group.docs.map((doc) => (
+                            <button
+                              key={doc.id}
+                              type="button"
+                              onClick={() => openTakeoffSurface(doc.id)}
+                              className="flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent bg-bg/40 px-2 py-2 text-left text-xs text-fg/65 transition-colors hover:border-accent/30 hover:bg-accent/5 hover:text-accent"
+                            >
+                              <Badge tone="default" className="text-[9px]">{takeoffKindLabel(doc.kind)}</Badge>
+                              <span className="min-w-0 flex-1 truncate">{doc.label}</span>
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fg/30" />
+                            </button>
+                          )) : (
+                            <button
+                              type="button"
+                              onClick={() => sourceUploadInputRef.current?.click()}
+                              className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-line bg-bg/30 px-3 py-6 text-xs text-fg/35 transition-colors hover:border-accent/30 hover:text-accent"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              Add {group.label}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeIntakeOption === "extract" && (
+                <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                  <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold text-fg/75">Document extraction</p>
+                        <p className="mt-1 text-xs text-fg/40">Use tables, schedules, quotes, and written scope.</p>
+                      </div>
+                      <Button variant="accent" size="sm" onClick={() => openDocumentExtractor()}>
+                        <BrainCircuit className="h-3.5 w-3.5" />
+                        Extract
+                      </Button>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {extractableDocuments.length > 0 ? extractableDocuments.map((doc) => (
+                        <button
+                          key={doc.id}
+                          type="button"
+                          onClick={() => openDocumentExtractor(doc.fileName)}
+                          className="flex min-w-0 items-center gap-2 rounded-md border border-line bg-panel/70 px-3 py-2 text-left text-xs transition-colors hover:border-accent/35 hover:text-accent"
+                        >
+                          <Files className="h-3.5 w-3.5 shrink-0 text-fg/45" />
+                          <span className="min-w-0 flex-1 truncate">{doc.fileName}</span>
+                          <Badge tone="info" className="text-[9px]">{doc.documentType || "file"}</Badge>
+                        </button>
+                      )) : (
+                        <div className="rounded-md border border-dashed border-line bg-panel/50 px-3 py-5 text-center text-xs text-fg/40 md:col-span-2">
+                          No extractable project documents yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-line bg-panel/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Add sources</p>
+                    <Button variant="secondary" size="sm" className="mt-3 w-full justify-center" onClick={onOpenDocuments}>
+                      <FolderOpen className="h-3.5 w-3.5" />
+                      Open Documents
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {activeIntakeOption === "tools" && (
+                <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                  <div>
+                    <p className="text-xs font-semibold text-fg/75">Trade tools</p>
+                    <p className="mt-1 text-xs text-fg/40">Open the configured tool catalog for this workspace.</p>
+                    <div className="mt-4 grid gap-2 md:grid-cols-2">
+                      <Button variant="accent" size="sm" className="justify-center" onClick={onOpenPluginTools}>
+                        <Puzzle className="h-3.5 w-3.5" />
+                        Open Tool Library
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="justify-center"
+                        onClick={() => onOpenAgentChat?.("Choose an appropriate configured estimating tool for this scope, explain why, and stage any line items for review before applying them.")}
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Ask AI
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-line bg-panel/70 p-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Applies to</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {["Labor", "Material", "Equipment", "Subcontract", "Travel"].map((label) => (
+                        <Badge key={label} tone="default" className="text-[10px]">{label}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -2583,41 +3606,33 @@ export function TakeoffTab({
       )}
     >
       {/* ─── Top Toolbar ─── */}
-      <div className="flex items-center gap-3 border-b border-line bg-panel px-3 py-2 shrink-0">
-        <div className="flex items-center rounded-lg border border-line bg-bg/50 p-0.5">
-          <button
-            type="button"
-            disabled={pdfDocuments.length === 0}
-            onClick={() => handleTakeoffModeSwitch("pdf")}
-            className={cn(
-              "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-              !isCadDocument ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
-            )}
-            title="2D PDF takeoff"
-          >
-            <FileText className="h-3.5 w-3.5" />
-            PDF
-            <span className="text-[10px] text-fg/35">{pdfDocuments.length}</span>
-          </button>
-          <button
-            type="button"
-            disabled={modelDocuments.length === 0}
-            onClick={() => handleTakeoffModeSwitch("model")}
-            className={cn(
-              "flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40",
-              isCadDocument ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
-            )}
-            title="3D model takeoff"
-          >
-            <Box className="h-3.5 w-3.5" />
-            Model
-            <span className="text-[10px] text-fg/35">{modelDocuments.length}</span>
-          </button>
-        </div>
-
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0">
+        {!detached && (
+          <>
+            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake">
+              <FolderOpen className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Intake</span>
+            </Button>
+            <Separator className="!h-6 !w-px" />
+          </>
+        )}
+        {onOpenRevisionDiff && !detached && (
+          <>
+            <Button
+              variant="secondary"
+              size="xs"
+              onClick={onOpenRevisionDiff}
+              title="Compare drawing revisions and re-takeoff"
+            >
+              <GitCompare className="h-3.5 w-3.5" />
+              <span className="hidden 2xl:inline">Compare</span>
+            </Button>
+            <Separator className="!h-6 !w-px" />
+          </>
+        )}
         {/* Document selector */}
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-medium text-fg/50">Source:</label>
+        <div className="flex min-w-0 items-center gap-2">
+          <label className="hidden text-xs font-medium text-fg/50 xl:inline">Source:</label>
           <RadixSelect.Root
             value={selectedDocId}
             onValueChange={(v) => {
@@ -2630,7 +3645,7 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
           >
-            <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 w-56 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors truncate">
+            <RadixSelect.Trigger className="inline-flex h-8 w-44 min-w-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 2xl:w-56">
               <RadixSelect.Value placeholder="No drawings available" />
               <RadixSelect.Icon className="ml-auto shrink-0">
                 <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
@@ -2709,7 +3724,7 @@ export function TakeoffTab({
           </RadixSelect.Root>
         </div>
 
-        {!isCadDocument && (
+        {!isCadDocument && !isDwgDocument && (
           <>
             <Separator className="!h-6 !w-px" />
 
@@ -2765,15 +3780,15 @@ export function TakeoffTab({
 
             {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (
-              <div className="inline-flex items-center gap-1">
+              <div className="inline-flex shrink-0 items-center gap-1">
                 <button
                   type="button"
                   onClick={() => handleToolSelect("calibrate")}
-                  className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-1 text-[11px] font-medium text-emerald-500 hover:bg-emerald-500/20 transition-colors"
-                  title="Click to recalibrate"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500 transition-colors hover:bg-emerald-500/20"
+                  title={`Recalibrate: 1 ${calibration.unit} = ${calibration.pixelsPerUnit.toFixed(1)}px`}
+                  aria-label="Recalibrate drawing scale"
                 >
                   <Scaling className="h-3 w-3" />
-                  1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
                 </button>
                 <button
                   type="button"
@@ -2781,32 +3796,34 @@ export function TakeoffTab({
                     setVerifyMode(true);
                     setActiveTool("calibrate");
                   }}
-                  className="inline-flex items-center rounded-md border border-emerald-500/20 px-2 py-1 text-[11px] font-medium text-emerald-500/80 hover:bg-emerald-500/10 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-emerald-500/20 text-emerald-500/80 transition-colors hover:bg-emerald-500/10"
                   title="Draw a line of known length to verify the calibration"
+                  aria-label="Verify drawing calibration"
                 >
-                  Verify
+                  <Check className="h-3 w-3" />
                 </button>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={() => handleToolSelect("calibrate")}
-                className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-500 hover:bg-amber-500/20 transition-colors animate-pulse"
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500 transition-colors hover:bg-amber-500/20"
                 title="Click to set the drawing scale"
+                aria-label="Set drawing scale"
               >
                 <Scaling className="h-3 w-3" />
-                Set scale
               </button>
             )}
             <button
               type="button"
               onClick={handleReadLegend}
               disabled={legendLoading || !selectedDoc}
-              className="inline-flex items-center gap-1 rounded-md border border-line bg-panel2/40 px-2 py-1 text-[11px] font-medium text-fg/70 hover:bg-panel2 transition-colors disabled:opacity-50"
+              className="inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md border border-line bg-panel2/40 px-1.5 text-fg/70 transition-colors hover:bg-panel2 disabled:opacity-50"
               title="Read the legend / symbol schedule on this page (uses Azure DI OCR)"
+              aria-label="Read legend or symbol schedule"
             >
               <BookOpen className="h-3 w-3" />
-              {legendLoading ? "Reading…" : "Legend"}
+              {legendLoading && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
               {legendEntries && legendEntries.length > 0 && (
                 <span className="text-[10px] text-fg/45 ml-0.5">{legendEntries.length}</span>
               )}
@@ -2816,16 +3833,44 @@ export function TakeoffTab({
 
         <div className="flex-1" />
 
-        {!isCadDocument && (
+        {!isCadDocument && !isDwgDocument && (
           <>
             {/* Active tool indicator */}
-            <Badge tone="info" className="text-[11px]">
-              {TOOLS.find((t) => t.id === activeTool)?.label ?? "Select"} tool
+            <Badge tone="info" className="h-7 gap-1 px-2 text-[11px]" title={`${activeToolDef?.label ?? "Select"} tool`}>
+              {activeToolDef && <activeToolDef.icon className="h-3 w-3" />}
+              <span className="hidden 2xl:inline">{activeToolDef?.label ?? "Select"}</span>
             </Badge>
+
+            <Button
+              variant={snapEnabled ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setSnapEnabled((value) => !value)}
+              title="Toggle PDF edge and vertex snap"
+            >
+              <Crosshair className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void undoTakeoffAction()}
+              disabled={!canUndoTakeoff}
+              title="Undo takeoff edit"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void redoTakeoffAction()}
+              disabled={!canRedoTakeoff}
+              title="Redo takeoff edit"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </Button>
 
             {/* Clear all */}
             {annotations.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all annotations">
+              <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all takeoff marks">
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -2841,12 +3886,11 @@ export function TakeoffTab({
                   className="rounded-r-none"
                   title={
                     annotations.length === 0
-                      ? "No annotations to export — create some takeoffs first"
-                      : `Export ${annotations.length} annotation${annotations.length === 1 ? "" : "s"} as CSV`
+                      ? "No takeoff marks to export"
+                      : `Export ${annotations.length} takeoff mark${annotations.length === 1 ? "" : "s"} as CSV`
                   }
                 >
                   <Download className="h-3.5 w-3.5" />
-                  CSV
                 </Button>
                 <Button
                   variant="secondary"
@@ -2854,7 +3898,7 @@ export function TakeoffTab({
                   onClick={() => setExportDropdownOpen((v) => !v)}
                   disabled={annotations.length === 0}
                   className="rounded-l-none border-l border-line/50 px-1.5"
-                  title={annotations.length === 0 ? "No annotations to export" : "Export options"}
+                  title={annotations.length === 0 ? "No takeoff marks to export" : "Export options"}
                 >
                   <ChevronDown className="h-3 w-3" />
                 </Button>
@@ -2913,7 +3957,7 @@ export function TakeoffTab({
       </div>
 
       {/* ─── No-Calibration Warning ─── */}
-      {!isCadDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
+      {!isCadDocument && !isDwgDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
         <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/5 px-4 py-2.5 shrink-0">
           <Scaling className="h-4 w-4 text-amber-500 shrink-0 animate-pulse" />
           <div className="flex-1">
@@ -2932,7 +3976,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── Auto-Count Banner ─── */}
-      {!isCadDocument && (isAutoCountActive || autoCountRunning) && (
+      {!isCadDocument && !isDwgDocument && (isAutoCountActive || autoCountRunning) && (
         <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
@@ -3126,7 +4170,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── Ask AI Banner ─── */}
-      {!isCadDocument && isAskAiActive && (
+      {!isCadDocument && !isDwgDocument && isAskAiActive && (
         <div className="flex items-center gap-3 border-b border-violet-500/30 bg-violet-500/5 px-4 py-2.5 shrink-0">
           <BrainCircuit className="h-4 w-4 text-violet-500 shrink-0" />
           <div className="flex-1">
@@ -3157,15 +4201,43 @@ export function TakeoffTab({
 
       {/* ─── Main Area ─── */}
       <div className="relative flex flex-1 overflow-hidden min-h-0">
+        {isDwgDocument ? (
+          <DwgTakeoffSurface
+            projectId={projectId}
+            documents={dwgDocuments.map((doc) => ({
+              id: doc.id,
+              label: doc.label,
+              fileName: doc.fileName,
+              fileUrl: buildPdfUrl(doc),
+            }))}
+            selectedDocumentId={selectedDoc?.kind === "dwg" ? selectedDoc.id : undefined}
+            workspace={workspace}
+            selectedWorksheetId={selectedWorksheet?.id}
+            defaultEstimateCategory={defaultCategory ? { id: defaultCategory.id, name: defaultCategory.name, entityType: defaultCategory.entityType } : null}
+            onSelectedDocumentChange={(docId) => {
+              setSelectedDocId(docId);
+              setPage(1);
+              setZoom(1);
+              fitOnLoadRef.current = true;
+              setAnnotations([]);
+              setSelectedAnnotationId(null);
+              setAutoCountResults(null);
+              setAutoCountSnippet(null);
+            }}
+            onWorkspaceMutated={notifyWorkspaceMutated}
+          />
+        ) : (
+          <>
+
         {/* Left: Tool palette */}
         {!isCadDocument && (
-        <div className="flex w-10 flex-col border-r border-line bg-panel p-1 shrink-0">
+        <div className="flex w-9 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
           {TOOL_GROUPS.map((group) => {
             const groupTools = TOOLS.filter((t) => t.group === group.key);
             return (
               <div key={group.key}>
                 {group.key !== "nav" && (
-                  <div className="my-0.5 h-px w-full bg-line/50" />
+                  <div className="my-px h-px w-full bg-line/50" />
                 )}
                 {groupTools.map(({ id, label, icon: Icon }) => (
                   <button
@@ -3173,7 +4245,7 @@ export function TakeoffTab({
                     onClick={() => handleToolSelect(id)}
                     title={label}
                     className={cn(
-                      "flex h-7 w-full items-center justify-center rounded-md transition-colors",
+                      "flex h-6 w-full items-center justify-center rounded-md transition-colors",
                       activeTool === id
                         ? "bg-accent/15 text-accent"
                         : "text-fg/40 hover:bg-panel2 hover:text-fg/70"
@@ -3276,6 +4348,7 @@ export function TakeoffTab({
                     }
                     onCalibrationRequest={handleCalibrationRequest}
                     pdfCanvas={pdfCanvasRef.current}
+                    snapEnabled={snapEnabled}
                     zoom={zoom}
                   />
 
@@ -3534,6 +4607,8 @@ export function TakeoffTab({
               </Button>
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
 
@@ -4328,19 +5403,21 @@ export function TakeoffTab({
       {/* ─── Status Bar ─── */}
       <div className="flex items-center gap-3 border-t border-line bg-panel px-3 py-1.5 shrink-0">
         <p className="text-[11px] text-fg/40">
-          {isCadDocument
+          {isDwgDocument
+            ? "DWG takeoff surface active."
+            : isCadDocument
             ? selectedModelIsEditable
               ? "Model editor active."
               : "3D model preview active."
             : TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>
         <div className="flex-1" />
-        {!isCadDocument && calibration && (
+        {!isCadDocument && !isDwgDocument && calibration && (
           <span className="text-[11px] text-fg/30">
             Scale: 1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
           </span>
         )}
-        {!isCadDocument && (
+        {!isCadDocument && !isDwgDocument && (
           <>
             <span className="text-[11px] text-fg/30">
               Page {page}/{totalPages}

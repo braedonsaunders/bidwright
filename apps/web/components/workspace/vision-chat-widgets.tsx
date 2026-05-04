@@ -352,7 +352,7 @@ export function VisionToolWidget({
       zoomDrawingRegion: "Zooming into region...",
       countSymbols: "Counting symbols on page...",
       detectScale: "Detecting drawing scale...",
-      saveCountAsAnnotations: "Saving annotations...",
+      saveCountAsAnnotations: "Saving takeoff marks...",
       measureLinear: "Measuring distance...",
       listDrawingPages: "Listing drawing pages...",
     };
@@ -443,7 +443,7 @@ export function VisionToolWidget({
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
             <span className="text-[11px] font-medium text-fg/60">
-              Saved {saved} annotation{saved !== 1 ? "s" : ""} to takeoff
+              Saved {saved} takeoff mark{saved !== 1 ? "s" : ""} to takeoff
             </span>
           </div>
         </div>

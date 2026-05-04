@@ -492,10 +492,10 @@ export function QuotesList({ projects, users = [], departments = [] }: {
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <span className="text-xs font-medium text-fg/65">Client</span>
                 {quickAddOpen ? (
-                  <div className="flex gap-1.5">
+                  <div className="flex min-w-0 gap-1.5">
                     <Input
                       value={quickAddName}
                       onChange={(event) => setQuickAddName(event.target.value)}
@@ -532,8 +532,8 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                     </Button>
                   </div>
                 ) : (
-                  <div className="flex gap-1.5">
-                    <div className="flex-1">
+                  <div className="flex min-w-0 gap-1.5">
+                    <div className="min-w-0 flex-1">
                       <SearchablePicker
                         value={manualCustomerId || null}
                         onSelect={setManualCustomerId}

@@ -152,6 +152,16 @@ export interface SelectOption {
   disabled?: boolean;
 }
 
+const EMPTY_SELECT_ITEM_VALUE = "__bidwright_empty_select_item__";
+
+function selectItemValue(value: string) {
+  return value === "" ? EMPTY_SELECT_ITEM_VALUE : value;
+}
+
+function selectExternalValue(value: string) {
+  return value === EMPTY_SELECT_ITEM_VALUE ? "" : value;
+}
+
 export function Select({
   value,
   onValueChange,
@@ -192,11 +202,13 @@ export function Select({
     sm: "h-8 px-2.5 text-xs",
     md: "h-9 px-3 text-sm",
   }[size];
+  const hasEmptyOption = options.some((option) => option.value === "");
+  const radixValue = value === "" && hasEmptyOption ? EMPTY_SELECT_ITEM_VALUE : value;
 
   return (
     <SelectPrimitive.Root
-      value={value}
-      onValueChange={onValueChange}
+      value={radixValue}
+      onValueChange={(nextValue) => onValueChange(selectExternalValue(nextValue))}
       disabled={disabled}
       defaultOpen={defaultOpen}
       open={open}
@@ -207,13 +219,13 @@ export function Select({
         aria-label={ariaLabel}
         data-testid={dataTestId}
         className={cn(
-          "inline-flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-bg/50 text-fg outline-none transition-colors hover:border-accent/30 focus-visible:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
+          "inline-flex min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-lg border border-line bg-bg/50 text-fg outline-none transition-colors hover:border-accent/30 focus-visible:border-accent/50 focus-visible:ring-1 focus-visible:ring-accent/20 disabled:pointer-events-none disabled:opacity-40",
           sizes,
           triggerClassName,
           className,
         )}
       >
-        <SelectPrimitive.Value placeholder={<span className="text-fg/30">{placeholder}</span>} />
+        <SelectPrimitive.Value className="min-w-0 flex-1 truncate text-left" placeholder={<span className="block truncate text-fg/30">{placeholder}</span>} />
         <SelectPrimitive.Icon className="text-fg/35 shrink-0">
           <ChevronDown className="h-3.5 w-3.5" />
         </SelectPrimitive.Icon>
@@ -229,10 +241,10 @@ export function Select({
           )}
         >
           <SelectPrimitive.Viewport className="p-1 max-h-[280px]">
-            {options.map((option) => (
+            {options.map((option, index) => (
               <SelectPrimitive.Item
-                key={option.value}
-                value={option.value}
+                key={`${option.value || EMPTY_SELECT_ITEM_VALUE}-${index}`}
+                value={selectItemValue(option.value)}
                 disabled={option.disabled}
                 className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-35 data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
               >
@@ -278,8 +290,11 @@ export function CompactSelect({
   title?: string;
   ariaLabel?: string;
 }) {
+  const hasEmptyOption = options.some((option) => option.value === "");
+  const radixValue = value === "" && hasEmptyOption ? EMPTY_SELECT_ITEM_VALUE : value;
+
   return (
-    <SelectPrimitive.Root value={value} onValueChange={onValueChange} disabled={disabled}>
+    <SelectPrimitive.Root value={radixValue} onValueChange={(nextValue) => onValueChange(selectExternalValue(nextValue))} disabled={disabled}>
       <SelectPrimitive.Trigger
         data-testid={dataTestId}
         title={title}
@@ -302,10 +317,10 @@ export function CompactSelect({
           className="z-[300] min-w-[180px] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
         >
           <SelectPrimitive.Viewport className="p-1">
-            {options.map((option) => (
+            {options.map((option, index) => (
               <SelectPrimitive.Item
-                key={option.value}
-                value={option.value}
+                key={`${option.value || EMPTY_SELECT_ITEM_VALUE}-${index}`}
+                value={selectItemValue(option.value)}
                 disabled={option.disabled}
                 className="relative flex cursor-default select-none items-center rounded-md py-1.5 pl-7 pr-2 text-xs text-fg/75 outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-35 data-[highlighted]:bg-panel2 data-[highlighted]:text-fg"
               >
@@ -440,7 +455,8 @@ export function ModalBackdrop({
       {/* Scroll container */}
       <div className="absolute inset-0 overflow-y-auto">
         <div className="flex min-h-full items-center justify-center p-4">
-          <div className={cn("relative z-10 w-full", widths[size])}>
+          {/* Center fixed-width modal bodies that are wider than the selected shell size. */}
+          <div className={cn("relative z-10 w-full [&>*]:relative [&>*]:left-1/2 [&>*]:-translate-x-1/2", widths[size])}>
             {children}
           </div>
         </div>

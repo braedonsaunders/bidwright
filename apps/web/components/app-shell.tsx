@@ -4,15 +4,16 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  BookOpen,
+  Building2,
   Check,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
   FileText,
-  FolderOpen,
   LayoutDashboard,
+  Library,
   LogOut,
+  Monitor,
   Moon,
   PackageOpen,
   Search,
@@ -28,14 +29,25 @@ import { searchTools, listMyOrganizations, switchOrganization } from "@/lib/api"
 import { formatCompactMoney } from "@/lib/format";
 import { Badge, Button, Input, Separator } from "@/components/ui";
 import { useAuth } from "@/components/auth-provider";
+import { BidwrightMark } from "@/components/brand-logo";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/intake", label: "Intake", icon: PackageOpen },
   { href: "/quotes", label: "Quotes", icon: FileText },
-  { href: "/knowledge", label: "Knowledge", icon: BookOpen },
+  { href: "/clients", label: "Clients", icon: Building2 },
+  { href: "/library", label: "Library", icon: Library, activePaths: ["/library", "/knowledge"] },
   { href: "/performance", label: "Performance", icon: TrendingUp },
   { href: "/settings", label: "Settings", icon: Settings },
+];
+
+type ThemePreference = "light" | "dark" | "system";
+type ResolvedTheme = "light" | "dark";
+
+const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; icon: typeof Sun }> = [
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+  { value: "system", label: "System", icon: Monitor },
 ];
 
 function statusTone(status: string) {
@@ -48,15 +60,22 @@ function statusTone(status: string) {
 }
 
 function useTheme() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [theme, setTheme] = useState<ThemePreference>("system");
+  const [systemDark, setSystemDark] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("bidwright-theme");
-    if (stored === "dark" || stored === "light") {
+    if (stored === "dark" || stored === "light" || stored === "system") {
       setTheme(stored);
-    } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      setTheme("dark");
     }
+  }, []);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = () => setSystemDark(query.matches);
+    syncSystemTheme();
+    query.addEventListener("change", syncSystemTheme);
+    return () => query.removeEventListener("change", syncSystemTheme);
   }, []);
 
   useEffect(() => {
@@ -64,14 +83,18 @@ function useTheme() {
     if (theme === "dark") {
       root.classList.add("dark");
       root.classList.remove("light");
-    } else {
+    } else if (theme === "light") {
       root.classList.add("light");
+      root.classList.remove("dark");
+    } else {
+      root.classList.remove("light");
       root.classList.remove("dark");
     }
     localStorage.setItem("bidwright-theme", theme);
   }, [theme]);
 
-  return { theme, toggle: () => setTheme((t) => (t === "dark" ? "light" : "dark")) };
+  const resolvedTheme: ResolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme;
+  return { theme, resolvedTheme, setTheme };
 }
 
 export function AppShell({
@@ -82,7 +105,7 @@ export function AppShell({
   projects?: ProjectListItem[];
 }) {
   const pathname = usePathname();
-  const { theme, toggle } = useTheme();
+  const { theme, resolvedTheme, setTheme } = useTheme();
   const {
     user: authUser,
     organization: authOrg,
@@ -113,6 +136,7 @@ export function AppShell({
   // Active project selection (persisted in localStorage)
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const projectSelectorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -138,6 +162,10 @@ export function AppShell({
   }, [pathname, activeProjectId]);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null;
+  const themeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[2];
+  const ThemeIcon = themeOption.icon;
+  const flushWorkspace = pathname.startsWith("/library");
+  const fittedWorkspace = pathname.startsWith("/clients");
 
   // Filter sidebar projects by search query
   const filteredProjects = searchQuery.trim()
@@ -172,6 +200,7 @@ export function AppShell({
       }
       if (projectSelectorRef.current && !projectSelectorRef.current.contains(target)) {
         setProjectSelectorOpen(false);
+        setThemeMenuOpen(false);
       }
       // Close org switcher and user menu on outside clicks
       const sidebar = document.querySelector("aside");
@@ -203,9 +232,7 @@ export function AppShell({
               }}
               className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-panel2/50 transition-colors"
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-accent-fg shrink-0">
-                <FolderOpen className="h-4 w-4" />
-              </div>
+              <BidwrightMark className="h-8 w-8" />
               <div className="min-w-0 flex-1 text-left">
                 <p className="text-sm font-semibold tracking-tight truncate">
                   Bidwright
@@ -319,7 +346,9 @@ export function AppShell({
 
         <nav className="flex-1 space-y-0.5 px-3 py-3">
           {navItems.map((item) => {
-            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            const active = item.href === "/"
+              ? pathname === "/"
+              : (item.activePaths ?? [item.href]).some((href) => pathname.startsWith(href));
             const Icon = item.icon;
             return (
               <Link
@@ -388,13 +417,45 @@ export function AppShell({
               <span>Active Project</span>
               <div className="flex items-center gap-1">
                 <span>{formatCompactMoney(activeProject.latestRevision?.subtotal ?? 0)}</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggle(); }}
-                  className="p-1 rounded-md text-fg/40 hover:bg-panel2/50 hover:text-fg/70 transition-colors"
-                  title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                >
-                  {theme === "dark" ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-                </button>
+                <div className="relative">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setThemeMenuOpen((open) => !open);
+                    }}
+                    className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/50 hover:text-fg/70"
+                    title={`Theme: ${themeOption.label}${theme === "system" ? ` (${resolvedTheme})` : ""}`}
+                  >
+                    <ThemeIcon className="h-3.5 w-3.5" />
+                  </button>
+                  {themeMenuOpen ? (
+                    <div className="absolute bottom-full right-0 z-50 mb-1 w-32 rounded-lg border border-line bg-panel p-1 shadow-lg">
+                      {THEME_OPTIONS.map((option) => {
+                        const Icon = option.icon;
+                        const selected = theme === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-panel2",
+                              selected ? "text-accent" : "text-fg/70",
+                            )}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setTheme(option.value);
+                              setThemeMenuOpen(false);
+                            }}
+                          >
+                            <Icon className="h-3.5 w-3.5" />
+                            <span className="min-w-0 flex-1">{option.label}</span>
+                            {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
             <button
@@ -476,7 +537,14 @@ export function AppShell({
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <main className="flex-1 min-h-0 overflow-y-auto p-5 flex flex-col">{children}</main>
+        <main
+          className={cn(
+            "flex min-h-0 flex-1 flex-col",
+            flushWorkspace ? "overflow-hidden p-0" : fittedWorkspace ? "overflow-hidden p-5" : "overflow-y-auto p-5",
+          )}
+        >
+          {children}
+        </main>
       </div>
     </div>
   );

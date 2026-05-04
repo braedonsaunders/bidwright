@@ -88,7 +88,7 @@ export interface QuoteRevision {
   freightOnBoard: string;
   status: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup: number;
-  necaDifficulty: string;
+  laborDifficulty: string;
   followUpNote: string;
   printEmptyNotesColumn: boolean;
   printCategory: string[];
@@ -101,6 +101,7 @@ export interface QuoteRevision {
   calculatedCategoryTotals: unknown[];
   summaryLayoutPreset: SummaryPreset;
   pdfPreferences: Record<string, unknown>;
+  pricingLadder: PricingLadderSnapshot;
   subtotal: number;
   cost: number;
   estimatedProfit: number;
@@ -115,9 +116,12 @@ export interface WorkspaceWorksheetItem {
   id: string;
   worksheetId: string;
   phaseId?: string | null;
+  categoryId?: string | null;
   category: string;
   entityType: string;
   entityName: string;
+  classification?: Record<string, unknown>;
+  costCode?: string | null;
   vendor?: string;
   description: string;
   quantity: number;
@@ -131,21 +135,38 @@ export interface WorkspaceWorksheetItem {
   lineOrder: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  sourceAssemblyId?: string | null;
+  assemblyInstanceId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
 }
 
 export interface WorkspaceWorksheet {
   id: string;
   revisionId: string;
+  folderId?: string | null;
   name: string;
   order: number;
   items: WorkspaceWorksheetItem[];
 }
 
+export interface WorkspaceWorksheetFolder {
+  id: string;
+  revisionId: string;
+  parentId?: string | null;
+  name: string;
+  order: number;
+}
+
 export interface ProjectPhase {
   id: string;
   revisionId: string;
+  parentId?: string | null;
   number: string;
   name: string;
   description: string;
@@ -285,6 +306,22 @@ export type AdjustmentPricingMode =
   | "line_item_additional"
   | "line_item_standalone"
   | "custom_total";
+export type AdjustmentFinancialCategory =
+  | "overhead"
+  | "profit"
+  | "tax"
+  | "contingency"
+  | "insurance"
+  | "bond"
+  | "allowance"
+  | "alternate"
+  | "fee"
+  | "other";
+export type AdjustmentCalculationBase =
+  | "selected_scope"
+  | "line_subtotal"
+  | "direct_cost"
+  | "cumulative";
 
 export interface ProjectAdjustment {
   id: string;
@@ -295,10 +332,76 @@ export interface ProjectAdjustment {
   name: string;
   description: string;
   type: string;
+  financialCategory: AdjustmentFinancialCategory | string;
+  calculationBase: AdjustmentCalculationBase | string;
+  active: boolean;
   appliesTo: string;
   percentage: number | null;
   amount: number | null;
   show: "Yes" | "No";
+}
+
+export type EstimateFactorImpact = "labor_hours" | "resource_units" | "direct_cost" | "sell_price";
+export type EstimateFactorConfidence = "high" | "medium" | "low";
+export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
+export type EstimateFactorApplicationScope = "global" | "line" | "both";
+export type EstimateFactorFormulaType =
+  | "fixed_multiplier"
+  | "per_unit_scale"
+  | "condition_score"
+  | "temperature_productivity"
+  | "neca_condition_score"
+  | "extended_duration";
+
+export interface EstimateFactorScope {
+  mode?: "all" | "line" | "category" | "phase" | "worksheet" | "classification" | "labor_unit" | "cost_code" | "text";
+  worksheetItemIds?: string[];
+  categoryIds?: string[];
+  categoryNames?: string[];
+  analyticsBuckets?: string[];
+  phaseIds?: string[];
+  worksheetIds?: string[];
+  classificationCodes?: string[];
+  laborUnitIds?: string[];
+  costCodes?: string[];
+  text?: string[];
+  [key: string]: unknown;
+}
+
+export interface EstimateFactor {
+  id: string;
+  revisionId: string;
+  order: number;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  value: number;
+  active: boolean;
+  appliesTo: string;
+  applicationScope: EstimateFactorApplicationScope;
+  scope: EstimateFactorScope;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef: Record<string, unknown>;
+  tags: string[];
+}
+
+export interface EstimateFactorPreset extends Omit<EstimateFactor, "id" | "revisionId" | "order" | "active"> {
+  id: string;
+}
+
+export interface EstimateFactorLibraryRecord extends EstimateFactorPreset {
+  organizationId: string | null;
+  order: number;
+  builtIn?: boolean;
+  readOnly?: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface ProjectCondition {
@@ -318,11 +421,42 @@ export interface AdditionalLineItem {
   amount: number;
 }
 
-export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
+export type ConstructionClassificationStandard =
+  | "masterformat"
+  | "uniformat"
+  | "omniclass"
+  | "uniclass"
+  | "din276"
+  | "nrm"
+  | "icms"
+  | "cost_code";
+export type ConstructionClassificationLevel = "division" | "section" | "full";
+
+export interface SummaryBuilderClassificationConfig {
+  standard: ConstructionClassificationStandard;
+  level: ConstructionClassificationLevel;
+  includeUnclassified: boolean;
+}
+
+export type SummaryRowType = "category" | "phase" | "worksheet" | "classification" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
-export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "by_worksheet" | "phase_x_category" | "custom";
+export type SummaryPreset =
+  | "quick_total"
+  | "by_category"
+  | "by_phase"
+  | "by_worksheet"
+  | "by_masterformat_division"
+  | "by_uniformat_division"
+  | "by_omniclass_division"
+  | "by_uniclass_division"
+  | "by_din276_division"
+  | "by_nrm_division"
+  | "by_icms_division"
+  | "by_cost_code"
+  | "phase_x_category"
+  | "custom";
 export type SummaryBuilderMode = "total" | "grouped" | "pivot";
-export type SummaryBuilderDimension = "none" | "phase" | "category" | "worksheet";
+export type SummaryBuilderDimension = "none" | "phase" | "category" | "worksheet" | "classification";
 
 export interface SummaryBuilderAxisItem {
   key: string;
@@ -340,6 +474,7 @@ export interface SummaryBuilderConfig {
   columnDimension: SummaryBuilderDimension;
   rows: SummaryBuilderAxisItem[];
   columns: SummaryBuilderAxisItem[];
+  classification: SummaryBuilderClassificationConfig;
   totals: {
     label: string;
     visible: boolean;
@@ -357,6 +492,10 @@ export interface SummaryRowData {
   sourceCategoryId?: string | null;
   sourceCategoryLabel?: string | null;
   sourcePhaseId?: string | null;
+  sourceWorksheetId?: string | null;
+  sourceWorksheetLabel?: string | null;
+  sourceClassificationId?: string | null;
+  sourceClassificationLabel?: string | null;
   sourceAdjustmentId?: string | null;
   computedValue: number;
   computedCost: number;
@@ -372,6 +511,10 @@ export interface SummaryRowInput {
   sourceCategoryId?: string | null;
   sourceCategoryLabel?: string | null;
   sourcePhaseId?: string | null;
+  sourceWorksheetId?: string | null;
+  sourceWorksheetLabel?: string | null;
+  sourceClassificationId?: string | null;
+  sourceClassificationLabel?: string | null;
   sourceAdjustmentId?: string | null;
 }
 
@@ -431,12 +574,70 @@ export interface CatalogSummary {
   updatedAt: string;
 }
 
+export interface LaborUnitLibraryRecord {
+  id: string;
+  organizationId: string | null;
+  cabinetId: string | null;
+  name: string;
+  description: string;
+  provider: string;
+  discipline: string;
+  source: "manual" | "import" | "library" | "plugin";
+  sourceDescription: string;
+  sourceDatasetId: string | null;
+  tags: string[];
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  metadata: Record<string, unknown>;
+  unitCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaborUnitRecord {
+  id: string;
+  libraryId: string;
+  catalogItemId: string | null;
+  code: string;
+  name: string;
+  description: string;
+  discipline: string;
+  category: string;
+  className: string;
+  subClassName: string;
+  outputUom: string;
+  hoursNormal: number;
+  hoursDifficult: number | null;
+  hoursVeryDifficult: number | null;
+  defaultDifficulty: "normal" | "difficult" | "very_difficult";
+  entityCategoryType: string;
+  tags: string[];
+  sourceRef: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaborUnitTreeGroupRecord {
+  id: string;
+  level: "catalog" | "category" | "class" | "subclass";
+  label: string;
+  libraryId: string | null;
+  category: string;
+  className: string;
+  subClassName: string;
+  unitCount: number;
+  normalHoursTotal: number;
+}
+
 export interface FileNode {
   id: string;
   projectId: string;
   parentId: string | null;
   name: string;
   type: "file" | "directory";
+  scope?: "project" | "knowledge";
   fileType?: string;
   size?: number;
   documentId?: string;
@@ -504,6 +705,14 @@ export interface SourceTotalEntry {
   margin: number;
   phaseId?: string | null;
   phaseLabel?: string | null;
+  worksheetId?: string | null;
+  worksheetLabel?: string | null;
+  categoryId?: string | null;
+  categoryLabel?: string | null;
+  classificationStandard?: ConstructionClassificationStandard;
+  classificationLevel?: ConstructionClassificationLevel;
+  classificationCode?: string | null;
+  classificationLabel?: string | null;
 }
 
 export interface AdjustmentTotalEntry {
@@ -512,12 +721,92 @@ export interface AdjustmentTotalEntry {
   kind: AdjustmentKind;
   pricingMode: AdjustmentPricingMode;
   type: string;
+  financialCategory: AdjustmentFinancialCategory | string;
+  calculationBase: AdjustmentCalculationBase | string;
+  active: boolean;
   appliesTo: string;
   show: "Yes" | "No";
   affectsSubtotal: boolean;
+  baseAmount: number;
+  runningTotal: number;
   value: number;
   cost: number;
   margin: number;
+}
+
+export interface EstimateFactorTotalEntry {
+  id: string;
+  label: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  active: boolean;
+  appliesTo: string;
+  applicationScope: EstimateFactorApplicationScope;
+  value: number;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  targetCount: number;
+  targetLineItemIds: string[];
+  baseValue: number;
+  baseCost: number;
+  baseHours: number;
+  valueDelta: number;
+  costDelta: number;
+  hoursDelta: number;
+  effectiveValue: number;
+  effectiveCost: number;
+  effectiveHours: number;
+  scope: EstimateFactorScope;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef: Record<string, unknown>;
+}
+
+export interface PricingLadderRow {
+  id: string;
+  label: string;
+  rowType: "base" | "factor" | "adjustment" | "total" | "profit";
+  financialCategory: AdjustmentFinancialCategory | string;
+  pricingMode?: AdjustmentPricingMode;
+  calculationBase?: AdjustmentCalculationBase | string;
+  appliesTo?: string;
+  percentage?: number | null;
+  fixedAmount?: number | null;
+  baseAmount: number;
+  value: number;
+  cost: number;
+  margin: number;
+  runningTotal: number;
+  affectsTotal: boolean;
+  visible: boolean;
+  active: boolean;
+  sourceAdjustmentId?: string | null;
+  sourceFactorId?: string | null;
+}
+
+export interface PricingLadderSnapshot {
+  version: 1;
+  directCost: number;
+  lineSubtotal: number;
+  adjustmentTotal: number;
+  netTotal: number;
+  grandTotal: number;
+  internalProfit: number;
+  internalMargin: number;
+  rows: PricingLadderRow[];
+}
+
+export interface CostBreakdownEntry {
+  id: string;
+  label: string;
+  type: string;
+  value: number;
+  cost: number;
+  margin: number;
+  quantity: number;
+  itemCount: number;
+  shareOfCost: number;
 }
 
 export interface EstimateData {
@@ -525,6 +814,10 @@ export interface EstimateData {
   totals: {
     subtotal: number;
     cost: number;
+    lineSubtotalBeforeFactors?: number;
+    costBeforeFactors?: number;
+    totalHoursBeforeFactors?: number;
+    adjustedLineItems: WorkspaceWorksheetItem[];
     estimatedProfit: number;
     estimatedMargin: number;
     calculatedTotal?: number;
@@ -538,7 +831,14 @@ export interface EstimateData {
     worksheetTotals: SourceTotalEntry[];
     worksheetCategoryTotals: SourceTotalEntry[];
     worksheetPhaseTotals: SourceTotalEntry[];
+    classificationTotals: SourceTotalEntry[];
+    phaseClassificationTotals: SourceTotalEntry[];
+    worksheetClassificationTotals: SourceTotalEntry[];
+    categoryClassificationTotals: SourceTotalEntry[];
+    factorTotals: EstimateFactorTotalEntry[];
     adjustmentTotals: AdjustmentTotalEntry[];
+    pricingLadder: PricingLadderSnapshot;
+    costBreakdown: CostBreakdownEntry[];
     breakout: EstimateTotalBreakout[];
   };
   lineItems: WorkspaceWorksheetItem[];
@@ -612,8 +912,11 @@ export interface ProjectWorkspaceData {
     userId: string | null;
   };
   currentRevision: QuoteRevision;
+  revisions: QuoteRevision[];
+  worksheetFolders: WorkspaceWorksheetFolder[];
   worksheets: WorkspaceWorksheet[];
   phases: ProjectPhase[];
+  estimateFactors: EstimateFactor[];
   adjustments: ProjectAdjustment[];
   modifiers: ProjectModifier[];
   conditions: ProjectCondition[];
@@ -622,6 +925,7 @@ export interface ProjectWorkspaceData {
   summaryRows: SummaryRowData[];
   rateSchedules: RateSchedule[];
   catalogs: CatalogSummary[];
+  entityCategories: EntityCategory[];
   aiRuns: AiRun[];
   citations: Citation[];
   scheduleTasks: ScheduleTask[];
@@ -693,6 +997,41 @@ export interface WorkspaceResponse {
   packages: PackageRecord[];
   jobs: JobRecord[];
   documents: SourceDocument[];
+}
+
+export type LineItemSearchSourceType =
+  | "catalog_item"
+  | "rate_schedule_item"
+  | "labor_unit"
+  | "cost_resource"
+  | "effective_cost"
+  | "assembly"
+  | "plugin_tool"
+  | "external_action";
+
+export type LineItemSearchActionType =
+  | "select"
+  | "open_assembly"
+  | "plugin_tool"
+  | "plugin_remote_search";
+
+export interface LineItemSearchResult {
+  id: string;
+  sourceType: LineItemSearchSourceType;
+  sourceId: string;
+  actionType: LineItemSearchActionType;
+  projectId: string | null;
+  category: string;
+  entityType: string;
+  title: string;
+  subtitle: string;
+  code: string;
+  vendor: string;
+  uom: string;
+  unitCost: number | null;
+  unitPrice: number | null;
+  payload: Record<string, unknown>;
+  score: number;
 }
 
 export async function updateWorkspaceState(projectId: string, patch: Record<string, unknown>) {
@@ -1039,6 +1378,42 @@ export async function getProjectEstimate(projectId: string) {
   return apiRequest<EstimateData>(`/projects/${projectId}/estimate`);
 }
 
+export async function searchLineItemCandidates(
+  projectId: string,
+  input: {
+    q?: string;
+    category?: string;
+    worksheetId?: string;
+    sourceTypes?: LineItemSearchSourceType[];
+    disabledSourceTypes?: LineItemSearchSourceType[];
+    disabledLaborLibraryIds?: string[];
+    disabledCatalogIds?: string[];
+    limit?: number;
+    offset?: number;
+    refresh?: boolean;
+  } = {},
+): Promise<LineItemSearchResult[]> {
+  const params = new URLSearchParams();
+  if (input.q) params.set("q", input.q);
+  if (input.category) params.set("category", input.category);
+  if (input.worksheetId) params.set("worksheetId", input.worksheetId);
+  if (input.sourceTypes?.length) params.set("sourceTypes", input.sourceTypes.join(","));
+  if (input.disabledSourceTypes?.length) params.set("disabledSourceTypes", input.disabledSourceTypes.join(","));
+  if (input.disabledLaborLibraryIds?.length) params.set("disabledLaborLibraryIds", input.disabledLaborLibraryIds.join(","));
+  if (input.disabledCatalogIds?.length) params.set("disabledCatalogIds", input.disabledCatalogIds.join(","));
+  if (input.limit) params.set("limit", String(input.limit));
+  if (input.offset) params.set("offset", String(input.offset));
+  if (input.refresh) params.set("refresh", "true");
+  const query = params.toString();
+  return apiRequest<LineItemSearchResult[]>(`/projects/${projectId}/line-item-search${query ? `?${query}` : ""}`);
+}
+
+export async function rebuildLineItemSearchIndex(projectId: string): Promise<{ indexed: number }> {
+  return apiRequest<{ indexed: number }>(`/projects/${projectId}/line-item-search/rebuild`, {
+    method: "POST",
+  });
+}
+
 export async function getCatalogs() {
   return apiRequest<CatalogSummary[]>("/catalogs");
 }
@@ -1070,7 +1445,7 @@ export interface RevisionPatchInput {
   freightOnBoard?: string;
   status?: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup?: number;
-  necaDifficulty?: string;
+  laborDifficulty?: string;
   followUpNote?: string;
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
@@ -1081,6 +1456,7 @@ export interface RevisionPatchInput {
   doubleHours?: number;
   breakoutPackage?: unknown[];
   calculatedCategoryTotals?: unknown[];
+  pdfPreferences?: Record<string, unknown>;
 }
 
 export interface QuotePatchInput {
@@ -1166,9 +1542,12 @@ export async function makeRevisionZero(projectId: string) {
 
 export interface WorksheetItemPatchInput {
   phaseId?: string | null;
+  categoryId?: string | null;
   category?: string;
   entityType?: string;
   entityName?: string;
+  classification?: Record<string, unknown>;
+  costCode?: string | null;
   vendor?: string | null;
   description?: string;
   quantity?: number;
@@ -1182,15 +1561,23 @@ export interface WorksheetItemPatchInput {
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
 }
 
 export interface CreateWorksheetItemInput {
   phaseId?: string | null;
+  categoryId?: string | null;
   category: string;
   entityType: string;
   entityName: string;
+  classification?: Record<string, unknown>;
+  costCode?: string | null;
   vendor?: string | null;
   description: string;
   quantity: number;
@@ -1204,8 +1591,13 @@ export interface CreateWorksheetItemInput {
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
 }
 
 export interface WorksheetItemMutationResponse {
@@ -1320,10 +1712,25 @@ export async function importWorksheetItems(
 
 export interface CreateWorksheetInput {
   name: string;
+  folderId?: string | null;
+  order?: number;
 }
 
 export interface WorksheetPatchInput {
   name?: string;
+  order?: number;
+  folderId?: string | null;
+}
+
+export interface CreateWorksheetFolderInput {
+  name: string;
+  parentId?: string | null;
+  order?: number;
+}
+
+export interface WorksheetFolderPatchInput {
+  name?: string;
+  parentId?: string | null;
   order?: number;
 }
 
@@ -1353,17 +1760,49 @@ export async function deleteWorksheet(projectId: string, worksheetId: string) {
   });
 }
 
+export async function createWorksheetFolder(projectId: string, input: CreateWorksheetFolderInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-folders`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateWorksheetFolder(projectId: string, folderId: string, patch: WorksheetFolderPatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-folders/${folderId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteWorksheetFolder(projectId: string, folderId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/worksheet-folders/${folderId}`, {
+    method: "DELETE",
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Phases
 // ---------------------------------------------------------------------------
 
 export interface CreatePhaseInput {
+  parentId?: string | null;
   number?: string;
   name?: string;
   description?: string;
+  order?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
 }
 
 export interface PhasePatchInput {
+  parentId?: string | null;
   number?: string;
   name?: string;
   description?: string;
@@ -1623,6 +2062,9 @@ export interface CreateAdjustmentInput {
   type?: string;
   kind?: AdjustmentKind;
   pricingMode?: AdjustmentPricingMode;
+  financialCategory?: AdjustmentFinancialCategory | string;
+  calculationBase?: AdjustmentCalculationBase | string;
+  active?: boolean;
   appliesTo?: string;
   percentage?: number | null;
   amount?: number | null;
@@ -1658,6 +2100,97 @@ export async function updateAdjustment(projectId: string, adjustmentId: string, 
 
 export async function deleteAdjustment(projectId: string, adjustmentId: string) {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/adjustments/${adjustmentId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Estimate Factors
+// ---------------------------------------------------------------------------
+
+export interface CreateEstimateFactorInput {
+  name?: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  impact?: EstimateFactorImpact;
+  value?: number;
+  active?: boolean;
+  appliesTo?: string;
+  applicationScope?: EstimateFactorApplicationScope;
+  scope?: EstimateFactorScope;
+  formulaType?: EstimateFactorFormulaType;
+  parameters?: Record<string, unknown>;
+  confidence?: EstimateFactorConfidence;
+  sourceType?: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef?: Record<string, unknown>;
+  tags?: string[];
+  order?: number;
+}
+
+export interface EstimateFactorPatchInput extends CreateEstimateFactorInput {}
+
+export async function getEstimateFactors(projectId: string) {
+  return apiRequest<EstimateFactor[]>(`/projects/${projectId}/factors`);
+}
+
+export async function getEstimateFactorLibrary(projectId: string) {
+  return apiRequest<EstimateFactorLibraryRecord[]>(`/projects/${projectId}/factors/library`);
+}
+
+export async function createEstimateFactor(projectId: string, input: CreateEstimateFactorInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/factors`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateEstimateFactor(projectId: string, factorId: string, patch: EstimateFactorPatchInput) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/factors/${factorId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteEstimateFactor(projectId: string, factorId: string) {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/factors/${factorId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listEstimateFactorLibraryEntries() {
+  return apiRequest<EstimateFactorLibraryRecord[]>("/factor-library");
+}
+
+export async function createEstimateFactorLibraryEntry(input: CreateEstimateFactorInput) {
+  return apiRequest<EstimateFactorLibraryRecord>("/factor-library", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateEstimateFactorLibraryEntry(entryId: string, patch: EstimateFactorPatchInput) {
+  return apiRequest<EstimateFactorLibraryRecord>(`/factor-library/${entryId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteEstimateFactorLibraryEntry(entryId: string) {
+  return apiRequest<{ deleted: boolean }>(`/factor-library/${entryId}`, {
     method: "DELETE",
   });
 }
@@ -1953,7 +2486,8 @@ export async function getRateSchedule(id: string): Promise<RateSchedule> {
 }
 
 export async function createRateSchedule(input: {
-  name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
+  name: string; description?: string; category: string; defaultMarkup?: number; autoCalculate?: boolean;
+  effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>("/api/rate-schedules", {
     method: "POST",
@@ -1964,6 +2498,7 @@ export async function createRateSchedule(input: {
 
 export async function updateRateSchedule(id: string, patch: {
   name?: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
+  effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${id}`, {
     method: "PATCH",
@@ -2049,6 +2584,7 @@ export async function importRateSchedule(projectId: string, scheduleId: string):
 
 export async function updateProjectRateSchedule(projectId: string, id: string, patch: {
   name?: string; description?: string; defaultMarkup?: number;
+  effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
 }): Promise<WorkspaceResponse> {
   return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}`, {
     method: "PATCH",
@@ -2443,6 +2979,27 @@ export interface ImportPreviewResponse {
   headers: string[];
   sampleRows: string[][];
   fileId: string;
+  rowCount?: number;
+  columnProfiles?: Array<{
+    header: string;
+    nonEmptyCount: number;
+    numericCount: number;
+    distinctCount: number;
+    sampleValues: string[];
+    sum?: number;
+    min?: number;
+    max?: number;
+  }>;
+  pivotSummaries?: Array<{
+    groupBy: string;
+    measure: string;
+    rows: Array<{
+      label: string;
+      count: number;
+      total: number;
+      average: number;
+    }>;
+  }>;
 }
 
 export async function importPreview(projectId: string, file: File) {
@@ -2489,8 +3046,7 @@ export async function importProcess(
 export async function createCatalog(input: {
   name: string;
   kind: string;
-  scope: string;
-  projectId?: string | null;
+  scope?: "global";
   description?: string;
 }) {
   return apiRequest<CatalogSummary>("/catalogs", {
@@ -2510,6 +3066,129 @@ export async function updateCatalog(catalogId: string, patch: Partial<CatalogSum
 
 export async function deleteCatalog(catalogId: string) {
   return apiRequest<{ deleted: boolean }>(`/catalogs/${catalogId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listLaborUnitLibraries(scope: "organization" | "all" = "all") {
+  const params = new URLSearchParams({ scope });
+  return apiRequest<LaborUnitLibraryRecord[]>(`/api/labor-units/libraries?${params.toString()}`);
+}
+
+export async function createLaborUnitLibrary(input: {
+  name: string;
+  description?: string;
+  provider?: string;
+  discipline?: string;
+  source?: "manual" | "import" | "library" | "plugin";
+  sourceDescription?: string;
+  sourceDatasetId?: string | null;
+  cabinetId?: string | null;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}) {
+  return apiRequest<LaborUnitLibraryRecord>("/api/labor-units/libraries", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateLaborUnitLibrary(libraryId: string, patch: Partial<LaborUnitLibraryRecord>) {
+  return apiRequest<LaborUnitLibraryRecord>(`/api/labor-units/libraries/${libraryId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteLaborUnitLibrary(libraryId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/labor-units/libraries/${libraryId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listLaborUnits(input: {
+  libraryId?: string;
+  q?: string;
+  provider?: string;
+  category?: string;
+  className?: string;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  if (input.libraryId) params.set("libraryId", input.libraryId);
+  if (input.q) params.set("q", input.q);
+  if (input.provider) params.set("provider", input.provider);
+  if (input.category) params.set("category", input.category);
+  if (input.className) params.set("className", input.className);
+  if (input.limit != null) params.set("limit", String(input.limit));
+  if (input.offset != null) params.set("offset", String(input.offset));
+  const query = params.toString();
+  return apiRequest<{ units: LaborUnitRecord[]; total: number }>(`/api/labor-units/units${query ? `?${query}` : ""}`);
+}
+
+export async function listLaborUnitTree(input: {
+  parentType?: "root" | "catalog" | "category" | "class" | "subclass";
+  libraryId?: string | null;
+  q?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  limit?: number;
+  offset?: number;
+} = {}) {
+  const params = new URLSearchParams();
+  if (input.parentType) params.set("parentType", input.parentType);
+  if (input.libraryId) params.set("libraryId", input.libraryId);
+  if (input.q) params.set("q", input.q);
+  if (input.category != null) params.set("category", input.category);
+  if (input.className != null) params.set("className", input.className);
+  if (input.subClassName != null) params.set("subClassName", input.subClassName);
+  if (input.limit != null) params.set("limit", String(input.limit));
+  if (input.offset != null) params.set("offset", String(input.offset));
+  const query = params.toString();
+  return apiRequest<{ nodes: LaborUnitTreeGroupRecord[]; units: LaborUnitRecord[]; total: number }>(`/api/labor-units/tree${query ? `?${query}` : ""}`);
+}
+
+export async function createLaborUnit(libraryId: string, input: {
+  catalogItemId?: string | null;
+  code?: string;
+  name: string;
+  description?: string;
+  discipline?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  outputUom?: string;
+  hoursNormal: number;
+  hoursDifficult?: number | null;
+  hoursVeryDifficult?: number | null;
+  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
+  entityCategoryType?: string;
+  tags?: string[];
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  sortOrder?: number;
+}) {
+  return apiRequest<LaborUnitRecord>(`/api/labor-units/libraries/${libraryId}/units`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateLaborUnit(unitId: string, patch: Partial<LaborUnitRecord>) {
+  return apiRequest<LaborUnitRecord>(`/api/labor-units/units/${unitId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteLaborUnit(unitId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/labor-units/units/${unitId}`, {
     method: "DELETE",
   });
 }
@@ -2771,6 +3450,52 @@ export function getDocumentDownloadUrl(projectId: string, docId: string, inline 
   return resolveApiUrl(`/projects/${projectId}/documents/${docId}/download${inline ? "?inline=1" : ""}`);
 }
 
+export async function uploadSourceDocument(
+  projectId: string,
+  file: File,
+  input: { documentType?: string; folderPath?: string } = {}
+): Promise<SourceDocument> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (input.documentType) formData.append("documentType", input.documentType);
+  if (input.folderPath) formData.append("folderPath", input.folderPath);
+
+  const response = await fetch(resolveApiUrl(`/projects/${projectId}/documents/upload`), {
+    method: "POST",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+    },
+    cache: "no-store",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Upload failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function updateSourceDocument(
+  projectId: string,
+  docId: string,
+  patch: { fileName?: string; documentType?: string }
+) {
+  return apiRequest<SourceDocument>(`/projects/${projectId}/documents/${docId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteSourceDocument(projectId: string, docId: string) {
+  return apiRequest<{ deleted: boolean }>(`/projects/${projectId}/documents/${docId}`, {
+    method: "DELETE",
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Structured Extraction (Azure Document Intelligence)
 // ---------------------------------------------------------------------------
@@ -2883,6 +3608,22 @@ export async function executePlugin(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ toolId, projectId, revisionId, input, ...opts }),
   });
+}
+
+export async function searchPluginField(
+  pluginId: string,
+  toolId: string,
+  fieldId: string,
+  params: Record<string, string | number | boolean | undefined>,
+): Promise<Array<Record<string, unknown>>> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  const payload = await apiRequest<Array<Record<string, unknown>> | { results?: Array<Record<string, unknown>> }>(
+    `/plugins/${encodeURIComponent(pluginId)}/tools/${encodeURIComponent(toolId)}/fields/${encodeURIComponent(fieldId)}/search${query.toString() ? `?${query.toString()}` : ""}`,
+  );
+  return Array.isArray(payload) ? payload : payload.results ?? [];
 }
 
 export async function listPluginExecutions(projectId: string) {
@@ -3379,62 +4120,6 @@ export async function queryDataset(datasetId: string, filters: Array<{ column: s
   });
 }
 
-// ── Dataset Library (Templates) ──────────────────────────────────────────
-
-// Admin endpoints
-export async function adminListDatasetTemplates() {
-  return apiRequest<DatasetRecord[]>("/api/admin/datasets");
-}
-
-export async function adminGetDatasetTemplate(id: string, opts?: { limit?: number; offset?: number; filter?: string }) {
-  const params = new URLSearchParams();
-  if (opts?.limit) params.set("limit", String(opts.limit));
-  if (opts?.offset) params.set("offset", String(opts.offset));
-  if (opts?.filter) params.set("filter", opts.filter);
-  const qs = params.toString();
-  return apiRequest<DatasetRecord & { rows: DatasetRowRecord[]; total: number }>(`/api/admin/datasets/${id}${qs ? `?${qs}` : ""}`);
-}
-
-export async function adminCreateDatasetTemplate(input: {
-  name: string;
-  description: string;
-  category: DatasetRecord["category"];
-  columns: DatasetColumnRecord[];
-  source?: DatasetRecord["source"];
-  sourceDescription?: string;
-}) {
-  return apiRequest<DatasetRecord>("/api/admin/datasets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function adminUpdateDatasetTemplate(id: string, patch: Partial<DatasetRecord>) {
-  return apiRequest<DatasetRecord>(`/api/admin/datasets/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
-  });
-}
-
-export async function adminDeleteDatasetTemplate(id: string) {
-  return apiRequest<{ ok: boolean }>(`/api/admin/datasets/${id}`, { method: "DELETE" });
-}
-
-// Organization-facing library endpoints
-export async function listDatasetLibrary() {
-  return apiRequest<DatasetRecord[]>("/datasets/library");
-}
-
-export async function getDatasetLibraryItem(templateId: string) {
-  return apiRequest<DatasetRecord & { rows: DatasetRowRecord[]; total: number }>(`/datasets/library/${templateId}`);
-}
-
-export async function adoptDatasetTemplate(templateId: string) {
-  return apiRequest<DatasetRecord>(`/datasets/library/${templateId}/adopt`, { method: "POST" });
-}
-
 export async function extractDatasetsFromBook(bookId: string) {
   return apiRequest<{
     sessionId: string;
@@ -3479,6 +4164,103 @@ export async function updateTakeoffAnnotation(projectId: string, annotationId: s
 export async function deleteTakeoffAnnotation(projectId: string, annotationId: string) {
   return apiRequest<void>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
     method: "DELETE",
+  });
+}
+
+export interface DwgTakeoffPoint {
+  x: number;
+  y: number;
+}
+
+export interface DwgTakeoffBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+export interface DwgTakeoffEntity {
+  id: string;
+  type: string;
+  layer: string;
+  layoutName?: string;
+  color: string;
+  start?: DwgTakeoffPoint;
+  end?: DwgTakeoffPoint;
+  center?: DwgTakeoffPoint;
+  radius?: number;
+  vertices?: DwgTakeoffPoint[];
+  closed?: boolean;
+  text?: string;
+  bounds: DwgTakeoffBounds;
+  raw: Record<string, unknown>;
+}
+
+export interface DwgTakeoffLayer {
+  name: string;
+  color: string;
+  count: number;
+  frozen?: boolean;
+  locked?: boolean;
+  lineType?: string;
+}
+
+export interface DwgTakeoffLayout {
+  id: string;
+  name: string;
+  kind: "model" | "paper";
+  entityCount: number;
+  bounds: DwgTakeoffBounds;
+}
+
+export interface DwgTakeoffMetadata {
+  schemaVersion: 1;
+  processorVersion: number;
+  documentId: string;
+  projectId: string;
+  fileName: string;
+  sourceHash: string;
+  processedAt: string;
+  status: "processed" | "converter_required" | "failed";
+  sourceKind: "dxf" | "dwg" | "unknown";
+  converter: {
+    status: "not_required" | "configured" | "missing" | "failed";
+    command?: string;
+    message?: string;
+  };
+  units: string;
+  extents: DwgTakeoffBounds;
+  layers: DwgTakeoffLayer[];
+  layouts: DwgTakeoffLayout[];
+  entities: DwgTakeoffEntity[];
+  entityStats: {
+    total: number;
+    byType: Record<string, number>;
+    byLayer: Record<string, number>;
+  };
+  thumbnailSvg: string;
+  activeVersionId: string;
+  versions: Array<{
+    id: string;
+    processedAt: string;
+    sourceHash: string;
+    status: DwgTakeoffMetadata["status"];
+    sourceKind: DwgTakeoffMetadata["sourceKind"];
+    entityCount: number;
+    layerCount: number;
+    layoutCount: number;
+    converterStatus: DwgTakeoffMetadata["converter"]["status"];
+  }>;
+}
+
+export async function getDwgTakeoffMetadata(projectId: string, documentId: string, refresh = false) {
+  const qs = refresh ? "?refresh=1" : "";
+  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/dwg-metadata${qs}`);
+}
+
+export async function processDwgTakeoffMetadata(projectId: string, documentId: string) {
+  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/process-dwg`, {
+    method: "POST",
   });
 }
 
@@ -4662,7 +5444,12 @@ export interface AssemblyParameterRecord {
   sortOrder: number;
 }
 
-export type AssemblyComponentTypeValue = "catalog_item" | "rate_schedule_item" | "sub_assembly";
+export type AssemblyComponentTypeValue =
+  | "catalog_item"
+  | "rate_schedule_item"
+  | "labor_unit"
+  | "cost_intelligence"
+  | "sub_assembly";
 
 export interface AssemblyComponentRecord {
   id: string;
@@ -4670,6 +5457,10 @@ export interface AssemblyComponentRecord {
   componentType: AssemblyComponentTypeValue;
   catalogItemId: string | null;
   rateScheduleItemId: string | null;
+  laborUnitId: string | null;
+  laborDifficulty: "normal" | "difficult" | "very_difficult";
+  costResourceId: string | null;
+  effectiveCostId: string | null;
   subAssemblyId: string | null;
   quantityExpr: string;
   description: string;
@@ -4804,6 +5595,10 @@ export async function createAssemblyComponent(
     componentType: AssemblyComponentTypeValue;
     catalogItemId?: string | null;
     rateScheduleItemId?: string | null;
+    laborUnitId?: string | null;
+    laborDifficulty?: "normal" | "difficult" | "very_difficult";
+    costResourceId?: string | null;
+    effectiveCostId?: string | null;
     subAssemblyId?: string | null;
     quantityExpr?: string;
     description?: string;
@@ -4830,6 +5625,10 @@ export async function updateAssemblyComponent(
     componentType: AssemblyComponentTypeValue;
     catalogItemId: string | null;
     rateScheduleItemId: string | null;
+    laborUnitId: string | null;
+    laborDifficulty: "normal" | "difficult" | "very_difficult";
+    costResourceId: string | null;
+    effectiveCostId: string | null;
     subAssemblyId: string | null;
     quantityExpr: string;
     description: string;
@@ -4864,6 +5663,9 @@ export interface AssemblyPreviewResult {
     componentType: string;
     catalogItemId?: string;
     rateScheduleItemId?: string;
+    laborUnitId?: string;
+    costResourceId?: string;
+    effectiveCostId?: string;
     category: string;
     entityName: string;
     description: string;
@@ -4874,6 +5676,25 @@ export interface AssemblyPreviewResult {
     markup: number;
     lineCost: number;
     linePrice: number;
+  }>;
+  resourceRollup: Array<{
+    key: string;
+    componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "mixed";
+    catalogItemId?: string;
+    rateScheduleItemId?: string;
+    laborUnitId?: string;
+    costResourceId?: string;
+    effectiveCostId?: string;
+    category: string;
+    entityName: string;
+    uom: string;
+    quantity: number;
+    lineCost: number;
+    linePrice: number;
+    averageUnitCost: number;
+    averageUnitPrice: number;
+    componentCount: number;
+    componentPaths: string[][];
   }>;
   totals: { cost: number; price: number; lineCount: number };
   warnings: string[];
@@ -4978,4 +5799,589 @@ export async function insertAssemblyIntoWorksheet(
       body: JSON.stringify(input),
     },
   );
+}
+
+// ── Cost Intelligence ─────────────────────────────────────────────────
+
+export interface CostResourceRecord {
+  id: string;
+  organizationId: string;
+  catalogItemId: string | null;
+  resourceType: string;
+  category: string;
+  code: string;
+  name: string;
+  normalizedName: string;
+  description: string;
+  manufacturer: string;
+  manufacturerPartNumber: string;
+  defaultUom: string;
+  aliases: string[];
+  tags: string[];
+  metadata: Record<string, unknown>;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CostObservationRecord {
+  id: string;
+  organizationId: string;
+  resourceId: string | null;
+  projectId: string | null;
+  sourceDocumentId: string | null;
+  vendorName: string;
+  vendorSku: string;
+  documentType: string;
+  observedAt: string;
+  effectiveDate: string | null;
+  quantity: number;
+  observedUom: string;
+  unitCost: number;
+  unitPrice: number | null;
+  currency: string;
+  freight: number;
+  tax: number;
+  discount: number;
+  confidence: number;
+  fingerprint: string;
+  sourceRef: Record<string, unknown>;
+  rawText: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EffectiveCostRecord {
+  id: string;
+  organizationId: string;
+  resourceId: string | null;
+  resource?: CostResourceRecord | null;
+  projectId: string | null;
+  vendorName: string;
+  region: string;
+  uom: string;
+  unitCost: number;
+  unitPrice: number | null;
+  currency: string;
+  effectiveDate: string | null;
+  expiresAt: string | null;
+  sourceObservationId: string | null;
+  sourceObservation?: CostObservationRecord | null;
+  method: string;
+  sampleSize: number;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CostIntelligenceSummaryRecord {
+  resources: number;
+  observations: number;
+  effectiveCosts: number;
+  vendors: number;
+}
+
+export interface EffectiveCostManualInput {
+  resourceId?: string | null;
+  resourceName?: string;
+  resourceType?: string;
+  category?: string;
+  code?: string;
+  defaultUom?: string;
+  projectId?: string | null;
+  vendorName?: string;
+  region?: string;
+  uom?: string;
+  unitCost: number;
+  unitPrice?: number | null;
+  currency?: string;
+  effectiveDate?: string | null;
+  expiresAt?: string | null;
+  method?: "manual" | "contract";
+  sampleSize?: number;
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export type EffectiveCostPatchInput = Partial<Omit<EffectiveCostManualInput, "method" | "unitCost"> & {
+  method: "latest_observation" | "weighted_average" | "manual" | "contract";
+  unitCost: number;
+}>;
+
+export interface VendorPdfFileIngestResult {
+  fileName: string;
+  status: "processed" | "skipped" | "failed";
+  vendorName: string;
+  documentNumber: string;
+  documentDate: string | null;
+  lineCount: number;
+  observationsCreated: number;
+  duplicatesSkipped: number;
+  resourcesCreated: number;
+  resourcesReused: number;
+  warnings: string[];
+}
+
+export interface VendorPdfIngestResult {
+  batchId: string;
+  files: VendorPdfFileIngestResult[];
+  fileCount: number;
+  parsedFileCount: number;
+  lineCount: number;
+  observationsCreated: number;
+  duplicatesSkipped: number;
+  resourcesCreated: number;
+  resourcesReused: number;
+  effectiveCostsUpdated: number;
+  warnings: string[];
+}
+
+export type VendorPdfCandidateDecision = "pending" | "approved" | "discarded";
+export type VendorPdfCandidateRecommendation = "new_cost_item" | "update_cost_basis" | "duplicate" | "discard";
+
+export interface VendorPdfReviewCandidate {
+  id: string;
+  batchId: string;
+  fileName: string;
+  lineIndex: number;
+  pageNumber: number | null;
+  decision: VendorPdfCandidateDecision;
+  recommendation: VendorPdfCandidateRecommendation;
+  recommendationReason: string;
+  confidence: number;
+  vendorName: string;
+  vendorSku: string;
+  documentType: string;
+  documentNumber: string;
+  documentDate: string | null;
+  resourceId: string | null;
+  resourceName: string;
+  resourceType: string;
+  category: string;
+  description: string;
+  quantity: number;
+  uom: string;
+  unitCost: number;
+  unitPrice: number | null;
+  currency: string;
+  lineTotal: number | null;
+  rawText: string;
+  source: "table" | "text" | "spreadsheet";
+  fingerprint: string;
+  duplicateObservationId: string | null;
+  existingCostBasisId: string | null;
+  existingUnitCost: number | null;
+  groupKey: string;
+  groupLabel: string;
+  sourceRef: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+}
+
+export interface VendorPdfAnalyzeResult {
+  batchId: string;
+  files: VendorPdfFileIngestResult[];
+  fileCount: number;
+  parsedFileCount: number;
+  lineCount: number;
+  candidateCount: number;
+  newCandidateCount: number;
+  updateCandidateCount: number;
+  duplicateCandidateCount: number;
+  discardCandidateCount: number;
+  candidates: VendorPdfReviewCandidate[];
+  reviewFolder: string | null;
+  runtime: {
+    workDir: string | null;
+    originalsDir: string | null;
+    extractionsDir: string | null;
+    instructionsFile: string | null;
+    expectedOutputFile: string | null;
+  };
+  pipeline: {
+    extractionProvider: "azure_document_intelligence" | "local_pdf_parser" | "spreadsheet_file";
+    reviewStage: "agent_packet_prepared";
+    commitMode: "approval_required";
+  };
+  warnings: string[];
+}
+
+export interface VendorPdfAgentReviewRunResult {
+  batchId: string;
+  organizationId: string;
+  runtime: string;
+  sessionProjectId: string;
+  sessionId: string;
+  status: string;
+  reviewFolder: string;
+  outputFile: string;
+}
+
+export interface VendorPdfAgentReviewOutput {
+  batchId: string;
+  found: boolean;
+  updatedAt?: string;
+  candidates: VendorPdfReviewCandidate[];
+}
+
+export type VendorPdfReviewRunStatus = "reviewed" | "analyzed" | "uploaded";
+
+export interface VendorPdfReviewRunSummary {
+  batchId: string;
+  status: VendorPdfReviewRunStatus;
+  fileNames: string[];
+  fileCount: number;
+  candidateCount: number;
+  pendingCount: number;
+  approvedCount: number;
+  discardedCount: number;
+  newCandidateCount: number;
+  updateCandidateCount: number;
+  duplicateCandidateCount: number;
+  discardCandidateCount: number;
+  extractionProvider: "azure_document_intelligence" | "local_pdf_parser" | "spreadsheet_file" | null;
+  hasAgentReviewOutput: boolean;
+  reviewFolder: string;
+  updatedAt: string;
+  warnings: string[];
+}
+
+export interface VendorPdfReviewRunDetail {
+  summary: VendorPdfReviewRunSummary;
+  analysis: VendorPdfAnalyzeResult;
+  reviewedCandidates: VendorPdfReviewCandidate[] | null;
+  reviewedAt: string | null;
+}
+
+export interface VendorPdfApprovalResult {
+  batchId: string;
+  candidatesReceived: number;
+  approvedCandidates: number;
+  discardedCandidates: number;
+  observationsCreated: number;
+  duplicatesSkipped: number;
+  resourcesCreated: number;
+  resourcesReused: number;
+  costBasisUpdated: number;
+  warnings: string[];
+}
+
+export interface CostVendorProductRecord {
+  key: string;
+  vendorSku: string;
+  name: string;
+  resourceId: string | null;
+  resourceName: string;
+  uom: string;
+  currency: string;
+  latestUnitCost: number;
+  latestObservedAt: string;
+  observationCount: number;
+  costBasisCount: number;
+}
+
+export interface CostVendorRecord {
+  vendorName: string;
+  productCount: number;
+  observationCount: number;
+  costBasisCount: number;
+  currencies: string[];
+  latestObservedAt: string | null;
+  products: CostVendorProductRecord[];
+}
+
+export async function listVendorPdfReviewRuns(input: {
+  limit?: number;
+} = {}): Promise<VendorPdfReviewRunSummary[]> {
+  const params = new URLSearchParams();
+  if (input.limit) params.set("limit", String(input.limit));
+  const query = params.toString();
+  return apiRequest<VendorPdfReviewRunSummary[]>(`/api/cost-intelligence/vendor-pdfs/review-runs${query ? `?${query}` : ""}`);
+}
+
+export async function getVendorPdfReviewRun(input: {
+  batchId: string;
+}): Promise<VendorPdfReviewRunDetail> {
+  return apiRequest<VendorPdfReviewRunDetail>(`/api/cost-intelligence/vendor-pdfs/review-runs/${encodeURIComponent(input.batchId)}`);
+}
+
+export async function deleteVendorPdfReviewRun(input: {
+  batchId: string;
+}): Promise<{ deleted: boolean; archived?: boolean; batchId: string }> {
+  return apiRequest<{ deleted: boolean; archived?: boolean; batchId: string }>(`/api/cost-intelligence/vendor-pdfs/review-runs/${encodeURIComponent(input.batchId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function analyzeVendorPdfEvidence(input: {
+  files: File[];
+  entrySurface?: string;
+}): Promise<VendorPdfAnalyzeResult> {
+  const form = new FormData();
+  for (const file of input.files) form.append("files", file);
+  if (input.entrySurface) form.append("entrySurface", input.entrySurface);
+
+  const response = await fetch(resolveMultipartApiUrl("/api/cost-intelligence/vendor-pdfs/analyze"), {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const body = text ? (() => {
+      try {
+        return JSON.parse(text) as { error?: string; message?: string };
+      } catch {
+        return {};
+      }
+    })() : {};
+    const fallback = text && !text.trim().startsWith("<") ? text.trim().slice(0, 500) : `PDF analysis failed (${response.status})`;
+    throw new Error(body.error ?? body.message ?? fallback);
+  }
+  return response.json();
+}
+
+export async function analyzeCostSpreadsheetEvidence(input: {
+  files: File[];
+  entrySurface?: string;
+}): Promise<VendorPdfAnalyzeResult> {
+  const form = new FormData();
+  for (const file of input.files) form.append("files", file);
+  if (input.entrySurface) form.append("entrySurface", input.entrySurface);
+
+  const response = await fetch(resolveMultipartApiUrl("/api/cost-intelligence/spreadsheets/analyze"), {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    const body = text ? (() => {
+      try {
+        return JSON.parse(text) as { error?: string; message?: string };
+      } catch {
+        return {};
+      }
+    })() : {};
+    const fallback = text && !text.trim().startsWith("<") ? text.trim().slice(0, 500) : `Spreadsheet analysis failed (${response.status})`;
+    throw new Error(body.error ?? body.message ?? fallback);
+  }
+  return response.json();
+}
+
+export async function approveVendorPdfCandidates(input: {
+  batchId: string;
+  candidates: VendorPdfReviewCandidate[];
+  entrySurface?: string;
+}): Promise<VendorPdfApprovalResult> {
+  return apiRequest<VendorPdfApprovalResult>("/api/cost-intelligence/vendor-pdfs/approve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function runVendorPdfAgentReview(input: {
+  batchId: string;
+  force?: boolean;
+}): Promise<VendorPdfAgentReviewRunResult> {
+  return apiRequest<VendorPdfAgentReviewRunResult>("/api/cost-intelligence/vendor-pdfs/agent-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getVendorPdfAgentReviewOutput(input: {
+  batchId: string;
+}): Promise<VendorPdfAgentReviewOutput> {
+  const params = new URLSearchParams({ batchId: input.batchId });
+  return apiRequest<VendorPdfAgentReviewOutput>(`/api/cost-intelligence/vendor-pdfs/agent-review-output?${params.toString()}`);
+}
+
+export async function ingestVendorPdfEvidence(input: {
+  files: File[];
+  entrySurface?: string;
+}): Promise<VendorPdfIngestResult> {
+  const form = new FormData();
+  for (const file of input.files) form.append("files", file);
+  if (input.entrySurface) form.append("entrySurface", input.entrySurface);
+
+  const response = await fetch(resolveMultipartApiUrl("/api/cost-intelligence/vendor-pdfs/ingest"), {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error ?? body.message ?? `PDF ingestion failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function resolveMultipartApiUrl(path: string) {
+  if (typeof window !== "undefined") {
+    const apiOrigin = new URL(apiBaseUrl).origin;
+    const currentOrigin = window.location.origin;
+    const defaultLocalApi = /^http:\/\/(localhost|127\.0\.0\.1):4001$/.test(apiOrigin);
+    if (defaultLocalApi && apiOrigin !== currentOrigin) {
+      return new URL(`/api/proxy${path}`, currentOrigin).toString();
+    }
+  }
+  return resolveApiUrl(path);
+}
+
+export async function listCostVendors(input: { q?: string; vendorName?: string; limit?: number } = {}): Promise<CostVendorRecord[]> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiRequest<CostVendorRecord[]>(`/api/cost-intelligence/vendors${query ? `?${query}` : ""}`);
+}
+
+export async function listCostResources(input: { q?: string; limit?: number } = {}): Promise<CostResourceRecord[]> {
+  const params = new URLSearchParams();
+  if (input.q) params.set("q", input.q);
+  if (input.limit) params.set("limit", String(input.limit));
+  const query = params.toString();
+  return apiRequest<CostResourceRecord[]>(`/api/cost-intelligence/resources${query ? `?${query}` : ""}`);
+}
+
+export async function getCostIntelligenceSummary(): Promise<CostIntelligenceSummaryRecord> {
+  return apiRequest<CostIntelligenceSummaryRecord>("/api/cost-intelligence/summary");
+}
+
+export async function createCostResource(input: {
+  catalogItemId?: string | null;
+  resourceType?: string;
+  category?: string;
+  code?: string;
+  name: string;
+  description?: string;
+  manufacturer?: string;
+  manufacturerPartNumber?: string;
+  defaultUom?: string;
+  aliases?: string[];
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  active?: boolean;
+}): Promise<CostResourceRecord> {
+  return apiRequest<CostResourceRecord>("/api/cost-intelligence/resources", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listCostObservations(input: {
+  resourceId?: string;
+  projectId?: string;
+  sourceDocumentId?: string;
+  vendorName?: string;
+  limit?: number;
+} = {}): Promise<CostObservationRecord[]> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiRequest<CostObservationRecord[]>(`/api/cost-intelligence/observations${query ? `?${query}` : ""}`);
+}
+
+export async function createCostObservation(input: {
+  resourceId?: string | null;
+  projectId?: string | null;
+  sourceDocumentId?: string | null;
+  vendorName?: string;
+  vendorSku?: string;
+  documentType?: string;
+  effectiveDate?: string | null;
+  quantity?: number;
+  observedUom?: string;
+  unitCost: number;
+  unitPrice?: number | null;
+  currency?: string;
+  freight?: number;
+  tax?: number;
+  discount?: number;
+  confidence?: number;
+  fingerprint?: string;
+  sourceRef?: Record<string, unknown>;
+  rawText?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<CostObservationRecord> {
+  return apiRequest<CostObservationRecord>("/api/cost-intelligence/observations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listEffectiveCosts(input: {
+  q?: string;
+  resourceId?: string;
+  projectId?: string;
+  vendorName?: string;
+  limit?: number;
+} = {}): Promise<EffectiveCostRecord[]> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiRequest<EffectiveCostRecord[]>(`/api/cost-intelligence/effective-costs${query ? `?${query}` : ""}`);
+}
+
+export async function createEffectiveCost(input: EffectiveCostManualInput): Promise<EffectiveCostRecord> {
+  return apiRequest<EffectiveCostRecord>("/api/cost-intelligence/effective-costs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateEffectiveCost(
+  effectiveCostId: string,
+  patch: EffectiveCostPatchInput,
+): Promise<EffectiveCostRecord> {
+  return apiRequest<EffectiveCostRecord>(`/api/cost-intelligence/effective-costs/${effectiveCostId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteEffectiveCost(effectiveCostId: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/cost-intelligence/effective-costs/${effectiveCostId}`, {
+    method: "DELETE",
+  });
+}
+
+export async function deleteEffectiveCosts(effectiveCostIds: string[]): Promise<{ deleted: boolean; deletedCount: number }> {
+  return apiRequest<{ deleted: boolean; deletedCount: number }>("/api/cost-intelligence/effective-costs/bulk", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: effectiveCostIds }),
+  });
+}
+
+export async function recomputeEffectiveCost(input: {
+  resourceId: string;
+  projectId?: string | null;
+  vendorName?: string | null;
+  region?: string | null;
+  targetUom?: string | null;
+  currency?: string | null;
+  method?: "latest_observation" | "weighted_average";
+  asOf?: string | null;
+  lookbackDays?: number | null;
+  minConfidence?: number | null;
+}): Promise<EffectiveCostRecord> {
+  return apiRequest<EffectiveCostRecord>("/api/cost-intelligence/effective-costs/recompute", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }

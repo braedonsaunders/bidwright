@@ -6,7 +6,7 @@
  * gaps, risks, overestimates, and actionable recommendations.
  */
 
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
 import { getAdapter, isRegisteredRuntime, tryGetAdapter } from "../services/cli-adapters/registry.js";
@@ -303,6 +303,20 @@ function extractAuthToken(request: FastifyRequest): string {
   return (request.query as any)?.token || "";
 }
 
+async function requireProjectAccess(request: FastifyRequest, reply: FastifyReply, projectId: string): Promise<boolean> {
+  const store = request.store;
+  if (!store) {
+    reply.code(401).send({ error: "Authentication required" });
+    return false;
+  }
+  const project = await store.getProject(projectId).catch(() => null);
+  if (!project) {
+    reply.code(404).send({ error: "Project not found" });
+    return false;
+  }
+  return true;
+}
+
 export function registerReviewRoutes(app: FastifyInstance) {
 
   // ── Start Review Session ──────────────────────────────────
@@ -540,8 +554,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   });
 
   // ── Get Latest Review ─────────────────────────────────────
-  app.get("/api/review/:projectId/latest", async (request) => {
+  app.get("/api/review/:projectId/latest", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     let review = await prisma.quoteReview.findFirst({
       where: { projectId },
       orderBy: { createdAt: "desc" },
@@ -566,6 +581,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   // ── SSE Stream (reuses CLI stream for the project) ────────
   app.get("/api/review/:projectId/stream", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const session = getSession(projectId);
 
     if (!session) {
@@ -610,6 +626,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   // ── Save Review Section (called by MCP tools) ─────────────
   app.post("/api/review/:projectId/save-section", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const { section, data } = (request.body || {}) as {
       section: "coverage" | "findings" | "competitiveness" | "recommendations" | "summary";
       data: any;
@@ -667,6 +684,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
 
   app.put("/api/review/:projectId/manual", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const body = (request.body || {}) as {
       coverage?: unknown;
       findings?: unknown;
@@ -729,6 +747,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   // ── Resolve Recommendation ────────────────────────────────
   app.post("/api/review/:projectId/resolve/:recId", async (request, reply) => {
     const { projectId, recId } = request.params as { projectId: string; recId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const store = request.store!;
 
     const review = await prisma.quoteReview.findFirst({
@@ -821,6 +840,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   // ── Dismiss Recommendation ────────────────────────────────
   app.post("/api/review/:projectId/dismiss/:recId", async (request, reply) => {
     const { projectId, recId } = request.params as { projectId: string; recId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
 
     const review = await prisma.quoteReview.findFirst({
       where: { projectId },
@@ -843,8 +863,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   });
 
   // ── Stop Review Session ───────────────────────────────────
-  app.post("/api/review/:projectId/stop", async (request) => {
+  app.post("/api/review/:projectId/stop", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const stopped = stopSession(projectId);
 
     // Mark review as completed
@@ -863,8 +884,9 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
   });
 
   // ── Review Status ─────────────────────────────────────────
-  app.get("/api/review/:projectId/status", async (request) => {
+  app.get("/api/review/:projectId/status", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await requireProjectAccess(request, reply, projectId))) return;
     const session = getSession(projectId);
 
     const runs = await prisma.aiRun.findMany({

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
@@ -25,6 +26,44 @@ async function resolveAzureConfig(
 }
 
 export async function takeoffRoutes(app: FastifyInstance) {
+  // ── GET /api/takeoff/:projectId/documents/:documentId/dwg-metadata ───
+  // Server-side DXF/DWG intake processing for CAD takeoff. DXF is parsed
+  // directly; binary DWG uses the optional BIDWRIGHT_DWG_CONVERTER_CMD
+  // adapter, then persists entity/layer/layout metadata in SourceDocument.
+  app.get("/api/takeoff/:projectId/documents/:documentId/dwg-metadata", async (request, reply) => {
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    const query = request.query as { refresh?: string };
+    try {
+      return await getDwgProcessingResult(projectId, documentId, {
+        refresh: query.refresh === "1" || query.refresh === "true",
+      });
+    } catch (error) {
+      const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+      return reply.code(statusCode).send({
+        message: error instanceof Error ? error.message : "DWG processing failed",
+        result: (error as { result?: unknown }).result,
+      });
+    }
+  });
+
+  // ── POST /api/takeoff/:projectId/documents/:documentId/process-dwg ────
+  app.post("/api/takeoff/:projectId/documents/:documentId/process-dwg", async (request, reply) => {
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    try {
+      return await getDwgProcessingResult(projectId, documentId, { refresh: true });
+    } catch (error) {
+      const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number"
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+      return reply.code(statusCode).send({
+        message: error instanceof Error ? error.message : "DWG processing failed",
+        result: (error as { result?: unknown }).result,
+      });
+    }
+  });
+
   // ── POST /api/takeoff/:projectId/documents/:documentId/detect-scale ──
   // OCRs the page via Azure Document Intelligence and parses the text for
   // standard scale notations like "1:50" or "1/4\" = 1'-0\"".

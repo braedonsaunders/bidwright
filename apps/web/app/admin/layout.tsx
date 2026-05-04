@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { Building2, Database, LayoutDashboard, LogOut, Shield, Users } from "lucide-react";
+import { Building2, LayoutDashboard, Library, LogOut, Shield, Users } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
+import { BidwrightMark } from "@/components/brand-logo";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +13,7 @@ const adminNav = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/organizations", label: "Organizations", icon: Building2 },
   { href: "/admin/users", label: "All Users", icon: Users },
-  { href: "/admin/datasets", label: "Datasets", icon: Database },
+  { href: "/admin/catalogs", label: "Catalogs", icon: Library },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -45,7 +46,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen bg-bg text-fg">
       <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
         <div className="flex items-center gap-2.5 border-b border-line px-4 py-4">
-          <Shield className="h-5 w-5 text-accent" />
+          <BidwrightMark className="h-7 w-7" />
           <div>
             <h1 className="text-sm font-bold text-fg">Bidwright</h1>
             <p className="text-[10px] text-fg/30">System Administration</p>

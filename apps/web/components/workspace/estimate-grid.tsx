@@ -1,55 +1,91 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
+  BookOpen,
+  Boxes,
+  BrainCircuit,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronUp,
   Clipboard,
+  CircleDollarSign,
   Columns,
   Copy,
   Download,
+  Edit3,
+  ExternalLink,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   GripVertical,
+  Hammer,
   Layers,
+  ListTree,
+  Loader2,
   Maximize2,
   MoreHorizontal,
+  MoveRight,
   Package,
+  PlugZap,
   Plus,
   Search,
+  Sparkles,
+  Store,
+  Table2,
+  Tag,
   Trash2,
   X,
   Link2,
+  Zap,
 } from "lucide-react";
 import type {
-  CatalogItem,
   CatalogSummary,
   CreateWorksheetItemInput,
+  EffectiveCostRecord,
   EntityCategory,
+  EstimateFactor,
+  EstimateFactorFormulaType,
+  EstimateFactorLibraryRecord,
+  LineItemSearchResult,
+  LineItemSearchSourceType,
   ProjectWorkspaceData,
   WorksheetItemPatchInput,
   WorkspaceResponse,
   WorkspaceWorksheet,
+  WorkspaceWorksheetFolder,
   WorkspaceWorksheetItem,
 } from "@/lib/api";
 import {
   createWorksheet,
+  createWorksheetFolder,
   createWorksheetItem,
   createWorksheetItemFast,
+  createEstimateFactor,
+  deleteWorksheetFolder,
   deleteWorksheet,
+  deleteEstimateFactor,
   deleteWorksheetItem,
   deleteWorksheetItemFast,
+  executePlugin,
   getEntityCategories,
+  searchLineItemCandidates,
+  searchPluginField,
+  getEstimateFactorLibrary,
+  updateEstimateFactor,
   updateWorksheet,
+  updateWorksheetFolder,
   updateWorksheetItem,
   updateWorksheetItemFast,
 } from "@/lib/api";
+import { downloadCsv } from "@/lib/csv";
 import { formatMoney, formatPercent } from "@/lib/format";
 import {
   getWorksheetHourBreakdown,
@@ -58,6 +94,7 @@ import {
 } from "@/lib/worksheet-hours";
 import {
   categoryAllowsEditingUnitSlot,
+  getCategoryUnitLabel,
   categoryUsesTieredUnits,
 } from "@/lib/entity-category-calculation";
 import {
@@ -82,6 +119,8 @@ import {
 import { ItemDetailDrawer } from "./item-detail-drawer";
 import { AssemblyInsertModal } from "./assembly-insert-modal";
 import { SaveSelectionAsAssemblyModal } from "./save-selection-as-assembly-modal";
+import { makeUomOptions, useUomLibrary } from "@/components/shared/uom-select";
+import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
 
 /* ─── Types ─── */
 
@@ -93,6 +132,7 @@ export interface EstimateGridProps {
   highlightItemId?: string;
   activeWorksheetId?: WorksheetTabId;
   onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
+  onOpenPluginTools?: () => void;
 }
 
 type EditingCell = {
@@ -126,12 +166,30 @@ type EntityDropdownPosition = {
   bottom?: number;
   maxHeight: number;
   listMaxHeight: number;
+  placement: "above" | "below";
 } | null;
 
 type SortDirection = "asc" | "desc";
 type SortState = { column: ColumnId; direction: SortDirection } | null;
 
 type WorksheetTabId = string | "all";
+type WorksheetViewMode = "tabs" | "organizer";
+type WorksheetViewId = WorksheetTabId | `folder:${string}`;
+type OrganizerNodeTarget =
+  | { type: "folder"; id: string; name: string; parentId: string | null }
+  | { type: "worksheet"; id: string; name: string; folderId: string | null };
+type OrganizerContextMenuState = (OrganizerNodeTarget & { x: number; y: number }) | null;
+type RenameTarget = OrganizerNodeTarget | null;
+type MoveTarget = OrganizerNodeTarget | null;
+type DeleteFolderTarget = {
+  folderId: string;
+  name: string;
+  parentId: string | null;
+  worksheetCount: number;
+  childFolderCount: number;
+  itemCount: number;
+} | null;
+type FitLevel = "full" | "compact" | "tight";
 
 type ColumnId =
   | "expand"
@@ -143,6 +201,7 @@ type ColumnId =
   | "description"
   | "quantity"
   | "uom"
+  | "factors"
   | "units"
   | "unit1"
   | "unit2"
@@ -235,11 +294,12 @@ const COLUMN_LABELS: Record<ColumnId, string> = {
   checkbox: "Select",
   reorder: "Reorder",
   lineOrder: "#",
-  entityName: "Entity Name",
+  entityName: "Line Item Name",
   vendor: "Vendor",
   description: "Description",
   quantity: "Qty",
   uom: "UOM",
+  factors: "Factors",
   units: "Units",
   unit1: "Reg",
   unit2: "OT",
@@ -261,6 +321,7 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "description",
   "quantity",
   "uom",
+  "factors",
   "units",
   "cost",
   "extCost",
@@ -270,11 +331,11 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "phaseId",
 ];
 
-const ENTITY_DROPDOWN_WIDTH = 320;
-const ENTITY_DROPDOWN_GAP = 4;
+const ENTITY_DROPDOWN_WIDTH = 560;
 const ENTITY_DROPDOWN_MARGIN = 8;
-const ENTITY_DROPDOWN_HEADER_HEIGHT = 44;
-const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 256;
+const ENTITY_DROPDOWN_HEADER_HEIGHT = 84;
+const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 460;
+const ENTITY_SEARCH_PAGE_SIZE = 90;
 const TEMP_WORKSHEET_ITEM_PREFIX = "temp-worksheet-item-";
 
 /* ─── Helpers ─── */
@@ -300,11 +361,129 @@ function findWs(workspace: ProjectWorkspaceData, id: string) {
   return (workspace.worksheets ?? []).find((w) => w.id === id) ?? null;
 }
 
+function folderViewId(folderId: string): WorksheetViewId {
+  return `folder:${folderId}`;
+}
+
+function worksheetViewIsFolder(id: WorksheetViewId): id is `folder:${string}` {
+  return id.startsWith("folder:");
+}
+
+function folderIdFromView(id: WorksheetViewId) {
+  return worksheetViewIsFolder(id) ? id.slice("folder:".length) : null;
+}
+
+function findWorksheetFolder(workspace: ProjectWorkspaceData, id: string) {
+  return (workspace.worksheetFolders ?? []).find((folder) => folder.id === id) ?? null;
+}
+
+function getWorksheetFolderDescendantIds(
+  folders: WorkspaceWorksheetFolder[],
+  folderId: string,
+) {
+  const ids = new Set<string>([folderId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of folders) {
+      if (folder.parentId && ids.has(folder.parentId) && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
+}
+
+function getWorksheetsInFolderView(workspace: ProjectWorkspaceData, folderId: string) {
+  const folderIds = getWorksheetFolderDescendantIds(workspace.worksheetFolders ?? [], folderId);
+  return (workspace.worksheets ?? []).filter((worksheet) => worksheet.folderId && folderIds.has(worksheet.folderId));
+}
+
+function getWorksheetFolderPath(folders: WorkspaceWorksheetFolder[], folderId: string | null | undefined) {
+  if (!folderId) return "";
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  let cursor = byId.get(folderId);
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    parts.unshift(cursor.name);
+    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+  }
+  return parts.join(" / ");
+}
+
+function isDescendantWorksheetFolder(
+  folders: WorkspaceWorksheetFolder[],
+  candidateParentId: string,
+  folderId: string,
+) {
+  let cursor = folders.find((folder) => folder.id === candidateParentId) ?? null;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor.id)) {
+    if (cursor.id === folderId) return true;
+    seen.add(cursor.id);
+    cursor = cursor.parentId
+      ? folders.find((folder) => folder.id === cursor?.parentId) ?? null
+      : null;
+  }
+  return false;
+}
+
 function findCategoryForRow(
   row: WorkspaceWorksheetItem,
   categories: EntityCategory[]
 ): EntityCategory | undefined {
-  return categories.find((c) => c.name === row.category);
+  return (row.categoryId ? categories.find((c) => c.id === row.categoryId) : undefined)
+    ?? categories.find((c) => c.name === row.category || c.entityType === row.entityType);
+}
+
+function categoryRequiresRateSchedule(category: EntityCategory | undefined) {
+  return category?.itemSource === "rate_schedule" || category?.calculationType === "tiered_rate";
+}
+
+type EstimatePhase = ProjectWorkspaceData["phases"][number];
+
+function estimatePhaseLabel(phase: Pick<EstimatePhase, "number" | "name">) {
+  return [phase.number, phase.name].map((part) => part?.trim()).filter(Boolean).join(" - ") || "Phase";
+}
+
+function buildEstimatePhaseOptions(phases: EstimatePhase[]) {
+  const byId = new Map(phases.map((phase) => [phase.id, phase]));
+  const childrenByParent = new Map<string | null, EstimatePhase[]>();
+  for (const phase of phases) {
+    const parentId = phase.parentId && byId.has(phase.parentId) ? phase.parentId : null;
+    const siblings = childrenByParent.get(parentId) ?? [];
+    siblings.push(phase);
+    childrenByParent.set(parentId, siblings);
+  }
+  for (const siblings of childrenByParent.values()) {
+    siblings.sort((left, right) => {
+      if (left.order !== right.order) return left.order - right.order;
+      return estimatePhaseLabel(left).localeCompare(estimatePhaseLabel(right), undefined, { numeric: true, sensitivity: "base" });
+    });
+  }
+
+  const options: Array<{ value: string; label: string }> = [];
+  const visited = new Set<string>();
+  const visit = (parentId: string | null, depth: number) => {
+    for (const phase of childrenByParent.get(parentId) ?? []) {
+      if (visited.has(phase.id)) continue;
+      visited.add(phase.id);
+      options.push({
+        value: phase.id,
+        label: `${depth > 0 ? `${"--".repeat(depth)} ` : ""}${estimatePhaseLabel(phase)}`,
+      });
+      visit(phase.id, depth + 1);
+    }
+  };
+  visit(null, 0);
+  for (const phase of [...phases].sort((left, right) => estimatePhaseLabel(left).localeCompare(estimatePhaseLabel(right), undefined, { numeric: true, sensitivity: "base" }))) {
+    if (visited.has(phase.id)) continue;
+    options.push({ value: phase.id, label: estimatePhaseLabel(phase) });
+  }
+  return options;
 }
 
 function isCellDisabledByCategory(
@@ -336,44 +515,1048 @@ function getLaborColumnLabel(
   column: "unit1" | "unit2" | "unit3",
   category: EntityCategory | undefined
 ): string {
-  if (!category) {
-    return column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3";
-  }
-  const map = { unit1: "unit1", unit2: "unit2", unit3: "unit3" } as const;
-  const label = category.unitLabels[map[column]];
-  return label || (column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3");
+  const fallback = column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3";
+  return getCategoryUnitLabel(category, column, fallback);
 }
 
 /** Entity option item with optional pricing data from catalog */
 interface EntityOptionItem {
   label: string;
   value: string;
+  source?:
+    | "catalog"
+    | "rate_schedule"
+    | "cost_intelligence"
+    | "cost_resource"
+    | "labor_unit"
+    | "assembly"
+    | "plugin"
+    | "external_action"
+    | "plugin_result"
+    | "freeform";
+  sourceType?: LineItemSearchResult["sourceType"] | "plugin_result";
+  sourceId?: string;
+  actionType?: LineItemSearchResult["actionType"] | "plugin_result";
   unitCost?: number;
   unitPrice?: number;
   unit?: string;
   description?: string;
   rateScheduleItemId?: string;
   itemId?: string;
+  effectiveCostId?: string;
+  costResourceId?: string;
+  laborUnitId?: string;
+  quantity?: number;
+  vendor?: string | null;
+  code?: string;
+  sourceNotes?: string;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
+  searchableText?: string;
+  subtitle?: string;
+  score?: number;
+  actionId?: string;
+  pluginId?: string;
+  pluginSlug?: string;
+  toolId?: string;
+  searchFieldId?: string;
+  queryParam?: string;
+  pluginInput?: Record<string, unknown>;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
+  payload?: Record<string, unknown>;
+}
+
+interface EntityOptionGroup {
+  categoryName: string;
+  categoryId: string;
+  entityType: string;
+  defaultUom: string;
+  label?: string;
+  treePath?: string[];
+  source?: EntityOptionItem["source"];
+  sortPriority?: number;
+  tone?: "accent" | "success" | "muted" | "warning";
+  items: EntityOptionItem[];
+}
+
+function normalizeEntityLookup(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function metadataString(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function metadataObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function hasMeaningfulMetadata(value: unknown) {
+  const object = metadataObject(value);
+  return !!object && Object.keys(object).length > 0;
+}
+
+function mergeSourceNotes(...values: Array<string | null | undefined>) {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+  for (const value of values) {
+    for (const part of (value ?? "").split(/\n+/)) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parts.push(trimmed);
+    }
+  }
+  return parts.join("\n");
+}
+
+function resourceIdentity(resource: Record<string, unknown>) {
+  return [
+    resource.componentType,
+    resource.rateScheduleItemId,
+    resource.itemId,
+    resource.costResourceId,
+    resource.effectiveCostId,
+    resource.laborUnitId,
+  ].map((value) => String(value ?? "")).join("|");
+}
+
+function mergeResourceCompositions(...values: Array<Record<string, unknown> | undefined>) {
+  const records = values.filter(hasMeaningfulMetadata) as Record<string, unknown>[];
+  if (records.length === 0) return {};
+  if (records.length === 1) return records[0];
+
+  const resources: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  for (const record of records) {
+    const recordResources = Array.isArray(record.resources) ? record.resources : [];
+    for (const resource of recordResources) {
+      const object = metadataObject(resource);
+      if (!object) continue;
+      const key = resourceIdentity(object);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      resources.push(object);
+    }
+  }
+
+  return {
+    source: "line_item_composer",
+    sources: records.map((record) => record.source).filter(Boolean),
+    resources,
+  };
+}
+
+function mergeSourceEvidence(...values: Array<Record<string, unknown> | undefined>) {
+  const records = values.filter(hasMeaningfulMetadata) as Record<string, unknown>[];
+  if (records.length === 0) return {};
+  if (records.length === 1) return records[0];
+  return {
+    source: "line_item_composer",
+    evidence: records,
+  };
+}
+
+function effectiveCostItem(cost: EffectiveCostRecord) {
+  const costItem = metadataObject(cost.metadata?.costItem);
+  return {
+    name: cost.resource?.name?.trim() || metadataString(costItem, "name") || "Effective cost",
+    code: cost.resource?.code?.trim() || metadataString(costItem, "code"),
+    description: cost.resource?.description || metadataString(costItem, "description"),
+    category: cost.resource?.category || metadataString(costItem, "category"),
+    resourceType: cost.resource?.resourceType || metadataString(costItem, "resourceType"),
+    defaultUom: cost.resource?.defaultUom || metadataString(costItem, "defaultUom") || cost.uom || "EA",
+    manufacturer: cost.resource?.manufacturer || metadataString(costItem, "manufacturer"),
+    manufacturerPartNumber: cost.resource?.manufacturerPartNumber || metadataString(costItem, "manufacturerPartNumber"),
+    aliases: cost.resource?.aliases ?? [],
+    tags: cost.resource?.tags ?? [],
+  };
+}
+
+function categoryLookupKeys(category: EntityCategory) {
+  return [category.id, category.name, category.entityType, category.analyticsBucket]
+    .map(normalizeEntityLookup)
+    .filter(Boolean);
+}
+
+function catalogForItem(workspace: ProjectWorkspaceData, catalogItemId: string | null | undefined) {
+  if (!catalogItemId) return null;
+  return (workspace.catalogs ?? []).find((catalog) =>
+    (catalog.items ?? []).some((item) => item.id === catalogItemId),
+  ) ?? null;
+}
+
+function effectiveCostMatchesCategory(
+  cost: EffectiveCostRecord,
+  category: EntityCategory,
+  workspace: ProjectWorkspaceData,
+) {
+  const resource = cost.resource;
+  const item = effectiveCostItem(cost);
+  const categoryKeys = new Set(categoryLookupKeys(category));
+  const resourceKeys = [
+    item.category,
+    item.resourceType,
+    metadataString(resource?.metadata, "category"),
+    metadataString(resource?.metadata, "resourceType"),
+  ]
+    .map(normalizeEntityLookup)
+    .filter(Boolean);
+
+  if (resourceKeys.some((key) => categoryKeys.has(key))) return true;
+
+  const catalog = catalogForItem(workspace, resource?.catalogItemId);
+  if (!catalog) return false;
+  if (category.itemSource === "catalog" && category.catalogId && catalog.id === category.catalogId) return true;
+
+  return [catalog.id, catalog.kind, catalog.name]
+    .map(normalizeEntityLookup)
+    .some((key) => categoryKeys.has(key));
+}
+
+function buildEffectiveCostOption(cost: EffectiveCostRecord): EntityOptionItem {
+  const resource = cost.resource;
+  const item = effectiveCostItem(cost);
+  const name = item.name;
+  const code = item.code;
+  const vendor = cost.vendorName.trim();
+  const region = cost.region.trim();
+  const labelParts = [`${name}${code ? ` (${code})` : ""}`];
+  if (vendor) labelParts.push(vendor);
+  if (region) labelParts.push(region);
+
+  const noteParts = [
+    `Cost Intelligence cost basis ${cost.id}`,
+    cost.method,
+    vendor ? `vendor ${vendor}` : "",
+    cost.effectiveDate ? `effective ${cost.effectiveDate}` : "",
+    Number.isFinite(cost.confidence) ? `confidence ${Math.round(cost.confidence * 100)}%` : "",
+  ].filter(Boolean);
+
+  return {
+    label: labelParts.join(" · "),
+    value: name,
+    source: "cost_intelligence",
+    unitCost: cost.unitCost,
+    unitPrice: cost.unitPrice ?? undefined,
+    unit: cost.uom || item.defaultUom || "EA",
+    description: item.description || `${name} from Cost Intelligence`,
+    itemId: resource?.catalogItemId ?? undefined,
+    effectiveCostId: cost.id,
+    costResourceId: cost.resourceId ?? resource?.id ?? undefined,
+    vendor: vendor || null,
+    sourceNotes: noteParts.join("; "),
+    resourceComposition: {
+      source: "cost_intelligence",
+      resources: [{
+        componentType: "cost_intelligence",
+        effectiveCostId: cost.id,
+        costResourceId: cost.resourceId ?? resource?.id ?? null,
+        itemId: resource?.catalogItemId ?? null,
+        uom: cost.uom || item.defaultUom || "EA",
+        unitCost: cost.unitCost,
+        unitPrice: cost.unitPrice ?? null,
+      }],
+    },
+    sourceEvidence: {
+      source: "cost_intelligence",
+      effectiveCostId: cost.id,
+      costResourceId: cost.resourceId ?? resource?.id ?? null,
+      sourceObservationId: cost.sourceObservationId ?? null,
+      vendorName: cost.vendorName,
+      region: cost.region,
+      method: cost.method,
+      effectiveDate: cost.effectiveDate ?? null,
+      expiresAt: cost.expiresAt ?? null,
+      confidence: cost.confidence,
+    },
+    searchableText: [
+      name,
+      code,
+      vendor,
+      region,
+      cost.method,
+      item.category,
+      item.resourceType,
+      item.manufacturer,
+      item.manufacturerPartNumber,
+      ...item.aliases,
+      ...item.tags,
+    ].filter(Boolean).join(" "),
+  };
+}
+
+function entityOptionMatchesSearch(item: EntityOptionItem, query: string) {
+  if (!query) return true;
+  const haystack = [
+    item.label,
+    item.value,
+    item.description,
+    item.vendor,
+    item.sourceNotes,
+    item.searchableText,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function payloadString(payload: Record<string, unknown> | undefined, key: string) {
+  const value = payload?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function payloadNumber(payload: Record<string, unknown> | undefined, key: string) {
+  const value = payload?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function compactMoney(value: number) {
+  const abs = Math.abs(value);
+  if (abs >= 1000) return `$${Math.round(value).toLocaleString()}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function firstText(...values: Array<string | null | undefined>) {
+  return values.map((value) => value?.trim()).find(Boolean) ?? "";
+}
+
+function compactPath(parts: Array<string | null | undefined>, separator = " / ") {
+  const seen = new Set<string>();
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .filter((part) => {
+      const key = part.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join(separator);
+}
+
+function cleanHierarchyPart(value: string | null | undefined) {
+  return (value ?? "")
+    .replace(/:selected:/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function sourceBadgeLabel(source: EntityOptionItem["source"]) {
+  switch (source) {
+    case "rate_schedule": return "Rate";
+    case "cost_intelligence": return "CI";
+    case "cost_resource": return "Resource";
+    case "labor_unit": return "Labor";
+    case "assembly": return "Assembly";
+    case "external_action": return "Action";
+    case "plugin": return "Plugin";
+    case "plugin_result": return "Product";
+    case "catalog": return "Catalog";
+      default: return "";
+  }
+}
+
+function sourceIconFor(source: EntityOptionItem["source"]) {
+  switch (source) {
+    case "rate_schedule": return Zap;
+    case "cost_intelligence": return BrainCircuit;
+    case "cost_resource": return Boxes;
+    case "labor_unit": return Hammer;
+    case "assembly": return Layers;
+    case "external_action": return Store;
+    case "plugin": return PlugZap;
+    case "plugin_result": return Package;
+    case "catalog": return BookOpen;
+    default: return Tag;
+  }
+}
+
+function sourceAccentClasses(source: EntityOptionItem["source"]) {
+  switch (source) {
+    case "cost_intelligence":
+      return "border-success/25 bg-success/8 text-success";
+    case "labor_unit":
+      return "border-warning/25 bg-warning/8 text-warning";
+    case "rate_schedule":
+      return "border-accent/25 bg-accent/10 text-accent";
+    case "assembly":
+      return "border-success/25 bg-success/8 text-success";
+    case "external_action":
+    case "plugin":
+    case "plugin_result":
+      return "border-accent/25 bg-accent/8 text-accent";
+    case "cost_resource":
+      return "border-fg/15 bg-panel2 text-fg/65";
+    case "catalog":
+      return "border-line bg-bg/70 text-fg/65";
+    default:
+      return "border-line bg-panel2 text-fg/50";
+  }
+}
+
+type EntityBrowseModeId =
+  | "rate_books"
+  | "catalogs"
+  | "labor_units"
+  | "cost_intel"
+  | "assemblies"
+  | "plugins";
+
+const ENTITY_BROWSE_CARDS: Array<{
+  id: EntityBrowseModeId;
+  label: string;
+  detail: string;
+  sources: LineItemSearchSourceType[];
+  Icon: typeof BookOpen;
+  accent: string;
+}> = [
+  {
+    id: "rate_books",
+    label: "Rate Books",
+    detail: "Imported quote schedules",
+    sources: ["rate_schedule_item"],
+    Icon: Zap,
+    accent: "border-accent/25 bg-accent/8 text-accent",
+  },
+  {
+    id: "catalogs",
+    label: "Catalogues",
+    detail: "Materials, labour, stock, equipment",
+    sources: ["catalog_item", "cost_resource"],
+    Icon: BookOpen,
+    accent: "border-fg/15 bg-bg text-fg/70",
+  },
+  {
+    id: "labor_units",
+    label: "Labour Units",
+    detail: "Hierarchical production units",
+    sources: ["labor_unit"],
+    Icon: Hammer,
+    accent: "border-warning/25 bg-warning/8 text-warning",
+  },
+  {
+    id: "cost_intel",
+    label: "Cost Intel",
+    detail: "Vendor-backed effective costs",
+    sources: ["effective_cost"],
+    Icon: BrainCircuit,
+    accent: "border-success/25 bg-success/8 text-success",
+  },
+  {
+    id: "assemblies",
+    label: "Assemblies",
+    detail: "Kits and configured builds",
+    sources: ["assembly"],
+    Icon: Layers,
+    accent: "border-success/25 bg-success/8 text-success",
+  },
+  {
+    id: "plugins",
+    label: "External Searches",
+    detail: "Provider lookups that return line items",
+    sources: ["external_action"],
+    Icon: Store,
+    accent: "border-accent/25 bg-accent/8 text-accent",
+  },
+];
+
+function entityBrowseCardById(id: EntityBrowseModeId | null) {
+  return ENTITY_BROWSE_CARDS.find((card) => card.id === id) ?? null;
+}
+
+type EstimateSearchSettings = {
+  disabledSourceTypes: LineItemSearchSourceType[];
+  disabledLaborLibraryIds: string[];
+  disabledCatalogIds: string[];
+};
+
+const ESTIMATE_SEARCH_PREF_KEY = "estimateSearch";
+const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
+  "catalog_item",
+  "rate_schedule_item",
+  "labor_unit",
+  "cost_resource",
+  "effective_cost",
+  "assembly",
+  "plugin_tool",
+  "external_action",
+];
+
+function asPlainRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function uniqueStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)));
+}
+
+function isLineItemSearchSourceType(value: string): value is LineItemSearchSourceType {
+  return LINE_ITEM_SEARCH_SOURCE_TYPES.includes(value as LineItemSearchSourceType);
+}
+
+function readEstimateSearchSettings(pdfPreferences: Record<string, unknown> | null | undefined): EstimateSearchSettings {
+  const preferences = asPlainRecord(pdfPreferences);
+  const rawSettings = asPlainRecord(preferences[ESTIMATE_SEARCH_PREF_KEY]);
+  return {
+    disabledSourceTypes: uniqueStringArray(rawSettings.disabledSourceTypes).filter(isLineItemSearchSourceType),
+    disabledLaborLibraryIds: uniqueStringArray(rawSettings.disabledLaborLibraryIds),
+    disabledCatalogIds: uniqueStringArray(rawSettings.disabledCatalogIds),
+  };
+}
+
+function searchSourceTypeEnabled(settings: EstimateSearchSettings, sourceType: LineItemSearchSourceType) {
+  return !settings.disabledSourceTypes.includes(sourceType);
+}
+
+function enabledSearchSourcesForRequest(
+  settings: EstimateSearchSettings,
+  sourceTypes: LineItemSearchSourceType[] | undefined,
+) {
+  if (!sourceTypes) return undefined;
+  return sourceTypes.filter((sourceType) => searchSourceTypeEnabled(settings, sourceType));
+}
+
+function browseCardIsEnabled(settings: EstimateSearchSettings, card: { sources: LineItemSearchSourceType[] }) {
+  return card.sources.some((sourceType) => searchSourceTypeEnabled(settings, sourceType));
+}
+
+function laborHierarchyLevelLabel(level: number) {
+  return ["Library", "Catalogue", "Discipline", "Group", "Class", "Sub-class"][level] ?? `Level ${level + 1}`;
+}
+
+function sourcePriority(source: EntityOptionItem["source"]) {
+  switch (source) {
+    case "rate_schedule": return 0;
+    case "labor_unit": return 1;
+    case "catalog": return 2;
+    case "cost_intelligence": return 3;
+    case "cost_resource": return 4;
+    case "assembly": return 5;
+    case "external_action": return 8;
+    case "plugin": return 9;
+    case "plugin_result": return 10;
+    default: return 6;
+  }
+}
+
+function entityOptionKey(item: EntityOptionItem) {
+  return [
+    item.actionId,
+    item.source,
+    item.sourceId,
+    item.rateScheduleItemId,
+    item.itemId,
+    item.effectiveCostId,
+    item.costResourceId,
+    item.laborUnitId,
+    item.value,
+  ].filter(Boolean).join("\u001f");
+}
+
+function mergeEntityOptionGroups(
+  existing: EntityOptionGroup[],
+  incoming: EntityOptionGroup[],
+) {
+  const groups = existing.map((group) => ({
+    ...group,
+    items: [...group.items],
+  }));
+  const groupIndexById = new Map(groups.map((group, index) => [group.categoryId, index]));
+  const seen = new Set(groups.flatMap((group) => group.items.map(entityOptionKey)));
+
+  for (const incomingGroup of incoming) {
+    const index = groupIndexById.get(incomingGroup.categoryId);
+    const target = index === undefined
+      ? {
+          ...incomingGroup,
+          items: [],
+        }
+      : groups[index];
+
+    for (const item of incomingGroup.items) {
+      const key = entityOptionKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      target.items.push(item);
+    }
+
+    if (index === undefined) {
+      groupIndexById.set(target.categoryId, groups.length);
+      groups.push(target);
+    }
+  }
+
+  return groups;
+}
+
+function sourceForSearchResult(result: LineItemSearchResult): EntityOptionItem["source"] {
+  switch (result.sourceType) {
+    case "catalog_item": return "catalog";
+    case "rate_schedule_item": return "rate_schedule";
+    case "effective_cost": return "cost_intelligence";
+    case "cost_resource": return "cost_resource";
+    case "labor_unit": return "labor_unit";
+    case "assembly": return "assembly";
+    case "external_action": return "external_action";
+    case "plugin_tool": return "plugin";
+    default: return "freeform";
+  }
+}
+
+function findCategoryForSearchResult(
+  result: Pick<LineItemSearchResult, "category" | "entityType" | "uom">,
+  categories: EntityCategory[],
+  fallbackCategoryName?: string,
+) {
+  const keys = [result.category, result.entityType].map(normalizeEntityLookup).filter(Boolean);
+  const match = categories.find((category) => {
+    const categoryKeys = categoryLookupKeys(category);
+    return keys.some((key) => categoryKeys.includes(key));
+  });
+  if (match) {
+    return match;
+  }
+  if (fallbackCategoryName) {
+    return categories.find((category) => category.name === fallbackCategoryName);
+  }
+  return undefined;
+}
+
+function sourceGroupForSearchResult(
+  result: LineItemSearchResult,
+  category: EntityCategory | undefined,
+  payload: Record<string, unknown>,
+  isAction: boolean,
+) {
+  const source = sourceForSearchResult(result);
+  const targetCategoryName = isAction ? "Actions" : (category?.name ?? result.category) || result.entityType || "Other";
+  const entityType = isAction ? "Action" : (category?.entityType ?? result.entityType) || result.category || targetCategoryName;
+  const defaultUom = category?.defaultUom ?? result.uom ?? "EA";
+
+  if (isAction) {
+    const pluginName = firstText(payloadString(payload, "pluginName"), result.subtitle, "Actions");
+    return {
+      categoryName: targetCategoryName,
+      categoryId: `__actions:${normalizeEntityLookup(pluginName) || result.sourceId}`,
+      entityType,
+      defaultUom,
+      label: `Actions / ${pluginName}`,
+      source,
+      sortPriority: 900,
+      tone: "accent" as const,
+    };
+  }
+
+  switch (result.sourceType) {
+    case "labor_unit": {
+      const provider = firstText(payloadString(payload, "provider"), result.vendor);
+      const discipline = payloadString(payload, "discipline");
+      const laborCategory = payloadString(payload, "laborCategory") || payloadString(payload, "category");
+      const className = payloadString(payload, "className");
+      const subClassName = payloadString(payload, "subClassName");
+      const treePath = [
+        "Labour units",
+        provider,
+        discipline,
+        laborCategory,
+        className,
+        subClassName,
+      ].map(cleanHierarchyPart).filter(Boolean);
+      const headerLabel = compactPath(["Labour units", provider || discipline], " / ");
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `labor:${normalizeEntityLookup(provider)}:${normalizeEntityLookup(discipline)}:${normalizeEntityLookup(laborCategory)}:${normalizeEntityLookup(className)}:${normalizeEntityLookup(subClassName)}`,
+        entityType,
+        defaultUom,
+        label: headerLabel || "Labor units",
+        treePath,
+        source,
+        sortPriority: 100,
+        tone: "warning" as const,
+      };
+    }
+    case "catalog_item": {
+      const catalog = firstText(payloadString(payload, "catalogName"), result.subtitle);
+      const catalogKind = firstText(payloadString(payload, "catalogKind"), result.entityType);
+      const itemCategory = firstText(payloadString(payload, "catalogCategory"), result.category);
+      const rateScheduleItemId = payloadString(payload, "rateScheduleItemId");
+      if (rateScheduleItemId) {
+        const schedule = firstText(payloadString(payload, "scheduleName"), result.subtitle);
+        const scheduleCategory = firstText(payloadString(payload, "scheduleCategory"), result.category, targetCategoryName);
+        return {
+          categoryName: targetCategoryName,
+          categoryId: `catalog-rate:${normalizeEntityLookup(schedule)}:${normalizeEntityLookup(scheduleCategory)}:${normalizeEntityLookup(catalog || catalogKind)}`,
+          entityType,
+          defaultUom,
+          label: compactPath(["Rate book", scheduleCategory, schedule]),
+          source: "rate_schedule" as const,
+          sortPriority: 5,
+          tone: "accent" as const,
+        };
+      }
+      const path = compactPath(["Catalog", catalog || catalogKind, itemCategory !== catalogKind ? itemCategory : ""]);
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `catalog:${normalizeEntityLookup(catalog || catalogKind)}:${normalizeEntityLookup(itemCategory)}`,
+        entityType,
+        defaultUom,
+        label: path || "Catalog",
+        source,
+        sortPriority: 200,
+        tone: "muted" as const,
+      };
+    }
+    case "rate_schedule_item": {
+      const schedule = firstText(payloadString(payload, "scheduleName"), result.subtitle);
+      const scheduleCategory = firstText(payloadString(payload, "scheduleCategory"), result.category);
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `rate:${normalizeEntityLookup(schedule)}:${normalizeEntityLookup(scheduleCategory)}`,
+        entityType,
+        defaultUom,
+        label: compactPath(["Rates", scheduleCategory, schedule]),
+        source,
+        sortPriority: 0,
+        tone: "accent" as const,
+      };
+    }
+    case "effective_cost": {
+      const resourceType = firstText(payloadString(payload, "resourceType"), result.entityType);
+      const costCategory = firstText(payloadString(payload, "costCategory"), result.category);
+      const vendor = firstText(payloadString(payload, "vendorName"), result.vendor);
+      const region = payloadString(payload, "region");
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `cost:${normalizeEntityLookup(resourceType)}:${normalizeEntityLookup(costCategory)}:${normalizeEntityLookup(vendor)}:${normalizeEntityLookup(region)}`,
+        entityType,
+        defaultUom,
+        label: compactPath(["Cost intel", resourceType || costCategory, vendor, region]),
+        source,
+        sortPriority: 300,
+        tone: "success" as const,
+      };
+    }
+    case "cost_resource": {
+      const resourceType = firstText(payloadString(payload, "resourceType"), result.entityType);
+      const resourceCategory = firstText(payloadString(payload, "resourceCategory"), result.category);
+      const manufacturer = firstText(payloadString(payload, "manufacturer"), result.vendor);
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `resource:${normalizeEntityLookup(resourceType)}:${normalizeEntityLookup(resourceCategory)}:${normalizeEntityLookup(manufacturer)}`,
+        entityType,
+        defaultUom,
+        label: compactPath(["Resources", resourceType || resourceCategory, manufacturer]),
+        source,
+        sortPriority: 400,
+        tone: "muted" as const,
+      };
+    }
+    case "assembly": {
+      const assemblyCategory = firstText(payloadString(payload, "assemblyCategory"), result.category);
+      return {
+        categoryName: targetCategoryName,
+        categoryId: `assembly:${normalizeEntityLookup(assemblyCategory) || "general"}`,
+        entityType,
+        defaultUom,
+        label: compactPath(["Assemblies", assemblyCategory]),
+        source,
+        sortPriority: 500,
+        tone: "success" as const,
+      };
+    }
+    default:
+      return {
+        categoryName: targetCategoryName,
+        categoryId: category?.id ?? `${result.sourceType}:${normalizeEntityLookup(targetCategoryName) || "other"}`,
+        entityType,
+        defaultUom,
+        label: compactPath([sourceBadgeLabel(source) || "Library", targetCategoryName]),
+        source,
+        sortPriority: sourcePriority(source),
+        tone: "muted" as const,
+      };
+  }
+}
+
+function entityOptionFromSearchResult(
+  result: LineItemSearchResult,
+  categories: EntityCategory[],
+  searchTerm: string,
+): { group: EntityOptionGroup; item: EntityOptionItem } {
+  const category = findCategoryForSearchResult(result, categories);
+  const isAction = result.actionType !== "select" || result.sourceType === "external_action" || result.sourceType === "plugin_tool";
+  const payload = result.payload ?? {};
+  const groupInfo = sourceGroupForSearchResult(result, category, payload, isAction);
+  const costResourceId = payloadString(payload, "costResourceId") || undefined;
+  const effectiveCostId = payloadString(payload, "effectiveCostId") || undefined;
+  const laborUnitId = payloadString(payload, "laborUnitId") || undefined;
+  const itemId = payloadString(payload, "itemId") || payloadString(payload, "catalogItemId") || undefined;
+  const rateScheduleItemId = payloadString(payload, "rateScheduleItemId") || undefined;
+  const quantity =
+    payloadNumber(payload, "quantity") ??
+    payloadNumber(payload, "outputQuantity") ??
+    payloadNumber(payload, "defaultQuantity");
+  const sourceEvidence = metadataObject(payload.sourceEvidence) ?? {
+    source: result.sourceType,
+    sourceId: result.sourceId,
+    searchDocumentId: result.id,
+    sourceNotes: payloadString(payload, "sourceNotes") || result.subtitle,
+  };
+  const resourceComposition = metadataObject(payload.resourceComposition) ?? (
+    rateScheduleItemId || itemId || costResourceId || effectiveCostId || laborUnitId
+      ? {
+          source: result.sourceType,
+          resources: [{
+            componentType: result.sourceType,
+            rateScheduleItemId: rateScheduleItemId ?? null,
+            itemId: itemId ?? null,
+            costResourceId: costResourceId ?? null,
+            effectiveCostId: effectiveCostId ?? null,
+            laborUnitId: laborUnitId ?? null,
+            uom: result.uom || null,
+            unitCost: result.unitCost ?? null,
+            unitPrice: result.unitPrice ?? null,
+          }],
+        }
+      : undefined
+  );
+  const label = result.actionType === "plugin_remote_search" && searchTerm.trim()
+    ? `Search ${result.title} for "${searchTerm.trim()}"`
+    : result.actionType === "plugin_tool"
+      ? `Run ${result.title}`
+      : `${result.title}${result.code ? ` (${result.code})` : ""}`;
+
+  return {
+    group: {
+      categoryName: groupInfo.categoryName,
+      categoryId: groupInfo.categoryId,
+      entityType: groupInfo.entityType,
+      defaultUom: groupInfo.defaultUom,
+      label: groupInfo.label,
+      treePath: groupInfo.treePath,
+      source: groupInfo.source,
+      sortPriority: groupInfo.sortPriority,
+      tone: groupInfo.tone,
+      items: [],
+    },
+    item: {
+      label,
+      value: result.title,
+      source: sourceForSearchResult(result),
+      sourceType: result.sourceType,
+      sourceId: result.sourceId,
+      actionType: result.actionType,
+      unitCost: result.unitCost ?? undefined,
+      unitPrice: result.unitPrice ?? undefined,
+      unit: result.uom,
+      description: payloadString(payload, "description") || result.subtitle || result.title,
+      rateScheduleItemId,
+      itemId,
+      effectiveCostId,
+      costResourceId,
+      laborUnitId,
+      quantity,
+      vendor: result.vendor || null,
+      code: result.code || undefined,
+      sourceNotes: payloadString(payload, "sourceNotes") || result.subtitle,
+      resourceComposition,
+      sourceEvidence,
+      searchableText: [result.title, result.subtitle, result.code, result.vendor, result.category, result.entityType].join(" "),
+      subtitle: result.subtitle,
+      score: result.score,
+      actionId: result.id,
+      pluginId: payloadString(payload, "pluginId") || undefined,
+      pluginSlug: payloadString(payload, "pluginSlug") || undefined,
+      toolId: payloadString(payload, "toolId") || undefined,
+      searchFieldId: payloadString(payload, "searchFieldId") || undefined,
+      queryParam: payloadString(payload, "queryParam") || "q",
+      unit1: payloadNumber(payload, "unit1"),
+      unit2: payloadNumber(payload, "unit2"),
+      unit3: payloadNumber(payload, "unit3"),
+      payload,
+    },
+  };
+}
+
+function groupSearchResults(
+  results: LineItemSearchResult[],
+  categories: EntityCategory[],
+  searchTerm: string,
+  currentCategoryName?: string,
+): EntityOptionGroup[] {
+  const groups = new Map<string, EntityOptionGroup>();
+  const mappedResults = results.map((result) => entityOptionFromSearchResult(result, categories, searchTerm));
+  const linkedCatalogRateIds = new Set(
+    mappedResults
+      .filter(({ item }) => item.source === "catalog" && item.rateScheduleItemId)
+      .map(({ item }) => item.rateScheduleItemId!),
+  );
+
+  for (const mapped of mappedResults) {
+    if (
+      mapped.item.source === "rate_schedule" &&
+      mapped.item.rateScheduleItemId &&
+      linkedCatalogRateIds.has(mapped.item.rateScheduleItemId)
+    ) {
+      continue;
+    }
+    const key = mapped.group.categoryId;
+    const group = groups.get(key) ?? mapped.group;
+    group.items.push(mapped.item);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values()).sort((left, right) => {
+    if (left.categoryName === "Actions" && right.categoryName !== "Actions") return 1;
+    if (right.categoryName === "Actions" && left.categoryName !== "Actions") return -1;
+    if (currentCategoryName && left.categoryName === currentCategoryName && right.categoryName !== currentCategoryName) return -1;
+    if (currentCategoryName && right.categoryName === currentCategoryName && left.categoryName !== currentCategoryName) return 1;
+    const priorityDelta = (left.sortPriority ?? sourcePriority(left.source)) - (right.sortPriority ?? sourcePriority(right.source));
+    if (priorityDelta !== 0) return priorityDelta;
+    return (left.label ?? left.categoryName).localeCompare(right.label ?? right.categoryName);
+  });
+}
+
+function optionMeasureLabel(item: EntityOptionItem) {
+  if (item.source === "labor_unit") {
+    const normal = item.unit1 ?? payloadNumber(item.payload, "unit1");
+    if (normal !== undefined) return `${normal.toFixed(2)} h/u`;
+  }
+  const cost = item.unitCost;
+  const price = item.unitPrice;
+  if (cost !== undefined && price !== undefined && (cost !== 0 || price !== 0)) {
+    if (cost === 0) return `${compactMoney(price)}`;
+    if (price === 0) return `${compactMoney(cost)}`;
+    return `${compactMoney(cost)} / ${compactMoney(price)}`;
+  }
+  if (price !== undefined && price !== 0) return compactMoney(price);
+  if (cost !== undefined && cost !== 0) return compactMoney(cost);
+  return "";
+}
+
+function optionMetaParts(item: EntityOptionItem) {
+  const payload = item.payload;
+  switch (item.source) {
+    case "labor_unit": {
+      const difficulty = payloadString(payload, "defaultDifficulty");
+      const difficult = payloadNumber(payload, "hoursDifficult");
+      const veryDifficult = payloadNumber(payload, "hoursVeryDifficult");
+      return [
+        item.unit ? `UOM ${item.unit}` : "",
+        difficulty ? `default ${difficulty}` : "",
+        difficult !== undefined ? `${difficult.toFixed(2)} diff` : "",
+        veryDifficult !== undefined ? `${veryDifficult.toFixed(2)} very` : "",
+      ].filter(Boolean);
+    }
+    case "rate_schedule":
+      return [
+        payloadString(payload, "scheduleName") || item.subtitle,
+        item.code,
+        item.unit ? `per ${item.unit}` : "",
+      ].filter(Boolean);
+    case "cost_intelligence": {
+      const confidence = payloadNumber(payload, "confidence");
+      return [
+        item.vendor,
+        payloadString(payload, "region"),
+        payloadString(payload, "method"),
+        confidence !== undefined ? `${Math.round(confidence * 100)}% conf` : "",
+        payloadString(payload, "effectiveDate"),
+      ].filter(Boolean);
+    }
+    case "cost_resource":
+      return [
+        compactPath([payloadString(payload, "resourceType"), payloadString(payload, "resourceCategory")], " / "),
+        payloadString(payload, "manufacturerPartNumber"),
+        item.unit ? `UOM ${item.unit}` : "",
+      ].filter(Boolean);
+    case "catalog":
+      return [
+        payloadString(payload, "scheduleName"),
+        payloadString(payload, "catalogName") || item.subtitle,
+        item.code,
+        item.vendor,
+        item.unit ? `UOM ${item.unit}` : "",
+      ].filter(Boolean);
+    case "assembly":
+      return [
+        item.code,
+        payloadString(payload, "assemblyCategory"),
+        item.unit ? `unit ${item.unit}` : "",
+      ].filter(Boolean);
+    case "external_action":
+    case "plugin":
+      return [
+        payloadString(payload, "pluginName") || item.subtitle,
+        payloadString(payload, "toolName"),
+        item.actionType === "plugin_remote_search" ? "remote search" : "creates lines",
+      ].filter(Boolean);
+    case "plugin_result":
+      return [
+        item.vendor,
+        item.subtitle,
+      ].filter(Boolean);
+    default:
+      return [
+        item.subtitle || item.description,
+        item.unit ? `UOM ${item.unit}` : "",
+      ].filter(Boolean);
+  }
+}
+
+function laborUnitReferenceParts(item: EntityOptionItem) {
+  const code = item.code ?? "";
+  const codeParts = code.split("-").filter(Boolean);
+  const description = payloadString(item.payload, "description");
+  const tableFromDescription = description.match(/\bSource Table\s+([A-Za-z0-9.-]+)/i)?.[1] ?? "";
+  const table = (tableFromDescription || codeParts[1] || "").replace(/[.,;:]+$/, "");
+  return {
+    code,
+    series: codeParts[0] || "",
+    table,
+    ref: codeParts.slice(2).join("-"),
+  };
 }
 
 /** Build entity dropdown options grouped by category */
 function buildEntityOptions(
   workspace: ProjectWorkspaceData,
-  categories: EntityCategory[]
-): Array<{
-  categoryName: string;
-  categoryId: string;
-  entityType: string;
-  defaultUom: string;
-  items: EntityOptionItem[];
-}> {
-  const groups: Array<{
-    categoryName: string;
-    categoryId: string;
-    entityType: string;
-    defaultUom: string;
-    items: EntityOptionItem[];
-  }> = [];
+  categories: EntityCategory[],
+  effectiveCosts: EffectiveCostRecord[] = [],
+): EntityOptionGroup[] {
+  const groups: EntityOptionGroup[] = [];
+
+  const costCategories = categories.filter((cat) => cat.enabled && cat.itemSource !== "rate_schedule");
+  const fallbackCostCategory = costCategories[0] ?? null;
+  const costOptionsByCategory = new Map<string, EntityOptionItem[]>();
+
+  for (const cost of effectiveCosts) {
+    if (!Number.isFinite(cost.unitCost)) continue;
+    const matchedCategories = costCategories.filter((cat) => effectiveCostMatchesCategory(cost, cat, workspace));
+    const targetCategories = matchedCategories.length > 0
+      ? matchedCategories
+      : fallbackCostCategory
+      ? [fallbackCostCategory]
+      : [];
+
+    for (const target of targetCategories) {
+      const bucket = costOptionsByCategory.get(target.id) ?? [];
+      if (!bucket.some((item) => item.effectiveCostId === cost.id)) {
+        bucket.push(buildEffectiveCostOption(cost));
+      }
+      costOptionsByCategory.set(target.id, bucket);
+    }
+  }
 
   for (const cat of categories) {
     const items: EntityOptionItem[] = [];
@@ -381,12 +1564,10 @@ function buildEntityOptions(
 
     switch (itemSource) {
       case "rate_schedule": {
-        // Pull items from revision-scoped rate schedules whose category string
-        // matches this EntityCategory's entityType (case-insensitive). The
-        // schedule's category is a free string set by the org when creating it.
-        const catKey = cat.entityType.toLowerCase();
+        // Rate books are keyed by the canonical EntityCategory.entityType.
+        const catKey = cat.entityType.trim();
         for (const sched of workspace.rateSchedules ?? []) {
-          if (sched.category.toLowerCase() === catKey) {
+          if (sched.category.trim() === catKey) {
             for (const rsItem of sched.items ?? []) {
               const firstTier = sched.tiers?.[0];
               const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
@@ -394,6 +1575,7 @@ function buildEntityOptions(
                 items.push({
                   label: `${rsItem.name}${rsItem.code ? ` (${rsItem.code})` : ""}`,
                   value: rsItem.name,
+                  source: "rate_schedule",
                   unitCost: rate,
                   unit: rsItem.unit,
                   rateScheduleItemId: rsItem.id,
@@ -417,7 +1599,16 @@ function buildEntityOptions(
             : catalog.kind.toLowerCase() === catKey;
           if (isLinked) {
             for (const ci of catalog.items ?? []) {
-              items.push({ label: ci.name, value: ci.name, unitCost: ci.unitCost, unitPrice: ci.unitPrice, unit: ci.unit, itemId: ci.id });
+              items.push({
+                label: ci.name,
+                value: ci.name,
+                source: "catalog",
+                unitCost: ci.unitCost,
+                unitPrice: ci.unitPrice,
+                unit: ci.unit,
+                description: ci.name,
+                itemId: ci.id,
+              });
             }
           }
         }
@@ -428,8 +1619,15 @@ function buildEntityOptions(
       }
       case "freeform":
       default: {
-        items.push({ label: cat.name, value: cat.name });
+        items.push({ label: cat.name, value: cat.name, source: "freeform" });
         break;
+      }
+    }
+
+    const costItems = costOptionsByCategory.get(cat.id) ?? [];
+    for (const costItem of costItems) {
+      if (!items.some((item) => item.effectiveCostId === costItem.effectiveCostId)) {
+        items.push(costItem);
       }
     }
 
@@ -449,7 +1647,8 @@ function buildEntityOptions(
 function groupRowsByCategory(
   rows: WorkspaceWorksheetItem[],
   categories: EntityCategory[],
-  preserveOrder = false
+  preserveOrder = false,
+  adjustedLineItemsById: Map<string, WorkspaceWorksheetItem> = new Map(),
 ): Array<{
   category: string;
   catDef: EntityCategory | undefined;
@@ -460,7 +1659,7 @@ function groupRowsByCategory(
   const grouped: Record<string, WorkspaceWorksheetItem[]> = {};
 
   for (const row of rows) {
-    const cat = row.category || "Uncategorized";
+    const cat = row.category || "";
     if (!grouped[cat]) grouped[cat] = [];
     grouped[cat].push(row);
   }
@@ -482,7 +1681,7 @@ function groupRowsByCategory(
         category: catName,
         catDef: categories.find((c) => c.name === catName),
         items,
-        totalPrice: items.reduce((s, r) => s + r.price, 0),
+        totalPrice: items.reduce((s, r) => s + (adjustedLineItemsById.get(r.id)?.price ?? r.price), 0),
       });
       delete grouped[catName];
     }
@@ -497,24 +1696,11 @@ function groupRowsByCategory(
       category: catName,
       catDef: undefined,
       items: sorted,
-      totalPrice: sorted.reduce((s, r) => s + r.price, 0),
+      totalPrice: sorted.reduce((s, r) => s + (adjustedLineItemsById.get(r.id)?.price ?? r.price), 0),
     });
   }
 
   return result;
-}
-
-/**
- * Resolve catalog kind to an EntityCategory by matching kind to the category's
- * entityType (case-insensitive) — used only for badge tone alignment in the
- * catalog picker. Returns the category name or the raw kind if nothing matches.
- */
-function catalogKindToCategoryName(kind: string, entityCategories: EntityCategory[]): string {
-  const lk = kind.toLowerCase();
-  const match = entityCategories.find(
-    (c) => c.entityType.toLowerCase() === lk || c.name.toLowerCase() === lk,
-  );
-  return match?.name ?? kind;
 }
 
 /* ─── Component ─── */
@@ -527,23 +1713,26 @@ export function EstimateGrid({
   highlightItemId,
   activeWorksheetId,
   onActiveWorksheetChange,
+  onOpenPluginTools,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
 
   // Entity categories loaded from API
   const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
+  const globalUoms = useUomLibrary();
 
   // Tab state
-  const [activeTab, setActiveTabState] = useState<WorksheetTabId>(
+  const [worksheetViewMode, setWorksheetViewMode] = useState<WorksheetViewMode>("tabs");
+  const [activeTab, setActiveTabState] = useState<WorksheetViewId>(
     activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
   );
-  const prevTabRef = useRef<WorksheetTabId>(activeTab);
+  const prevTabRef = useRef<WorksheetViewId>(activeTab);
   const [tabSlideDir, setTabSlideDir] = useState<1 | -1>(1);
 
-  const setActiveTab = useCallback((nextTab: WorksheetTabId) => {
+  const setActiveTab = useCallback((nextTab: WorksheetViewId) => {
     setActiveTabState((prev) => {
       // Resolve direction by tab order: "all" first, then worksheet array order.
-      const order: WorksheetTabId[] = ["all", ...(workspace.worksheets ?? []).map((w) => w.id)];
+      const order: WorksheetViewId[] = ["all", ...(workspace.worksheets ?? []).map((w) => w.id)];
       const prevIdx = order.indexOf(prev);
       const nextIdx = order.indexOf(nextTab);
       if (prevIdx >= 0 && nextIdx >= 0 && prevIdx !== nextIdx) {
@@ -552,11 +1741,14 @@ export function EstimateGrid({
       prevTabRef.current = nextTab;
       return nextTab;
     });
-    onActiveWorksheetChange?.(nextTab);
+    if (!worksheetViewIsFolder(nextTab)) {
+      onActiveWorksheetChange?.(nextTab);
+    }
   }, [onActiveWorksheetChange, workspace.worksheets]);
 
   useEffect(() => {
     if (!activeWorksheetId || activeWorksheetId === activeTab) return;
+    if (worksheetViewIsFolder(activeTab)) return;
     setActiveTabState(activeWorksheetId);
     prevTabRef.current = activeWorksheetId;
   }, [activeTab, activeWorksheetId]);
@@ -572,6 +1764,7 @@ export function EstimateGrid({
   // Entity dropdown state
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
+  const [entityBrowseMode, setEntityBrowseMode] = useState<EntityBrowseModeId | null>(null);
   const [entityHighlightIdx, setEntityHighlightIdx] = useState(0);
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
   const [entityDropdownPos, setEntityDropdownPos] = useState<EntityDropdownPosition>(null);
@@ -604,9 +1797,17 @@ export function EstimateGrid({
   // Modals
   const [showNewWsModal, setShowNewWsModal] = useState(false);
   const [newWsName, setNewWsName] = useState("");
+  const [newWsFolderId, setNewWsFolderId] = useState<string | null>(null);
   const [renameWsId, setRenameWsId] = useState<string | null>(null);
   const [renameWsName, setRenameWsName] = useState("");
   const [deleteWsTarget, setDeleteWsTarget] = useState<{ wsId: string; name: string; itemCount: number } | null>(null);
+  const [folderForm, setFolderForm] = useState<{ parentId: string | null; name: string } | null>(null);
+  const [renameTarget, setRenameTarget] = useState<RenameTarget>(null);
+  const [renameName, setRenameName] = useState("");
+  const [moveTarget, setMoveTarget] = useState<MoveTarget>(null);
+  const [moveParentId, setMoveParentId] = useState<string>("__root__");
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<DeleteFolderTarget>(null);
+  const [organizerMenu, setOrganizerMenu] = useState<OrganizerContextMenuState>(null);
 
 
   // Selected row
@@ -620,10 +1821,13 @@ export function EstimateGrid({
   const [inlineRenameName, setInlineRenameName] = useState("");
   const inlineRenameRef = useRef<HTMLInputElement | null>(null);
   const tabScrollRef = useRef<HTMLDivElement | null>(null);
+  const gridWidthRef = useRef<HTMLDivElement | null>(null);
   const [tabOverflow, setTabOverflow] = useState<{ left: boolean; right: boolean }>({ left: false, right: false });
+  const [gridWidth, setGridWidth] = useState(0);
 
   // ─── NEW STATE: Detail Drawer ───
   const [detailItem, setDetailItem] = useState<WorkspaceWorksheetItem | null>(null);
+  const [factorLineItem, setFactorLineItem] = useState<WorkspaceWorksheetItem | null>(null);
 
   // ─── NEW STATE: Row Selection / Bulk Operations ───
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -639,14 +1843,34 @@ export function EstimateGrid({
   // ─── Sort State ───
   const [sortState, setSortState] = useState<SortState>(null);
 
-  // ─── NEW STATE: Catalog Quick-Add ───
-  const [showCatalogPicker, setShowCatalogPicker] = useState(false);
-  const [catalogSearchTerm, setCatalogSearchTerm] = useState("");
-  const [selectedCatalogItemIds, setSelectedCatalogItemIds] = useState<Set<string>>(new Set());
+  // ─── Add Items command center ───
+  const [showAddItemsPicker, setShowAddItemsPicker] = useState(false);
+  const [addItemsSearchTerm, setAddItemsSearchTerm] = useState("");
+  const [addItemsBrowseMode, setAddItemsBrowseMode] = useState<EntityBrowseModeId | null>(null);
+  const [addItemsGroups, setAddItemsGroups] = useState<EntityOptionGroup[]>([]);
+  const [addItemsLoading, setAddItemsLoading] = useState(false);
+  const [addItemsLoadingMore, setAddItemsLoadingMore] = useState(false);
+  const [addItemsHasMore, setAddItemsHasMore] = useState(false);
+  const [addItemsOffset, setAddItemsOffset] = useState(0);
+  const [addItemsError, setAddItemsError] = useState<string | null>(null);
+  const [selectedAddItems, setSelectedAddItems] = useState<Map<string, { group: EntityOptionGroup; item: EntityOptionItem }>>(() => new Map());
+  const addItemsRequestRef = useRef(0);
+  const addItemsLoadingMoreRef = useRef(false);
 
   // ─── NEW STATE: Assembly insert ───
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
   const [showSaveAsAssembly, setShowSaveAsAssembly] = useState(false);
+
+  const [entitySearchGroups, setEntitySearchGroups] = useState<EntityOptionGroup[]>([]);
+  const [entitySearchLoading, setEntitySearchLoading] = useState(false);
+  const [entitySearchLoadingMore, setEntitySearchLoadingMore] = useState(false);
+  const [entitySearchHasMore, setEntitySearchHasMore] = useState(false);
+  const [entitySearchOffset, setEntitySearchOffset] = useState(0);
+  const [entitySearchError, setEntitySearchError] = useState<string | null>(null);
+  const [entityActionLoadingId, setEntityActionLoadingId] = useState<string | null>(null);
+  const [entityPluginResults, setEntityPluginResults] = useState<EntityOptionItem[]>([]);
+  const entitySearchRequestRef = useRef(0);
+  const entitySearchLoadingMoreRef = useRef(false);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -746,11 +1970,14 @@ export function EstimateGrid({
 
     const optimisticItem: WorkspaceWorksheetItem = {
       id: temporaryId,
-      worksheetId,
-      phaseId: payload.phaseId ?? null,
-      category: payload.category,
+	      worksheetId,
+	      phaseId: payload.phaseId ?? null,
+	      categoryId: payload.categoryId ?? null,
+	      category: payload.category,
       entityType: payload.entityType,
       entityName: payload.entityName,
+      classification: payload.classification ?? {},
+      costCode: payload.costCode ?? null,
       vendor: payload.vendor ?? undefined,
       description: payload.description,
       quantity: payload.quantity,
@@ -790,11 +2017,57 @@ export function EstimateGrid({
     });
   }, [applyMutationError, onApply, selectedRowId, workspace.project.id, workspace.worksheets]);
 
+  const createDraftItem = useCallback((worksheetId: string) => {
+    const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
+    const worksheet = workspace.worksheets.find((entry) => entry.id === worksheetId);
+    const fallbackOrder =
+      worksheet?.items.reduce(
+        (maxOrder, item) => Math.max(maxOrder, item.lineOrder),
+        0,
+      ) ?? 0;
+    const draftItem: WorkspaceWorksheetItem = {
+      id: temporaryId,
+	      worksheetId,
+	      phaseId: null,
+	      categoryId: null,
+	      category: "",
+      entityType: "",
+      entityName: "",
+      classification: {},
+      costCode: null,
+      vendor: undefined,
+      description: "",
+      quantity: 1,
+      uom: "",
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      unit1: 0,
+      unit2: 0,
+      unit3: 0,
+      lineOrder: fallbackOrder + 1,
+      rateScheduleItemId: null,
+      itemId: null,
+      tierUnits: {},
+      sourceNotes: "",
+    };
+
+    setCategoryFilter("");
+    onApply((current) => applyWorksheetItemUpsert(current, draftItem));
+    setSelectedRowId(temporaryId);
+    setSelectedCell({ rowId: temporaryId, column: "entityName" });
+    setEntityDropdownRowId(temporaryId);
+    setEntitySearchTerm("");
+    setEntitySearchError(null);
+    setEntityPluginResults([]);
+  }, [onApply, workspace.currentRevision.defaultMarkup, workspace.worksheets]);
+
   const removeItem = useCallback((
     itemId: string,
     fallbackMessage = "Delete failed.",
   ) => {
     if (isTemporaryWorksheetItemId(itemId)) {
+      onApply((current) => applyWorksheetItemDelete(current, itemId));
       return;
     }
 
@@ -818,22 +2091,34 @@ export function EstimateGrid({
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
     const dropdownWidth = entityDropdownRef.current?.offsetWidth ?? ENTITY_DROPDOWN_WIDTH;
-    const preferredHeight = ENTITY_DROPDOWN_HEADER_HEIGHT + ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT;
-    const spaceBelow = Math.max(
-      0,
-      viewportHeight - rect.bottom - ENTITY_DROPDOWN_GAP - ENTITY_DROPDOWN_MARGIN
+    const headerEl = entityDropdownRef.current?.querySelector<HTMLElement>("[data-entity-dropdown-header]");
+    const headerHeight = Math.ceil(
+      headerEl?.getBoundingClientRect().height ?? ENTITY_DROPDOWN_HEADER_HEIGHT
     );
-    const spaceAbove = Math.max(0, rect.top - ENTITY_DROPDOWN_GAP - ENTITY_DROPDOWN_MARGIN);
-    const openAbove = spaceBelow < preferredHeight && spaceAbove > spaceBelow;
-    const availableHeight = openAbove ? spaceAbove : spaceBelow;
-    const maxHeight =
-      availableHeight > ENTITY_DROPDOWN_HEADER_HEIGHT
-        ? Math.min(preferredHeight, availableHeight)
-        : availableHeight;
+    const headerTopMax = Math.max(
+      ENTITY_DROPDOWN_MARGIN,
+      viewportHeight - ENTITY_DROPDOWN_MARGIN - headerHeight
+    );
+    const headerTop = Math.min(Math.max(rect.top, ENTITY_DROPDOWN_MARGIN), headerTopMax);
+    const spaceBelowList = Math.max(
+      0,
+      viewportHeight - headerTop - headerHeight - ENTITY_DROPDOWN_MARGIN
+    );
+    const spaceAboveList = Math.max(0, headerTop - ENTITY_DROPDOWN_MARGIN);
+    const placement: "above" | "below" =
+      spaceBelowList >= Math.min(ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT, spaceAboveList) ||
+      spaceBelowList >= spaceAboveList
+        ? "below"
+        : "above";
     const listMaxHeight = Math.max(
       0,
-      maxHeight - ENTITY_DROPDOWN_HEADER_HEIGHT
+      Math.min(
+        ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT,
+        placement === "above" ? spaceAboveList : spaceBelowList
+      )
     );
+    const maxHeight = headerHeight + listMaxHeight;
+    const top = headerTop;
     const maxLeft = Math.max(
       ENTITY_DROPDOWN_MARGIN,
       viewportWidth - dropdownWidth - ENTITY_DROPDOWN_MARGIN
@@ -842,10 +2127,11 @@ export function EstimateGrid({
 
     setEntityDropdownPos({
       left,
-      top: openAbove ? undefined : rect.bottom + ENTITY_DROPDOWN_GAP,
-      bottom: openAbove ? viewportHeight - rect.top + ENTITY_DROPDOWN_GAP : undefined,
+      top,
+      bottom: undefined,
       maxHeight,
       listMaxHeight,
+      placement,
     });
   }, []);
 
@@ -864,10 +2150,17 @@ export function EstimateGrid({
 
   // Sync active tab when worksheets change
   useEffect(() => {
+    if (worksheetViewIsFolder(activeTab)) {
+      const folderId = folderIdFromView(activeTab);
+      if (folderId && !findWorksheetFolder(workspace, folderId)) {
+        setActiveTab(workspace.worksheets[0]?.id ?? "all");
+      }
+      return;
+    }
     if (activeTab !== "all" && !findWs(workspace, activeTab)) {
       setActiveTab(workspace.worksheets[0]?.id ?? "all");
     }
-  }, [workspace.worksheets, activeTab]);
+  }, [workspace, activeTab, setActiveTab]);
 
   // Focus entity search when dropdown opens
   useEffect(() => {
@@ -906,35 +2199,198 @@ export function EstimateGrid({
     setSelectedIds(new Set());
   }, [activeTab]);
 
-  // Entity dropdown options
-  const entityOptions = useMemo(
-    () => buildEntityOptions(workspace, entityCategories),
-    [workspace, entityCategories]
+  const activeEntityRow = useMemo(() => {
+    if (!entityDropdownRowId) return null;
+    return (workspace.worksheets ?? [])
+      .flatMap((worksheet) => worksheet.items)
+      .find((row) => row.id === entityDropdownRowId) ?? null;
+  }, [entityDropdownRowId, workspace.worksheets]);
+  const estimateSearchSettings = useMemo(
+    () => readEstimateSearchSettings(workspace.currentRevision.pdfPreferences),
+    [workspace.currentRevision.pdfPreferences],
   );
+  const enabledEntityBrowseCards = useMemo(
+    () => ENTITY_BROWSE_CARDS.filter((card) => browseCardIsEnabled(estimateSearchSettings, card)),
+    [estimateSearchSettings],
+  );
+  const activeEntityBrowseCard = useMemo(
+    () => {
+      const card = entityBrowseCardById(entityBrowseMode);
+      return card && browseCardIsEnabled(estimateSearchSettings, card) ? card : null;
+    },
+    [entityBrowseMode, estimateSearchSettings],
+  );
+
+  useEffect(() => {
+    if (!entityDropdownRowId || !activeEntityRow) {
+      setEntitySearchGroups([]);
+      setEntitySearchLoading(false);
+      setEntitySearchLoadingMore(false);
+      entitySearchLoadingMoreRef.current = false;
+      setEntitySearchHasMore(false);
+      setEntitySearchOffset(0);
+      setEntitySearchError(null);
+      setEntityPluginResults([]);
+      setEntityBrowseMode(null);
+      return;
+    }
+
+    const requestId = ++entitySearchRequestRef.current;
+    const trimmedSearch = entitySearchTerm.trim();
+    const browseCard = trimmedSearch ? null : activeEntityBrowseCard;
+    if (!trimmedSearch && !browseCard) {
+      setEntitySearchGroups([]);
+      setEntitySearchLoading(false);
+      setEntitySearchLoadingMore(false);
+      entitySearchLoadingMoreRef.current = false;
+      setEntitySearchHasMore(false);
+      setEntitySearchOffset(0);
+      setEntitySearchError(null);
+      setEntityPluginResults([]);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setEntitySearchLoading(true);
+      setEntitySearchLoadingMore(false);
+      entitySearchLoadingMoreRef.current = false;
+      setEntitySearchHasMore(false);
+      setEntitySearchOffset(0);
+      setEntitySearchError(null);
+      try {
+        const results = await searchLineItemCandidates(workspace.project.id, {
+          q: entitySearchTerm,
+          category: activeEntityRow.category,
+          worksheetId: activeEntityRow.worksheetId,
+          sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+          disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+          disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
+          disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
+          limit: ENTITY_SEARCH_PAGE_SIZE,
+          offset: 0,
+        });
+        if (requestId !== entitySearchRequestRef.current) return;
+        setEntitySearchGroups(groupSearchResults(results, entityCategories, entitySearchTerm, activeEntityRow.category));
+        setEntitySearchOffset(results.length);
+        setEntitySearchHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
+        setEntityPluginResults([]);
+      } catch (error) {
+        if (requestId !== entitySearchRequestRef.current) return;
+        setEntitySearchGroups([]);
+        setEntitySearchOffset(0);
+        setEntitySearchHasMore(false);
+        setEntitySearchError(error instanceof Error ? error.message : "Search failed.");
+      } finally {
+        if (requestId === entitySearchRequestRef.current) {
+          setEntitySearchLoading(false);
+        }
+      }
+    }, trimmedSearch ? 180 : 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, workspace.project.id]);
+
+  const loadMoreEntitySearchResults = useCallback(async () => {
+    if (
+      !entityDropdownRowId ||
+      !activeEntityRow ||
+      entitySearchLoading ||
+      entitySearchLoadingMore ||
+      entitySearchLoadingMoreRef.current ||
+      !entitySearchHasMore
+    ) {
+      return;
+    }
+
+    const requestId = entitySearchRequestRef.current;
+    const trimmedSearch = entitySearchTerm.trim();
+    const browseCard = trimmedSearch ? null : activeEntityBrowseCard;
+    entitySearchLoadingMoreRef.current = true;
+    setEntitySearchLoadingMore(true);
+    setEntitySearchError(null);
+    try {
+      const results = await searchLineItemCandidates(workspace.project.id, {
+        q: entitySearchTerm,
+        category: activeEntityRow.category,
+        worksheetId: activeEntityRow.worksheetId,
+        sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+        disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+        disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
+        disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
+        limit: ENTITY_SEARCH_PAGE_SIZE,
+        offset: entitySearchOffset,
+      });
+      if (requestId !== entitySearchRequestRef.current) return;
+      const nextGroups = groupSearchResults(results, entityCategories, entitySearchTerm, activeEntityRow.category);
+      setEntitySearchGroups((current) => mergeEntityOptionGroups(current, nextGroups));
+      setEntitySearchOffset((current) => current + results.length);
+      setEntitySearchHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
+    } catch (error) {
+      if (requestId !== entitySearchRequestRef.current) return;
+      setEntitySearchError(error instanceof Error ? error.message : "Search failed.");
+      setEntitySearchHasMore(false);
+    } finally {
+      if (requestId === entitySearchRequestRef.current) {
+        entitySearchLoadingMoreRef.current = false;
+        setEntitySearchLoadingMore(false);
+      }
+    }
+  }, [
+    activeEntityRow,
+    activeEntityBrowseCard,
+    entityCategories,
+    entityBrowseMode,
+    entityDropdownRowId,
+    entitySearchHasMore,
+    entitySearchLoading,
+    entitySearchLoadingMore,
+    entitySearchOffset,
+    entitySearchTerm,
+    estimateSearchSettings,
+    workspace.project.id,
+  ]);
+
+  const entityDisplayGroups = useMemo(() => {
+    if (entityPluginResults.length === 0) return entitySearchGroups;
+    const remoteGroup: EntityOptionGroup = {
+      categoryName: "Provider Results",
+      categoryId: "__provider_results",
+      entityType: "Material",
+      defaultUom: "EA",
+      label: "Provider results",
+      source: "plugin_result",
+      sortPriority: 50,
+      tone: "success",
+      items: entityPluginResults,
+    };
+    return [remoteGroup, ...entitySearchGroups];
+  }, [entityPluginResults, entitySearchGroups]);
 
   // Flat list of selectable entity items for keyboard navigation when the
   // entity dropdown is open. Items in the "matching" group come first.
   const entityFlatItems = useMemo(() => {
-    if (!entityDropdownRowId) return [];
-    const allRows = (workspace.worksheets ?? []).flatMap((w) => w.items);
-    const row = allRows.find((r) => r.id === entityDropdownRowId);
-    if (!row) return [];
-    const q = entitySearchTerm.toLowerCase();
-    const matching = entityOptions.filter((g) => g.categoryName === row.category);
-    const others = entityOptions.filter((g) => g.categoryName !== row.category);
-    type FlatEntity = { group: typeof entityOptions[0]; item: EntityOptionItem };
+    if (!entityDropdownRowId || !activeEntityRow) return [];
+    type FlatEntity = { group: EntityOptionGroup; item: EntityOptionItem };
     const out: FlatEntity[] = [];
-    for (const group of [...matching, ...others]) {
-      const filtered = q ? group.items.filter((it) => it.label.toLowerCase().includes(q)) : group.items;
-      for (const item of filtered) out.push({ group, item });
+    for (const group of entityDisplayGroups) {
+      for (const item of group.items) out.push({ group, item });
     }
     return out;
-  }, [entityDropdownRowId, entitySearchTerm, entityOptions, workspace.worksheets]);
+  }, [activeEntityRow, entityDisplayGroups, entityDropdownRowId]);
 
   // Reset highlight when dropdown opens or search changes
   useEffect(() => {
     setEntityHighlightIdx(0);
-  }, [entityDropdownRowId, entitySearchTerm]);
+  }, [entityBrowseMode, entityDropdownRowId, entitySearchTerm]);
+
+  useEffect(() => {
+    setEntityHighlightIdx((current) => {
+      if (entityFlatItems.length === 0) return 0;
+      return Math.min(current, entityFlatItems.length - 1);
+    });
+  }, [entityFlatItems.length]);
 
   // Scroll the highlighted entity item into view
   useEffect(() => {
@@ -956,7 +2412,9 @@ export function EstimateGrid({
     const cols = new Set(DEFAULT_VISIBLE_COLUMNS);
 
     // Hide combined units column if no rows use labour or have unit fields
-    const hasLabourOrUnit1 = activeCatDefs.some((c) => categoryUsesTieredUnits(c) || c.editableFields.unit1);
+    const hasLabourOrUnit1 = activeCatDefs.some((c) =>
+      categoryUsesTieredUnits(c) || categoryAllowsEditingUnitSlot(c, "unit1")
+    );
     if (!hasLabourOrUnit1 && allItems.length > 0) {
       cols.delete("units");
     }
@@ -977,8 +2435,16 @@ export function EstimateGrid({
   );
 
   const getRowUnitSlotLabels = useCallback(
-    (row: WorkspaceWorksheetItem, category: EntityCategory | undefined) =>
-      getWorksheetUnitSlotLabels(row, workspace.rateSchedules, category?.unitLabels),
+    (row: WorkspaceWorksheetItem, category: EntityCategory | undefined) => {
+      const categoryLabels = category
+        ? {
+            unit1: getCategoryUnitLabel(category, "unit1", "Unit 1"),
+            unit2: getCategoryUnitLabel(category, "unit2", "Unit 2"),
+            unit3: getCategoryUnitLabel(category, "unit3", "Unit 3"),
+          }
+        : undefined;
+      return getWorksheetUnitSlotLabels(row, workspace.rateSchedules, categoryLabels);
+    },
     [workspace.rateSchedules],
   );
 
@@ -1004,12 +2470,39 @@ export function EstimateGrid({
     });
   }
 
+  const adjustedLineItemsById = useMemo(() => {
+    const rows = workspace.estimate?.totals?.adjustedLineItems ?? workspace.estimate?.lineItems ?? [];
+    return new Map(rows.map((item) => [item.id, item]));
+  }, [workspace.estimate?.lineItems, workspace.estimate?.totals?.adjustedLineItems]);
+
+  const displayLineItem = useCallback(
+    (item: WorkspaceWorksheetItem) => adjustedLineItemsById.get(item.id) ?? item,
+    [adjustedLineItemsById],
+  );
+
+  const lineItemHasFactorAdjustment = useCallback((item: WorkspaceWorksheetItem) => {
+    const adjusted = adjustedLineItemsById.get(item.id);
+    if (!adjusted) return false;
+    return (
+      Math.abs((adjusted.price ?? 0) - (item.price ?? 0)) >= 0.005 ||
+      Math.abs((adjusted.cost ?? 0) - (item.cost ?? 0)) >= 0.005 ||
+      Math.abs((adjusted.unit1 ?? 0) - (item.unit1 ?? 0)) >= 0.005 ||
+      Math.abs((adjusted.unit2 ?? 0) - (item.unit2 ?? 0)) >= 0.005 ||
+      Math.abs((adjusted.unit3 ?? 0) - (item.unit3 ?? 0)) >= 0.005
+    );
+  }, [adjustedLineItemsById]);
+
   // Get visible rows
   const visibleRows = useMemo(() => {
     let rows: WorkspaceWorksheetItem[];
 
     if (activeTab === "all") {
       rows = (workspace.worksheets ?? []).flatMap((w) => w.items);
+    } else if (worksheetViewIsFolder(activeTab)) {
+      const folderId = folderIdFromView(activeTab);
+      rows = folderId
+        ? getWorksheetsInFolderView(workspace, folderId).flatMap((w) => w.items)
+        : [];
     } else {
       const ws = findWs(workspace, activeTab);
       rows = ws ? ws.items : [];
@@ -1038,18 +2531,20 @@ export function EstimateGrid({
           case "description": aVal = a.description.toLowerCase(); bVal = b.description.toLowerCase(); break;
           case "quantity": aVal = a.quantity; bVal = b.quantity; break;
           case "uom": aVal = a.uom; bVal = b.uom; break;
-          case "unit1": aVal = getRowHourBreakdown(a).unit1; bVal = getRowHourBreakdown(b).unit1; break;
-          case "unit2": aVal = getRowHourBreakdown(a).unit2; bVal = getRowHourBreakdown(b).unit2; break;
-          case "unit3": aVal = getRowHourBreakdown(a).unit3; bVal = getRowHourBreakdown(b).unit3; break;
-          case "cost": aVal = a.cost; bVal = b.cost; break;
+          case "unit1": aVal = getRowHourBreakdown(displayLineItem(a)).unit1; bVal = getRowHourBreakdown(displayLineItem(b)).unit1; break;
+          case "unit2": aVal = getRowHourBreakdown(displayLineItem(a)).unit2; bVal = getRowHourBreakdown(displayLineItem(b)).unit2; break;
+          case "unit3": aVal = getRowHourBreakdown(displayLineItem(a)).unit3; bVal = getRowHourBreakdown(displayLineItem(b)).unit3; break;
+          case "cost": aVal = displayLineItem(a).cost; bVal = displayLineItem(b).cost; break;
           case "markup": aVal = a.markup; bVal = b.markup; break;
-          case "price": aVal = a.price; bVal = b.price; break;
-          case "extCost": aVal = a.cost * a.quantity; bVal = b.cost * b.quantity; break;
+          case "price": aVal = displayLineItem(a).price; bVal = displayLineItem(b).price; break;
+          case "extCost": aVal = displayLineItem(a).cost * a.quantity; bVal = displayLineItem(b).cost * b.quantity; break;
           case "margin": {
-            const aExt = a.cost * a.quantity;
-            const bExt = b.cost * b.quantity;
-            aVal = a.price > 0 ? (a.price - aExt) / a.price : 0;
-            bVal = b.price > 0 ? (b.price - bExt) / b.price : 0;
+            const adjustedA = displayLineItem(a);
+            const adjustedB = displayLineItem(b);
+            const aExt = adjustedA.cost * a.quantity;
+            const bExt = adjustedB.cost * b.quantity;
+            aVal = adjustedA.price > 0 ? (adjustedA.price - aExt) / adjustedA.price : 0;
+            bVal = adjustedB.price > 0 ? (adjustedB.price - bExt) / adjustedB.price : 0;
             break;
           }
           default: return 0;
@@ -1062,57 +2557,236 @@ export function EstimateGrid({
     }
 
     return rows;
-  }, [categoryFilter, phaseFilter, activeTab, workspace.worksheets, sortState, getRowHourBreakdown]);
+  }, [categoryFilter, phaseFilter, activeTab, workspace, sortState, getRowHourBreakdown, displayLineItem]);
+
+  const activeFolderId = folderIdFromView(activeTab);
+  const activeFolder = activeFolderId ? findWorksheetFolder(workspace, activeFolderId) : null;
+  const activeWorksheetForActions = useMemo(() => {
+    if (activeTab !== "all" && !worksheetViewIsFolder(activeTab)) {
+      return findWs(workspace, activeTab);
+    }
+    if (activeFolderId) {
+      return getWorksheetsInFolderView(workspace, activeFolderId)[0] ?? null;
+    }
+    return workspace.worksheets[0] ?? null;
+  }, [activeFolderId, activeTab, workspace]);
+
+  const activeViewLabel = activeTab === "all"
+    ? "All worksheets"
+    : activeFolder
+      ? getWorksheetFolderPath(workspace.worksheetFolders ?? [], activeFolder.id)
+      : findWs(workspace, activeTab)?.name ?? "Worksheet";
+
+  const fitLevel: FitLevel = gridWidth > 0 && gridWidth < 760
+    ? "tight"
+    : gridWidth > 0 && gridWidth < 1040
+      ? "compact"
+      : "full";
 
   // Grouped rows
   const groupedRows = useMemo(
-    () => groupRowsByCategory(visibleRows, entityCategories, sortState !== null),
-    [visibleRows, entityCategories, sortState]
+    () => groupRowsByCategory(visibleRows, entityCategories, sortState !== null, adjustedLineItemsById),
+    [visibleRows, entityCategories, sortState, adjustedLineItemsById]
   );
 
   // Totals
   const totals = useMemo(() => {
     return {
-      cost: visibleRows.reduce((sum, r) => sum + r.cost * r.quantity, 0),
-      price: visibleRows.reduce((sum, r) => sum + r.price, 0),
-      regHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit1 * r.quantity, 0),
-      otHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit2 * r.quantity, 0),
-      dtHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(r).unit3 * r.quantity, 0),
+      cost: visibleRows.reduce((sum, r) => sum + displayLineItem(r).cost * r.quantity, 0),
+      price: visibleRows.reduce((sum, r) => sum + displayLineItem(r).price, 0),
+      regHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit1 * r.quantity, 0),
+      otHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit2 * r.quantity, 0),
+      dtHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit3 * r.quantity, 0),
       count: visibleRows.length,
     };
-  }, [visibleRows, getRowHourBreakdown]);
+  }, [visibleRows, getRowHourBreakdown, displayLineItem]);
 
-  // All catalog items flattened (for catalog quick-add)
-  const allCatalogItems = useMemo(() => {
-    const items: Array<CatalogItem & { catalogKind: string; catalogName: string }> = [];
-    for (const catalog of workspace.catalogs ?? []) {
-      for (const ci of catalog.items ?? []) {
-        items.push({ ...ci, catalogKind: catalog.kind, catalogName: catalog.name });
+  const lineFactorsByItemId = useMemo(() => {
+    const map = new Map<string, EstimateFactor[]>();
+    for (const factor of workspace.estimateFactors ?? []) {
+      const ids = Array.isArray(factor.scope?.worksheetItemIds) ? factor.scope.worksheetItemIds : [];
+      if ((factor.applicationScope ?? "global") === "global" || ids.length === 0) continue;
+      for (const id of ids) {
+        const list = map.get(id) ?? [];
+        list.push(factor);
+        map.set(id, list);
       }
     }
-    return items;
-  }, [workspace.catalogs]);
+    return map;
+  }, [workspace.estimateFactors]);
 
-  // Filtered catalog items for picker
-  const filteredCatalogItems = useMemo(() => {
-    const q = catalogSearchTerm.trim().toLowerCase();
-    if (!q) return allCatalogItems;
-    return allCatalogItems.filter(
-      (ci) =>
-        ci.name.toLowerCase().includes(q) ||
-        ci.code.toLowerCase().includes(q) ||
-        ci.catalogName.toLowerCase().includes(q)
-    );
-  }, [allCatalogItems, catalogSearchTerm]);
+  const factorTotalsById = useMemo(
+    () => new Map((workspace.estimate?.totals?.factorTotals ?? []).map((entry) => [entry.id, entry])),
+    [workspace.estimate?.totals?.factorTotals],
+  );
+
+  const activeAddItemsBrowseCard = useMemo(
+    () => {
+      const card = entityBrowseCardById(addItemsBrowseMode);
+      return card && browseCardIsEnabled(estimateSearchSettings, card) ? card : null;
+    },
+    [addItemsBrowseMode, estimateSearchSettings],
+  );
+
+  const addItemsFlatItems = useMemo(() => {
+    type FlatEntity = { group: EntityOptionGroup; item: EntityOptionItem };
+    const rows: FlatEntity[] = [];
+    for (const group of addItemsGroups) {
+      for (const item of group.items) rows.push({ group, item });
+    }
+    return rows;
+  }, [addItemsGroups]);
+
+  useEffect(() => {
+    if (!showAddItemsPicker) {
+      setAddItemsGroups([]);
+      setAddItemsLoading(false);
+      setAddItemsLoadingMore(false);
+      addItemsLoadingMoreRef.current = false;
+      setAddItemsHasMore(false);
+      setAddItemsOffset(0);
+      setAddItemsError(null);
+      setAddItemsBrowseMode(null);
+      setAddItemsSearchTerm("");
+      setSelectedAddItems(new Map());
+      return;
+    }
+
+    const requestId = ++addItemsRequestRef.current;
+    const trimmedSearch = addItemsSearchTerm.trim();
+    const browseCard = trimmedSearch ? null : activeAddItemsBrowseCard;
+    if (!trimmedSearch && !browseCard) {
+      setAddItemsGroups([]);
+      setAddItemsLoading(false);
+      setAddItemsLoadingMore(false);
+      addItemsLoadingMoreRef.current = false;
+      setAddItemsHasMore(false);
+      setAddItemsOffset(0);
+      setAddItemsError(null);
+      return;
+    }
+
+    const timer = window.setTimeout(async () => {
+      setAddItemsLoading(true);
+      setAddItemsLoadingMore(false);
+      addItemsLoadingMoreRef.current = false;
+      setAddItemsHasMore(false);
+      setAddItemsOffset(0);
+      setAddItemsError(null);
+      try {
+        const results = await searchLineItemCandidates(workspace.project.id, {
+          q: addItemsSearchTerm,
+          worksheetId: activeWorksheetForActions?.id,
+          sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+          disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+          disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
+          disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
+          limit: ENTITY_SEARCH_PAGE_SIZE,
+          offset: 0,
+        });
+        if (requestId !== addItemsRequestRef.current) return;
+        setAddItemsGroups(groupSearchResults(results, entityCategories, addItemsSearchTerm, ""));
+        setAddItemsOffset(results.length);
+        setAddItemsHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
+      } catch (error) {
+        if (requestId !== addItemsRequestRef.current) return;
+        setAddItemsGroups([]);
+        setAddItemsOffset(0);
+        setAddItemsHasMore(false);
+        setAddItemsError(error instanceof Error ? error.message : "Search failed.");
+      } finally {
+        if (requestId === addItemsRequestRef.current) {
+          setAddItemsLoading(false);
+        }
+      }
+    }, trimmedSearch ? 180 : 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeAddItemsBrowseCard,
+    activeWorksheetForActions?.id,
+    addItemsBrowseMode,
+    addItemsSearchTerm,
+    entityCategories,
+    estimateSearchSettings,
+    showAddItemsPicker,
+    workspace.project.id,
+  ]);
+
+  const loadMoreAddItems = useCallback(async () => {
+    if (
+      !showAddItemsPicker ||
+      addItemsLoading ||
+      addItemsLoadingMore ||
+      addItemsLoadingMoreRef.current ||
+      !addItemsHasMore
+    ) {
+      return;
+    }
+
+    const requestId = addItemsRequestRef.current;
+    const trimmedSearch = addItemsSearchTerm.trim();
+    const browseCard = trimmedSearch ? null : activeAddItemsBrowseCard;
+    addItemsLoadingMoreRef.current = true;
+    setAddItemsLoadingMore(true);
+    setAddItemsError(null);
+    try {
+      const results = await searchLineItemCandidates(workspace.project.id, {
+        q: addItemsSearchTerm,
+        worksheetId: activeWorksheetForActions?.id,
+        sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+        disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+        disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
+        disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
+        limit: ENTITY_SEARCH_PAGE_SIZE,
+        offset: addItemsOffset,
+      });
+      if (requestId !== addItemsRequestRef.current) return;
+      const nextGroups = groupSearchResults(results, entityCategories, addItemsSearchTerm, "");
+      setAddItemsGroups((current) => mergeEntityOptionGroups(current, nextGroups));
+      setAddItemsOffset((current) => current + results.length);
+      setAddItemsHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
+    } catch (error) {
+      if (requestId !== addItemsRequestRef.current) return;
+      setAddItemsError(error instanceof Error ? error.message : "Search failed.");
+      setAddItemsHasMore(false);
+    } finally {
+      if (requestId === addItemsRequestRef.current) {
+        addItemsLoadingMoreRef.current = false;
+        setAddItemsLoadingMore(false);
+      }
+    }
+  }, [
+    activeAddItemsBrowseCard,
+    activeWorksheetForActions?.id,
+    addItemsHasMore,
+    addItemsLoading,
+    addItemsLoadingMore,
+    addItemsOffset,
+    addItemsSearchTerm,
+    entityCategories,
+    estimateSearchSettings,
+    showAddItemsPicker,
+    workspace.project.id,
+  ]);
 
   // Helper to check if a column is visible
   // Checkbox column only appears when items are selected (bulk mode)
   const isColVisible = useCallback(
     (col: ColumnId) => {
       if (col === "checkbox") return selectedIds.size > 0;
-      return visibleColumns.has(col);
+      if (!visibleColumns.has(col)) return false;
+      if (fitLevel === "compact") {
+        return !["lineOrder", "vendor", "extCost", "markup", "margin"].includes(col);
+      }
+      if (fitLevel === "tight") {
+        return !["lineOrder", "vendor", "uom", "factors", "extCost", "markup", "margin", "phaseId", "actions"].includes(col);
+      }
+      return true;
     },
-    [visibleColumns, selectedIds.size]
+    [fitLevel, visibleColumns, selectedIds.size]
   );
 
   // Count visible data columns for colSpan on group header
@@ -1135,10 +2809,6 @@ export function EstimateGrid({
   function startEditing(rowId: string, column: EditableColumn, currentValue: string | number) {
     const row = visibleRows.find((r) => r.id === rowId);
     if (!row) return;
-    if (isTemporaryWorksheetItemId(row.id)) return;
-
-    const catDef = findCategoryForRow(row, entityCategories);
-    if (isCellDisabledByCategory(catDef, column)) return;
 
     // Entity name uses the dropdown instead
     if (column === "entityName") {
@@ -1148,6 +2818,11 @@ export function EstimateGrid({
       setSelectedRowId(rowId);
       return;
     }
+
+    if (isTemporaryWorksheetItemId(row.id)) return;
+
+    const catDef = findCategoryForRow(row, entityCategories);
+    if (isCellDisabledByCategory(catDef, column)) return;
 
     let val: string;
     if (column === "markup") {
@@ -1374,6 +3049,7 @@ export function EstimateGrid({
           return;
         case "Enter":
         case "F2": {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) return;
           e.preventDefault();
           const row = visibleRows.find((r) => r.id === selectedCell.rowId);
           if (!row) return;
@@ -1439,78 +3115,137 @@ export function EstimateGrid({
 
   // ─── Entity selection ───
 
-  function handleEntitySelect(
+	  function handleEntitySelect(
     rowId: string,
     entityName: string,
     categoryName: string,
     entityType: string,
     defaultUom: string,
-    /** Optional auto-populate fields from catalog item */
-    catalogData?: { cost?: number; uom?: string; description?: string },
-    /** Optional rate schedule item ID to link */
+    catalogData?: {
+      cost?: number;
+      uom?: string;
+      description?: string;
+      vendor?: string | null;
+      sourceNotes?: string;
+      price?: number;
+      quantity?: number;
+      unit1?: number;
+      unit2?: number;
+      unit3?: number;
+      costResourceId?: string;
+      effectiveCostId?: string;
+      laborUnitId?: string;
+      resourceComposition?: Record<string, unknown>;
+      sourceEvidence?: Record<string, unknown>;
+    },
     rateScheduleItemId?: string,
-    /** Optional catalog item ID to link */
     itemId?: string,
   ) {
     setEntityDropdownRowId(null);
     setEntityDropdownPos(null);
     setEntitySearchTerm("");
+    setEntityBrowseMode(null);
+    setEntityPluginResults([]);
 
-    const row = visibleRows.find((r) => r.id === rowId);
-    const newCatDef = entityCategories.find((c) => c.name === categoryName);
-    const oldCategory = row?.category;
-    const categoryChanged = oldCategory !== categoryName;
+	    const row = visibleRows.find((r) => r.id === rowId);
+	    const newCatDef = entityCategories.find((c) => c.name === categoryName);
+	    const oldCategory = row?.category;
+	    const categoryChanged = oldCategory !== categoryName;
+	    const preservingProductivityBasis = !!rateScheduleItemId && !!row?.laborUnitId;
 
-    // Build patch with the basic entity fields
-    const patch: Record<string, unknown> = {
-      entityName,
-      category: categoryName,
-      entityType,
-      uom: catalogData?.uom ?? defaultUom,
-    };
+	    const patch: Record<string, unknown> = {
+	      categoryId: newCatDef?.id ?? null,
+	      entityName,
+	      category: categoryName,
+	      entityType,
+	      uom: preservingProductivityBasis ? row.uom : catalogData?.uom ?? defaultUom,
+	    };
 
-    // Auto-populate from catalog item if provided
-    if (catalogData?.cost !== undefined) {
-      patch.cost = catalogData.cost;
+    if (catalogData?.cost !== undefined) patch.cost = catalogData.cost;
+    if (catalogData?.price !== undefined) patch.price = catalogData.price;
+    if (catalogData?.quantity !== undefined) patch.quantity = catalogData.quantity;
+    if (catalogData?.unit1 !== undefined) patch.unit1 = catalogData.unit1;
+    if (catalogData?.unit2 !== undefined) patch.unit2 = catalogData.unit2;
+    if (catalogData?.unit3 !== undefined) patch.unit3 = catalogData.unit3;
+	    if (catalogData?.description && !(preservingProductivityBasis && row?.description)) patch.description = catalogData.description;
+    if (catalogData?.vendor !== undefined) patch.vendor = catalogData.vendor;
+    if (catalogData?.sourceNotes !== undefined) patch.sourceNotes = catalogData.sourceNotes;
+    if (catalogData?.costResourceId !== undefined) patch.costResourceId = catalogData.costResourceId;
+    if (catalogData?.effectiveCostId !== undefined) patch.effectiveCostId = catalogData.effectiveCostId;
+    if (catalogData?.laborUnitId !== undefined) patch.laborUnitId = catalogData.laborUnitId;
+    if (catalogData?.resourceComposition !== undefined) patch.resourceComposition = catalogData.resourceComposition;
+    if (catalogData?.sourceEvidence !== undefined) patch.sourceEvidence = catalogData.sourceEvidence;
+
+    if (preservingProductivityBasis && row) {
+      if (row.laborUnitId && catalogData?.laborUnitId === undefined) {
+        patch.laborUnitId = row.laborUnitId;
+      }
+      if (catalogData?.sourceNotes !== undefined || row.sourceNotes) {
+        patch.sourceNotes = mergeSourceNotes(row.sourceNotes, catalogData?.sourceNotes);
+      }
+      if (catalogData?.resourceComposition !== undefined || hasMeaningfulMetadata(row.resourceComposition)) {
+        patch.resourceComposition = mergeResourceCompositions(
+          row.resourceComposition,
+          catalogData?.resourceComposition,
+        );
+      }
+      if (catalogData?.sourceEvidence !== undefined || hasMeaningfulMetadata(row.sourceEvidence)) {
+        patch.sourceEvidence = mergeSourceEvidence(row.sourceEvidence, catalogData?.sourceEvidence);
+      }
     }
-    if (catalogData?.description) {
-      patch.description = catalogData.description;
-    }
 
-    // Link to catalog item if provided
     if (itemId) {
       patch.itemId = itemId;
     } else if (categoryChanged) {
       patch.itemId = null;
     }
 
-    // Link to rate schedule item if provided
-    if (rateScheduleItemId) {
-      patch.rateScheduleItemId = rateScheduleItemId;
-      // Initialize tier hours from revision's rate schedules
-      const schedule = (workspace.rateSchedules ?? []).find((s) =>
-        s.items.some((i) => i.id === rateScheduleItemId),
-      );
-      if (schedule) {
-        const tierUnits: Record<string, number> = {};
-        for (const tier of schedule.tiers) {
-          tierUnits[tier.id] = 0;
-        }
-        patch.tierUnits = tierUnits;
-      }
+	    if (rateScheduleItemId) {
+	      patch.rateScheduleItemId = rateScheduleItemId;
+	      const schedule = (workspace.rateSchedules ?? []).find((s) =>
+	        s.items.some((i) => i.id === rateScheduleItemId),
+	      );
+	      if (schedule) {
+	        const existingUnit1 = Number(patch.unit1 ?? row?.unit1 ?? 0);
+	        const existingUnit2 = Number(patch.unit2 ?? row?.unit2 ?? 0);
+	        const existingUnit3 = Number(patch.unit3 ?? row?.unit3 ?? 0);
+	        const hasProductivityHours = !!(catalogData?.laborUnitId ?? row?.laborUnitId) && (existingUnit1 > 0 || existingUnit2 > 0 || existingUnit3 > 0);
+	        const sortedTiers = [...schedule.tiers].sort((left, right) => left.multiplier - right.multiplier || left.sortOrder - right.sortOrder);
+	        const tierUnits: Record<string, number> = {};
+	        if (hasProductivityHours) {
+	          const regular = sortedTiers.find((tier) => tier.multiplier === 1) ?? sortedTiers[0];
+	          const overtime = sortedTiers.find((tier) => tier.multiplier === 1.5);
+	          const doubletime = sortedTiers.find((tier) => tier.multiplier === 2);
+	          if (regular && existingUnit1 > 0) tierUnits[regular.id] = existingUnit1;
+	          if (overtime && existingUnit2 > 0) tierUnits[overtime.id] = existingUnit2;
+	          if (doubletime && existingUnit3 > 0) tierUnits[doubletime.id] = existingUnit3;
+	        } else {
+	          for (const tier of schedule.tiers) {
+	            tierUnits[tier.id] = 0;
+	          }
+	        }
+	        patch.tierUnits = tierUnits;
+	      }
     } else if (categoryChanged) {
-      // Clear rate schedule link when category changes
       patch.rateScheduleItemId = null;
       patch.tierUnits = {};
     }
 
-    // Category Change Reset: when switching categories, reset fields
-    // based on new category's editableFields
-    if (categoryChanged && newCatDef) {
-      // Reset UOM to the new category's default
-      patch.uom = catalogData?.uom ?? newCatDef.defaultUom;
+    if (
+      categoryChanged &&
+      catalogData?.costResourceId === undefined &&
+      catalogData?.effectiveCostId === undefined &&
+      catalogData?.laborUnitId === undefined
+    ) {
+      patch.costResourceId = null;
+      patch.effectiveCostId = null;
+      patch.laborUnitId = null;
+      patch.resourceComposition = {};
+      patch.sourceEvidence = {};
+    }
 
-      // Clear computed fields that are non-editable in the new category
+	    if (categoryChanged && newCatDef) {
+	      patch.uom = preservingProductivityBasis ? row?.uom : catalogData?.uom ?? newCatDef.defaultUom;
       if (isCellDisabledByCategory(newCatDef, "unit1")) patch.unit1 = 0;
       if (isCellDisabledByCategory(newCatDef, "unit2")) patch.unit2 = 0;
       if (isCellDisabledByCategory(newCatDef, "unit3")) patch.unit3 = 0;
@@ -1519,43 +3254,420 @@ export function EstimateGrid({
       if (isCellDisabledByCategory(newCatDef, "price")) patch.price = 0;
     }
 
-    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
+    if (row && isTemporaryWorksheetItemId(row.id)) {
+      const patchHas = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
+      const patchValue = <T,>(key: string, fallback: T): T =>
+        patchHas(key) && patch[key] !== undefined ? (patch[key] as T) : fallback;
+      const createPayload: CreateWorksheetItemInput = {
+	        phaseId: row.phaseId ?? null,
+	        categoryId: (patch.categoryId as string | null | undefined) ?? newCatDef?.id ?? null,
+	        category: String(patch.category ?? categoryName),
+        entityType: String(patch.entityType ?? entityType),
+        entityName: String(patch.entityName ?? entityName),
+        classification: row.classification ?? {},
+        costCode: row.costCode ?? null,
+        vendor: (patch.vendor as string | null | undefined) ?? row.vendor ?? null,
+        description: String(patch.description ?? row.description ?? ""),
+        quantity: Number(patchValue("quantity", row.quantity ?? 1)),
+        uom: String(patch.uom ?? row.uom ?? defaultUom),
+        cost: Number(patch.cost ?? row.cost ?? 0),
+        markup: Number(patch.markup ?? row.markup ?? workspace.currentRevision.defaultMarkup ?? 0.2),
+        price: Number(patch.price ?? row.price ?? 0),
+        unit1: Number(patch.unit1 ?? row.unit1 ?? 0),
+        unit2: Number(patch.unit2 ?? row.unit2 ?? 0),
+        unit3: Number(patch.unit3 ?? row.unit3 ?? 0),
+        lineOrder: row.lineOrder,
+        rateScheduleItemId: patchValue("rateScheduleItemId", row.rateScheduleItemId ?? null) as string | null,
+        itemId: patchValue("itemId", row.itemId ?? null) as string | null,
+        costResourceId: patchValue("costResourceId", row.costResourceId ?? null) as string | null,
+        effectiveCostId: patchValue("effectiveCostId", row.effectiveCostId ?? null) as string | null,
+        laborUnitId: patchValue("laborUnitId", row.laborUnitId ?? null) as string | null,
+        tierUnits: (patch.tierUnits as Record<string, number> | undefined) ?? row.tierUnits ?? {},
+        sourceNotes: String(patch.sourceNotes ?? row.sourceNotes ?? ""),
+        resourceComposition: patchValue("resourceComposition", row.resourceComposition ?? {}) as Record<string, unknown>,
+        sourceEvidence: patchValue("sourceEvidence", row.sourceEvidence ?? {}) as Record<string, unknown>,
+      };
+
+      startTransition(async () => {
+        try {
+          const mutation = await createWorksheetItemFast(
+            workspace.project.id,
+            row.worksheetId,
+            createPayload,
+          );
+          onApply((current) => {
+            const withoutDraft = applyWorksheetItemDelete(current, row.id);
+            return applyWorksheetItemMutation(withoutDraft, mutation);
+          });
+          setSelectedRowId(mutation.item.id);
+          setSelectedCell({ rowId: mutation.item.id, column: "entityName" });
+        } catch (error) {
+          applyMutationError("Create failed.", error);
+        }
+      });
+      return;
+    }
+
+	    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
+	  }
+
+  function categoryByAnalyticsBucket(bucket: string) {
+    const normalized = bucket.trim().toLowerCase();
+    return entityCategories.find((category) => (category.analyticsBucket ?? "").trim().toLowerCase() === normalized);
+  }
+
+  function labourCategory() {
+    return categoryByAnalyticsBucket("labour")
+      ?? entityCategories.find((category) => /labou?r/i.test(`${category.name} ${category.entityType}`))
+      ?? entityCategories.find((category) => category.itemSource === "rate_schedule" && category.calculationType === "tiered_rate");
+  }
+
+  function materialCategory() {
+    return categoryByAnalyticsBucket("material")
+      ?? entityCategories.find((category) => /materials?/i.test(`${category.name} ${category.entityType}`))
+      ?? firstEnabledCategory(entityCategories);
+  }
+
+  function inferCanonicalCategoryForOption(group: EntityOptionGroup, item: EntityOptionItem) {
+    const direct = getTargetCategoryForEntityGroup(group, item);
+    if (item.source === "labor_unit") {
+      return labourCategory() ?? direct;
+    }
+    if (item.source === "cost_intelligence" || item.source === "cost_resource" || item.source === "plugin_result") {
+      const resourceType = [
+        payloadString(item.payload, "resourceType"),
+        payloadString(item.payload, "costCategory"),
+        payloadString(item.payload, "resourceCategory"),
+        group.categoryName,
+        group.entityType,
+      ].join(" ").toLowerCase();
+      if (/\bequipment\b|\brental\b/.test(resourceType)) {
+        return categoryByAnalyticsBucket("equipment")
+          ?? entityCategories.find((category) => /\bequipment\b/i.test(`${category.name} ${category.entityType}`))
+          ?? direct
+          ?? materialCategory();
+      }
+      if (/\bsub(contract|contractor)?\b/.test(resourceType)) {
+        return categoryByAnalyticsBucket("subcontractor")
+          ?? entityCategories.find((category) => /\bsub/i.test(`${category.name} ${category.entityType}`))
+          ?? direct
+          ?? materialCategory();
+      }
+      if (/\blabou?r\b/.test(resourceType)) {
+        return labourCategory() ?? direct ?? materialCategory();
+      }
+      return direct ?? materialCategory();
+    }
+    return direct;
+  }
+
+  function stageTemporaryWorksheetItemPatch(rowId: string, patch: WorksheetItemPatchInput) {
+    const row = visibleRows.find((candidate) => candidate.id === rowId);
+    if (!row || !isTemporaryWorksheetItemId(row.id)) return false;
+    const staged: WorkspaceWorksheetItem = {
+      ...row,
+      ...patch,
+      categoryId: patch.categoryId === undefined ? row.categoryId : patch.categoryId,
+      vendor: patch.vendor === null ? undefined : patch.vendor ?? row.vendor,
+      phaseId: patch.phaseId === undefined ? row.phaseId : patch.phaseId,
+      rateScheduleItemId: patch.rateScheduleItemId === undefined ? row.rateScheduleItemId : patch.rateScheduleItemId,
+      itemId: patch.itemId === undefined ? row.itemId : patch.itemId,
+      tierUnits: patch.tierUnits === undefined ? row.tierUnits : patch.tierUnits,
+      sourceNotes: patch.sourceNotes === undefined ? row.sourceNotes : patch.sourceNotes,
+      resourceComposition: patch.resourceComposition === undefined ? row.resourceComposition : patch.resourceComposition,
+      sourceEvidence: patch.sourceEvidence === undefined ? row.sourceEvidence : patch.sourceEvidence,
+    };
+    onApply((current) => applyWorksheetItemUpsert(current, staged));
+    return true;
+  }
+
+  function buildOptionSourcePatch(
+    targetCategory: EntityCategory,
+    item: EntityOptionItem,
+  ): WorksheetItemPatchInput {
+    const uom = item.unit ?? targetCategory.defaultUom;
+    return {
+      categoryId: targetCategory.id,
+      category: targetCategory.name,
+      entityType: targetCategory.entityType,
+      entityName: item.value || item.label,
+      uom,
+      cost: item.unitCost ?? undefined,
+      price: item.unitPrice ?? undefined,
+      quantity: item.quantity,
+      unit1: item.unit1,
+      unit2: item.unit2,
+      unit3: item.unit3,
+      description: item.description ?? item.label,
+      vendor: item.vendor ?? null,
+      sourceNotes: item.sourceNotes ?? "",
+      costResourceId: item.costResourceId ?? null,
+      effectiveCostId: item.effectiveCostId ?? null,
+      laborUnitId: item.laborUnitId ?? null,
+      itemId: item.itemId ?? null,
+      rateScheduleItemId: item.rateScheduleItemId ?? null,
+      resourceComposition: item.resourceComposition ?? {},
+      sourceEvidence: item.sourceEvidence ?? {},
+    };
+  }
+
+	  async function handlePluginRemoteSearch(item: EntityOptionItem) {
+    const query = entitySearchTerm.trim();
+    if (!item.pluginId || !item.toolId || !item.searchFieldId) {
+      onError("This plugin search action is missing its tool metadata.");
+      return;
+    }
+    if (query.length < 2) {
+      setEntitySearchError("Type at least 2 characters before searching an external provider.");
+      return;
+    }
+
+    const actionId = item.actionId ?? `${item.pluginId}:${item.toolId}:${item.searchFieldId}`;
+    setEntityActionLoadingId(actionId);
+    setEntitySearchError(null);
+    try {
+      const rows = await searchPluginField(item.pluginId, item.toolId, item.searchFieldId, {
+        [item.queryParam ?? "q"]: query,
+        limit: 10,
+      });
+      const mapped = rows.slice(0, 12).map((result, index) => {
+        const title = String(result.title ?? result.name ?? result.label ?? query);
+        const vendor = String(result.vendor ?? result.source ?? result.seller ?? item.label.replace(/^Search\s+/i, "") ?? "");
+        const cost = payloadNumber(result, "price") ?? payloadNumber(result, "cost") ?? payloadNumber(result, "extracted_price");
+        const description = String(result.description ?? result.title ?? title);
+        const input = {
+          query,
+          name: title,
+          vendor,
+          cost: cost ?? 0,
+          description,
+          quantity: 1,
+          markup: workspace.currentRevision.defaultMarkup ?? 0.15,
+        };
+        return {
+          label: title,
+          value: title,
+          source: "plugin_result" as const,
+          sourceType: "plugin_result" as const,
+          actionType: "plugin_result" as const,
+          unitCost: cost,
+          quantity: 1,
+          unit: "EA",
+          vendor,
+          description,
+          subtitle: [vendor, result.rating ? `Rating ${result.rating}` : "", result.link ? "Open product link in details" : ""].filter(Boolean).join(" · "),
+          sourceNotes: [item.label, result.link ? String(result.link) : ""].filter(Boolean).join("; "),
+          actionId: `${actionId}:${index}`,
+          pluginId: item.pluginId,
+          pluginSlug: item.pluginSlug,
+          toolId: item.toolId,
+          pluginInput: input,
+          payload: result,
+        } satisfies EntityOptionItem;
+      });
+      setEntityPluginResults(mapped);
+      if (mapped.length === 0) {
+        setEntitySearchError(`No ${item.label.replace(/^Search\s+/i, "")} results for "${query}".`);
+      }
+    } catch (error) {
+      setEntityPluginResults([]);
+      setEntitySearchError(error instanceof Error ? error.message : "External provider search failed.");
+    } finally {
+      setEntityActionLoadingId(null);
+    }
+  }
+
+  function handleEntityAction(rowId: string, group: EntityOptionGroup, item: EntityOptionItem) {
+    if (item.actionType === "plugin_remote_search") {
+      void handlePluginRemoteSearch(item);
+      return;
+    }
+
+    const row = visibleRows.find((candidate) => candidate.id === rowId);
+    if (item.actionType === "open_assembly") {
+      setEntityDropdownRowId(null);
+      setEntityDropdownPos(null);
+      setEntitySearchTerm("");
+      setEntityBrowseMode(null);
+      setShowAssemblyPicker(true);
+      return;
+    }
+
+    if (item.actionType === "plugin_tool") {
+      setEntityDropdownRowId(null);
+      setEntityDropdownPos(null);
+      setEntitySearchTerm("");
+      setEntityBrowseMode(null);
+      if (onOpenPluginTools) {
+        onOpenPluginTools();
+      } else {
+        onError("Open Plugin Tools to run this action.");
+      }
+      return;
+    }
+
+    if (item.actionType === "plugin_result") {
+      setEntityDropdownRowId(null);
+      setEntityDropdownPos(null);
+      setEntitySearchTerm("");
+      setEntityBrowseMode(null);
+      if (!item.pluginId || !item.toolId || !item.pluginInput) {
+        onError("This provider result is missing its plugin execution data.");
+        return;
+      }
+      startTransition(async () => {
+        try {
+          await executePlugin(
+            item.pluginId!,
+            item.toolId!,
+            workspace.project.id,
+            workspace.currentRevision.id,
+            item.pluginInput!,
+            {
+              worksheetId: row?.worksheetId,
+              executedBy: "user",
+            },
+          );
+          onRefresh();
+        } catch (error) {
+          onError(error instanceof Error ? error.message : "Plugin execution failed.");
+        }
+      });
+      return;
+    }
+
+    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    if (!targetCategory) {
+      setEntitySearchError("Choose a configured worksheet category before applying this result.");
+      return;
+    }
+    if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
+      if (item.source === "labor_unit") {
+        const stagedPatch = buildOptionSourcePatch(targetCategory, item);
+        stagedPatch.rateScheduleItemId = row?.rateScheduleItemId ?? undefined;
+        stagedPatch.itemId = row?.itemId ?? null;
+        if (row?.rateScheduleItemId && !isTemporaryWorksheetItemId(row.id)) {
+          stagedPatch.entityName = row.entityName;
+          commitItemPatch(row.id, stagedPatch, "Labor productivity update failed.");
+          setEntityDropdownRowId(null);
+          setEntityDropdownPos(null);
+          setEntitySearchTerm("");
+          setEntityBrowseMode(null);
+          return;
+        }
+        if (stageTemporaryWorksheetItemPatch(rowId, stagedPatch)) {
+          setSelectedCell({ rowId, column: "entityName" });
+          setEntityDropdownRowId(rowId);
+          setEntityBrowseMode("rate_books");
+          setEntitySearchTerm("");
+          setEntitySearchError("Productivity selected. Choose an imported labour rate item to price this line.");
+          return;
+        }
+      }
+      setEntitySearchError(
+        `Choose an imported ${targetCategory.name} item for this category before creating the row.`
+      );
+      return;
+    }
+
+    setEntityDropdownRowId(null);
+    setEntityDropdownPos(null);
+    setEntitySearchTerm("");
+    setEntityBrowseMode(null);
+
+    handleEntitySelect(
+	      rowId,
+	      item.value,
+	      targetCategory.name,
+	      targetCategory.entityType,
+	      targetCategory.defaultUom,
+      item.unitCost !== undefined ||
+        item.unitPrice !== undefined ||
+        item.unit !== undefined ||
+        item.description !== undefined ||
+        item.vendor !== undefined ||
+        item.sourceNotes !== undefined ||
+        item.quantity !== undefined ||
+        item.unit1 !== undefined ||
+        item.unit2 !== undefined ||
+        item.unit3 !== undefined ||
+        item.costResourceId !== undefined ||
+        item.effectiveCostId !== undefined ||
+        item.laborUnitId !== undefined ||
+        item.resourceComposition !== undefined ||
+        item.sourceEvidence !== undefined
+        ? {
+            cost: item.unitCost,
+            price: item.unitPrice,
+            uom: item.unit,
+            description: item.description ?? item.label,
+            vendor: item.vendor,
+            sourceNotes: item.sourceNotes,
+            quantity: item.quantity,
+            unit1: item.unit1,
+            unit2: item.unit2,
+            unit3: item.unit3,
+            costResourceId: item.costResourceId,
+            effectiveCostId: item.effectiveCostId,
+            laborUnitId: item.laborUnitId,
+            resourceComposition: item.resourceComposition,
+            sourceEvidence: item.sourceEvidence,
+          }
+        : undefined,
+      item.rateScheduleItemId,
+      item.itemId,
+    );
   }
 
   // ─── Row operations ───
 
-  function addNewItem(categoryOverride?: string) {
-    const wsId = activeTab !== "all" ? activeTab : workspace.worksheets[0]?.id;
-    if (!wsId) return;
+  const addNewItem = useCallback((_categoryOverride?: string) => {
+    const wsId = activeWorksheetForActions?.id;
+    if (!wsId) {
+      if (activeFolderId) {
+        setNewWsFolderId(activeFolderId);
+        setNewWsName("");
+        setShowNewWsModal(true);
+      }
+      return;
+    }
 
     const ws = findWs(workspace, wsId);
     if (!ws) return;
 
-    const fallbackCat = firstEnabledCategory(entityCategories);
-    const catName = categoryOverride ?? fallbackCat?.name ?? "";
-    const catDef = entityCategories.find((c) => c.name === catName) ?? fallbackCat;
-    if (!catDef) {
-      onError("Configure at least one entity category in Settings before adding items.");
-      return;
-    }
+    createDraftItem(wsId);
+  }, [activeFolderId, activeWorksheetForActions?.id, createDraftItem, workspace]);
 
-    const payload: CreateWorksheetItemInput = {
-      category: catDef.name,
-      entityType: catDef.entityType,
-      entityName: catDef.name,
-      description: "",
-      quantity: 1,
-      uom: catDef.defaultUom || "EA",
-      cost: 0,
-      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-      price: 0,
-      unit1: 0,
-      unit2: 0,
-      unit3: 0,
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || (!e.metaKey && !e.ctrlKey) || e.altKey) return;
+      if (editingCell || entityDropdownRowId || isPending) return;
+
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tagName = target.tagName;
+        if (
+          tagName === "INPUT" ||
+          tagName === "TEXTAREA" ||
+          tagName === "SELECT" ||
+          target.isContentEditable ||
+          target.closest("[role='dialog']")
+        ) {
+          return;
+        }
+        if (gridWidthRef.current && target !== document.body && !gridWidthRef.current.contains(target)) return;
+      } else if (target instanceof Element && gridWidthRef.current && !gridWidthRef.current.contains(target)) {
+        return;
+      }
+
+      if ((workspace.worksheets ?? []).length === 0) return;
+      e.preventDefault();
+      addNewItem();
     };
 
-    createItem(wsId, payload);
-  }
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [addNewItem, editingCell, entityDropdownRowId, isPending, workspace.worksheets]);
 
   function deleteRow(itemId: string) {
     removeItem(itemId);
@@ -1572,11 +3684,14 @@ export function EstimateGrid({
     const row = visibleRows.find((r) => r.id === itemId);
     if (!row) return;
 
-    const payload: CreateWorksheetItemInput = {
-      phaseId: row.phaseId ?? null,
-      category: row.category,
+	    const payload: CreateWorksheetItemInput = {
+	      phaseId: row.phaseId ?? null,
+	      categoryId: row.categoryId ?? null,
+	      category: row.category,
       entityType: row.entityType,
       entityName: row.entityName,
+      classification: row.classification ?? {},
+      costCode: row.costCode ?? null,
       vendor: row.vendor ?? null,
       description: row.description,
       quantity: row.quantity,
@@ -1588,6 +3703,15 @@ export function EstimateGrid({
       unit2: row.unit2,
       unit3: row.unit3,
       lineOrder: row.lineOrder + 1,
+      rateScheduleItemId: row.rateScheduleItemId ?? null,
+      itemId: row.itemId ?? null,
+      costResourceId: row.costResourceId ?? null,
+      effectiveCostId: row.effectiveCostId ?? null,
+      laborUnitId: row.laborUnitId ?? null,
+      tierUnits: row.tierUnits ?? {},
+      sourceNotes: row.sourceNotes ?? "",
+      resourceComposition: row.resourceComposition ?? {},
+      sourceEvidence: row.sourceEvidence ?? {},
     };
 
     createItem(row.worksheetId, payload, "Duplicate failed.");
@@ -1738,11 +3862,14 @@ export function EstimateGrid({
       try {
         let last: WorkspaceResponse | null = null;
         for (const row of rows) {
-          const payload: CreateWorksheetItemInput = {
-            phaseId: row.phaseId ?? null,
-            category: row.category,
+	          const payload: CreateWorksheetItemInput = {
+	            phaseId: row.phaseId ?? null,
+	            categoryId: row.categoryId ?? null,
+	            category: row.category,
             entityType: row.entityType,
             entityName: row.entityName,
+            classification: row.classification ?? {},
+            costCode: row.costCode ?? null,
             vendor: row.vendor ?? null,
             description: row.description,
             quantity: row.quantity,
@@ -1753,6 +3880,15 @@ export function EstimateGrid({
             unit1: row.unit1,
             unit2: row.unit2,
             unit3: row.unit3,
+            rateScheduleItemId: row.rateScheduleItemId ?? null,
+            itemId: row.itemId ?? null,
+            costResourceId: row.costResourceId ?? null,
+            effectiveCostId: row.effectiveCostId ?? null,
+            laborUnitId: row.laborUnitId ?? null,
+            tierUnits: row.tierUnits ?? {},
+            sourceNotes: row.sourceNotes ?? "",
+            resourceComposition: row.resourceComposition ?? {},
+            sourceEvidence: row.sourceEvidence ?? {},
           };
           last = await createWorksheetItem(workspace.project.id, row.worksheetId, payload);
         }
@@ -1764,46 +3900,146 @@ export function EstimateGrid({
     });
   }
 
-  // ─── Catalog Quick-Add ───
+  // ─── Universal Add Items ───
 
-  function handleAddFromCatalog() {
-    const wsId = activeTab !== "all" ? activeTab : workspace.worksheets[0]?.id;
+  function getTargetCategoryForEntityGroup(group: EntityOptionGroup, item?: EntityOptionItem) {
+    const directMatch = entityCategories.find((category) =>
+      category.name === group.categoryName || category.entityType === group.entityType
+    );
+    if (directMatch || item?.source !== "catalog") return directMatch;
+
+    const catalogKind = firstText(
+      payloadString(item.payload, "catalogKind"),
+      payloadString(item.payload, "catalogName"),
+    );
+    if (!catalogKind) return undefined;
+    const catalogKey = normalizeEntityLookup(catalogKind);
+    return entityCategories.find((category) =>
+      normalizeEntityLookup(category.name) === catalogKey ||
+      normalizeEntityLookup(category.entityType) === catalogKey
+    );
+  }
+
+	  function canCreateWorksheetItemFromOption(group: EntityOptionGroup, item: EntityOptionItem) {
+	    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    if (item.actionType && item.actionType !== "select") return false;
+    if (item.source === "assembly" || item.source === "plugin" || item.source === "external_action" || item.source === "plugin_result") {
+      return false;
+    }
+    if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) return false;
+    return true;
+  }
+
+  function buildCreatePayloadFromEntityOption(
+    group: EntityOptionGroup,
+    item: EntityOptionItem,
+    lineOrder?: number,
+	  ): { payload?: CreateWorksheetItemInput; error?: string } {
+	    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
+      return {
+        error: `Choose an imported ${targetCategory?.name ?? "rate"} item before creating a row.`,
+      };
+    }
+
+    const fallbackCategory = firstEnabledCategory(entityCategories);
+    const catalogKind = item.source === "catalog"
+      ? firstText(payloadString(item.payload, "catalogKind"), payloadString(item.payload, "catalogName"))
+      : "";
+    const categoryName = targetCategory?.name ?? (catalogKind || group.categoryName || fallbackCategory?.name || "");
+    const entityType = targetCategory?.entityType ?? (catalogKind || group.entityType || fallbackCategory?.entityType || "");
+    const uom = item.unit ?? group.defaultUom ?? targetCategory?.defaultUom ?? "EA";
+    const markup = workspace.currentRevision.defaultMarkup ?? 0.2;
+	    const payload: CreateWorksheetItemInput = {
+	      phaseId: null,
+	      categoryId: targetCategory?.id ?? (categoryName === fallbackCategory?.name ? fallbackCategory.id : null),
+	      category: categoryName,
+      entityType,
+      entityName: item.value || item.label,
+      classification: {},
+      costCode: null,
+      vendor: item.vendor ?? null,
+      description: item.description ?? item.label,
+      quantity: item.quantity ?? 1,
+      uom,
+      cost: item.unitCost ?? 0,
+      markup,
+      price: item.unitPrice ?? 0,
+      unit1: item.unit1 ?? 0,
+      unit2: item.unit2 ?? 0,
+      unit3: item.unit3 ?? 0,
+      lineOrder,
+      rateScheduleItemId: item.rateScheduleItemId ?? null,
+      itemId: item.itemId ?? null,
+      costResourceId: item.costResourceId ?? null,
+      effectiveCostId: item.effectiveCostId ?? null,
+      laborUnitId: item.laborUnitId ?? null,
+      tierUnits: {},
+      sourceNotes: item.sourceNotes ?? "",
+      resourceComposition: item.resourceComposition ?? {},
+      sourceEvidence: item.sourceEvidence ?? {},
+    };
+
+    if (item.rateScheduleItemId) {
+      const schedule = (workspace.rateSchedules ?? []).find((entry) =>
+        entry.items.some((scheduleItem) => scheduleItem.id === item.rateScheduleItemId),
+      );
+      if (schedule) {
+        payload.tierUnits = Object.fromEntries(schedule.tiers.map((tier) => [tier.id, 0]));
+      }
+    }
+
+    if (targetCategory) {
+      payload.uom = item.unit ?? targetCategory.defaultUom;
+      if (isCellDisabledByCategory(targetCategory, "unit1")) payload.unit1 = 0;
+      if (isCellDisabledByCategory(targetCategory, "unit2")) payload.unit2 = 0;
+      if (isCellDisabledByCategory(targetCategory, "unit3")) payload.unit3 = 0;
+      if (isCellDisabledByCategory(targetCategory, "cost")) payload.cost = item.unitCost ?? 0;
+      if (isCellDisabledByCategory(targetCategory, "markup")) payload.markup = markup;
+      if (isCellDisabledByCategory(targetCategory, "price")) payload.price = 0;
+    }
+
+    return { payload };
+  }
+
+  function handleAddSelectedItems() {
+    const wsId = activeWorksheetForActions?.id;
     if (!wsId) return;
 
-    const selected = allCatalogItems.filter((ci) => selectedCatalogItemIds.has(ci.id));
+    const selected = Array.from(selectedAddItems.values()).filter(({ group, item }) =>
+      canCreateWorksheetItemFromOption(group, item)
+    );
     if (selected.length === 0) return;
+
+    const worksheet = findWs(workspace, wsId);
+    const baseOrder =
+      worksheet?.items.reduce(
+        (maxOrder, item) => Math.max(maxOrder, item.lineOrder),
+        0,
+      ) ?? 0;
 
     startTransition(async () => {
       try {
         let last: WorkspaceResponse | null = null;
-        for (const ci of selected) {
-          const catName = catalogKindToCategoryName(ci.catalogKind, entityCategories);
-          const catDef = entityCategories.find((c) => c.name === catName);
-          const fallbackCat = firstEnabledCategory(entityCategories);
-
-          const payload: CreateWorksheetItemInput = {
-            category: catName,
-            entityType: catDef?.entityType ?? fallbackCat?.entityType ?? "",
-            entityName: ci.name,
-            description: "",
-            quantity: 1,
-            uom: ci.unit,
-            cost: ci.unitCost,
-            markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-            price: ci.unitPrice,
-            unit1: 0,
-            unit2: 0,
-            unit3: 0,
-          };
-
-          last = await createWorksheetItem(workspace.project.id, wsId, payload);
+        const errors: string[] = [];
+        for (const [index, entry] of selected.entries()) {
+          const result = buildCreatePayloadFromEntityOption(entry.group, entry.item, baseOrder + index + 1);
+          if (!result.payload) {
+            if (result.error) errors.push(result.error);
+            continue;
+          }
+          last = await createWorksheetItem(workspace.project.id, wsId, result.payload);
         }
         if (last) onApply(last);
-        setShowCatalogPicker(false);
-        setSelectedCatalogItemIds(new Set());
-        setCatalogSearchTerm("");
+        setShowAddItemsPicker(false);
+        setSelectedAddItems(new Map());
+        setAddItemsSearchTerm("");
+        setAddItemsBrowseMode(null);
+        if (errors.length > 0) {
+          onError(errors.length === 1 ? errors[0]! : `${errors.length} selected items could not be added.`);
+        }
       } catch (e) {
-        onError(e instanceof Error ? e.message : "Add from catalog failed.");
+        onError(e instanceof Error ? e.message : "Add items failed.");
       }
     });
   }
@@ -1826,14 +4062,14 @@ export function EstimateGrid({
       `Ext. Cost: ${extCost.toFixed(2)}`,
       `Markup: ${(row.markup * 100).toFixed(1)}%`,
       `Price: ${row.price}`,
-      phase ? `Phase: ${phase.number} - ${phase.name}` : "",
+      phase ? `Phase: ${estimatePhaseLabel(phase)}` : "",
     ].filter(Boolean).join("\t");
     navigator.clipboard.writeText(text);
   }
 
   function exportTableAsCsv() {
-    const headers = ["#", "Category", "Entity Name", "Vendor", "Description", "Qty", "UOM", "Cost", "Ext. Cost", "Markup", "Price", "Margin", "Phase"];
-    const csvRows = [headers.join(",")];
+    const headers = ["#", "Category", "Line Item Name", "Vendor", "Description", "Qty", "UOM", "Cost", "Ext. Cost", "Markup", "Price", "Margin", "Phase"];
+    const csvRows: Array<Array<unknown>> = [];
 
     for (const row of visibleRows) {
       const extCost = row.cost * row.quantity;
@@ -1841,10 +4077,10 @@ export function EstimateGrid({
       const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
       const cells = [
         row.lineOrder,
-        `"${row.category}"`,
-        `"${row.entityName.replace(/"/g, '""')}"`,
-        `"${(row.vendor ?? "").replace(/"/g, '""')}"`,
-        `"${row.description.replace(/"/g, '""')}"`,
+        row.category,
+        row.entityName,
+        row.vendor ?? "",
+        row.description,
         row.quantity,
         row.uom,
         row.cost.toFixed(2),
@@ -1852,18 +4088,12 @@ export function EstimateGrid({
         `${(row.markup * 100).toFixed(1)}%`,
         row.price.toFixed(2),
         `${margin}%`,
-        phase ? `"${phase.number} - ${phase.name}"` : "",
+        phase ? estimatePhaseLabel(phase) : "",
       ];
-      csvRows.push(cells.join(","));
+      csvRows.push(cells);
     }
 
-    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `estimate-${workspace.project.name.replace(/\s+/g, "-").toLowerCase()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`estimate-${workspace.project.name.replace(/\s+/g, "-").toLowerCase()}.csv`, headers, csvRows);
   }
 
   // ─── Context menu ───
@@ -1879,12 +4109,13 @@ export function EstimateGrid({
     function close() {
       setContextMenu(null);
       setTabMenu(null);
+      setOrganizerMenu(null);
       if (entityDropdownRowId) {
         setEntityDropdownRowId(null);
         setEntityDropdownPos(null);
       }
     }
-    if (contextMenu || tabMenu || entityDropdownRowId) {
+    if (contextMenu || tabMenu || organizerMenu || entityDropdownRowId) {
       const timer = setTimeout(() => {
         document.addEventListener("click", close);
       }, 0);
@@ -1893,7 +4124,7 @@ export function EstimateGrid({
         document.removeEventListener("click", close);
       };
     }
-  }, [contextMenu, tabMenu, entityDropdownRowId]);
+  }, [contextMenu, tabMenu, organizerMenu, entityDropdownRowId]);
 
   // Close column picker on outside click
   useEffect(() => {
@@ -1917,12 +4148,13 @@ export function EstimateGrid({
     if (!newWsName.trim()) return;
     startTransition(async () => {
       try {
-        const next = await createWorksheet(workspace.project.id, { name: newWsName.trim() });
+        const next = await createWorksheet(workspace.project.id, { name: newWsName.trim(), folderId: newWsFolderId });
         onApply(next);
         const ws = next.workspace.worksheets.at(-1);
         if (ws) setActiveTab(ws.id);
         setShowNewWsModal(false);
         setNewWsName("");
+        setNewWsFolderId(null);
       } catch (e) {
         onError(e instanceof Error ? e.message : "Create failed.");
       }
@@ -1964,6 +4196,100 @@ export function EstimateGrid({
   function handleTabContextMenu(e: React.MouseEvent, wsId: string) {
     e.preventDefault();
     setTabMenu({ wsId, x: e.clientX, y: e.clientY });
+  }
+
+  function handleCreateFolder() {
+    if (!folderForm?.name.trim()) return;
+    const parentId = folderForm.parentId;
+    const name = folderForm.name.trim();
+    startTransition(async () => {
+      try {
+        const next = await createWorksheetFolder(workspace.project.id, { name, parentId });
+        onApply(next);
+        const created = next.workspace.worksheetFolders.find(
+          (folder) => folder.name === name && (folder.parentId ?? null) === (parentId ?? null),
+        );
+        if (created) {
+          setWorksheetViewMode("organizer");
+          setActiveTab(folderViewId(created.id));
+        }
+        setFolderForm(null);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Create folder failed.");
+      }
+    });
+  }
+
+  function handleRenameTarget() {
+    if (!renameTarget || !renameName.trim()) {
+      setRenameTarget(null);
+      return;
+    }
+    const target = renameTarget;
+    const name = renameName.trim();
+    setRenameTarget(null);
+    setRenameName("");
+    startTransition(async () => {
+      try {
+        const next = target.type === "folder"
+          ? await updateWorksheetFolder(workspace.project.id, target.id, { name })
+          : await updateWorksheet(workspace.project.id, target.id, { name });
+        onApply(next);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Rename failed.");
+      }
+    });
+  }
+
+  function handleMoveTarget() {
+    if (!moveTarget) return;
+    const target = moveTarget;
+    const parentId = moveParentId === "__root__" ? null : moveParentId;
+    setMoveTarget(null);
+    startTransition(async () => {
+      try {
+        const next = target.type === "folder"
+          ? await updateWorksheetFolder(workspace.project.id, target.id, { parentId })
+          : await updateWorksheet(workspace.project.id, target.id, { folderId: parentId });
+        onApply(next);
+        if (target.type === "folder") {
+          setActiveTab(folderViewId(target.id));
+        } else {
+          setActiveTab(target.id);
+        }
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Move failed.");
+      }
+    });
+  }
+
+  function handleDeleteFolder(folderId: string) {
+    startTransition(async () => {
+      try {
+        const next = await deleteWorksheetFolder(workspace.project.id, folderId);
+        onApply(next);
+        if (activeFolderId === folderId) {
+          setActiveTab("all");
+        }
+        setDeleteFolderTarget(null);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Delete folder failed.");
+      }
+    });
+  }
+
+  function openMoveTarget(target: OrganizerNodeTarget) {
+    setMoveTarget(target);
+    setMoveParentId(
+      target.type === "folder"
+        ? target.parentId ?? "__root__"
+        : target.folderId ?? "__root__",
+    );
+  }
+
+  function openRenameTarget(target: OrganizerNodeTarget) {
+    setRenameTarget(target);
+    setRenameName(target.name);
   }
 
 
@@ -2207,9 +4533,11 @@ export function EstimateGrid({
         const items: Array<{ value: string; label: string }> = isPhase
           ? [
               { value: PHASE_NONE, label: "None" },
-              ...phases.map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+              ...buildEstimatePhaseOptions(phases),
             ]
-          : (catDef?.validUoms ?? ["EA", "LF", "FT", "SF", "HR", "DAY", "WK", "MO", "LS"]).map((u) => ({ value: u, label: u }));
+          : catDef?.validUoms?.length
+          ? catDef.validUoms.map((u) => ({ value: u, label: u }))
+          : makeUomOptions(globalUoms, { compact: true, value: editValue || row.uom });
         const currentValue = isPhase ? (editValue || PHASE_NONE) : editValue;
         const commit = (val: string) => {
           if (isPhase) {
@@ -2313,16 +4641,17 @@ export function EstimateGrid({
     }
 
     // Entity name cell - show dropdown trigger
-    if (column === "entityName") {
-      const isDropdownOpen = entityDropdownRowId === row.id;
-      const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === "entityName";
-      return (
-        <td
+	    if (column === "entityName") {
+	      const isDropdownOpen = entityDropdownRowId === row.id;
+	      const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === "entityName";
+	      const isDraft = isTemporaryWorksheetItemId(row.id) && !row.category;
+	      return (
+	        <td
           ref={isDropdownOpen ? entityCellRef : undefined}
           data-cell-row={row.id}
           data-cell-col="entityName"
           className={cn(
-            "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors",
+            "border-b border-line px-2 py-2 text-xs cursor-pointer transition-colors min-w-0 overflow-hidden",
             "hover:bg-accent/5",
             isSelected && !isDropdownOpen && "ring-1 ring-inset ring-accent/60 bg-accent/5",
             className
@@ -2330,112 +4659,544 @@ export function EstimateGrid({
           onClick={(e) => {
             e.stopPropagation();
             setSelectedCell({ rowId: row.id, column: "entityName" });
-            if (isDropdownOpen) {
-              setEntityDropdownRowId(null);
-              setEntityDropdownPos(null);
-            } else {
-              positionEntityDropdown(e.currentTarget as HTMLTableCellElement);
-              setEntityDropdownRowId(row.id);
-              setEntitySearchTerm("");
-              setSelectedRowId(row.id);
-            }
+		            if (isDropdownOpen) {
+		              setEntityDropdownRowId(null);
+		              setEntityDropdownPos(null);
+		              setEntityBrowseMode(null);
+		              setEntityPluginResults([]);
+		            } else {
+		              positionEntityDropdown(e.currentTarget as HTMLTableCellElement);
+		              setEntityDropdownRowId(row.id);
+		              setEntitySearchTerm("");
+		              setEntityBrowseMode(null);
+		              setEntitySearchError(null);
+		              setEntityPluginResults([]);
+	              setSelectedRowId(row.id);
+	            }
           }}
-        >
-          <div className="flex items-center gap-1">
-            <Badge
-              {...getCategoryBadgeProps(row.category, entityCategories)}
-              className="text-[9px] px-1 py-0"
-            >
-              {findCategoryForRow(row, entityCategories)?.shortform ?? row.category.charAt(0)}
-            </Badge>
-            <span className="truncate">{row.entityName}</span>
-          </div>
+	        >
+	          <div className="flex min-w-0 items-center gap-1">
+	            {!isDraft && (
+	              <Badge
+	                {...getCategoryBadgeProps(row.category, entityCategories)}
+	                className="text-[9px] px-1 py-0"
+	              >
+	                {findCategoryForRow(row, entityCategories)?.shortform ?? row.category.charAt(0)}
+	              </Badge>
+	            )}
+	            <span className={cn("truncate", isDraft && "italic text-fg/35")}>
+	              {isDraft ? "Choose item..." : row.entityName}
+	            </span>
+	          </div>
           {/* Entity dropdown rendered via portal */}
-          {isDropdownOpen && entityDropdownPos && (() => {
-            const q = entitySearchTerm.toLowerCase();
-            // Separate matching category groups from others
-            const matchingGroups = entityOptions.filter((g) => g.categoryName === row.category);
-            const otherGroups = entityOptions.filter((g) => g.categoryName !== row.category);
+	          {isDropdownOpen && entityDropdownPos && (() => {
+	            const matchingGroups = entityDisplayGroups.filter((g) => row.category && g.categoryName === row.category);
+	            const actionGroups = entityDisplayGroups.filter((g) => g.categoryName === "Actions");
+	            const providerGroups = entityDisplayGroups.filter((g) => g.categoryName === "Provider Results");
+	            const otherGroups = entityDisplayGroups.filter((g) =>
+	              (!row.category || g.categoryName !== row.category) &&
+	              g.categoryName !== "Actions" &&
+	              g.categoryName !== "Provider Results"
+	            );
+	            const sourceStats = Array.from(
+	              entityFlatItems.reduce<Map<string, number>>((map, entry) => {
+	                const label = sourceBadgeLabel(entry.item.source) || "Item";
+	                map.set(label, (map.get(label) ?? 0) + 1);
+	                return map;
+	              }, new Map()),
+	            ).slice(0, 5);
 
-            const selectFlatItem = (idx: number) => {
-              const flat = entityFlatItems[idx];
-              if (!flat) return;
-              handleEntitySelect(
-                row.id,
-                flat.item.value,
-                flat.group.categoryName,
-                flat.group.entityType,
-                flat.group.defaultUom,
-                flat.item.unitCost !== undefined
-                  ? { cost: flat.item.unitCost, uom: flat.item.unit, description: flat.item.label }
-                  : undefined,
-                flat.item.rateScheduleItemId,
-                flat.item.itemId,
-              );
-            };
+	            const selectFlatItem = (idx: number) => {
+	              const flat = entityFlatItems[idx];
+	              if (!flat) return;
+	              handleEntityAction(row.id, flat.group, flat.item);
+	            };
+	            const entityFlatIndexByKey = new Map(
+	              entityFlatItems.map((entry, index) => [
+	                `${entry.group.categoryId}\u001f${entityOptionKey(entry.item)}`,
+	                index,
+	              ]),
+	            );
 
-            // Running flat index used to apply the highlight to the right button as we render groups
-            let flatRenderIdx = 0;
-            const renderGroupItems = (group: typeof entityOptions[0], filtered: EntityOptionItem[]) =>
-              filtered.map((item) => {
-                const myIdx = flatRenderIdx++;
-                const isHighlighted = myIdx === entityHighlightIdx;
-                return (
-                  <button
-                    key={`${group.categoryId}-${item.value}-${item.rateScheduleItemId ?? ""}`}
-                    data-entity-idx={myIdx}
-                    className={cn(
-                      "w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between",
-                      isHighlighted ? "bg-accent/15" : "hover:bg-accent/10",
-                    )}
-                    onMouseEnter={() => setEntityHighlightIdx(myIdx)}
-                    onClick={() => selectFlatItem(myIdx)}
-                  >
-                    <span className="truncate">
-                      {item.rateScheduleItemId && <span className="text-accent mr-1">&#9679;</span>}
-                      {item.label}
-                    </span>
-                    {(item.unitCost !== undefined || item.unitPrice !== undefined) && (
-                      <span className="ml-2 text-[10px] text-fg/30 tabular-nums whitespace-nowrap">
-                        {item.unitCost !== undefined && `$${item.unitCost.toFixed(2)}`}
-                        {item.unitCost !== undefined && item.unitPrice !== undefined && " / "}
-                        {item.unitPrice !== undefined && `$${item.unitPrice.toFixed(2)}`}
-                      </span>
-                    )}
-                  </button>
-                );
-              });
+	            const handleResultsScroll = (event: { currentTarget: HTMLDivElement }) => {
+	              const target = event.currentTarget;
+	              if (target.scrollTop + target.clientHeight >= target.scrollHeight - 180) {
+	                void loadMoreEntitySearchResults();
+	              }
+	            };
 
-            return createPortal(
-              <motion.div
-                ref={entityDropdownRef}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.12 }}
-                className="fixed z-[200] flex w-80 flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
-                style={{
-                  top: entityDropdownPos.top,
-                  bottom: entityDropdownPos.bottom,
+		            const renderGroupItems = (
+		              group: EntityOptionGroup,
+		              filtered: EntityOptionItem[],
+		              options: { inLaborTree?: boolean; laborTreeDepth?: number } = {},
+		            ) =>
+		              filtered.map((item) => {
+		                const myIdx = entityFlatIndexByKey.get(`${group.categoryId}\u001f${entityOptionKey(item)}`) ?? 0;
+		                const isHighlighted = myIdx === entityHighlightIdx;
+		                const isLinkedCatalogRate = item.source === "catalog" && !!item.rateScheduleItemId;
+		                const badge = isLinkedCatalogRate ? "Catalog + rate" : sourceBadgeLabel(item.source);
+		                const badgeToneSource = isLinkedCatalogRate ? "rate_schedule" : item.source;
+		                const isActionLoading = item.actionId && entityActionLoadingId === item.actionId;
+		                const SourceIcon = sourceIconFor(item.source);
+		                const ActionIcon = item.actionType === "plugin_remote_search"
+	                  ? ExternalLink
+	                  : item.actionType === "plugin_tool"
+	                  ? PlugZap
+	                  : item.actionType === "open_assembly"
+	                  ? Layers
+		                  : ChevronRight;
+		                const isLaborChoice = item.source === "labor_unit";
+		                const needsRate = isLaborChoice && !item.rateScheduleItemId;
+		                const measure = optionMeasureLabel(item);
+		                const detailParts = optionMetaParts(item);
+		                const laborTreeDepth = isLaborChoice ? options.laborTreeDepth ?? group.treePath?.length ?? 0 : 0;
+		                const laborReference = isLaborChoice ? laborUnitReferenceParts(item) : null;
+		                const laborDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursDifficult") : undefined;
+		                const laborVeryDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursVeryDifficult") : undefined;
+		                return (
+		                  <button
+		                    key={`${group.categoryId}-${entityOptionKey(item)}`}
+		                    data-entity-idx={myIdx}
+		                    className={cn(
+		                      "group flex items-center gap-1.5 px-2 text-left transition-colors",
+		                      isLaborChoice
+		                        ? cn(
+		                            "mx-2 mb-1 w-[calc(100%-1rem)] rounded-md border bg-panel/90 shadow-[0_1px_0_rgba(0,0,0,0.04)] hover:border-warning/35 hover:bg-warning/8",
+		                            options.inLaborTree
+		                              ? "border-warning/15 py-1"
+		                              : "border-warning/20 py-1.5",
+		                          )
+		                        : "w-full border-b border-line/60 bg-bg/35 py-1 hover:bg-accent/5 last:border-b-0",
+		                      isHighlighted && (isLaborChoice ? "border-accent/35 bg-accent/10" : "bg-accent/10"),
+		                    )}
+		                    style={laborTreeDepth > 1 ? { paddingLeft: Math.min(40, 8 + laborTreeDepth * 5) } : undefined}
+		                    onMouseEnter={() => setEntityHighlightIdx(myIdx)}
+		                    onClick={() => selectFlatItem(myIdx)}
+		                  >
+		                    <span className={cn(
+		                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
+		                      sourceAccentClasses(item.source),
+		                    )}>
+		                      {isActionLoading ? (
+		                        <Loader2 className="h-3 w-3 animate-spin" />
+		                      ) : (
+		                        <SourceIcon className="h-3 w-3" />
+		                      )}
+		                    </span>
+		                    {isLaborChoice ? (
+		                      <span className="min-w-0 flex-1">
+		                        <span className="grid min-w-0 grid-cols-[minmax(84px,auto)_minmax(0,1fr)_auto] items-center gap-1.5">
+		                          <span className="truncate rounded border border-warning/20 bg-bg/70 px-1 py-px font-mono text-[9px] font-semibold leading-3 text-warning">
+		                            {laborReference?.code || "No code"}
+		                          </span>
+		                          <span className="min-w-0 truncate text-[11px] font-semibold leading-3 text-fg">
+		                            {item.value || item.label}
+		                          </span>
+		                          {measure && (
+		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-semibold tabular-nums leading-3 text-fg/70">
+		                              {measure}
+		                            </span>
+		                          )}
+		                        </span>
+		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/45">
+		                          {laborReference?.table && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
+		                              Table {laborReference.table}
+		                            </span>
+		                          )}
+		                          {laborReference?.ref && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
+		                              Ref {laborReference.ref}
+		                            </span>
+		                          )}
+		                          {item.unit && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px">
+		                              {item.unit}
+		                            </span>
+		                          )}
+		                          {laborDifficult !== undefined && (
+		                            <span className="shrink-0 tabular-nums">
+		                              Diff {laborDifficult.toFixed(2)}
+		                            </span>
+		                          )}
+		                          {laborVeryDifficult !== undefined && (
+		                            <span className="shrink-0 tabular-nums">
+		                              Very {laborVeryDifficult.toFixed(2)}
+		                            </span>
+		                          )}
+		                          {needsRate && (
+		                            <span className="shrink-0 rounded border border-warning/25 bg-warning/8 px-1 py-px text-[8px] font-semibold uppercase leading-3 text-warning">
+		                              Needs rate
+		                            </span>
+		                          )}
+		                        </span>
+		                      </span>
+		                    ) : (
+		                      <span className="min-w-0 flex-1">
+		                        <span className="flex min-w-0 items-center gap-2">
+		                          <span className="min-w-0 flex-1">
+		                            <span className="block truncate text-[11px] font-semibold leading-3 text-fg">
+		                              {item.label}
+		                            </span>
+		                          </span>
+		                          {measure && (
+		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-medium tabular-nums leading-3 text-fg/60">
+		                              {measure}
+		                            </span>
+		                          )}
+		                        </span>
+		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/42">
+		                          {badge && (
+		                            <span className={cn("shrink-0 rounded border px-1 py-px text-[8px] font-semibold leading-3", sourceAccentClasses(badgeToneSource))}>
+		                              {badge}
+		                            </span>
+		                          )}
+		                          {detailParts.slice(0, 3).map((part, detailIndex) => (
+		                            <span key={`${part}-${detailIndex}`} className="min-w-0 max-w-[190px] truncate">
+		                              {part}
+		                            </span>
+		                          ))}
+		                        </span>
+		                      </span>
+		                    )}
+	                    <span className="flex shrink-0 items-center text-fg/25 transition-colors group-hover:text-accent">
+	                      <ActionIcon className="h-3.5 w-3.5" />
+	                    </span>
+	                  </button>
+	                );
+	              });
+
+	            const renderGroupBlock = (
+	              group: EntityOptionGroup,
+	              label: string,
+	              tone: "accent" | "success" | "muted" | "warning" = "muted",
+	            ) => {
+		              if (group.items.length === 0) return null;
+	              const showTreePath = group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1;
+		              return (
+		                <div key={group.categoryId} className="bg-bg/25">
+		                  <div className={cn(
+		                    "sticky top-0 z-20 flex items-center justify-between border-b border-t px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal bg-panel shadow-[0_1px_0_rgba(0,0,0,0.04)]",
+		                    tone === "accent" && "border-accent/20 text-accent",
+		                    tone === "success" && "border-success/20 text-success",
+		                    tone === "warning" && "border-warning/20 text-warning",
+	                    tone === "muted" && "border-line text-fg/40",
+	                  )}>
+		                    <span className="truncate">{label}</span>
+		                    <span className="text-fg/30">{group.items.length}</span>
+			                  </div>
+			                  {showTreePath && (
+			                    <div className="border-b border-warning/25 bg-warning/10 px-2 py-1 shadow-[inset_0_-1px_0_rgba(0,0,0,0.03)]">
+			                      <div className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase leading-3 text-warning">
+			                        <ListTree className="h-3 w-3" />
+			                        Labour hierarchy
+			                      </div>
+			                      <div className="space-y-0.5">
+			                        {group.treePath!.map((part, level) => {
+			                          const isLeaf = level === group.treePath!.length - 1;
+			                          return (
+			                            <div
+			                              key={`${part}-${level}`}
+			                              className="relative flex min-w-0 items-center gap-1.5 text-[10px] leading-4"
+			                              style={{ paddingLeft: Math.min(44, level * 9) }}
+			                            >
+			                              {level > 0 && (
+			                                <span className="absolute left-0 top-1/2 h-px w-2 -translate-y-1/2 bg-warning/40" />
+			                              )}
+			                              <span className={cn(
+			                                "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[8px] font-bold tabular-nums",
+			                                isLeaf
+			                                  ? "border-warning/45 bg-warning/18 text-warning"
+			                                  : "border-warning/25 bg-bg/65 text-warning/70",
+			                              )}>
+			                                {level + 1}
+			                              </span>
+			                              <span className="w-[58px] shrink-0 text-[8px] font-semibold uppercase tracking-normal text-warning/70">
+			                                {laborHierarchyLevelLabel(level)}
+			                              </span>
+			                              <span className={cn(
+			                                "min-w-0 truncate rounded px-1",
+			                                isLeaf
+			                                  ? "border border-warning/20 bg-panel/90 text-[11px] font-bold text-fg shadow-[0_1px_0_rgba(0,0,0,0.03)]"
+			                                  : "font-medium text-fg/72",
+			                              )}>
+			                                {part}
+			                              </span>
+			                            </div>
+			                          );
+			                        })}
+			                      </div>
+			                    </div>
+			                  )}
+		                  {showTreePath ? (
+		                    <div className="border-t border-warning/20 bg-bg/55 py-1">
+		                      {renderGroupItems(group, group.items)}
+		                    </div>
+		                  ) : (
+		                    renderGroupItems(group, group.items)
+		                  )}
+		                </div>
+		              );
+		            };
+
+		            type LaborTreeNode = {
+		              key: string;
+		              label: string;
+		              level: number;
+		              itemCount: number;
+		              children: Map<string, LaborTreeNode>;
+		              groups: EntityOptionGroup[];
+		            };
+
+		            const buildLaborTree = (groups: EntityOptionGroup[]) => {
+		              const root: LaborTreeNode = {
+		                key: "labor-root",
+		                label: "Labour units",
+		                level: -1,
+		                itemCount: 0,
+		                children: new Map(),
+		                groups: [],
+		              };
+
+		              for (const group of groups) {
+		                const rawPath = (group.treePath?.length ? group.treePath : [group.label ?? group.categoryName])
+		                  .map(cleanHierarchyPart)
+		                  .filter(Boolean);
+		                const path = rawPath[0]?.toLowerCase() === "labour units"
+		                  ? rawPath.slice(1).map((part, index) => ({ part, level: index + 1 }))
+		                  : rawPath.map((part, level) => ({ part, level }));
+		                let cursor = root;
+		                cursor.itemCount += group.items.length;
+		                path.forEach(({ part, level }) => {
+		                  const partKey = normalizeEntityLookup(part) || `${level}-${cursor.children.size}`;
+		                  let child = cursor.children.get(partKey);
+		                  if (!child) {
+		                    child = {
+		                      key: `${cursor.key}/${partKey}`,
+		                      label: part,
+		                      level,
+		                      itemCount: 0,
+		                      children: new Map(),
+		                      groups: [],
+		                    };
+		                    cursor.children.set(partKey, child);
+		                  }
+		                  child.itemCount += group.items.length;
+		                  cursor = child;
+		                });
+		                cursor.groups.push(group);
+		              }
+
+		              return root;
+		            };
+
+		            const laborTreeLabel = (groups: EntityOptionGroup[]) => {
+		              const providers = Array.from(new Set(
+		                groups
+		                  .map((group) => group.treePath?.[1])
+		                  .filter((provider): provider is string => Boolean(provider)),
+		              ));
+		              return providers.length === 1 ? `Labour units / ${providers[0]}` : "Labour units";
+		            };
+
+		            const renderLaborTreeNode = (node: LaborTreeNode): ReactNode => {
+		              const children = Array.from(node.children.values());
+		              const isLeaf = node.groups.length > 0;
+		              const visibleDepth = Math.max(0, node.level - 1);
+		              const branchIndent = Math.min(58, 8 + visibleDepth * 10);
+		              const itemIndent = Math.min(66, 14 + (visibleDepth + 1) * 10);
+		              return (
+		                <div key={node.key} className="relative">
+		                  <div
+		                    className={cn(
+		                      "flex min-w-0 items-center gap-1.5 border-b border-warning/10 px-2 py-0.5 text-[10px] leading-4",
+		                      isLeaf ? "bg-warning/8" : "bg-warning/5",
+		                    )}
+		                    style={{ paddingLeft: branchIndent }}
+		                  >
+		                    <span className={cn(
+		                      "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[7px] font-bold tabular-nums",
+		                      isLeaf
+		                        ? "border-warning/40 bg-panel/90 text-warning"
+		                        : "border-warning/25 bg-bg/65 text-warning/70",
+		                    )}>
+		                      {node.level + 1}
+		                    </span>
+		                    <span className="w-[56px] shrink-0 text-[8px] font-semibold uppercase tracking-normal text-warning/70">
+		                      {laborHierarchyLevelLabel(node.level)}
+		                    </span>
+		                    <span className={cn(
+		                      "min-w-0 truncate",
+		                      isLeaf ? "font-bold text-fg" : "font-medium text-fg/72",
+		                    )}>
+		                      {node.label}
+		                    </span>
+		                    <span className="ml-auto shrink-0 text-[9px] font-medium tabular-nums text-fg/30">
+		                      {node.itemCount}
+		                    </span>
+		                  </div>
+		                  {children.length > 0 && (
+		                    <div className="bg-bg/35">
+		                      {children.map(renderLaborTreeNode)}
+		                    </div>
+		                  )}
+		                  {node.groups.length > 0 && (
+		                    <div className="border-b border-warning/10 bg-bg/60 py-1" style={{ paddingLeft: itemIndent }}>
+		                      {node.groups.map((group) => (
+		                        <div key={`${node.key}-${group.categoryId}`}>
+		                          {renderGroupItems(group, group.items, { inLaborTree: true, laborTreeDepth: 0 })}
+		                        </div>
+		                      ))}
+		                    </div>
+		                  )}
+		                </div>
+		              );
+		            };
+
+		            const renderLaborTreeGroups = (groups: EntityOptionGroup[], keySeed: string) => {
+		              if (groups.length === 0) return null;
+		              const root = buildLaborTree(groups);
+		              const itemCount = groups.reduce((sum, group) => sum + group.items.length, 0);
+		              return (
+		                <div key={keySeed} className="bg-bg/25">
+		                  <div className="sticky top-0 z-20 flex items-center justify-between border-b border-t border-warning/20 bg-panel px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal text-warning shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+		                    <span className="truncate">{laborTreeLabel(groups)}</span>
+		                    <span className="text-fg/30">{itemCount}</span>
+		                  </div>
+		                  <div className="bg-warning/5 py-0.5">
+		                    {Array.from(root.children.values()).map(renderLaborTreeNode)}
+		                  </div>
+		                </div>
+		              );
+		            };
+
+		            const renderGroupCollection = (
+		              groups: EntityOptionGroup[],
+		              fallbackTone: "accent" | "success" | "muted" | "warning",
+		              keyPrefix: string,
+		            ) => {
+		              const blocks: ReactNode[] = [];
+		              let laborBatch: EntityOptionGroup[] = [];
+
+		              const flushLaborBatch = () => {
+		                if (laborBatch.length === 0) return;
+		                const first = laborBatch[0];
+		                const last = laborBatch[laborBatch.length - 1];
+		                blocks.push(renderLaborTreeGroups(
+		                  laborBatch,
+		                  `${keyPrefix}-labor-${first.categoryId}-${last.categoryId}-${laborBatch.length}`,
+		                ));
+		                laborBatch = [];
+		              };
+
+		              groups.forEach((group, index) => {
+		                if (group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1) {
+		                  laborBatch.push(group);
+		                  return;
+		                }
+		                flushLaborBatch();
+		                const block = renderGroupBlock(
+		                  group,
+		                  group.label ?? group.categoryName,
+		                  group.tone ?? fallbackTone,
+		                );
+		                if (block) blocks.push(block);
+		              });
+		              flushLaborBatch();
+		              return blocks;
+		            };
+
+		            const browseCard = entitySearchTerm.trim() ? null : activeEntityBrowseCard;
+		            const BrowseHeaderIcon = browseCard?.Icon;
+		            const showBrowseLaunchpad = !entitySearchTerm.trim() && !browseCard;
+		            const renderBrowseLaunchpad = () => (
+		              <div className="p-2">
+		                <div className="grid grid-cols-2 gap-1.5">
+		                  {enabledEntityBrowseCards.map((card) => {
+		                    const BrowseIcon = card.Icon;
+		                    return (
+		                      <button
+		                        key={card.id}
+		                        type="button"
+		                        className="group flex min-h-[58px] items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-2 py-1.5 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
+		                        onClick={() => {
+		                          setEntityBrowseMode(card.id);
+		                          setEntityHighlightIdx(0);
+		                        }}
+		                      >
+		                        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", card.accent)}>
+		                          <BrowseIcon className="h-4 w-4" />
+		                        </span>
+		                        <span className="min-w-0">
+		                          <span className="block truncate text-[12px] font-semibold leading-4 text-fg">
+		                            {card.label}
+		                          </span>
+		                          <span className="block truncate text-[10px] leading-3 text-fg/42">
+		                            {card.detail}
+		                          </span>
+		                        </span>
+		                        <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-fg/25 transition-colors group-hover:text-accent" />
+		                      </button>
+		                    );
+		                  })}
+		                </div>
+		                {enabledEntityBrowseCards.length === 0 && (
+		                  <div className="rounded-lg border border-dashed border-line bg-bg/35 px-3 py-7 text-center text-xs text-fg/42">
+		                    All estimate search sources are disabled for this quote.
+		                  </div>
+		                )}
+		              </div>
+		            );
+
+	            return createPortal(
+	              <motion.div
+	                ref={entityDropdownRef}
+	                initial={{ opacity: 0, scale: 0.98, y: entityDropdownPos.placement === "above" ? 2 : -2 }}
+	                animate={{ opacity: 1, scale: 1 }}
+	                exit={{ opacity: 0, scale: 0.98, y: entityDropdownPos.placement === "above" ? 2 : -2 }}
+	                transition={{ duration: 0.12 }}
+	                className={cn(
+	                  "fixed z-[200] flex w-[min(560px,calc(100vw-16px))] flex-col border border-line/80 bg-panel/95 shadow-2xl backdrop-blur-xl",
+	                  entityDropdownPos.placement === "above"
+	                    ? "overflow-visible rounded-b-xl rounded-t-none"
+	                    : "overflow-hidden rounded-xl",
+	                )}
+	                style={{
+	                  top: entityDropdownPos.top,
+	                  bottom: entityDropdownPos.bottom,
                   left: entityDropdownPos.left,
-                  maxHeight: entityDropdownPos.maxHeight,
-                }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="p-2 border-b border-line">
-                  <input
-                    ref={entitySearchRef}
-                    type="text"
-                    className="w-full h-7 rounded border border-line bg-bg px-2 text-xs outline-none focus:border-accent/50"
-                    placeholder="Search entities..."
-                    value={entitySearchTerm}
-                    onChange={(e) => setEntitySearchTerm(e.target.value)}
-                    onKeyDown={(e) => {
-                      const len = entityFlatItems.length;
-                      if (e.key === "Escape") {
-                        e.preventDefault();
-                        setEntityDropdownRowId(null);
-                        setEntityDropdownPos(null);
+                  maxHeight: entityDropdownPos.placement === "below" ? entityDropdownPos.maxHeight : undefined,
+	                }}
+	                onClick={(e) => e.stopPropagation()}
+		              >
+		                <div
+		                  data-entity-dropdown-header
+		                  className={cn(
+		                    "bg-panel2/30 p-2",
+		                    entityDropdownPos.placement === "below" && "border-b border-line/80",
+		                  )}
+		                >
+		                  <div className="flex items-center gap-2 rounded-lg border border-line bg-bg/80 px-2.5 py-1.5 shadow-inner focus-within:border-accent/50 focus-within:ring-1 focus-within:ring-accent/20">
+		                    <Search className="h-4 w-4 shrink-0 text-accent" />
+	                    <input
+	                      ref={entitySearchRef}
+	                      type="text"
+	                      className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
+	                      placeholder="Search libraries, catalogs, rates, plugins..."
+		                      value={entitySearchTerm}
+		                      onChange={(e) => {
+		                        const next = e.target.value;
+		                        setEntitySearchTerm(next);
+		                        if (next.trim()) setEntityBrowseMode(null);
+		                      }}
+		                      onKeyDown={(e) => {
+	                      const len = entityFlatItems.length;
+	                      if (e.key === "Escape") {
+		                        e.preventDefault();
+			                        setEntityDropdownRowId(null);
+		                        setEntityDropdownPos(null);
+		                        setEntityBrowseMode(null);
+		                        setEntityPluginResults([]);
                       } else if (e.key === "ArrowDown") {
                         e.preventDefault();
                         if (len > 0) setEntityHighlightIdx((i) => (i + 1) % len);
@@ -2450,72 +5211,106 @@ export function EstimateGrid({
                         if (len > 0) setEntityHighlightIdx(len - 1);
                       } else if (e.key === "Enter") {
                         e.preventDefault();
-                        if (len > 0) selectFlatItem(entityHighlightIdx);
+                        if (len > 0) selectFlatItem(Math.min(entityHighlightIdx, len - 1));
                       } else if (e.key === "Tab") {
                         e.preventDefault();
                         const advancing = !e.shiftKey;
                         const targetRowId = row.id;
                         if (len > 0) {
-                          selectFlatItem(entityHighlightIdx);
+                          selectFlatItem(Math.min(entityHighlightIdx, len - 1));
                         } else {
-                          setEntityDropdownRowId(null);
-                          setEntityDropdownPos(null);
-                          setEntitySearchTerm("");
-                        }
+	                          setEntityDropdownRowId(null);
+		                          setEntityDropdownPos(null);
+		                          setEntitySearchTerm("");
+		                          setEntityBrowseMode(null);
+		                          setEntityPluginResults([]);
+	                        }
                         // After selecting, hop to the next/prev editable cell
                         setTimeout(() => {
                           if (advancing) advanceToNextCell(targetRowId, "entityName");
-                          else retreatToPrevCell(targetRowId, "entityName");
-                        }, 0);
-                      }
-                    }}
-                  />
-                </div>
-                <div
-                  className="overflow-y-auto py-1"
-                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
-                >
-                  {/* Matching category first */}
-                  {matchingGroups.map((group) => {
-                    const filtered = q
-                      ? group.items.filter((it) => it.label.toLowerCase().includes(q))
-                      : group.items;
-                    if (filtered.length === 0 && q) return null;
-                    return (
-                      <div key={group.categoryId}>
-                        <div className="px-3 py-1 text-[10px] font-semibold uppercase text-accent/60 tracking-wider bg-accent/5">
-                          Matching &mdash; {group.categoryName}
-                        </div>
-                        {renderGroupItems(group, filtered)}
-                      </div>
-                    );
-                  })}
-
-                  {/* Other categories */}
-                  {otherGroups.length > 0 && (
-                    <>
-                      {matchingGroups.length > 0 && (
-                        <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/25 tracking-wider bg-panel2/20 border-t border-line mt-1">
-                          Other
-                        </div>
-                      )}
-                      {otherGroups.map((group) => {
-                        const filtered = q
-                          ? group.items.filter((it) => it.label.toLowerCase().includes(q))
-                          : group.items;
-                        if (filtered.length === 0 && q) return null;
-                        return (
-                          <div key={group.categoryId}>
-                            <div className="px-3 py-1 text-[10px] font-semibold uppercase text-fg/35 tracking-wider bg-panel2/40">
-                              {group.categoryName}
-                            </div>
-                            {renderGroupItems(group, filtered)}
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </div>
+	                          else retreatToPrevCell(targetRowId, "entityName");
+	                        }, 0);
+	                      }
+	                    }}
+	                    />
+	                    {entitySearchLoading ? (
+	                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+	                    ) : (
+	                      <Sparkles className="h-4 w-4 shrink-0 text-accent/70" />
+	                    )}
+		                  </div>
+		                  <div className="mt-1.5 flex min-w-0 items-center gap-1 overflow-hidden">
+		                    {browseCard ? (
+		                      <button
+		                        type="button"
+		                        className={cn("inline-flex max-w-[260px] shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", browseCard.accent)}
+		                        onClick={() => setEntityBrowseMode(null)}
+		                      >
+		                        {BrowseHeaderIcon && <BrowseHeaderIcon className="h-3 w-3" />}
+		                        <span className="truncate">{browseCard.label}</span>
+		                        <X className="h-3 w-3" />
+		                      </button>
+		                    ) : (
+		                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/55 px-1.5 py-0.5 text-[10px] font-medium text-fg/45">
+		                        <CircleDollarSign className="h-3 w-3" />
+		                        {showBrowseLaunchpad ? "Browse source" : `${entityFlatItems.length} loaded`}
+		                      </span>
+		                    )}
+		                    {!showBrowseLaunchpad && sourceStats.map(([label, count]) => (
+		                      <span key={label} className="inline-flex shrink-0 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] text-fg/40">
+		                        {label} {count}
+		                      </span>
+		                    ))}
+	                    {entitySearchHasMore && (
+	                      <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/20 bg-accent/8 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+	                        <ArrowDown className="h-3 w-3" />
+	                        more
+	                      </span>
+	                    )}
+	                  </div>
+	                </div>
+		                <div
+		                  className={cn(
+		                    "overflow-y-auto p-0",
+		                    entityDropdownPos.placement === "above" &&
+		                      "absolute bottom-[calc(100%-1px)] left-[-1px] right-[-1px] rounded-t-xl border border-b-0 border-line/80 bg-panel/95 backdrop-blur-xl",
+		                  )}
+		                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
+			                  onScroll={handleResultsScroll}
+			                >
+			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
+			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
+			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
+			                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
+			                      Searching indexed library...
+		                    </div>
+		                  )}
+		                  {entitySearchError && (
+			                    <div className="rounded-lg border border-danger/20 bg-danger/5 px-2.5 py-2 text-[11px] text-danger">
+			                      {entitySearchError}
+			                    </div>
+			                  )}
+			                  {!showBrowseLaunchpad && !entitySearchLoading && !entitySearchError && entityFlatItems.length === 0 && (
+			                    <div className="rounded-lg border border-dashed border-line bg-bg/40 px-3 py-8 text-center text-xs text-fg/45">
+			                      No matches. Keep typing or create a freeform item.
+			                    </div>
+				                  )}
+				                  {!showBrowseLaunchpad && renderGroupCollection(providerGroups, "success", "provider")}
+				                  {!showBrowseLaunchpad && renderGroupCollection(matchingGroups, "accent", "matching")}
+				                  {!showBrowseLaunchpad && renderGroupCollection(otherGroups, "muted", "other")}
+				                  {!showBrowseLaunchpad && renderGroupCollection(actionGroups, "accent", "actions")}
+				                  {!showBrowseLaunchpad && entitySearchLoadingMore && (
+				                    <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-fg/40">
+				                      <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+				                      Loading more...
+				                    </div>
+				                  )}
+				                  {!showBrowseLaunchpad && !entitySearchHasMore && !entitySearchLoading && entityFlatItems.length > 0 && (
+				                    <div className="py-2 text-center text-[10px] text-fg/30">
+				                      End of indexed results
+				                    </div>
+			                  )}
+		                </div>
               </motion.div>,
               document.body,
             );
@@ -2530,7 +5325,7 @@ export function EstimateGrid({
         data-cell-row={row.id}
         data-cell-col={column}
         className={cn(
-          "border-b border-line px-2 py-2 text-xs transition-colors relative",
+          "border-b border-line px-2 py-2 text-xs transition-colors relative min-w-0 overflow-hidden align-top",
           disabled
             ? "bg-surface/50 cursor-not-allowed"
             : "cursor-pointer hover:bg-accent/5",
@@ -2546,7 +5341,9 @@ export function EstimateGrid({
           }
         }}
       >
-        {disabled ? <span className="italic opacity-40">{displayValue}</span> : displayValue}
+        <div className="min-w-0 overflow-hidden">
+          {disabled ? <span className="italic opacity-40">{displayValue}</span> : displayValue}
+        </div>
       </td>
     );
   }
@@ -2570,6 +5367,16 @@ export function EstimateGrid({
     return () => ro.disconnect();
   }, [checkTabOverflow, workspace.worksheets]);
 
+  useEffect(() => {
+    const el = gridWidthRef.current;
+    if (!el) return;
+    const update = () => setGridWidth(el.getBoundingClientRect().width);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [worksheetViewMode]);
+
   const scrollTabs = useCallback((dir: "left" | "right") => {
     const el = tabScrollRef.current;
     if (!el) return;
@@ -2580,127 +5387,184 @@ export function EstimateGrid({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
-      {/* ─── Worksheet Tabs ─── */}
-      <div className="flex items-center border-b border-line shrink-0">
-        {/* Left scroll arrow */}
-        <button
-          onClick={() => scrollTabs("left")}
-          className={cn(
-            "shrink-0 p-1 transition-opacity",
-            tabOverflow.left ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
-          )}
-          aria-label="Scroll tabs left"
-        >
-          <ChevronLeft className="h-3.5 w-3.5" />
-        </button>
-
-        {/* Scrollable tab strip */}
-        <div
-          ref={tabScrollRef}
-          onScroll={checkTabOverflow}
-          onWheel={(e) => {
-            if (!tabScrollRef.current) return;
-            // Convert vertical scroll to horizontal
-            if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-              e.preventDefault();
-              tabScrollRef.current.scrollLeft += e.deltaY;
-              checkTabOverflow();
-            }
-          }}
-          className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0"
-        >
+      {/* ─── Worksheet Navigation ─── */}
+      <div className="flex items-center gap-2 border-b border-line shrink-0">
+        <div className="flex items-center rounded-md border border-line bg-bg/60 p-0.5">
           <button
-            onClick={() => setActiveTab("all")}
+            type="button"
+            onClick={() => setWorksheetViewMode("tabs")}
             className={cn(
-              "relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
-              activeTab === "all"
-                ? "text-accent bg-accent/5"
-                : "text-fg/40 hover:text-fg/60"
+              "inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors",
+              worksheetViewMode === "tabs" ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/65",
             )}
+            title="Horizontal worksheet tabs"
           >
-            All
-            {activeTab === "all" && (
-              <motion.span
-                layoutId="ws-tab-indicator"
-                className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
-                transition={{ type: "spring", stiffness: 500, damping: 35 }}
-              />
-            )}
+            <Table2 className="h-3 w-3" />
+            Tabs
           </button>
-
-          {(workspace.worksheets ?? []).map((ws) => (
-            <button
-              key={ws.id}
-              onClick={() => setActiveTab(ws.id)}
-              onDoubleClick={() => {
-                setInlineRenameWsId(ws.id);
-                setInlineRenameName(ws.name);
-              }}
-              onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
-              className={cn(
-                "group relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
-                activeTab === ws.id
-                  ? "text-accent bg-accent/5"
-                  : "text-fg/40 hover:text-fg/60"
-              )}
-            >
-              {inlineRenameWsId === ws.id ? (
-                <input
-                  ref={inlineRenameRef}
-                  type="text"
-                  className="w-24 h-5 bg-bg border border-accent/50 rounded px-1 text-xs outline-none"
-                  value={inlineRenameName}
-                  onChange={(e) => setInlineRenameName(e.target.value)}
-                  onBlur={handleInlineRenameCommit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleInlineRenameCommit();
-                    } else if (e.key === "Escape") {
-                      setInlineRenameWsId(null);
-                    }
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <>
-                  {ws.name}
-                  <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
-                </>
-              )}
-              {activeTab === ws.id && (
-                <motion.span
-                  layoutId="ws-tab-indicator"
-                  className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
-                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                />
-              )}
-            </button>
-          ))}
-
           <button
-            onClick={() => {
-              setNewWsName("");
-              setShowNewWsModal(true);
-            }}
-            className="ml-1 p-1.5 text-fg/30 hover:text-fg/60 transition-colors shrink-0"
-            title="Add worksheet"
+            type="button"
+            onClick={() => setWorksheetViewMode("organizer")}
+            className={cn(
+              "inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] font-medium transition-colors",
+              worksheetViewMode === "organizer" ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/65",
+            )}
+            title="Worksheet folders and hierarchy"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <ListTree className="h-3 w-3" />
+            Organizer
           </button>
         </div>
 
-        {/* Right scroll arrow */}
-        <button
-          onClick={() => scrollTabs("right")}
-          className={cn(
-            "shrink-0 p-1 transition-opacity",
-            tabOverflow.right ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
-          )}
-          aria-label="Scroll tabs right"
-        >
-          <ChevronRight className="h-3.5 w-3.5" />
-        </button>
+        {worksheetViewMode === "tabs" ? (
+          <>
+            <button
+              onClick={() => scrollTabs("left")}
+              className={cn(
+                "shrink-0 p-1 transition-opacity",
+                tabOverflow.left ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
+              )}
+              aria-label="Scroll tabs left"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" />
+            </button>
+
+            <div
+              ref={tabScrollRef}
+              onScroll={checkTabOverflow}
+              onWheel={(e) => {
+                if (!tabScrollRef.current) return;
+                if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                  e.preventDefault();
+                  tabScrollRef.current.scrollLeft += e.deltaY;
+                  checkTabOverflow();
+                }
+              }}
+              className="flex items-center gap-0.5 overflow-x-auto scrollbar-none flex-1 min-w-0"
+            >
+              <button
+                onClick={() => setActiveTab("all")}
+                className={cn(
+                  "relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
+                  activeTab === "all"
+                    ? "text-accent bg-accent/5"
+                    : "text-fg/40 hover:text-fg/60"
+                )}
+              >
+                All
+                {activeTab === "all" && (
+                  <motion.span
+                    layoutId="ws-tab-indicator"
+                    className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
+                    transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                  />
+                )}
+              </button>
+
+              {(workspace.worksheets ?? []).map((ws) => (
+                <button
+                  key={ws.id}
+                  onClick={() => setActiveTab(ws.id)}
+                  onDoubleClick={() => {
+                    setInlineRenameWsId(ws.id);
+                    setInlineRenameName(ws.name);
+                  }}
+                  onContextMenu={(e) => handleTabContextMenu(e, ws.id)}
+                  className={cn(
+                    "group relative px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors whitespace-nowrap",
+                    activeTab === ws.id
+                      ? "text-accent bg-accent/5"
+                      : "text-fg/40 hover:text-fg/60"
+                  )}
+                >
+                  {inlineRenameWsId === ws.id ? (
+                    <input
+                      ref={inlineRenameRef}
+                      type="text"
+                      className="w-24 h-5 bg-bg border border-accent/50 rounded px-1 text-xs outline-none"
+                      value={inlineRenameName}
+                      onChange={(e) => setInlineRenameName(e.target.value)}
+                      onBlur={handleInlineRenameCommit}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleInlineRenameCommit();
+                        } else if (e.key === "Escape") {
+                          setInlineRenameWsId(null);
+                        }
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <>
+                      {ws.name}
+                      <span className="ml-1 text-[10px] text-fg/25">({ws.items.length})</span>
+                    </>
+                  )}
+                  {activeTab === ws.id && (
+                    <motion.span
+                      layoutId="ws-tab-indicator"
+                      className="absolute inset-x-0 -bottom-px h-0.5 bg-accent rounded-full"
+                      transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                    />
+                  )}
+                </button>
+              ))}
+
+              <button
+                onClick={() => {
+                  setNewWsFolderId(null);
+                  setNewWsName("");
+                  setShowNewWsModal(true);
+                }}
+                className="ml-1 p-1.5 text-fg/30 hover:text-fg/60 transition-colors shrink-0"
+                title="Add worksheet"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <button
+              onClick={() => scrollTabs("right")}
+              className={cn(
+                "shrink-0 p-1 transition-opacity",
+                tabOverflow.right ? "text-fg/40 hover:text-fg/70" : "text-fg/10 pointer-events-none"
+              )}
+              aria-label="Scroll tabs right"
+            >
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          </>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2 text-xs">
+            <span className="truncate text-fg/60">{activeViewLabel}</span>
+            <span className="text-[10px] text-fg/30">
+              {visibleRows.length} row{visibleRows.length === 1 ? "" : "s"}
+            </span>
+            <div className="ml-auto flex items-center gap-1">
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setFolderForm({ parentId: activeFolderId ?? null, name: "" })}
+                title="New folder"
+              >
+                <FolderPlus className="h-3 w-3" />
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  setNewWsFolderId(activeFolderId ?? null);
+                  setNewWsName("");
+                  setShowNewWsModal(true);
+                }}
+                title="New worksheet"
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Toolbar ─── */}
@@ -2764,39 +5628,25 @@ export function EstimateGrid({
             <Button size="xs" variant="ghost" onClick={exportTableAsCsv} title="Export as CSV">
               <Download className="h-3 w-3" />
             </Button>
-            <Button
-              size="xs"
-              onClick={() => addNewItem()}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0}
-              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : undefined}
-            >
-              <Plus className="h-3 w-3" /> Item
-            </Button>
-
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => {
-                setShowCatalogPicker(true);
-                setCatalogSearchTerm("");
-                setSelectedCatalogItemIds(new Set());
-              }}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0}
-              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : undefined}
-            >
-              <Package className="h-3 w-3" /> Catalog
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => setShowAssemblyPicker(true)}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0}
-              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Insert, author, or manage assembly groups in this worksheet"}
-            >
-              <Layers className="h-3 w-3" /> Assembly
-            </Button>
-          </div>
-        </div>
+	            <Button
+	              size="xs"
+	              onClick={() => addNewItem()}
+	              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+	              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Add one line item"}
+	            >
+	              <Plus className="h-3 w-3" /> Add
+	            </Button>
+	            <Button
+	              size="xs"
+	              variant="ghost"
+	              onClick={() => setShowAddItemsPicker(true)}
+	              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+	              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Add multiple line items"}
+	            >
+	              <Boxes className="h-3 w-3" /> Multi
+	            </Button>
+	          </div>
+	        </div>
 
       {/* ─── Bulk Operations Toolbar ─── */}
       {selectedIds.size > 0 && (
@@ -2844,7 +5694,7 @@ export function EstimateGrid({
             }}
             options={[
               { value: "__none__", label: "None" },
-              ...(workspace.phases ?? []).map((p) => ({ value: p.id, label: `${p.number} - ${p.name}` })),
+              ...buildEstimatePhaseOptions(workspace.phases ?? []),
             ]}
           />
 
@@ -2872,7 +5722,30 @@ export function EstimateGrid({
       )}
 
       {/* ─── Grid ─── */}
-      <div className="flex-1 min-h-0 relative">
+      <div className={cn("flex-1 min-h-0 relative", worksheetViewMode === "organizer" && "flex gap-2")}>
+        {worksheetViewMode === "organizer" && (
+          <WorksheetOrganizerPanel
+            workspace={workspace}
+            activeViewId={activeTab}
+            onSelectAll={() => setActiveTab("all")}
+            onSelectFolder={(folderId) => setActiveTab(folderViewId(folderId))}
+            onSelectWorksheet={(worksheetId) => setActiveTab(worksheetId)}
+            onOpenContextMenu={(target, x, y) => setOrganizerMenu({ ...target, x, y })}
+            onCreateRootFolder={() => setFolderForm({ parentId: null, name: "" })}
+            onCreateRootWorksheet={() => {
+              setNewWsFolderId(null);
+              setNewWsName("");
+              setShowNewWsModal(true);
+            }}
+          />
+        )}
+        <div
+          ref={gridWidthRef}
+          className={cn(
+            "min-h-0",
+            worksheetViewMode === "organizer" ? "relative flex-1" : "absolute inset-0",
+          )}
+        >
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={activeTab}
@@ -2899,17 +5772,18 @@ export function EstimateGrid({
                   .
                 </>
               ) : (
-                <>
-                  No line items found.{" "}
-                  <button className="text-accent hover:underline" onClick={() => addNewItem()}>
-                    Add one
-                  </button>
-                </>
+	                <>
+	                  No line items found.{" "}
+	                  <button className="text-accent hover:underline" onClick={() => addNewItem()}>
+	                    Add one
+	                  </button>
+	                </>
               )}
             </EmptyState>
           ) : (
-            <div className="overflow-auto rounded-lg border border-line h-full">
-              <table className="w-full min-w-[1280px] table-fixed text-sm">
+            <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line">
+              <div className="min-h-0 flex-1 overflow-auto">
+                <table className="w-full table-fixed text-sm">
                 <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
                     {/* Expand button column */}
@@ -2938,7 +5812,7 @@ export function EstimateGrid({
                     )}
                     {isColVisible("entityName") && (
                       <th className="border-b border-line px-2 py-2 text-left w-[200px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
-                        <span className="flex items-center gap-1">Entity Name {renderSortIcon("entityName")}</span>
+                        <span className="flex items-center gap-1">Line Item Name {renderSortIcon("entityName")}</span>
                       </th>
                     )}
                     {isColVisible("vendor") && (
@@ -2959,6 +5833,11 @@ export function EstimateGrid({
                     {isColVisible("uom") && (
                       <th className="border-b border-line px-2 py-2 text-center w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("uom")}>
                         <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
+                      </th>
+                    )}
+                    {isColVisible("factors") && (
+                      <th className="border-b border-line px-1 py-1.5 text-center w-[80px]">
+                        <span className="flex items-center justify-center gap-1">Factors</span>
                       </th>
                     )}
                     {isColVisible("units") && (
@@ -3002,12 +5881,12 @@ export function EstimateGrid({
                   </tr>
                 </thead>
                 <tbody>
-                  {groupedRows.map((group) => {
-                    const isCollapsed = collapsedCategories.has(group.category);
-                    return (
-                      <GroupRows
-                        key={group.category}
-                        group={group}
+	                  {groupedRows.map((group, groupIndex) => {
+	                    const isCollapsed = collapsedCategories.has(group.category);
+	                    return (
+	                      <GroupRows
+	                        key={`${group.category || "__uncategorized"}-${group.catDef?.id ?? "custom"}-${groupIndex}`}
+	                        group={group}
                         isCollapsed={isCollapsed}
                         onToggleCollapse={() => toggleCategoryCollapse(group.category)}
                         selectedRowId={selectedRowId}
@@ -3021,6 +5900,11 @@ export function EstimateGrid({
                         isColVisible={isColVisible}
                         visibleColumnCount={visibleColumnCount}
                         selectedIds={selectedIds}
+                        lineFactorsByItemId={lineFactorsByItemId}
+                        factorTotalsById={factorTotalsById}
+                        displayLineItem={displayLineItem}
+                        lineItemHasFactorAdjustment={lineItemHasFactorAdjustment}
+                        onOpenLineFactors={setFactorLineItem}
                         onToggleSelectRow={toggleSelectRow}
                         onMoveUp={handleMoveUp}
                         onMoveDown={handleMoveDown}
@@ -3049,6 +5933,7 @@ export function EstimateGrid({
                     {isColVisible("description") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("quantity") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("uom") && <td className="border-t border-line px-2 py-2" />}
+                    {isColVisible("factors") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("units") && (
                       <td className="border-t border-line px-1 py-2">
                         <div className="flex items-center justify-center gap-1 tabular-nums text-xs">
@@ -3085,11 +5970,25 @@ export function EstimateGrid({
                     {isColVisible("actions") && <td className="border-t border-line px-2 py-2" />}
                   </tr>
                 </tfoot>
-              </table>
+                </table>
+              </div>
+              <div className="flex shrink-0 items-center justify-between gap-2 border-t border-line bg-panel2/40 px-2.5 py-1 text-[10px] leading-4 text-fg/35">
+                <span className="truncate">
+                  Press{" "}
+                  <kbd className="rounded border border-line bg-bg/70 px-1 py-px font-mono text-[9px] text-fg/45">
+                    Cmd/Ctrl Enter
+                  </kbd>{" "}
+                  for a new line with search ready.
+                </span>
+                <span className="hidden shrink-0 text-fg/30 sm:inline">
+                  Multi adds several library results at once.
+                </span>
+              </div>
             </div>
           )}
           </motion.div>
         </AnimatePresence>
+        </div>
       </div>
 
       {/* ─── Context menu ─── */}
@@ -3199,6 +6098,83 @@ export function EstimateGrid({
         </div>
       )}
 
+      {/* ─── Organizer context menu ─── */}
+      {organizerMenu && (
+        <div
+          className="fixed z-50 min-w-[160px] rounded-lg border border-line bg-panel py-1 text-xs shadow-xl"
+          style={{ left: organizerMenu.x, top: organizerMenu.y }}
+        >
+          {organizerMenu.type === "folder" && (
+            <>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-panel2/60"
+                onClick={() => {
+                  setFolderForm({ parentId: organizerMenu.id, name: "" });
+                  setOrganizerMenu(null);
+                }}
+              >
+                <FolderPlus className="h-3 w-3" /> New folder
+              </button>
+              <button
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-panel2/60"
+                onClick={() => {
+                  setNewWsFolderId(organizerMenu.id);
+                  setNewWsName("");
+                  setShowNewWsModal(true);
+                  setOrganizerMenu(null);
+                }}
+              >
+                <Plus className="h-3 w-3" /> New worksheet
+              </button>
+              <div className="my-1 border-t border-line" />
+            </>
+          )}
+          <button
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-panel2/60"
+            onClick={() => {
+              openRenameTarget(organizerMenu);
+              setOrganizerMenu(null);
+            }}
+          >
+            <Edit3 className="h-3 w-3" /> Rename
+          </button>
+          <button
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-panel2/60"
+            onClick={() => {
+              openMoveTarget(organizerMenu);
+              setOrganizerMenu(null);
+            }}
+          >
+            <MoveRight className="h-3 w-3" /> Move
+          </button>
+          <div className="my-1 border-t border-line" />
+          <button
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-danger hover:bg-danger/10"
+            onClick={() => {
+              if (organizerMenu.type === "folder") {
+                const folderWorksheets = getWorksheetsInFolderView(workspace, organizerMenu.id);
+                setDeleteFolderTarget({
+                  folderId: organizerMenu.id,
+                  name: organizerMenu.name,
+                  parentId: organizerMenu.parentId,
+                  worksheetCount: folderWorksheets.length,
+                  childFolderCount: (workspace.worksheetFolders ?? []).filter((folder) => folder.parentId === organizerMenu.id).length,
+                  itemCount: folderWorksheets.reduce((sum, worksheet) => sum + worksheet.items.length, 0),
+                });
+              } else {
+                const ws = findWs(workspace, organizerMenu.id);
+                if (ws) {
+                  setDeleteWsTarget({ wsId: ws.id, name: ws.name, itemCount: ws.items.length });
+                }
+              }
+              setOrganizerMenu(null);
+            }}
+          >
+            <Trash2 className="h-3 w-3" /> Delete
+          </button>
+        </div>
+      )}
+
       {/* ─── Delete worksheet confirmation modal ─── */}
       {deleteWsTarget && (
         <ModalBackdrop open={true} onClose={() => setDeleteWsTarget(null)} size="sm">
@@ -3245,18 +6221,219 @@ export function EstimateGrid({
         </ModalBackdrop>
       )}
 
+      {/* ─── Delete folder confirmation modal ─── */}
+      {deleteFolderTarget && (
+        <ModalBackdrop open={true} onClose={() => setDeleteFolderTarget(null)} size="sm">
+          <div className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">Delete folder?</h2>
+                <p className="mt-0.5 text-xs text-fg/50">Worksheets inside it will be moved up one level.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteFolderTarget(null)}
+                disabled={isPending}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2 px-5 py-4 text-xs text-fg/75">
+              <p>
+                Delete folder <span className="font-medium text-fg">&ldquo;{deleteFolderTarget.name}&rdquo;</span>?
+              </p>
+              <p className="text-fg/55">
+                {deleteFolderTarget.worksheetCount} worksheet{deleteFolderTarget.worksheetCount === 1 ? "" : "s"},
+                {" "}{deleteFolderTarget.childFolderCount} child folder{deleteFolderTarget.childFolderCount === 1 ? "" : "s"},
+                and {deleteFolderTarget.itemCount} line item{deleteFolderTarget.itemCount === 1 ? "" : "s"} will stay in the estimate.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+              <Button size="sm" variant="ghost" onClick={() => setDeleteFolderTarget(null)} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => handleDeleteFolder(deleteFolderTarget.folderId)}
+                disabled={isPending}
+              >
+                {isPending ? "Deleting..." : "Delete folder"}
+              </Button>
+            </div>
+          </div>
+        </ModalBackdrop>
+      )}
+
+      {/* ─── New folder modal ─── */}
+      {folderForm && (
+        <ModalBackdrop open={true} onClose={() => setFolderForm(null)} size="sm">
+          <div className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">New folder</h2>
+                <p className="mt-0.5 text-xs text-fg/50">
+                  {folderForm.parentId
+                    ? `Inside ${getWorksheetFolderPath(workspace.worksheetFolders ?? [], folderForm.parentId)}`
+                    : "At the top level"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFolderForm(null)}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-1.5 px-5 py-4">
+              <span className="text-xs font-medium text-fg/65">Folder name</span>
+              <Input
+                autoFocus
+                placeholder="e.g. Mechanical / Field install"
+                value={folderForm.name}
+                onChange={(e) => setFolderForm((prev) => prev ? { ...prev, name: e.target.value } : prev)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreateFolder();
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+              <Button size="sm" variant="ghost" onClick={() => setFolderForm(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="accent"
+                onClick={handleCreateFolder}
+                disabled={!folderForm.name.trim() || isPending}
+              >
+                Create
+              </Button>
+            </div>
+          </div>
+        </ModalBackdrop>
+      )}
+
+      {/* ─── Rename organizer node modal ─── */}
+      {renameTarget && (
+        <ModalBackdrop open={true} onClose={() => setRenameTarget(null)} size="sm">
+          <div className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">Rename {renameTarget.type}</h2>
+                <p className="mt-0.5 text-xs text-fg/50">{renameTarget.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRenameTarget(null)}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-1.5 px-5 py-4">
+              <span className="text-xs font-medium text-fg/65">Name</span>
+              <Input
+                autoFocus
+                value={renameName}
+                onChange={(e) => setRenameName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameTarget();
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+              <Button size="sm" variant="ghost" onClick={() => setRenameTarget(null)}>
+                Cancel
+              </Button>
+              <Button size="sm" variant="accent" onClick={handleRenameTarget} disabled={!renameName.trim() || isPending}>
+                Rename
+              </Button>
+            </div>
+          </div>
+        </ModalBackdrop>
+      )}
+
+      {/* ─── Move organizer node modal ─── */}
+      {moveTarget && (() => {
+        const folders = workspace.worksheetFolders ?? [];
+        const folderOptions = [
+          { value: "__root__", label: "Top level" },
+          ...folders
+            .filter((folder) =>
+              moveTarget.type === "worksheet" ||
+              (folder.id !== moveTarget.id && !isDescendantWorksheetFolder(folders, folder.id, moveTarget.id))
+            )
+            .map((folder) => ({
+              value: folder.id,
+              label: getWorksheetFolderPath(folders, folder.id) || folder.name,
+            })),
+        ];
+        return (
+          <ModalBackdrop open={true} onClose={() => setMoveTarget(null)} size="sm">
+            <div className="rounded-xl border border-line bg-panel shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-fg">Move {moveTarget.type}</h2>
+                  <p className="mt-0.5 text-xs text-fg/50">{moveTarget.name}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMoveTarget(null)}
+                  className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="space-y-1.5 px-5 py-4">
+                <span className="text-xs font-medium text-fg/65">Destination</span>
+                <Select
+                  value={moveParentId}
+                  onValueChange={setMoveParentId}
+                  options={folderOptions}
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+                <Button size="sm" variant="ghost" onClick={() => setMoveTarget(null)}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="accent" onClick={handleMoveTarget} disabled={isPending}>
+                  Move
+                </Button>
+              </div>
+            </div>
+          </ModalBackdrop>
+        );
+      })()}
+
       {/* ─── New Worksheet modal ─── */}
       {showNewWsModal && (
-        <ModalBackdrop open={showNewWsModal} onClose={() => setShowNewWsModal(false)} size="sm">
+        <ModalBackdrop open={showNewWsModal} onClose={() => {
+          setShowNewWsModal(false);
+          setNewWsFolderId(null);
+        }} size="sm">
           <div className="rounded-xl border border-line bg-panel shadow-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
               <div>
                 <h2 className="text-sm font-semibold text-fg">New worksheet</h2>
-                <p className="mt-0.5 text-xs text-fg/50">Group related line items into their own tab.</p>
+                <p className="mt-0.5 text-xs text-fg/50">
+                  {newWsFolderId
+                    ? `Inside ${getWorksheetFolderPath(workspace.worksheetFolders ?? [], newWsFolderId)}`
+                    : "Group related line items into their own tab."}
+                </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowNewWsModal(false)}
+                onClick={() => {
+                  setShowNewWsModal(false);
+                  setNewWsFolderId(null);
+                }}
                 className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
                 aria-label="Close"
               >
@@ -3276,7 +6453,10 @@ export function EstimateGrid({
               />
             </div>
             <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
-              <Button size="sm" variant="ghost" onClick={() => setShowNewWsModal(false)}>
+              <Button size="sm" variant="ghost" onClick={() => {
+                setShowNewWsModal(false);
+                setNewWsFolderId(null);
+              }}>
                 Cancel
               </Button>
               <Button
@@ -3298,7 +6478,7 @@ export function EstimateGrid({
         open={showAssemblyPicker}
         onClose={() => setShowAssemblyPicker(false)}
         projectId={workspace.project.id}
-        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
+        worksheetId={activeWorksheetForActions?.id ?? null}
         onInserted={(next, info) => {
           onApply(next);
           if (info.warnings.length > 0) {
@@ -3312,7 +6492,7 @@ export function EstimateGrid({
         open={showSaveAsAssembly}
         onClose={() => setShowSaveAsAssembly(false)}
         projectId={workspace.project.id}
-        worksheetId={activeTab !== "all" ? activeTab : (workspace.worksheets[0]?.id ?? null)}
+        worksheetId={activeWorksheetForActions?.id ?? null}
         selectedItemIds={Array.from(selectedIds)}
         onSaved={(info) => {
           setSelectedIds(new Set());
@@ -3323,136 +6503,373 @@ export function EstimateGrid({
       />
 
 
-      {/* ─── Catalog Quick-Add Modal ─── */}
-      {showCatalogPicker && (
-        <ModalBackdrop open={showCatalogPicker} onClose={() => setShowCatalogPicker(false)}>
-          <div className="w-[600px] max-h-[70vh] flex flex-col rounded-xl border border-line bg-panel p-5 shadow-xl">
-            <h4 className="text-sm font-semibold mb-3 flex items-center gap-2">
-              <Package className="h-4 w-4" />
-              Add from Catalog
-            </h4>
+      {/* ─── Universal Add Items Modal ─── */}
+      {showAddItemsPicker && (() => {
+        const browseCard = addItemsSearchTerm.trim() ? null : activeAddItemsBrowseCard;
+        const BrowseHeaderIcon = browseCard?.Icon;
+        const showBrowseLaunchpad = !addItemsSearchTerm.trim() && !browseCard;
+        const selectableVisibleItems = addItemsFlatItems.filter(({ group, item }) =>
+          canCreateWorksheetItemFromOption(group, item)
+        );
+        const allVisibleSelected =
+          selectableVisibleItems.length > 0 &&
+          selectableVisibleItems.every(({ item }) => selectedAddItems.has(entityOptionKey(item)));
+        const sourceStats = Array.from(
+          addItemsFlatItems.reduce<Map<string, number>>((map, entry) => {
+            const label = sourceBadgeLabel(entry.item.source) || "Item";
+            map.set(label, (map.get(label) ?? 0) + 1);
+            return map;
+          }, new Map()),
+        ).slice(0, 6);
 
-            {/* Search */}
-            <div className="relative mb-3">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
-              <Input
-                autoFocus
-                className="pl-8"
-                placeholder="Search catalog items..."
-                value={catalogSearchTerm}
-                onChange={(e) => setCatalogSearchTerm(e.target.value)}
-              />
-            </div>
+        const toggleAddItem = (group: EntityOptionGroup, item: EntityOptionItem) => {
+          if (!canCreateWorksheetItemFromOption(group, item)) return;
+          const key = entityOptionKey(item);
+          setSelectedAddItems((current) => {
+            const next = new Map(current);
+            if (next.has(key)) next.delete(key);
+            else next.set(key, { group, item });
+            return next;
+          });
+        };
 
-            {/* Items list */}
-            <div className="flex-1 overflow-y-auto border border-line rounded-lg max-h-[400px]">
-              {filteredCatalogItems.length === 0 ? (
-                <div className="p-6 text-center text-xs text-fg/40">
-                  {allCatalogItems.length === 0
-                    ? "No catalog items available."
-                    : "No items match your search."}
-                </div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead className="bg-panel2/60 text-[10px] font-medium uppercase text-fg/35 sticky top-0">
-                    <tr>
-                      <th className="border-b border-line px-2 py-1.5 w-8">
-                        <input
-                          type="checkbox"
-                          className="h-3 w-3 rounded border-line accent-accent cursor-pointer"
-                          checked={
-                            filteredCatalogItems.length > 0 &&
-                            filteredCatalogItems.every((ci) => selectedCatalogItemIds.has(ci.id))
-                          }
-                          onChange={() => {
-                            if (filteredCatalogItems.every((ci) => selectedCatalogItemIds.has(ci.id))) {
-                              setSelectedCatalogItemIds(new Set());
-                            } else {
-                              setSelectedCatalogItemIds(new Set(filteredCatalogItems.map((ci) => ci.id)));
-                            }
-                          }}
-                        />
-                      </th>
-                      <th className="border-b border-line px-2 py-1.5 text-left">Code</th>
-                      <th className="border-b border-line px-2 py-1.5 text-left">Name</th>
-                      <th className="border-b border-line px-2 py-1.5 text-left">Catalog</th>
-                      <th className="border-b border-line px-2 py-1.5 text-center">Unit</th>
-                      <th className="border-b border-line px-2 py-1.5 text-right">Cost</th>
-                      <th className="border-b border-line px-2 py-1.5 text-right">Price</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredCatalogItems.map((ci) => {
-                      const checked = selectedCatalogItemIds.has(ci.id);
-                      return (
-                        <tr
-                          key={ci.id}
-                          className={cn(
-                            "cursor-pointer transition-colors",
-                            checked ? "bg-accent/5" : "hover:bg-panel2/20"
-                          )}
-                          onClick={() => {
-                            setSelectedCatalogItemIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(ci.id)) {
-                                next.delete(ci.id);
-                              } else {
-                                next.add(ci.id);
-                              }
-                              return next;
-                            });
-                          }}
-                        >
-                          <td className="border-b border-line px-2 py-1.5">
-                            <input
-                              type="checkbox"
-                              className="h-3 w-3 rounded border-line accent-accent cursor-pointer"
-                              checked={checked}
-                              readOnly
-                            />
-                          </td>
-                          <td className="border-b border-line px-2 py-1.5 font-mono text-fg/50">{ci.code}</td>
-                          <td className="border-b border-line px-2 py-1.5 font-medium">{ci.name}</td>
-                          <td className="border-b border-line px-2 py-1.5">
-                            <Badge
-                              {...getCategoryBadgeProps(catalogKindToCategoryName(ci.catalogKind, entityCategories), entityCategories)}
-                              className="text-[9px]"
-                            >
-                              {ci.catalogKind}
-                            </Badge>
-                          </td>
-                          <td className="border-b border-line px-2 py-1.5 text-center">{ci.unit}</td>
-                          <td className="border-b border-line px-2 py-1.5 text-right tabular-nums">{formatMoney(ci.unitCost, 2)}</td>
-                          <td className="border-b border-line px-2 py-1.5 text-right tabular-nums">{formatMoney(ci.unitPrice, 2)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
+        const handleActionItem = (item: EntityOptionItem) => {
+          if (item.actionType === "open_assembly") {
+            setShowAddItemsPicker(false);
+            setShowAssemblyPicker(true);
+            return;
+          }
+          if (item.actionType === "plugin_tool" || item.actionType === "plugin_remote_search") {
+            setShowAddItemsPicker(false);
+            if (onOpenPluginTools) onOpenPluginTools();
+            else onError("Open Plugin Tools to run this action.");
+          }
+        };
 
-            {/* Footer */}
-            <div className="flex justify-between items-center mt-3">
-              <span className="text-xs text-fg/40">
-                {selectedCatalogItemIds.size} item{selectedCatalogItemIds.size !== 1 ? "s" : ""} selected
+        const renderBrowseLaunchpad = () => (
+          <div className="grid grid-cols-3 gap-2 p-3">
+            <button
+              type="button"
+              className="group flex min-h-[86px] flex-col justify-between rounded-lg border border-accent/25 bg-accent/8 p-3 text-left transition-colors hover:border-accent/45 hover:bg-accent/10"
+              onClick={() => {
+                addNewItem();
+                setShowAddItemsPicker(false);
+              }}
+            >
+              <span className="flex items-center justify-between">
+                <span className="flex h-8 w-8 items-center justify-center rounded-md border border-accent/25 bg-bg text-accent">
+                  <Plus className="h-4 w-4" />
+                </span>
+                <ChevronRight className="h-4 w-4 text-accent/45 transition-colors group-hover:text-accent" />
               </span>
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setShowCatalogPicker(false)}>
-                  Cancel
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={handleAddFromCatalog}
-                  disabled={selectedCatalogItemIds.size === 0 || isPending}
+              <span>
+                <span className="block text-sm font-semibold text-fg">Blank Row</span>
+                <span className="block text-[11px] leading-4 text-fg/45">Start with an empty worksheet line</span>
+              </span>
+            </button>
+            {enabledEntityBrowseCards.map((card) => {
+              const BrowseIcon = card.Icon;
+              return (
+                <button
+                  key={card.id}
+                  type="button"
+                  className="group flex min-h-[86px] flex-col justify-between rounded-lg border border-line/70 bg-bg/45 p-3 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
+                  onClick={() => setAddItemsBrowseMode(card.id)}
                 >
-                  Add Selected
-                </Button>
+                  <span className="flex items-center justify-between">
+                    <span className={cn("flex h-8 w-8 items-center justify-center rounded-md border", card.accent)}>
+                      <BrowseIcon className="h-4 w-4" />
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-fg/25 transition-colors group-hover:text-accent" />
+                  </span>
+                  <span>
+                    <span className="block text-sm font-semibold text-fg">{card.label}</span>
+                    <span className="block text-[11px] leading-4 text-fg/45">{card.detail}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {enabledEntityBrowseCards.length === 0 && (
+              <div className="col-span-3 rounded-lg border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/42">
+                All estimate search sources are disabled for this quote.
+              </div>
+            )}
+          </div>
+        );
+
+        const renderAddItemRow = (group: EntityOptionGroup, item: EntityOptionItem) => {
+          const key = entityOptionKey(item);
+          const selected = selectedAddItems.has(key);
+          const selectable = canCreateWorksheetItemFromOption(group, item);
+          const needsRate = item.source === "labor_unit" && !item.rateScheduleItemId;
+          const isLinkedCatalogRate = item.source === "catalog" && !!item.rateScheduleItemId;
+          const badge = isLinkedCatalogRate ? "Catalog + rate" : sourceBadgeLabel(item.source);
+          const badgeToneSource = isLinkedCatalogRate ? "rate_schedule" : item.source;
+          const SourceIcon = sourceIconFor(item.source);
+          const ActionIcon = item.actionType === "open_assembly"
+            ? Layers
+            : item.actionType === "plugin_tool" || item.actionType === "plugin_remote_search"
+              ? PlugZap
+              : ChevronRight;
+          const measure = optionMeasureLabel(item);
+          const detailParts = optionMetaParts(item);
+
+          return (
+            <button
+              key={`${group.categoryId}-${key}`}
+              type="button"
+              className={cn(
+                "group flex w-full items-center gap-2 border-b border-line/60 px-2.5 py-1.5 text-left transition-colors last:border-b-0",
+                selected ? "bg-accent/8" : "bg-bg/35 hover:bg-accent/5",
+                !selectable && "opacity-85",
+              )}
+              onClick={() => {
+                if (selectable) toggleAddItem(group, item);
+                else handleActionItem(item);
+              }}
+            >
+              <span className={cn(
+                "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
+                selectable
+                  ? selected
+                    ? "border-accent bg-accent text-accent-fg"
+                    : "border-line bg-panel text-fg/30"
+                  : sourceAccentClasses(item.source),
+              )}>
+                {selectable ? (
+                  selected ? <Check className="h-3 w-3" /> : null
+                ) : (
+                  <SourceIcon className="h-3 w-3" />
+                )}
+              </span>
+              <span className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded border", sourceAccentClasses(item.source))}>
+                <SourceIcon className="h-3 w-3" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="block min-w-0 flex-1 truncate text-[12px] font-semibold leading-4 text-fg">
+                    {item.label}
+                  </span>
+                  {measure && (
+                    <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-medium tabular-nums leading-3 text-fg/60">
+                      {measure}
+                    </span>
+                  )}
+                </span>
+                <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg/42">
+                  {badge && (
+                    <span className={cn("shrink-0 rounded border px-1 py-px text-[8px] font-semibold leading-3", sourceAccentClasses(badgeToneSource))}>
+                      {badge}
+                    </span>
+                  )}
+                  {needsRate && (
+                    <span className="shrink-0 rounded border border-warning/25 bg-warning/8 px-1 py-px text-[9px] font-semibold leading-3 text-warning">
+                      Needs rate
+                    </span>
+                  )}
+                  {detailParts.slice(0, 4).map((part, detailIndex) => (
+                    <span key={`${part}-${detailIndex}`} className="min-w-0 max-w-[220px] truncate">
+                      {part}
+                    </span>
+                  ))}
+                </span>
+              </span>
+              {!selectable && (
+                <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-accent">
+                  Open
+                  <ActionIcon className="h-3.5 w-3.5" />
+                </span>
+              )}
+            </button>
+          );
+        };
+
+        const renderGroupBlock = (group: EntityOptionGroup) => {
+          if (group.items.length === 0) return null;
+          return (
+            <div key={group.categoryId} className="bg-bg/25">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-t border-line bg-panel px-2.5 py-1 text-[10px] font-semibold uppercase tracking-normal text-fg/42">
+                <span className="truncate">{group.label ?? group.categoryName}</span>
+                <span>{group.items.length}</span>
+              </div>
+              {group.items.map((item) => renderAddItemRow(group, item))}
+            </div>
+          );
+        };
+
+        return (
+          <ModalBackdrop open={showAddItemsPicker} onClose={() => setShowAddItemsPicker(false)}>
+            <div className="flex h-[min(76vh,720px)] w-[min(960px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+              <div className="border-b border-line bg-panel2/30 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="flex items-center gap-2 text-sm font-semibold">
+                      <Sparkles className="h-4 w-4 text-accent" />
+                      Add Line Items
+                    </h4>
+                    <p className="mt-0.5 text-[11px] text-fg/42">
+                      Search every indexed source, select many rows, or open assemblies and plugin tools from here.
+                    </p>
+                  </div>
+                  <Button size="xs" variant="ghost" onClick={() => setShowAddItemsPicker(false)} title="Close">
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+
+                <div className="mt-3 flex items-center gap-2">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-bg/80 px-2.5 py-1.5 shadow-inner focus-within:border-accent/50 focus-within:ring-1 focus-within:ring-accent/20">
+                    <Search className="h-4 w-4 shrink-0 text-accent" />
+                    <input
+                      autoFocus
+                      type="text"
+                      className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
+                      placeholder="Search rates, catalogues, labour units, assemblies, cost intel, plugins..."
+                      value={addItemsSearchTerm}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setAddItemsSearchTerm(next);
+                        if (next.trim()) setAddItemsBrowseMode(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") setShowAddItemsPicker(false);
+                      }}
+                    />
+                    {addItemsLoading ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 shrink-0 text-accent/70" />
+                    )}
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      addNewItem();
+                      setShowAddItemsPicker(false);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Blank
+                  </Button>
+                </div>
+
+                <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
+                  {browseCard ? (
+                    <button
+                      type="button"
+                      className={cn("inline-flex max-w-[280px] shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", browseCard.accent)}
+                      onClick={() => setAddItemsBrowseMode(null)}
+                    >
+                      {BrowseHeaderIcon && <BrowseHeaderIcon className="h-3 w-3" />}
+                      <span className="truncate">{browseCard.label}</span>
+                      <X className="h-3 w-3" />
+                    </button>
+                  ) : (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/55 px-1.5 py-0.5 text-[10px] font-medium text-fg/45">
+                      <CircleDollarSign className="h-3 w-3" />
+                      {showBrowseLaunchpad ? "Choose source" : `${addItemsFlatItems.length} loaded`}
+                    </span>
+                  )}
+                  {!showBrowseLaunchpad && sourceStats.map(([label, count]) => (
+                    <span key={label} className="inline-flex shrink-0 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] text-fg/40">
+                      {label} {count}
+                    </span>
+                  ))}
+                  {!showBrowseLaunchpad && selectableVisibleItems.length > 0 && (
+                    <button
+                      type="button"
+                      className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] font-medium text-fg/55 hover:border-accent/35 hover:text-accent"
+                      onClick={() => {
+                        setSelectedAddItems((current) => {
+                          const next = new Map(current);
+                          if (allVisibleSelected) {
+                            for (const { item } of selectableVisibleItems) next.delete(entityOptionKey(item));
+                          } else {
+                            for (const entry of selectableVisibleItems) next.set(entityOptionKey(entry.item), entry);
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      <Check className="h-3 w-3" />
+                      {allVisibleSelected ? "Clear visible" : "Select visible"}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div
+                className="min-h-0 flex-1 overflow-y-auto"
+                onScroll={(event) => {
+                  const target = event.currentTarget;
+                  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 220) {
+                    void loadMoreAddItems();
+                  }
+                }}
+              >
+                {showBrowseLaunchpad && renderBrowseLaunchpad()}
+                {!showBrowseLaunchpad && addItemsLoading && addItemsFlatItems.length === 0 && (
+                  <div className="flex items-center justify-center gap-2 px-3 py-10 text-xs text-fg/45">
+                    <Loader2 className="h-4 w-4 animate-spin text-accent" />
+                    Searching indexed line-item sources...
+                  </div>
+                )}
+                {addItemsError && (
+                  <div className="m-3 rounded-lg border border-danger/20 bg-danger/5 px-2.5 py-2 text-[11px] text-danger">
+                    {addItemsError}
+                  </div>
+                )}
+                {!showBrowseLaunchpad && !addItemsLoading && !addItemsError && addItemsFlatItems.length === 0 && (
+                  <div className="m-3 rounded-lg border border-dashed border-line bg-bg/40 px-3 py-10 text-center text-xs text-fg/45">
+                    No matches yet.
+                  </div>
+                )}
+                {!showBrowseLaunchpad && addItemsGroups.map(renderGroupBlock)}
+                {!showBrowseLaunchpad && addItemsLoadingMore && (
+                  <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-fg/40">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                    Loading more...
+                  </div>
+                )}
+                {!showBrowseLaunchpad && !addItemsHasMore && !addItemsLoading && addItemsFlatItems.length > 0 && (
+                  <div className="py-2 text-center text-[10px] text-fg/30">
+                    End of indexed results
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between border-t border-line bg-panel2/25 px-3 py-2">
+                <span className="text-xs text-fg/45">
+                  {selectedAddItems.size} item{selectedAddItems.size === 1 ? "" : "s"} selected
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => setShowAddItemsPicker(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={handleAddSelectedItems}
+                    disabled={selectedAddItems.size === 0 || isPending}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Selected
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-        </ModalBackdrop>
-      )}
+          </ModalBackdrop>
+        );
+      })()}
+
+      <LineFactorDrawer
+        item={factorLineItem}
+        workspace={workspace}
+        factors={factorLineItem ? lineFactorsByItemId.get(factorLineItem.id) ?? [] : []}
+        factorTotalsById={factorTotalsById}
+        onClose={() => setFactorLineItem(null)}
+        onApply={onApply}
+        onError={onError}
+      />
 
       {/* ─── Item Detail Drawer ─── */}
       <AnimatePresence>
@@ -3482,6 +6899,530 @@ export function EstimateGrid({
   );
 }
 
+function lineFactorPercent(value: number) {
+  return Number.isFinite(value) ? Math.round((value - 1) * 10_000) / 100 : 0;
+}
+
+function lineFactorValueFromPercent(value: string) {
+  const parsed = Number(value);
+  const percent = Number.isFinite(parsed) ? parsed : 0;
+  return Math.max(0.05, Math.min(10, Math.round((1 + percent / 100) * 10_000) / 10_000));
+}
+
+function lineFactorFormulaLabel(value: EstimateFactorFormulaType | string | undefined) {
+  switch (value) {
+    case "condition_score":
+      return "condition score";
+    case "neca_condition_score":
+      return "condition score sheet";
+    case "temperature_productivity":
+      return "temperature productivity";
+    case "extended_duration":
+      return "extended duration";
+    case "per_unit_scale":
+      return "scaled input";
+    default:
+      return "fixed multiplier";
+  }
+}
+
+function lineFactorScope(item: WorkspaceWorksheetItem) {
+  return {
+    mode: "line" as const,
+    worksheetItemIds: [item.id],
+    worksheetIds: [item.worksheetId],
+    categoryIds: item.categoryId ? [item.categoryId] : undefined,
+    categoryNames: item.category ? [item.category] : undefined,
+  };
+}
+
+function LineFactorDrawer({
+  item,
+  workspace,
+  factors,
+  factorTotalsById,
+  onClose,
+  onApply,
+  onError,
+}: {
+  item: WorkspaceWorksheetItem | null;
+  workspace: ProjectWorkspaceData;
+  factors: EstimateFactor[];
+  factorTotalsById: Map<string, ProjectWorkspaceData["estimate"]["totals"]["factorTotals"][number]>;
+  onClose: () => void;
+  onApply: (next: WorkspaceResponse) => void;
+  onError: (message: string) => void;
+}) {
+  const [library, setLibrary] = useState<EstimateFactorLibraryRecord[]>([]);
+  const [query, setQuery] = useState("");
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customName, setCustomName] = useState("Line Productivity Factor");
+  const [customPercent, setCustomPercent] = useState("0");
+  const [editingFactorId, setEditingFactorId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [editingPercent, setEditingPercent] = useState("0");
+  const [editingParameters, setEditingParameters] = useState<Record<string, unknown>>({});
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    if (!item) return;
+    let cancelled = false;
+    getEstimateFactorLibrary(workspace.project.id)
+      .then((entries) => {
+        if (!cancelled) setLibrary(entries.filter((entry) => (entry.applicationScope ?? "both") !== "global"));
+      })
+      .catch((cause) => {
+        if (!cancelled) onError(cause instanceof Error ? cause.message : "Failed to load factor library");
+      });
+    return () => { cancelled = true; };
+  }, [item, onError, workspace.project.id]);
+
+  if (!item || typeof document === "undefined") return null;
+
+  const filteredLibrary = library.filter((entry) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return true;
+    return `${entry.name} ${entry.code} ${entry.category} ${entry.description} ${entry.tags.join(" ")}`.toLowerCase().includes(needle);
+  });
+
+  const mutate = (task: () => Promise<WorkspaceResponse>) => {
+    startTransition(async () => {
+      try {
+        onApply(await task());
+      } catch (cause) {
+        onError(cause instanceof Error ? cause.message : "Line factor operation failed");
+      }
+    });
+  };
+
+  const addLibraryFactor = (entry: EstimateFactorLibraryRecord) => {
+    mutate(() => createEstimateFactor(workspace.project.id, {
+      name: entry.name,
+      code: entry.code,
+      description: entry.description,
+      category: entry.category,
+      impact: entry.impact,
+      value: entry.value,
+      active: true,
+      appliesTo: item.entityName || item.category || "Line item",
+      applicationScope: "line",
+      scope: lineFactorScope(item),
+      formulaType: entry.formulaType ?? "fixed_multiplier",
+      parameters: entry.parameters ?? {},
+      confidence: entry.confidence,
+      sourceType: "library",
+      sourceId: entry.id,
+      sourceRef: { ...(entry.sourceRef ?? {}), libraryEntryId: entry.id, lineItemId: item.id },
+      tags: entry.tags,
+    }));
+  };
+
+  const addCustomFactor = () => {
+    mutate(() => createEstimateFactor(workspace.project.id, {
+      name: customName.trim() || "Line Productivity Factor",
+      code: "LINE-CUSTOM",
+      description: `Line-level factor for ${item.entityName || "worksheet item"}`,
+      category: "Line Factor",
+      impact: "labor_hours",
+      value: lineFactorValueFromPercent(customPercent),
+      active: true,
+      appliesTo: item.entityName || item.category || "Line item",
+      applicationScope: "line",
+      scope: lineFactorScope(item),
+      formulaType: "fixed_multiplier",
+      parameters: {},
+      confidence: "medium",
+      sourceType: "custom",
+      sourceRef: { basis: "Estimator-entered line factor", lineItemId: item.id },
+      tags: ["line-factor"],
+    }));
+    setCustomOpen(false);
+    setCustomPercent("0");
+  };
+
+  const toggleFactor = (factor: EstimateFactor) => {
+    mutate(() => updateEstimateFactor(workspace.project.id, factor.id, { active: !factor.active }));
+  };
+
+  const startEdit = (factor: EstimateFactor) => {
+    setEditingFactorId(factor.id);
+    setEditingName(factor.name);
+    setEditingPercent(String(lineFactorPercent(factor.value)));
+    setEditingParameters(factor.parameters ?? {});
+  };
+
+  const saveEdit = (factor: EstimateFactor) => {
+    mutate(() => updateEstimateFactor(workspace.project.id, factor.id, {
+      name: editingName.trim() || factor.name,
+      value: lineFactorValueFromPercent(editingPercent),
+      formulaType: factor.formulaType ?? "fixed_multiplier",
+      parameters: editingParameters,
+    }));
+    setEditingFactorId(null);
+  };
+
+  return createPortal(
+    <AnimatePresence>
+      <motion.div key="line-factor-drawer-backdrop" className="fixed inset-0 z-[80] bg-black/30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
+      <motion.aside
+        key="line-factor-drawer-panel"
+        className="fixed bottom-0 right-0 top-0 z-[81] flex w-full max-w-[520px] flex-col border-l border-line bg-panel shadow-2xl"
+        initial={{ x: "100%" }}
+        animate={{ x: 0 }}
+        exit={{ x: "100%" }}
+        transition={{ type: "spring", damping: 28, stiffness: 300 }}
+      >
+        <div className="flex items-center justify-between border-b border-line px-5 py-4">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-fg">Line Factors</div>
+            <div className="mt-1 truncate text-[11px] text-fg/45">{item.entityName || item.description || item.id}</div>
+          </div>
+          <Button size="xs" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
+          <section className="rounded-lg border border-line bg-bg/35">
+            <div className="border-b border-line px-3 py-2 text-xs font-semibold text-fg">Applied to this line</div>
+            {factors.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs text-fg/40">No line factors yet.</div>
+            ) : factors.map((factor) => {
+              const total = factorTotalsById.get(factor.id);
+              const isEditing = editingFactorId === factor.id;
+              return (
+                <div key={factor.id} className="flex items-center gap-2 border-b border-line/70 px-3 py-2 last:border-b-0">
+                  <button className="shrink-0" onClick={() => toggleFactor(factor)} disabled={isPending}>
+                    <Badge tone={factor.active ? "success" : "default"}>{factor.active ? "On" : "Off"}</Badge>
+                  </button>
+                  {isEditing ? (
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="grid grid-cols-[minmax(0,1fr)_76px_auto_auto] gap-2">
+                        <Input className="h-7 text-xs" value={editingName} onChange={(event) => setEditingName(event.target.value)} />
+                        <Input className="h-7 text-right font-mono text-xs" value={editingPercent} onChange={(event) => setEditingPercent(event.target.value)} />
+                        <Button size="xs" className="h-7 px-2" onClick={() => saveEdit(factor)} disabled={isPending}>Save</Button>
+                        <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => setEditingFactorId(null)} disabled={isPending}>Cancel</Button>
+                      </div>
+                      {factor.formulaType !== "fixed_multiplier" ? (
+                        <FactorParameterEditor
+                          compact
+                          formulaType={(factor.formulaType ?? "fixed_multiplier") as EstimateFactorFormulaType}
+                          parameters={editingParameters}
+                          onChange={setEditingParameters}
+                        />
+                      ) : null}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium text-fg">{factor.name}</div>
+                        <div className="mt-0.5 text-[10px] text-fg/45">{lineFactorFormulaLabel(factor.formulaType)} / {lineFactorPercent(total?.value ?? factor.value)}%</div>
+                      </div>
+                      <div className={cn("font-mono text-[11px]", (total?.valueDelta ?? 0) >= 0 ? "text-warning" : "text-success")}>{formatMoney(total?.valueDelta ?? 0)}</div>
+                      <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => startEdit(factor)} disabled={isPending}>Edit</Button>
+                      <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => mutate(() => deleteEstimateFactor(workspace.project.id, factor.id))} disabled={isPending}>
+                        <Trash2 className="h-3.5 w-3.5 text-danger" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+
+          <section className="rounded-lg border border-line bg-bg/35">
+            <div className="border-b border-line px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-fg">Add from library</div>
+                <Button size="xs" variant="secondary" onClick={() => setCustomOpen((open) => !open)}><Plus className="h-3 w-3" /> Custom</Button>
+              </div>
+              <Input className="mt-2 h-8 text-xs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search line-capable factors" />
+            </div>
+            {customOpen ? (
+              <div className="grid gap-2 border-b border-line p-3">
+                <Input className="text-xs" value={customName} onChange={(event) => setCustomName(event.target.value)} />
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <Input className="text-right font-mono text-xs" value={customPercent} onChange={(event) => setCustomPercent(event.target.value)} />
+                  <Button size="xs" onClick={addCustomFactor} disabled={isPending}>Add</Button>
+                </div>
+              </div>
+            ) : null}
+            <div className="max-h-[44vh] overflow-auto">
+              {filteredLibrary.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-fg/40">No matching line-capable factors.</div>
+              ) : filteredLibrary.map((entry) => (
+                <button
+                  key={entry.id}
+                  className="flex w-full items-start gap-2 border-b border-line/70 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-accent/5"
+                  onClick={() => addLibraryFactor(entry)}
+                  disabled={isPending}
+                >
+                  <Plus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-fg">{entry.name}</span>
+                    <span className="mt-0.5 block truncate text-[10px] text-fg/45">{entry.category} / {lineFactorFormulaLabel(entry.formulaType)}</span>
+                  </span>
+                  <Badge tone={entry.value >= 1 ? "warning" : "success"}>{lineFactorPercent(entry.value)}%</Badge>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      </motion.aside>
+    </AnimatePresence>,
+    document.body,
+  );
+}
+
+function WorksheetOrganizerPanel({
+  workspace,
+  activeViewId,
+  onSelectAll,
+  onSelectFolder,
+  onSelectWorksheet,
+  onOpenContextMenu,
+  onCreateRootFolder,
+  onCreateRootWorksheet,
+}: {
+  workspace: ProjectWorkspaceData;
+  activeViewId: WorksheetViewId;
+  onSelectAll: () => void;
+  onSelectFolder: (folderId: string) => void;
+  onSelectWorksheet: (worksheetId: string) => void;
+  onOpenContextMenu: (target: OrganizerNodeTarget, x: number, y: number) => void;
+  onCreateRootFolder: () => void;
+  onCreateRootWorksheet: () => void;
+}) {
+  const folders = workspace.worksheetFolders ?? [];
+  const worksheets = workspace.worksheets ?? [];
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(folders.map((folder) => folder.id)));
+
+  const foldersByParent = useMemo(() => {
+    const map = new Map<string | null, WorkspaceWorksheetFolder[]>();
+    for (const folder of folders) {
+      const key = folder.parentId ?? null;
+      const next = map.get(key) ?? [];
+      next.push(folder);
+      map.set(key, next);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+    return map;
+  }, [folders]);
+
+  const worksheetsByFolder = useMemo(() => {
+    const map = new Map<string | null, WorkspaceWorksheet[]>();
+    for (const worksheet of worksheets) {
+      const key = worksheet.folderId ?? null;
+      const next = map.get(key) ?? [];
+      next.push(worksheet);
+      map.set(key, next);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+    return map;
+  }, [worksheets]);
+
+  const q = query.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!worksheetViewIsFolder(activeViewId)) return;
+    const folderId = folderIdFromView(activeViewId);
+    if (!folderId) return;
+    const byId = new Map(folders.map((folder) => [folder.id, folder]));
+    const ancestors = new Set<string>();
+    let cursor = byId.get(folderId);
+    while (cursor) {
+      ancestors.add(cursor.id);
+      cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+    }
+    setExpanded((prev) => new Set([...prev, ...ancestors]));
+  }, [activeViewId, folders]);
+
+  useEffect(() => {
+    if (q) setExpanded(new Set(folders.map((folder) => folder.id)));
+  }, [folders, q]);
+
+  const worksheetMatches = useCallback((worksheet: WorkspaceWorksheet) => {
+    if (!q) return true;
+    const path = getWorksheetFolderPath(folders, worksheet.folderId).toLowerCase();
+    return worksheet.name.toLowerCase().includes(q) || path.includes(q);
+  }, [folders, q]);
+
+  const folderMatches = useCallback((folder: WorkspaceWorksheetFolder): boolean => {
+    if (!q) return true;
+    if (folder.name.toLowerCase().includes(q)) return true;
+    const childFolders = foldersByParent.get(folder.id) ?? [];
+    const childWorksheets = worksheetsByFolder.get(folder.id) ?? [];
+    return childWorksheets.some(worksheetMatches) || childFolders.some(folderMatches);
+  }, [foldersByParent, q, worksheetMatches, worksheetsByFolder]);
+
+  function toggle(folderId: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId);
+      else next.add(folderId);
+      return next;
+    });
+  }
+
+  function folderStats(folderId: string) {
+    const folderWorksheets = getWorksheetsInFolderView(workspace, folderId);
+    const items = folderWorksheets.flatMap((worksheet) => worksheet.items);
+    return {
+      worksheetCount: folderWorksheets.length,
+      price: items.reduce((sum, item) => sum + item.price, 0),
+    };
+  }
+
+  function renderWorksheet(worksheet: WorkspaceWorksheet, depth: number) {
+    if (!worksheetMatches(worksheet)) return null;
+    const isActive = activeViewId === worksheet.id;
+    const price = worksheet.items.reduce((sum, item) => sum + item.price, 0);
+    return (
+      <button
+        key={worksheet.id}
+        type="button"
+        className={cn(
+          "group flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-xs transition-colors",
+          isActive ? "bg-accent/10 text-accent" : "text-fg/65 hover:bg-panel2/60 hover:text-fg",
+        )}
+        style={{ paddingLeft: depth * 14 + 8 }}
+        onClick={() => onSelectWorksheet(worksheet.id)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onOpenContextMenu(
+            { type: "worksheet", id: worksheet.id, name: worksheet.name, folderId: worksheet.folderId ?? null },
+            e.clientX,
+            e.clientY,
+          );
+        }}
+      >
+        <span className="w-3.5 shrink-0" />
+        <Table2 className="h-3.5 w-3.5 shrink-0 text-fg/35" />
+        <span className="min-w-0 flex-1 truncate font-medium">{worksheet.name}</span>
+        <span className="text-[10px] text-fg/30">{worksheet.items.length}</span>
+        <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatMoney(price)}</span>
+      </button>
+    );
+  }
+
+  function renderFolder(folder: WorkspaceWorksheetFolder, depth: number): React.ReactNode {
+    if (!folderMatches(folder)) return null;
+    const isExpanded = expanded.has(folder.id);
+    const isActive = activeViewId === folderViewId(folder.id);
+    const childFolders = foldersByParent.get(folder.id) ?? [];
+    const childWorksheets = worksheetsByFolder.get(folder.id) ?? [];
+    const stats = folderStats(folder.id);
+    return (
+      <div key={folder.id}>
+        <button
+          type="button"
+          className={cn(
+            "group flex w-full items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-xs transition-colors",
+            isActive ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2/60 hover:text-fg",
+          )}
+          style={{ paddingLeft: depth * 14 + 8 }}
+          onClick={() => onSelectFolder(folder.id)}
+          onDoubleClick={() => toggle(folder.id)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onOpenContextMenu(
+              { type: "folder", id: folder.id, name: folder.name, parentId: folder.parentId ?? null },
+              e.clientX,
+              e.clientY,
+            );
+          }}
+        >
+          <span
+            className="rounded p-0.5 text-fg/35 hover:bg-bg/60"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggle(folder.id);
+            }}
+          >
+            {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </span>
+          {isExpanded ? (
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-accent" />
+          ) : (
+            <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
+          )}
+          <span className="min-w-0 flex-1 truncate font-medium">{folder.name}</span>
+          <span className="text-[10px] text-fg/30">{stats.worksheetCount}</span>
+          <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatMoney(stats.price)}</span>
+        </button>
+        {isExpanded && (
+          <div>
+            {childFolders.map((child) => renderFolder(child, depth + 1))}
+            {childWorksheets.map((worksheet) => renderWorksheet(worksheet, depth + 1))}
+            {childFolders.length === 0 && childWorksheets.length === 0 && !q && (
+              <div className="px-2 py-1 text-[11px] italic text-fg/25" style={{ paddingLeft: (depth + 1) * 14 + 24 }}>
+                Empty
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const rootFolders = foldersByParent.get(null) ?? [];
+  const rootWorksheets = worksheetsByFolder.get(null) ?? [];
+
+  return (
+    <aside className="flex w-64 shrink-0 flex-col overflow-hidden rounded-lg border border-line bg-panel/50">
+      <div className="flex items-center gap-1 border-b border-line p-2">
+        <div className="relative min-w-0 flex-1">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
+          <Input
+            className="h-7 pl-7 text-xs"
+            placeholder="Search worksheets..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <button
+          type="button"
+          className="rounded-md p-1.5 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+          onClick={onCreateRootFolder}
+          title="New root folder"
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className="rounded-md p-1.5 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+          onClick={onCreateRootWorksheet}
+          title="New root worksheet"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-1.5">
+        <button
+          type="button"
+          className={cn(
+            "mb-1 flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+            activeViewId === "all" ? "bg-accent/10 text-accent" : "text-fg/65 hover:bg-panel2/60 hover:text-fg",
+          )}
+          onClick={onSelectAll}
+        >
+          <Layers className="h-3.5 w-3.5" />
+          <span className="min-w-0 flex-1 truncate font-medium">All worksheets</span>
+          <span className="text-[10px] text-fg/30">{worksheets.length}</span>
+        </button>
+        {rootFolders.map((folder) => renderFolder(folder, 0))}
+        {rootWorksheets.map((worksheet) => renderWorksheet(worksheet, 0))}
+        {rootFolders.length === 0 && rootWorksheets.length === 0 && (
+          <EmptyState className="mt-4">No worksheets yet.</EmptyState>
+        )}
+      </div>
+    </aside>
+  );
+}
+
 /* ─── GroupRows sub-component ─── */
 
 function GroupRows({
@@ -3499,6 +7440,11 @@ function GroupRows({
   isColVisible,
   visibleColumnCount,
   selectedIds,
+  lineFactorsByItemId,
+  factorTotalsById,
+  displayLineItem,
+  lineItemHasFactorAdjustment,
+  onOpenLineFactors,
   onToggleSelectRow,
   onMoveUp,
   onMoveDown,
@@ -3530,17 +7476,23 @@ function GroupRows({
   isColVisible: (col: ColumnId) => boolean;
   visibleColumnCount: number;
   selectedIds: Set<string>;
+  lineFactorsByItemId: Map<string, EstimateFactor[]>;
+  factorTotalsById: Map<string, ProjectWorkspaceData["estimate"]["totals"]["factorTotals"][number]>;
+  displayLineItem: (item: WorkspaceWorksheetItem) => WorkspaceWorksheetItem;
+  lineItemHasFactorAdjustment: (item: WorkspaceWorksheetItem) => boolean;
+  onOpenLineFactors: (item: WorkspaceWorksheetItem) => void;
   onToggleSelectRow: (id: string) => void;
   onMoveUp: (row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) => void;
   onMoveDown: (row: WorkspaceWorksheetItem, groupItems: WorkspaceWorksheetItem[]) => void;
   detailItem: WorkspaceWorksheetItem | null;
   onOpenDetail: (item: WorkspaceWorksheetItem) => void;
   isPending: boolean;
-}) {
-  const catDef = group.catDef;
-  const regLabel = catDef ? catDef.unitLabels.unit1 : "";
-  const overLabel = catDef ? catDef.unitLabels.unit2 : "";
-  const doubleLabel = catDef ? catDef.unitLabels.unit3 : "";
+	}) {
+	  const catDef = group.catDef;
+	  const isDraftGroup = group.category === "";
+	  const regLabel = catDef ? getCategoryUnitLabel(catDef, "unit1", "") : "";
+  const overLabel = catDef ? getCategoryUnitLabel(catDef, "unit2", "") : "";
+  const doubleLabel = catDef ? getCategoryUnitLabel(catDef, "unit3", "") : "";
 
   /* Set of item IDs that have takeoff links */
   const linkedItemIds = useMemo(() => {
@@ -3554,23 +7506,27 @@ function GroupRows({
   return (
     <>
       {/* Category group header */}
-      <tr
-        className="bg-panel2/30 cursor-pointer hover:bg-panel2/50 transition-colors border-l-4"
-        style={{ borderLeftColor: catDef?.color ?? "#6b7280" }}
-        onClick={onToggleCollapse}
-      >
-        <td colSpan={visibleColumnCount} className="border-b border-line px-2 py-1.5">
-          <div className="flex items-center gap-2">
+	      <tr
+	        className="bg-panel2/30 cursor-pointer hover:bg-panel2/50 transition-colors border-l-4"
+	        style={{ borderLeftColor: catDef?.color ?? "#6b7280" }}
+	        onClick={onToggleCollapse}
+	      >
+	        <td colSpan={visibleColumnCount} className="border-b border-line px-2 py-1.5">
+	          <div className="flex items-center gap-2">
             {isCollapsed ? (
               <ChevronRight className="h-3.5 w-3.5 text-fg/40" />
             ) : (
               <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
             )}
-            <Badge
-              {...getCategoryBadgeProps(group.category, entityCategories)}
-            >
-              {group.category}
-            </Badge>
+	            {isDraftGroup ? (
+	              <span className="text-[11px] font-medium text-fg/40">New row</span>
+	            ) : (
+	              <Badge
+	                {...getCategoryBadgeProps(group.category, entityCategories)}
+	              >
+	                {group.category}
+	              </Badge>
+	            )}
             <span className="text-[11px] text-fg/40">
               {group.items.length} item{group.items.length !== 1 ? "s" : ""}
             </span>
@@ -3588,8 +7544,10 @@ function GroupRows({
           const isChecked = selectedIds.has(row.id);
           const isDetailOpen = detailItem?.id === row.id;
           const phase = (workspace.phases ?? []).find((p) => p.id === row.phaseId);
-          const extCost = row.cost * row.quantity;
-          const margin = row.price > 0 ? ((row.price - extCost) / row.price * 100).toFixed(1) + "%" : "--";
+          const displayRow = displayLineItem(row);
+          const hasFactorAdjustment = lineItemHasFactorAdjustment(row);
+          const extCost = displayRow.cost * row.quantity;
+          const margin = displayRow.price > 0 ? ((displayRow.price - extCost) / displayRow.price * 100).toFixed(1) + "%" : "--";
 
           return (
             <tr
@@ -3694,21 +7652,22 @@ function GroupRows({
                 </td>
               )}
 
-              {/* Entity Name (with dropdown) */}
+              {/* Line Item Name (with dropdown) */}
               {isColVisible("entityName") &&
-                renderEditableCell(row, "entityName", row.entityName, "min-w-[200px]")}
+                renderEditableCell(row, "entityName", <span className="block truncate">{row.entityName}</span>)}
 
               {/* Vendor */}
               {isColVisible("vendor") &&
-                renderEditableCell(row, "vendor", row.vendor ?? "", "min-w-[100px]")}
+                renderEditableCell(row, "vendor", <span className="block truncate">{row.vendor ?? ""}</span>)}
 
               {/* Description */}
               {isColVisible("description") &&
                 renderEditableCell(
                   row,
                   "description",
-                  row.description || <span className="text-fg/20 italic">Add description...</span>,
-                  "min-w-[160px] max-w-[260px] truncate",
+                  row.description
+                    ? <span className="block truncate">{row.description}</span>
+                    : <span className="text-fg/20 italic">Add description...</span>,
                 )}
 
               {/* Quantity */}
@@ -3718,11 +7677,12 @@ function GroupRows({
                   "quantity",
                   <span className="tabular-nums inline-flex items-center gap-1">
                     {linkedItemIds.has(row.id) && (
-                      <span title="Linked to takeoff annotation">
+                      <span title="Linked to takeoff mark">
                         <Link2 className="h-3 w-3 text-accent/60 shrink-0" />
                       </span>
                     )}
                     {row.quantity}
+                    {visibleColumns.has("uom") && !isColVisible("uom") && <span className="text-[10px] text-fg/35">{row.uom}</span>}
                   </span>,
                   "text-right"
                 )}
@@ -3730,6 +7690,32 @@ function GroupRows({
               {/* UOM */}
               {isColVisible("uom") &&
                 renderEditableCell(row, "uom", row.uom, "text-center")}
+
+              {isColVisible("factors") && (
+                <td className="border-b border-line px-1 py-1 text-center">
+                  <button
+                    className={cn(
+                      "inline-flex h-5 max-w-full items-center justify-center gap-0.5 rounded border px-1 text-[10px] leading-none transition-colors",
+                      (lineFactorsByItemId.get(row.id)?.length ?? 0) > 0
+                        ? "border-accent/35 bg-accent/10 text-accent"
+                        : "border-line bg-bg/45 text-fg/45 hover:border-accent/35 hover:text-accent",
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenLineFactors(row);
+                    }}
+                    title="Line factors"
+                  >
+                    <Zap className="h-2.5 w-2.5" />
+                    <span>{lineFactorsByItemId.get(row.id)?.length ?? 0}</span>
+                    {lineFactorsByItemId.get(row.id)?.some((factor) => (factorTotalsById.get(factor.id)?.valueDelta ?? 0) !== 0) ? (
+                      <span className="max-w-[40px] truncate text-[9px] text-fg/45">
+                        {formatMoney(lineFactorsByItemId.get(row.id)?.reduce((sum, factor) => sum + (factorTotalsById.get(factor.id)?.valueDelta ?? 0), 0) ?? 0)}
+                      </span>
+                    ) : null}
+                  </button>
+                </td>
+              )}
 
               {/* Combined units column */}
               {isColVisible("units") && renderUnitsCell(row)}
@@ -3739,7 +7725,12 @@ function GroupRows({
                 renderEditableCell(
                   row,
                   "cost",
-                  <span className="tabular-nums">{formatMoney(row.cost, 2)}</span>,
+                  <span className="block tabular-nums">
+                    {formatMoney(displayRow.cost, 2)}
+                    {visibleColumns.has("extCost") && !isColVisible("extCost") && (
+                      <span className="block text-[10px] text-fg/35">{formatMoney(extCost, 2)} ext</span>
+                    )}
+                  </span>,
                   "text-right"
                 )}
 
@@ -3764,7 +7755,21 @@ function GroupRows({
                 renderEditableCell(
                   row,
                   "price",
-                  <span className="tabular-nums font-medium">{formatMoney(row.price)}</span>,
+                  <span
+                    className={cn(
+                      "inline-flex h-5 max-w-full items-center justify-end rounded-md px-1.5 tabular-nums font-medium leading-none",
+                      hasFactorAdjustment && "border border-accent/35 bg-accent/10 text-accent",
+                    )}
+                    title={hasFactorAdjustment ? `Raw ${formatMoney(row.price)} / factor-adjusted ${formatMoney(displayRow.price)}` : undefined}
+                  >
+                    <span>{formatMoney(displayRow.price)}</span>
+                    {visibleColumns.has("markup") && !isColVisible("markup") && (
+                      <span className="block text-[10px] font-normal text-fg/35">{formatPercent(row.markup)} mkup</span>
+                    )}
+                    {visibleColumns.has("margin") && !isColVisible("margin") && (
+                      <span className="block text-[10px] font-normal text-fg/35">{margin}</span>
+                    )}
+                  </span>,
                   "text-right"
                 )}
 
@@ -3781,7 +7786,7 @@ function GroupRows({
                   row,
                   "phaseId",
                   phase ? (
-                    <span className="text-fg/60 truncate block max-w-[72px]" title={`${phase.number} – ${phase.name}`}>{phase.number} – {phase.name}</span>
+                    <span className="text-fg/60 truncate block max-w-[72px]" title={estimatePhaseLabel(phase)}>{estimatePhaseLabel(phase)}</span>
                   ) : (
                     <span className="text-fg/20">--</span>
                   ),

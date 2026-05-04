@@ -11,6 +11,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
+import { ESTIMATE_FACTOR_PRESETS } from "@bidwright/domain";
 
 import {
   type PrismaApiStore,
@@ -19,6 +20,8 @@ import {
   type CatalogItemPatchInput,
   type CatalogPatchInput,
   type CreateAdjustmentInput,
+  type CreateEstimateFactorInput,
+  type CreateEstimateFactorLibraryEntryInput,
   type ConditionPatchInput,
   type CreateAdditionalLineItemInput,
   type CreateCatalogInput,
@@ -28,19 +31,24 @@ import {
   type CreateModifierInput,
   type CreatePhaseInput,
   type CreateReportSectionInput,
+  type CreateWorksheetFolderInput,
   type CreateWorksheetInput,
   type CreateWorksheetItemInput,
   type CreateProjectInput,
   type CreateSummaryRowInput,
   type FileNodePatchInput,
+  type EstimateFactorPatchInput,
+  type EstimateFactorLibraryEntryPatchInput,
   type ModifierPatchInput,
   type PackageIngestionOutcome,
   type PhasePatchInput,
   type QuotePatchInput,
   type ReportSectionPatchInput,
   type RevisionPatchInput,
+  type SourceDocumentPatchInput,
   type SummaryRowPatchInput,
   type StatusPatchInput,
+  type WorksheetFolderPatchInput,
   type WorksheetPatchInput,
   type WorksheetItemPatchInput,
   type CreateJobInput,
@@ -56,7 +64,8 @@ import {
   type ScheduleCalendarPatchInput,
   type CreateScheduleResourceInput,
   type ScheduleResourcePatchInput,
-  type CreateScheduleBaselineInput
+  type CreateScheduleBaselineInput,
+  type LineItemSearchSourceType
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
 import {
@@ -79,14 +88,17 @@ import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
 import { assemblyRoutes } from "./routes/assembly-routes.js";
+import { laborUnitRoutes } from "./routes/labor-unit-routes.js";
 import { labourCostRoutes } from "./routes/labour-cost-routes.js";
 import { burdenRoutes } from "./routes/burden-routes.js";
 import { travelPolicyRoutes } from "./routes/travel-policy-routes.js";
 import { settingsRoutes } from "./routes/settings-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
+import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
+import { parseImportFile } from "./services/catalog-import-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
 import {
   aiRewriteDescription,
@@ -131,7 +143,7 @@ const revisionPatchSchema = z.object({
   freightOnBoard: z.string().optional(),
   status: z.enum(["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"]).optional(),
   defaultMarkup: z.number().finite().optional(),
-  necaDifficulty: z.string().optional(),
+  laborDifficulty: z.string().optional(),
   followUpNote: z.string().optional(),
   printEmptyNotesColumn: z.boolean().optional(),
   printCategory: z.array(z.string()).optional(),
@@ -141,7 +153,8 @@ const revisionPatchSchema = z.object({
   overHours: z.number().finite().optional(),
   doubleHours: z.number().finite().optional(),
   breakoutPackage: z.array(z.unknown()).optional(),
-  calculatedCategoryTotals: z.array(z.unknown()).optional()
+  calculatedCategoryTotals: z.array(z.unknown()).optional(),
+  pdfPreferences: z.record(z.unknown()).optional()
 });
 const quotePatchSchema = z.object({
   customerExistingNew: z.enum(["Existing", "New"]).optional(),
@@ -155,9 +168,12 @@ const quotePatchSchema = z.object({
 });
 const worksheetItemPatchSchema = z.object({
   phaseId: z.string().nullable().optional(),
+  categoryId: z.string().nullable().optional(),
   category: z.string().min(1).optional(),
   entityType: z.string().min(1).optional(),
   entityName: z.string().min(1).optional(),
+  classification: z.record(z.unknown()).optional(),
+  costCode: z.string().nullable().optional(),
   vendor: z.string().nullable().optional(),
   description: z.string().optional(),
   quantity: z.number().finite().optional(),
@@ -173,12 +189,20 @@ const worksheetItemPatchSchema = z.object({
   itemId: z.string().nullable().optional(),
   tierUnits: z.record(z.number()).optional(),
   sourceNotes: z.string().optional(),
+  costResourceId: z.string().nullable().optional(),
+  effectiveCostId: z.string().nullable().optional(),
+  laborUnitId: z.string().nullable().optional(),
+  resourceComposition: z.record(z.unknown()).optional(),
+  sourceEvidence: z.record(z.unknown()).optional(),
 });
 const createWorksheetItemSchema = z.object({
   phaseId: z.string().nullable().optional(),
+  categoryId: z.string().nullable().optional(),
   category: z.string().min(1),
   entityType: z.string().min(1),
   entityName: z.string().min(1),
+  classification: z.record(z.unknown()).optional(),
+  costCode: z.string().nullable().optional(),
   vendor: z.string().nullable().optional(),
   description: z.string().default(""),
   quantity: z.coerce.number().finite(),
@@ -194,22 +218,47 @@ const createWorksheetItemSchema = z.object({
   itemId: z.string().nullable().optional(),
   tierUnits: z.record(z.number()).optional(),
   sourceNotes: z.string().default(""),
+  costResourceId: z.string().nullable().optional(),
+  effectiveCostId: z.string().nullable().optional(),
+  laborUnitId: z.string().nullable().optional(),
+  resourceComposition: z.record(z.unknown()).optional(),
+  sourceEvidence: z.record(z.unknown()).optional(),
 });
+
 const createWorksheetSchema = z.object({
-  name: z.string().min(1)
+  name: z.string().min(1),
+  folderId: z.string().nullable().optional(),
+  order: z.number().int().optional(),
 });
 const worksheetPatchSchema = z.object({
   name: z.string().min(1).optional(),
-  order: z.number().int().optional()
+  order: z.number().int().optional(),
+  folderId: z.string().nullable().optional(),
+});
+const createWorksheetFolderSchema = z.object({
+  name: z.string().min(1),
+  parentId: z.string().nullable().optional(),
+  order: z.number().int().optional(),
+});
+const worksheetFolderPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  parentId: z.string().nullable().optional(),
+  order: z.number().int().optional(),
 });
 
 const createPhaseSchema = z.object({
+  parentId: z.string().nullable().optional(),
   number: z.string().optional(),
   name: z.string().optional(),
-  description: z.string().optional()
+  description: z.string().optional(),
+  order: z.number().int().optional(),
+  startDate: z.string().nullable().optional(),
+  endDate: z.string().nullable().optional(),
+  color: z.string().optional()
 });
 
 const phasePatchSchema = z.object({
+  parentId: z.string().nullable().optional(),
   number: z.string().optional(),
   name: z.string().optional(),
   description: z.string().optional(),
@@ -363,6 +412,9 @@ const createAdjustmentSchema = z.object({
     "line_item_standalone",
     "custom_total",
   ]).optional(),
+  financialCategory: z.string().optional(),
+  calculationBase: z.enum(["selected_scope", "line_subtotal", "direct_cost", "cumulative"]).optional(),
+  active: z.boolean().optional(),
   appliesTo: z.string().optional(),
   percentage: z.number().finite().nullable().optional(),
   amount: z.number().finite().nullable().optional(),
@@ -371,6 +423,48 @@ const createAdjustmentSchema = z.object({
 });
 
 const adjustmentPatchSchema = createAdjustmentSchema;
+
+const estimateFactorScopeSchema = z.record(z.unknown()).optional();
+
+const createEstimateFactorSchema = z.object({
+  name: z.string().optional(),
+  code: z.string().optional(),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  impact: z.enum(["labor_hours", "resource_units", "direct_cost", "sell_price"]).optional(),
+  value: z.number().finite().min(0.05).max(10).optional(),
+  active: z.boolean().optional(),
+  appliesTo: z.string().optional(),
+  applicationScope: z.enum(["global", "line", "both"]).optional(),
+  scope: estimateFactorScopeSchema,
+  formulaType: z.enum(["fixed_multiplier", "per_unit_scale", "condition_score", "temperature_productivity", "neca_condition_score", "extended_duration"]).optional(),
+  parameters: z.record(z.unknown()).optional(),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
+  sourceType: z.enum(["library", "knowledge", "labor_unit", "condition_difficulty", "neca_difficulty", "custom", "agent"]).optional(),
+  sourceId: z.string().nullable().optional(),
+  sourceRef: z.record(z.unknown()).optional(),
+  tags: z.array(z.string()).optional(),
+  order: z.number().int().optional(),
+});
+
+const estimateFactorPatchSchema = createEstimateFactorSchema;
+
+const estimateFactorLibraryEntrySchema = createEstimateFactorSchema;
+
+function builtinEstimateFactorLibraryEntries() {
+  return ESTIMATE_FACTOR_PRESETS.map((entry, index) => ({
+    ...entry,
+    applicationScope: entry.applicationScope ?? "both",
+    formulaType: entry.formulaType ?? "fixed_multiplier",
+    parameters: entry.parameters ?? {},
+    organizationId: null,
+    order: index,
+    builtIn: true,
+    readOnly: true,
+    createdAt: null,
+    updatedAt: null,
+  }));
+}
 
 const createConditionSchema = z.object({
   type: z.string().min(1),
@@ -425,16 +519,12 @@ const statusPatchSchema = z.object({
 const createCatalogSchema = z.object({
   name: z.string().min(1),
   kind: z.string().min(1),
-  scope: z.string().min(1),
-  projectId: z.string().nullable().optional(),
   description: z.string().optional()
 });
 
 const catalogPatchSchema = z.object({
   name: z.string().min(1).optional(),
   kind: z.string().min(1).optional(),
-  scope: z.string().min(1).optional(),
-  projectId: z.string().nullable().optional(),
   description: z.string().optional()
 });
 
@@ -473,6 +563,11 @@ const createFileNodeSchema = z.object({
 const fileNodePatchSchema = z.object({
   name: z.string().min(1).optional(),
   parentId: z.string().nullable().optional()
+});
+
+const sourceDocumentPatchSchema = z.object({
+  fileName: z.string().min(1).optional(),
+  documentType: z.string().min(1).optional()
 });
 
 interface UploadFieldMap {
@@ -518,6 +613,92 @@ const MULTIPART_MAX_FILE_SIZE_BYTES = 1_073_741_824;
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function parseImportNumericValue(value: string) {
+  const cleaned = String(value ?? "").replace(/[$,%\s]/g, "").replace(/,/g, "");
+  if (!cleaned) return null;
+  const parsed = Number.parseFloat(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildImportColumnProfiles(headers: string[], rows: string[][]) {
+  return headers.map((header, index) => {
+    const values = rows
+      .map((row) => String(row[index] ?? "").trim())
+      .filter(Boolean);
+    const numericValues = values
+      .map(parseImportNumericValue)
+      .filter((value): value is number => value !== null);
+    const distinctValues = Array.from(new Set(values.map((value) => value.toLowerCase())));
+    const sampleValues = Array.from(new Set(values)).slice(0, 5);
+
+    return {
+      header,
+      nonEmptyCount: values.length,
+      numericCount: numericValues.length,
+      distinctCount: distinctValues.length,
+      sampleValues,
+      ...(numericValues.length > 0 ? {
+        sum: roundMoney(numericValues.reduce((sum, value) => sum + value, 0)),
+        min: Math.min(...numericValues),
+        max: Math.max(...numericValues),
+      } : {}),
+    };
+  });
+}
+
+function buildImportPivotSummaries(headers: string[], rows: string[][]) {
+  const profiles = buildImportColumnProfiles(headers, rows);
+  const rowCount = Math.max(rows.length, 1);
+  const groupCandidates = profiles
+    .filter((profile) =>
+      profile.nonEmptyCount > 0 &&
+      profile.distinctCount > 1 &&
+      profile.distinctCount <= Math.min(50, rowCount) &&
+      profile.numericCount < profile.nonEmptyCount
+    )
+    .sort((a, b) => {
+      const score = (header: string) => /category|type|vendor|phase|uom|unit|description|name/i.test(header) ? 0 : 1;
+      return score(a.header) - score(b.header) || a.distinctCount - b.distinctCount;
+    })
+    .slice(0, 4);
+  const measureCandidates = [
+    { header: "__count", index: -1 },
+    ...profiles
+      .filter((profile) => profile.numericCount > 0)
+      .sort((a, b) => b.numericCount - a.numericCount)
+      .slice(0, 5)
+      .map((profile) => ({ header: profile.header, index: headers.indexOf(profile.header) })),
+  ];
+
+  return groupCandidates.flatMap((group) => {
+    const groupIndex = headers.indexOf(group.header);
+    return measureCandidates.map((measure) => {
+      const buckets = new Map<string, { count: number; total: number }>();
+      for (const row of rows) {
+        const label = String(row[groupIndex] ?? "").trim() || "(blank)";
+        const bucket = buckets.get(label) ?? { count: 0, total: 0 };
+        bucket.count += 1;
+        bucket.total += measure.index >= 0 ? parseImportNumericValue(String(row[measure.index] ?? "")) ?? 0 : 1;
+        buckets.set(label, bucket);
+      }
+
+      return {
+        groupBy: group.header,
+        measure: measure.header,
+        rows: Array.from(buckets.entries())
+          .map(([label, bucket]) => ({
+            label,
+            count: bucket.count,
+            total: roundMoney(bucket.total),
+            average: bucket.count > 0 ? roundMoney(bucket.total / bucket.count) : 0,
+          }))
+          .sort((a, b) => b.total - a.total)
+          .slice(0, 12),
+      };
+    });
+  });
 }
 
 function hashFile(filePath: string) {
@@ -1663,6 +1844,9 @@ export function buildServer() {
     }
 
     try {
+      const scopedProject = await request.store!.getProject(projectId);
+      if (!scopedProject) return reply.code(404).send({ message: "Project not found" });
+
       const beforeProject = await prisma.project.findUnique({
         where: { id: projectId },
         select: {
@@ -1909,6 +2093,85 @@ export function buildServer() {
     return request.store!.listDocuments(projectId);
   });
 
+  app.post("/projects/:projectId/documents/upload", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+
+    const fields: Record<string, string> = {};
+    let fileBuffer: Buffer | null = null;
+    let originalFileName = "";
+    let fileSeen = false;
+
+    for await (const part of request.parts()) {
+      if (part.type === "file") {
+        if (fileSeen) {
+          return reply.code(400).send({ message: "Only one file per upload" });
+        }
+        fileSeen = true;
+        originalFileName = part.filename || "unnamed";
+        fileBuffer = await part.toBuffer();
+      } else {
+        fields[part.fieldname] = Array.isArray(part.value) ? part.value.join("") : String(part.value);
+      }
+    }
+
+    if (!fileSeen || !fileBuffer) {
+      return reply.code(400).send({ message: "A file is required" });
+    }
+
+    const safeName = sanitizeFileName(originalFileName);
+    const fileExt = path.extname(safeName).replace(/^\./, "").toLowerCase();
+    const relPath = path.join("projects", projectId, "documents", `${randomUUID()}-${safeName}`);
+    const absPath = resolveApiPath(relPath);
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, fileBuffer);
+
+    const folderPath = (fields.folderPath || "")
+      .split("/")
+      .map((segment) => sanitizeFileName(segment))
+      .filter(Boolean)
+      .join("/");
+    const displayName = folderPath ? `${folderPath}/${safeName}` : safeName;
+
+    const document = await request.store!.createSourceDocument(projectId, {
+      fileName: displayName,
+      fileType: fileExt,
+      documentType: fields.documentType || "reference",
+      checksum: createHash("sha256").update(fileBuffer).digest("hex"),
+      storagePath: relPath,
+    });
+
+    reply.code(201);
+    return document;
+  });
+
+  app.patch("/projects/:projectId/documents/:docId", async (request, reply) => {
+    const { projectId, docId } = request.params as { projectId: string; docId: string };
+    const parsed = sourceDocumentPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid document payload", issues: parsed.error.flatten() });
+    }
+    try {
+      return await request.store!.updateDocument(projectId, docId, parsed.data satisfies SourceDocumentPatchInput);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Document not found";
+      return reply.code(404).send({ message });
+    }
+  });
+
+  app.delete("/projects/:projectId/documents/:docId", async (request, reply) => {
+    const { projectId, docId } = request.params as { projectId: string; docId: string };
+    try {
+      return await request.store!.deleteDocument(projectId, docId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Document not found";
+      return reply.code(404).send({ message });
+    }
+  });
+
   app.get("/projects/:projectId/workspace-state", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const project = await request.store!.getProject(projectId);
@@ -1994,9 +2257,20 @@ export function buildServer() {
 
     // ── Validate item against entity category configuration ──
     const entityCategories = await request.store!.listEntityCategories();
-    const matchedCategory = entityCategories.find(
-      (ec: any) => ec.name === parsed.data.category || ec.entityType === parsed.data.entityType
-    );
+    const matchedCategory = parsed.data.categoryId
+      ? entityCategories.find((ec: any) => ec.id === parsed.data.categoryId)
+      : entityCategories.find(
+          (ec: any) =>
+            ec.name === parsed.data.category ||
+            ec.entityType === parsed.data.entityType
+        );
+
+    if (parsed.data.categoryId && !matchedCategory) {
+      return reply.code(400).send({
+        message: `categoryId "${parsed.data.categoryId}" is not configured for this organization.`,
+        hint: "Call getEntityCategories or quote.getItemConfig, then retry with a valid categoryId.",
+      });
+    }
 
     if (matchedCategory) {
       const calcType = (matchedCategory as any).calculationType;
@@ -2083,6 +2357,59 @@ export function buildServer() {
       });
     }
     reply.code(201);
+    return payload;
+  });
+
+  app.post("/projects/:projectId/worksheet-folders", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createWorksheetFolderSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid worksheet folder payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    await request.store!.createWorksheetFolder(projectId, parsed.data satisfies CreateWorksheetFolderInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({
+        message: "Project workspace not found"
+      });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/worksheet-folders/:folderId", async (request, reply) => {
+    const { projectId, folderId } = request.params as { projectId: string; folderId: string };
+    const parsed = worksheetFolderPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid worksheet folder payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    await request.store!.updateWorksheetFolder(projectId, folderId, parsed.data satisfies WorksheetFolderPatchInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({
+        message: "Project workspace not found"
+      });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/worksheet-folders/:folderId", async (request, reply) => {
+    const { projectId, folderId } = request.params as { projectId: string; folderId: string };
+    await request.store!.deleteWorksheetFolder(projectId, folderId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({
+        message: "Project workspace not found"
+      });
+    }
     return payload;
   });
 
@@ -2208,6 +2535,72 @@ export function buildServer() {
       });
     }
     return payload;
+  });
+
+  app.get("/projects/:projectId/line-item-search", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      q: z.string().optional(),
+      category: z.string().optional(),
+      worksheetId: z.string().optional(),
+      sourceTypes: z.string().optional(),
+      disabledSourceTypes: z.string().optional(),
+      disabledLaborLibraryIds: z.string().optional(),
+      disabledCatalogIds: z.string().optional(),
+      limit: z.coerce.number().int().positive().max(100).optional(),
+      offset: z.coerce.number().int().min(0).max(100000).optional(),
+      refresh: z.coerce.boolean().optional(),
+    }).safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid line item search query",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    try {
+      const sourceTypes = (parsed.data.sourceTypes ?? "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean) as LineItemSearchSourceType[];
+      const disabledSourceTypes = (parsed.data.disabledSourceTypes ?? "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean) as LineItemSearchSourceType[];
+      const disabledLaborLibraryIds = (parsed.data.disabledLaborLibraryIds ?? "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      const disabledCatalogIds = (parsed.data.disabledCatalogIds ?? "")
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      return await request.store!.searchLineItemCandidates(projectId, {
+        q: parsed.data.q,
+        preferredCategory: parsed.data.category,
+        worksheetId: parsed.data.worksheetId,
+        sourceTypes,
+        disabledSourceTypes,
+        disabledLaborLibraryIds,
+        disabledCatalogIds,
+        limit: parsed.data.limit,
+        offset: parsed.data.offset,
+        refresh: parsed.data.refresh,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Line item search failed";
+      return reply.code(message.includes("not found") ? 404 : 500).send({ message });
+    }
+  });
+
+  app.post("/projects/:projectId/line-item-search/rebuild", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    try {
+      return await request.store!.rebuildLineItemSearchIndex(projectId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Line item search rebuild failed";
+      return reply.code(message.includes("not found") ? 404 : 500).send({ message });
+    }
   });
 
   // ── Phase routes ──────────────────────────────────────────────────
@@ -2647,6 +3040,126 @@ export function buildServer() {
     return payload;
   });
 
+  app.get("/factor-library", async (request) => {
+    const organizationEntries = await request.store!.listEstimateFactorLibraryEntries();
+    return [
+      ...builtinEstimateFactorLibraryEntries(),
+      ...organizationEntries.map((entry) => ({ ...entry, builtIn: false, readOnly: false })),
+    ];
+  });
+
+  app.post("/factor-library", async (request, reply) => {
+    const parsed = estimateFactorLibraryEntrySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid factor library payload",
+        issues: parsed.error.flatten()
+      });
+    }
+    const created = await request.store!.createEstimateFactorLibraryEntry(parsed.data satisfies CreateEstimateFactorLibraryEntryInput);
+    reply.code(201);
+    return { ...created, builtIn: false, readOnly: false };
+  });
+
+  app.patch("/factor-library/:entryId", async (request, reply) => {
+    const { entryId } = request.params as { entryId: string };
+    if (ESTIMATE_FACTOR_PRESETS.some((entry) => entry.id === entryId)) {
+      return reply.code(400).send({ message: "Built-in factor library entries are read-only" });
+    }
+    const parsed = estimateFactorLibraryEntrySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid factor library payload",
+        issues: parsed.error.flatten()
+      });
+    }
+    const updated = await request.store!.updateEstimateFactorLibraryEntry(entryId, parsed.data satisfies EstimateFactorLibraryEntryPatchInput);
+    return { ...updated, builtIn: false, readOnly: false };
+  });
+
+  app.delete("/factor-library/:entryId", async (request, reply) => {
+    const { entryId } = request.params as { entryId: string };
+    if (ESTIMATE_FACTOR_PRESETS.some((entry) => entry.id === entryId)) {
+      return reply.code(400).send({ message: "Built-in factor library entries are read-only" });
+    }
+    await request.store!.deleteEstimateFactorLibraryEntry(entryId);
+    return { deleted: true };
+  });
+
+  app.get("/projects/:projectId/factors", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    return request.store!.listEstimateFactors(projectId);
+  });
+
+  app.get("/projects/:projectId/factors/library", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    const organizationEntries = await request.store!.listEstimateFactorLibraryEntries();
+    return [
+      ...builtinEstimateFactorLibraryEntries(),
+      ...organizationEntries.map((entry) => ({ ...entry, builtIn: false, readOnly: false })),
+    ];
+  });
+
+  app.post("/projects/:projectId/factors", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createEstimateFactorSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid estimate factor payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+
+    await request.store!.createEstimateFactor(projectId, workspace.currentRevision.id, parsed.data satisfies CreateEstimateFactorInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    reply.code(201);
+    return payload;
+  });
+
+  app.patch("/projects/:projectId/factors/:factorId", async (request, reply) => {
+    const { projectId, factorId } = request.params as { projectId: string; factorId: string };
+    const parsed = estimateFactorPatchSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid estimate factor payload",
+        issues: parsed.error.flatten()
+      });
+    }
+
+    await request.store!.updateEstimateFactor(projectId, factorId, parsed.data satisfies EstimateFactorPatchInput);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
+  app.delete("/projects/:projectId/factors/:factorId", async (request, reply) => {
+    const { projectId, factorId } = request.params as { projectId: string; factorId: string };
+    await request.store!.deleteEstimateFactor(projectId, factorId);
+    const payload = await buildWorkspaceResponse(request.store!, projectId);
+    if (!payload) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+    return payload;
+  });
+
   app.get("/projects/:projectId/modifiers", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const project = await request.store!.getProject(projectId);
@@ -2873,7 +3386,7 @@ export function buildServer() {
   // ── Summary Row routes ──────────────────────────────────────────────
 
   const summaryRowCreateSchema = z.object({
-    type: z.enum(["category", "phase", "adjustment", "heading", "separator", "subtotal"]).optional(),
+    type: z.enum(["category", "phase", "worksheet", "classification", "adjustment", "heading", "separator", "subtotal"]).optional(),
     label: z.string().optional(),
     order: z.number().int().optional(),
     visible: z.boolean().optional(),
@@ -2881,6 +3394,10 @@ export function buildServer() {
     sourceCategoryId: z.string().nullable().optional(),
     sourceCategoryLabel: z.string().nullable().optional(),
     sourcePhaseId: z.string().nullable().optional(),
+    sourceWorksheetId: z.string().nullable().optional(),
+    sourceWorksheetLabel: z.string().nullable().optional(),
+    sourceClassificationId: z.string().nullable().optional(),
+    sourceClassificationLabel: z.string().nullable().optional(),
     sourceAdjustmentId: z.string().nullable().optional(),
   });
 
@@ -2892,14 +3409,20 @@ export function buildServer() {
     visible: z.boolean(),
     order: z.number().int(),
   });
+  const summaryBuilderClassificationSchema = z.object({
+    standard: z.enum(["masterformat", "uniformat", "omniclass", "uniclass", "din276", "nrm", "icms", "cost_code"]),
+    level: z.enum(["division", "section", "full"]),
+    includeUnclassified: z.boolean(),
+  });
   const summaryBuilderSchema = z.object({
     version: z.literal(1),
-    preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]),
+    preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "by_masterformat_division", "by_uniformat_division", "by_omniclass_division", "by_uniclass_division", "by_din276_division", "by_nrm_division", "by_icms_division", "by_cost_code", "phase_x_category", "custom"]),
     mode: z.enum(["total", "grouped", "pivot"]),
-    rowDimension: z.enum(["none", "phase", "category", "worksheet"]),
-    columnDimension: z.enum(["none", "phase", "category", "worksheet"]),
+    rowDimension: z.enum(["none", "phase", "category", "worksheet", "classification"]),
+    columnDimension: z.enum(["none", "phase", "category", "worksheet", "classification"]),
     rows: z.array(summaryBuilderAxisItemSchema),
     columns: z.array(summaryBuilderAxisItemSchema),
+    classification: summaryBuilderClassificationSchema,
     totals: z.object({
       label: z.string(),
       visible: z.boolean(),
@@ -2975,7 +3498,7 @@ export function buildServer() {
   app.post("/projects/:projectId/summary-rows/apply-preset", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const parsed = z.object({
-      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]),
+      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "by_masterformat_division", "by_uniformat_division", "by_omniclass_division", "by_uniclass_division", "by_din276_division", "by_nrm_division", "by_icms_division", "by_cost_code", "phase_x_category", "custom"]),
     }).safeParse(request.body ?? {});
     if (!parsed.success) {
       return reply.code(400).send({ message: "Invalid preset" });
@@ -3433,7 +3956,7 @@ export function buildServer() {
     if (!parsed.success) {
       return reply.code(400).send({ message: "Invalid catalog payload", issues: parsed.error.flatten() });
     }
-    const catalog = await request.store!.createCatalog(parsed.data satisfies CreateCatalogInput);
+    const catalog = await request.store!.createCatalog({ ...parsed.data, scope: "global", projectId: null } satisfies CreateCatalogInput);
     reply.code(201);
     return catalog;
   });
@@ -3556,8 +4079,9 @@ export function buildServer() {
     }
     try {
       return await request.store!.updateFileNode(nodeId, parsed.data satisfies FileNodePatchInput);
-    } catch {
-      return reply.code(404).send({ message: "File node not found" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "File node not found";
+      return reply.code(message.includes("Cannot move") ? 400 : 404).send({ message });
     }
   });
 
@@ -4160,10 +4684,19 @@ export function buildServer() {
       return reply.code(400).send({ message: "No worksheet available for equipment items" });
     }
 
+    const equipmentCategory = (workspace.entityCategories ?? []).find((category: any) => {
+      const key = `${category.name ?? ""} ${category.entityType ?? ""}`.toLowerCase();
+      return key.includes("equipment");
+    }) ?? (workspace.entityCategories ?? []).find((category: any) => category.enabled !== false);
+    if (!equipmentCategory) {
+      return reply.code(400).send({ message: "Configure at least one entity category before accepting equipment items." });
+    }
+
     for (const item of equipment) {
       await request.store!.createWorksheetItem(projectId, targetWorksheetId, {
-        category: "Equipment",
-        entityType: "equipment",
+        categoryId: equipmentCategory.id,
+        category: equipmentCategory.name,
+        entityType: equipmentCategory.entityType,
         entityName: item.name,
         description: item.description,
         quantity: item.quantity,
@@ -4231,32 +4764,48 @@ export function buildServer() {
       return reply.code(404).send({ message: "Project not found" });
     }
 
-    let csvText = "";
+    let importBuffer: Buffer | null = null;
     let originalFileName = "import.csv";
+    let mimeType = "";
 
     for await (const part of request.parts()) {
       if (part.type === "file") {
         originalFileName = part.filename || originalFileName;
+        mimeType = part.mimetype || "";
         const chunks: Buffer[] = [];
         for await (const chunk of part.file) {
           chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
         }
-        csvText = Buffer.concat(chunks).toString("utf8");
+        importBuffer = Buffer.concat(chunks);
       }
     }
 
-    if (!csvText) {
+    if (!importBuffer || importBuffer.length === 0) {
       return reply.code(400).send({ message: "No file uploaded" });
     }
 
-    const parsed = request.store!.parseCSV(csvText);
+    const tables = await parseImportFile({
+      buffer: importBuffer,
+      filename: originalFileName,
+      mimeType,
+      azureConfig: {
+        endpoint: process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT,
+        key: process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY,
+      },
+    });
+    const parsed = tables
+      .slice()
+      .sort((left, right) => right.rows.length - left.rows.length)[0] ?? { headers: [], rows: [] };
     const fileId = `import-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     request.store!.storeImportPreview(fileId, parsed);
 
     return {
       headers: parsed.headers,
-      sampleRows: parsed.rows.slice(0, 5),
-      fileId
+      sampleRows: parsed.rows.slice(0, 25),
+      fileId,
+      rowCount: parsed.rows.length,
+      columnProfiles: buildImportColumnProfiles(parsed.headers, parsed.rows),
+      pivotSummaries: buildImportPivotSummaries(parsed.headers, parsed.rows)
     };
   });
 
@@ -4363,7 +4912,7 @@ A plugin has:
 - toolDefinitions: array of tools, each with:
   - id, name, description, llmDescription, parameters (array of {name, type, description, required}), outputType (line_items|worksheet|text_content|revision_patch|score|modifier|summary)
   - outputTemplate for declarative line item outputs when the tool creates estimate rows. Use field references, defaults, first/join/template values, and validation rules instead of relying on backend plugin IDs.
-  - execution only when the tool needs a supported generic server capability such as dataset_labour_units, scoring_result_patch, table_hours, shop_pipe_estimate, or shop_weld_estimate. Never invent backend helper endpoints or exact slug/tool-name handlers.
+  - execution only when the tool needs a supported generic server capability such as labor_units, scoring_result_patch, table_hours, shop_pipe_estimate, or shop_weld_estimate. Never invent backend helper endpoints or exact slug/tool-name handlers.
   - ui: declarative UI schema with sections, each section has type (fields|table|scoring) and contains:
     - fields: array of {id, type (text|number|currency|percentage|select|search|computed|boolean|slider|textarea|date), label, description, placeholder, defaultValue, validation:{required,min,max}, width (full|half|third|quarter), options:[{value,label}], optionsSource, searchConfig, computation:{formula,dependencies,format(number|hours|currency|percentage)}}
     - table: {id, label, columns:[{id,label,type,width,editable,options,computation,aggregate(sum|avg)}], defaultRows, allowAddRow, allowDeleteRow, totalsRow, rowTemplate}
@@ -4890,7 +5439,6 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
     if (!book.storagePath) return reply.code(404).send({ message: "No source file stored for this book" });
 
-    const { resolveApiPath } = await import("./paths.js");
     const absPath = resolveApiPath(book.storagePath);
     try {
       await import("node:fs/promises").then((fs) => fs.access(absPath));
@@ -4930,7 +5478,6 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     if (!book) return reply.code(404).send({ message: "Knowledge book not found" });
     if (!book.storagePath) return reply.code(404).send({ message: "No source file" });
 
-    const { resolveApiPath } = await import("./paths.js");
     const { relativeKnowledgeBookThumbnailPath } = await import("./paths.js");
     const thumbRelPath = relativeKnowledgeBookThumbnailPath(bookId);
     const thumbAbsPath = resolveApiPath(thumbRelPath);
@@ -5155,8 +5702,10 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(settingsRoutes);
   app.register(integrationsRoutes);
   app.register(webhooksRoutes);
+  app.register(costIntelligenceRoutes);
   app.register(estimateRoutes);
   app.register(catalogRoutes);
+  app.register(laborUnitRoutes);
   app.register(assemblyRoutes);
   registerCliRoutes(app);
   registerReviewRoutes(app);

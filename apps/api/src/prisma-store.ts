@@ -19,7 +19,10 @@ import {
   materializeSummaryRowsFromBuilder,
   normalizeSummaryBuilderConfig,
   normalizeCalculationType,
+  normalizeUomLibrary,
+  summarizeExpandedAssemblyResources,
   summarizeProjectTotals,
+  validateEstimateWorkspace,
 } from "@bidwright/domain";
 import type { SummaryBuilderConfig, SummaryPreset } from "@bidwright/domain";
 import type {
@@ -50,7 +53,9 @@ import type {
   Department,
   EntityCategory,
   EstimateCalibrationFeedback,
+  EstimateFactor,
   EstimateStrategy,
+  EffectiveCostRef,
   FileNode,
   Job,
   KnowledgeBook,
@@ -59,6 +64,9 @@ import type {
   KnowledgeDocument,
   KnowledgeDocumentChunk,
   KnowledgeDocumentPage,
+  LaborUnitRef,
+  LaborUnit,
+  LaborUnitLibrary,
   Modifier,
   RateSchedule,
   RateScheduleItem,
@@ -153,6 +161,8 @@ import {
   mapDepartment,
   mapEntityCategory,
   mapEstimateCalibrationFeedback,
+  mapEstimateFactor,
+  mapEstimateFactorLibraryEntry,
   mapEstimateStrategy,
   mapFileNode,
   mapIngestionJob,
@@ -166,6 +176,8 @@ import {
   mapLabourCostEntry,
   mapLabourCostTable,
   mapLabourCostTableWithEntries,
+  mapLaborUnit,
+  mapLaborUnitLibrary,
   mapModifier,
   mapPersona,
   mapPhase,
@@ -194,6 +206,7 @@ import {
   mapTravelPolicy,
   mapUser,
   mapWorksheet,
+  mapWorksheetFolder,
   mapWorksheetItem,
   mapWorkspaceState,
 } from "./store/mappers.js";
@@ -288,13 +301,125 @@ function resolveTierUnitKeys(
 }
 
 /**
- * Categories are dynamically configured per organization. WorksheetItem.category
- * is expected to match EntityCategory.name verbatim; trim and fall back to
- * entityType, then "Uncategorized" if both are blank.
+ * Categories are dynamically configured per organization. New writes resolve
+ * through the stable EntityCategory.id first; category/entityType strings are
+ * legacy display mirrors and backward-compatible import keys.
  */
 function normalizeEstimateCategoryName(value: string, entityType?: string | null) {
   const trimmed = value.trim();
   return trimmed || entityType?.trim() || "Uncategorized";
+}
+
+type EntityCategoryLike = {
+  id: string;
+  name: string;
+  entityType: string;
+  calculationType?: string | null;
+  itemSource?: string | null;
+};
+
+function normalizeCategoryMatchKey(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveEntityCategoryForItemInput(
+  categories: EntityCategoryLike[],
+  input: { categoryId?: string | null; category?: string | null; entityType?: string | null },
+): EntityCategoryLike | null {
+  const categoryId = typeof input.categoryId === "string" ? input.categoryId.trim() : "";
+  if (categoryId) {
+    const byId = categories.find((category) => category.id === categoryId);
+    if (byId) return byId;
+    return null;
+  }
+
+  const categoryName = normalizeCategoryMatchKey(input.category);
+  if (categoryName) {
+    const byName = categories.find((category) => normalizeCategoryMatchKey(category.name) === categoryName);
+    if (byName) return byName;
+  }
+
+  const entityType = normalizeCategoryMatchKey(input.entityType);
+  if (entityType) {
+    const byEntityType = categories.find((category) => normalizeCategoryMatchKey(category.entityType) === entityType);
+    if (byEntityType) return byEntityType;
+  }
+
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function normalizeWorksheetClassification(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? { ...value } : {};
+}
+
+function catalogClassificationFromMetadata(metadata: unknown): Record<string, unknown> {
+  const record = normalizeWorksheetClassification(metadata);
+  const nested = normalizeWorksheetClassification(record.classification);
+  for (const key of [
+    "masterformat",
+    "masterFormat",
+    "uniformat",
+    "uniFormat",
+    "Uniformat",
+    "uniformat2",
+    "uniformatII",
+    "astmE1557",
+    "omniclass",
+    "omniClass",
+    "OmniClass",
+    "uniclass",
+    "uniClass",
+    "Uniclass",
+    "din276",
+    "din",
+    "DIN276",
+    "DIN",
+    "nrm",
+    "NRM",
+    "nrm1",
+    "NRM1",
+    "icms",
+    "ICMS",
+    "costCode",
+    "cost_code",
+    "costcode",
+  ]) {
+    if (record[key] !== undefined && nested[key] === undefined) {
+      nested[key] = record[key];
+    }
+  }
+  return nested;
+}
+
+function mergeWorksheetClassifications(...values: unknown[]): Record<string, unknown> {
+  return values.reduce<Record<string, unknown>>((merged, value) => {
+    Object.assign(merged, normalizeWorksheetClassification(value));
+    return merged;
+  }, {});
+}
+
+function costCodeFromClassification(classification: Record<string, unknown>): string | null {
+  const direct = stringValue(classification.costCode) ?? stringValue(classification.cost_code) ?? stringValue(classification.costcode);
+  if (direct) {
+    return direct;
+  }
+  const nested = normalizeWorksheetClassification(classification.cost_code);
+  return stringValue(nested.code) ?? stringValue(nested.value);
 }
 
 function synchronizeWorksheetItemHourBreakdown(
@@ -355,6 +480,28 @@ function adjustmentToLegacyAdditionalLineItem(adjustment: Adjustment): Additiona
     type,
     amount: adjustment.amount ?? 0,
   };
+}
+
+function remapEstimateFactorScope(
+  scope: unknown,
+  phaseIdMap: Map<string, string>,
+  worksheetIdMap: Map<string, string>,
+  worksheetItemIdMap: Map<string, string> = new Map(),
+) {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    return {};
+  }
+  const next = { ...(scope as Record<string, unknown>) };
+  const remapArray = (value: unknown, map: Map<string, string>) =>
+    Array.isArray(value) ? value.map((entry) => map.get(String(entry)) ?? String(entry)) : value;
+
+  next.phaseIds = remapArray(next.phaseIds, phaseIdMap);
+  next.worksheetIds = remapArray(next.worksheetIds, worksheetIdMap);
+  next.worksheetItemIds = remapArray(next.worksheetItemIds, worksheetItemIdMap);
+  if (typeof next.phaseId === "string") next.phaseId = phaseIdMap.get(next.phaseId) ?? next.phaseId;
+  if (typeof next.worksheetId === "string") next.worksheetId = worksheetIdMap.get(next.worksheetId) ?? next.worksheetId;
+  if (typeof next.worksheetItemId === "string") next.worksheetItemId = worksheetItemIdMap.get(next.worksheetItemId) ?? next.worksheetItemId;
+  return next;
 }
 
 function isLegacyModifier(value: Modifier | null): value is Modifier {
@@ -433,7 +580,7 @@ export interface RevisionPatchInput {
   freightOnBoard?: string;
   status?: QuoteRevision["status"];
   defaultMarkup?: number;
-  necaDifficulty?: string;
+  laborDifficulty?: string;
   followUpNote?: string;
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
@@ -444,6 +591,7 @@ export interface RevisionPatchInput {
   doubleHours?: number;
   breakoutPackage?: unknown[];
   calculatedCategoryTotals?: unknown[];
+  pricingLadder?: Record<string, unknown>;
   pdfPreferences?: Record<string, unknown>;
 }
 
@@ -460,9 +608,12 @@ export interface QuotePatchInput {
 
 export interface WorksheetItemPatchInput {
   phaseId?: string | null;
+  categoryId?: string | null;
   category?: string;
   entityType?: string;
   entityName?: string;
+  classification?: Record<string, unknown>;
+  costCode?: string | null;
   vendor?: string | null;
   description?: string;
   quantity?: number;
@@ -478,13 +629,21 @@ export interface WorksheetItemPatchInput {
   itemId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
 }
 
 export interface CreateWorksheetItemInput {
   phaseId?: string | null;
+  categoryId?: string | null;
   category: string;
   entityType: string;
   entityName: string;
+  classification?: Record<string, unknown>;
+  costCode?: string | null;
   vendor?: string | null;
   description: string;
   quantity: number;
@@ -500,10 +659,17 @@ export interface CreateWorksheetItemInput {
   itemId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
 }
 
 export interface CreateWorksheetInput {
   name: string;
+  folderId?: string | null;
+  order?: number;
 }
 
 export interface EstimateMutationSnapshot {
@@ -519,15 +685,34 @@ export interface WorksheetItemMutationResult {
 export interface WorksheetPatchInput {
   name?: string;
   order?: number;
+  folderId?: string | null;
+}
+
+export interface CreateWorksheetFolderInput {
+  name: string;
+  parentId?: string | null;
+  order?: number;
+}
+
+export interface WorksheetFolderPatchInput {
+  name?: string;
+  parentId?: string | null;
+  order?: number;
 }
 
 export interface CreatePhaseInput {
+  parentId?: string | null;
   number?: string;
   name?: string;
   description?: string;
+  order?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  color?: string;
 }
 
 export interface PhasePatchInput {
+  parentId?: string | null;
   number?: string;
   name?: string;
   description?: string;
@@ -669,6 +854,9 @@ export interface CreateAdjustmentInput {
   type?: string;
   kind?: Adjustment["kind"];
   pricingMode?: Adjustment["pricingMode"];
+  financialCategory?: Adjustment["financialCategory"];
+  calculationBase?: Adjustment["calculationBase"];
+  active?: boolean;
   appliesTo?: string;
   percentage?: number | null;
   amount?: number | null;
@@ -682,12 +870,60 @@ export interface AdjustmentPatchInput {
   type?: string;
   kind?: Adjustment["kind"];
   pricingMode?: Adjustment["pricingMode"];
+  financialCategory?: Adjustment["financialCategory"];
+  calculationBase?: Adjustment["calculationBase"];
+  active?: boolean;
   appliesTo?: string;
   percentage?: number | null;
   amount?: number | null;
   show?: "Yes" | "No";
   order?: number;
 }
+
+export interface CreateEstimateFactorInput {
+  name?: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  impact?: EstimateFactor["impact"];
+  value?: number;
+  active?: boolean;
+  appliesTo?: string;
+  applicationScope?: EstimateFactor["applicationScope"];
+  scope?: EstimateFactor["scope"];
+  formulaType?: EstimateFactor["formulaType"];
+  parameters?: Record<string, unknown>;
+  confidence?: EstimateFactor["confidence"];
+  sourceType?: EstimateFactor["sourceType"];
+  sourceId?: string | null;
+  sourceRef?: Record<string, unknown>;
+  tags?: string[];
+  order?: number;
+}
+
+export interface EstimateFactorPatchInput extends CreateEstimateFactorInput {}
+
+export interface CreateEstimateFactorLibraryEntryInput {
+  name?: string;
+  code?: string;
+  description?: string;
+  category?: string;
+  impact?: EstimateFactor["impact"];
+  value?: number;
+  appliesTo?: string;
+  applicationScope?: EstimateFactor["applicationScope"];
+  scope?: EstimateFactor["scope"];
+  formulaType?: EstimateFactor["formulaType"];
+  parameters?: Record<string, unknown>;
+  confidence?: EstimateFactor["confidence"];
+  sourceType?: EstimateFactor["sourceType"];
+  sourceId?: string | null;
+  sourceRef?: Record<string, unknown>;
+  tags?: string[];
+  order?: number;
+}
+
+export interface EstimateFactorLibraryEntryPatchInput extends CreateEstimateFactorLibraryEntryInput {}
 
 export interface CreateConditionInput {
   type: string;
@@ -724,6 +960,10 @@ export interface CreateSummaryRowInput {
   sourceCategoryId?: string | null;
   sourceCategoryLabel?: string | null;
   sourcePhaseId?: string | null;
+  sourceWorksheetId?: string | null;
+  sourceWorksheetLabel?: string | null;
+  sourceClassificationId?: string | null;
+  sourceClassificationLabel?: string | null;
   sourceAdjustmentId?: string | null;
 }
 
@@ -795,6 +1035,165 @@ export interface CatalogItemPatchInput {
   metadata?: Record<string, unknown>;
 }
 
+export type LineItemSearchSourceType =
+  | "catalog_item"
+  | "rate_schedule_item"
+  | "labor_unit"
+  | "cost_resource"
+  | "effective_cost"
+  | "assembly"
+  | "plugin_tool"
+  | "external_action";
+
+export type LineItemSearchActionType =
+  | "select"
+  | "open_assembly"
+  | "plugin_tool"
+  | "plugin_remote_search";
+
+export interface LineItemSearchDocumentInput {
+  sourceType: LineItemSearchSourceType;
+  sourceId: string;
+  actionType?: LineItemSearchActionType;
+  projectId?: string | null;
+  category?: string;
+  entityType?: string;
+  title: string;
+  subtitle?: string;
+  code?: string;
+  vendor?: string;
+  uom?: string;
+  unitCost?: number | null;
+  unitPrice?: number | null;
+  searchText?: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface LineItemSearchResult {
+  id: string;
+  sourceType: LineItemSearchSourceType;
+  sourceId: string;
+  actionType: LineItemSearchActionType;
+  projectId: string | null;
+  category: string;
+  entityType: string;
+  title: string;
+  subtitle: string;
+  code: string;
+  vendor: string;
+  uom: string;
+  unitCost: number | null;
+  unitPrice: number | null;
+  payload: Record<string, unknown>;
+  score: number;
+}
+
+export interface LineItemSearchInput {
+  q?: string;
+  preferredCategory?: string;
+  worksheetId?: string;
+  sourceTypes?: LineItemSearchSourceType[];
+  disabledSourceTypes?: LineItemSearchSourceType[];
+  disabledLaborLibraryIds?: string[];
+  disabledCatalogIds?: string[];
+  limit?: number;
+  offset?: number;
+  refresh?: boolean;
+}
+
+export interface CreateLaborUnitLibraryInput {
+  name: string;
+  description?: string;
+  provider?: string;
+  discipline?: string;
+  source?: "manual" | "import" | "library" | "plugin";
+  sourceDescription?: string;
+  sourceDatasetId?: string | null;
+  cabinetId?: string | null;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface LaborUnitLibraryPatchInput {
+  name?: string;
+  description?: string;
+  provider?: string;
+  discipline?: string;
+  source?: "manual" | "import" | "library" | "plugin";
+  sourceDescription?: string;
+  sourceDatasetId?: string | null;
+  cabinetId?: string | null;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface CreateLaborUnitInput {
+  catalogItemId?: string | null;
+  code?: string;
+  name: string;
+  description?: string;
+  discipline?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  outputUom?: string;
+  hoursNormal: number;
+  hoursDifficult?: number | null;
+  hoursVeryDifficult?: number | null;
+  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
+  entityCategoryType?: string;
+  tags?: string[];
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  sortOrder?: number;
+}
+
+export interface LaborUnitPatchInput {
+  catalogItemId?: string | null;
+  code?: string;
+  name?: string;
+  description?: string;
+  discipline?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  outputUom?: string;
+  hoursNormal?: number;
+  hoursDifficult?: number | null;
+  hoursVeryDifficult?: number | null;
+  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
+  entityCategoryType?: string;
+  tags?: string[];
+  sourceRef?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  sortOrder?: number;
+}
+
+export type LaborUnitTreeParentType = "root" | "catalog" | "category" | "class" | "subclass";
+
+export interface LaborUnitTreeGroup {
+  id: string;
+  level: "catalog" | "category" | "class" | "subclass";
+  label: string;
+  libraryId: string | null;
+  category: string;
+  className: string;
+  subClassName: string;
+  unitCount: number;
+  normalHoursTotal: number;
+}
+
+export interface LaborUnitTreeInput {
+  parentType?: LaborUnitTreeParentType;
+  libraryId?: string;
+  q?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface CreateAssemblyInput {
   name: string;
   code?: string;
@@ -834,9 +1233,13 @@ export interface AssemblyParameterPatchInput {
 }
 
 export interface AssemblyComponentInput {
-  componentType: "catalog_item" | "rate_schedule_item" | "sub_assembly";
+  componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "sub_assembly";
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
+  laborUnitId?: string | null;
+  laborDifficulty?: "normal" | "difficult" | "very_difficult";
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
   subAssemblyId?: string | null;
   quantityExpr?: string;
   description?: string;
@@ -850,9 +1253,13 @@ export interface AssemblyComponentInput {
 }
 
 export interface AssemblyComponentPatchInput {
-  componentType?: "catalog_item" | "rate_schedule_item" | "sub_assembly";
+  componentType?: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "sub_assembly";
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
+  laborUnitId?: string | null;
+  laborDifficulty?: "normal" | "difficult" | "very_difficult";
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
   subAssemblyId?: string | null;
   quantityExpr?: string;
   description?: string;
@@ -892,6 +1299,11 @@ export interface FileNodePatchInput {
   fileType?: string;
   size?: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface SourceDocumentPatchInput {
+  fileName?: string;
+  documentType?: string;
 }
 
 export interface CreateTakeoffAnnotationInput {
@@ -1006,9 +1418,57 @@ async function sha256File(filePath: string) {
   return hash.digest("hex");
 }
 
+function stableLineItemSearchDocumentId(
+  organizationId: string,
+  projectId: string | null | undefined,
+  sourceType: string,
+  sourceId: string,
+) {
+  const digest = createHash("sha1")
+    .update([organizationId, projectId ?? "", sourceType, sourceId].join("\u001f"))
+    .digest("hex")
+    .slice(0, 32);
+  return `lis_${digest}`;
+}
+
+function searchTextFromParts(parts: Array<unknown>) {
+  return parts
+    .flatMap((part) => Array.isArray(part) ? part : [part])
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .slice(0, 8000);
+}
+
+function parseSearchDocumentPayload(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function expandLineItemFtsQuery(value: string) {
+  return value
+    .replace(/\blabor\b/gi, "labor OR labour")
+    .replace(/\blabour\b/gi, "labour OR labor");
+}
+
+function firstPluginSearchField(tool: { ui?: { sections?: Array<{ fields?: Array<Record<string, any>> }> } }) {
+  for (const section of tool.ui?.sections ?? []) {
+    for (const field of section.fields ?? []) {
+      if (field?.type === "search" && field.searchConfig?.dataSource) {
+        return field;
+      }
+    }
+  }
+  return null;
+}
+
 // ── Main Store Class ──────────────────────────────────────────────────────────
 
 export class PrismaApiStore {
+  private static lineItemSearchInfrastructureReady = false;
   private importCache = new Map<string, { headers: string[]; rows: string[][] }>();
   private _userId: string | null = null;
   private _activityActor: { id: string; name: string; type: "user" | "super_admin" | "ai" | "system" } | null = null;
@@ -1034,6 +1494,1071 @@ export class PrismaApiStore {
     }
   }
 
+  private async requireProjectReference(projectId: string | null | undefined, label = "Project"): Promise<void> {
+    if (!projectId) return;
+    const project = await this.db.project.findFirst({
+      where: { id: projectId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!project) {
+      throw new Error(`${label} ${projectId} not found`);
+    }
+  }
+
+  private async requireRevisionForProject(projectId: string, revisionId: string) {
+    await this.requireProject(projectId);
+    const revision = await this.db.quoteRevision.findFirst({
+      where: {
+        id: revisionId,
+        quote: { projectId, project: { organizationId: this.organizationId } },
+      },
+    });
+    if (!revision) {
+      throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+    }
+    return revision;
+  }
+
+  private async ensureLineItemSearchInfrastructure() {
+    if (PrismaApiStore.lineItemSearchInfrastructureReady) {
+      return;
+    }
+    await this.db.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+    await this.db.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "LineItemSearchDocument" (
+        "id" TEXT PRIMARY KEY,
+        "organizationId" TEXT NOT NULL,
+        "projectId" TEXT,
+        "sourceType" TEXT NOT NULL,
+        "sourceId" TEXT NOT NULL,
+        "actionType" TEXT NOT NULL DEFAULT 'select',
+        "category" TEXT NOT NULL DEFAULT '',
+        "entityType" TEXT NOT NULL DEFAULT '',
+        "title" TEXT NOT NULL,
+        "subtitle" TEXT NOT NULL DEFAULT '',
+        "code" TEXT NOT NULL DEFAULT '',
+        "vendor" TEXT NOT NULL DEFAULT '',
+        "uom" TEXT NOT NULL DEFAULT 'EA',
+        "unitCost" DOUBLE PRECISION,
+        "unitPrice" DOUBLE PRECISION,
+        "searchText" TEXT NOT NULL DEFAULT '',
+        "searchVector" tsvector NOT NULL DEFAULT ''::tsvector,
+        "payload" JSONB NOT NULL DEFAULT '{}',
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await this.db.$executeRawUnsafe(`ALTER TABLE "LineItemSearchDocument" ADD COLUMN IF NOT EXISTS "searchVector" tsvector NOT NULL DEFAULT ''::tsvector`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_idx" ON "LineItemSearchDocument"("organizationId")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_projectId_idx" ON "LineItemSearchDocument"("organizationId", "projectId")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_sourceType_idx" ON "LineItemSearchDocument"("organizationId", "sourceType")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_category_idx" ON "LineItemSearchDocument"("organizationId", "category")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_entityType_idx" ON "LineItemSearchDocument"("organizationId", "entityType")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchVector_fts_idx" ON "LineItemSearchDocument" USING GIN ("searchVector")`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_fts_idx" ON "LineItemSearchDocument" USING GIN (to_tsvector('english', "searchText"))`);
+    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_trgm_idx" ON "LineItemSearchDocument" USING GIN ("searchText" gin_trgm_ops)`);
+    await this.db.$executeRawUnsafe(`UPDATE "LineItemSearchDocument" SET "searchVector" = to_tsvector('english', "searchText") WHERE "searchVector" = ''::tsvector`);
+    PrismaApiStore.lineItemSearchInfrastructureReady = true;
+  }
+
+  private async upsertLineItemSearchDocument(doc: LineItemSearchDocumentInput) {
+    const title = doc.title.trim();
+    if (!title) return;
+    const sourceId = doc.sourceId.trim();
+    if (!sourceId) return;
+    const projectId = doc.projectId ?? null;
+    const payload = doc.payload ?? {};
+    const searchText = doc.searchText?.trim() || searchTextFromParts([
+      title,
+      doc.subtitle,
+      doc.code,
+      doc.vendor,
+      doc.category,
+      doc.entityType,
+      Object.values(payload),
+    ]);
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11, $12, $13,
+          $14, $15, $16, to_tsvector('english', $16::text), $17::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT ("id") DO UPDATE SET
+          "projectId" = EXCLUDED."projectId",
+          "sourceType" = EXCLUDED."sourceType",
+          "sourceId" = EXCLUDED."sourceId",
+          "actionType" = EXCLUDED."actionType",
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "unitCost" = EXCLUDED."unitCost",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      stableLineItemSearchDocumentId(this.organizationId, projectId, doc.sourceType, sourceId),
+      this.organizationId,
+      projectId,
+      doc.sourceType,
+      sourceId,
+      doc.actionType ?? "select",
+      doc.category ?? "",
+      doc.entityType ?? "",
+      title,
+      doc.subtitle ?? "",
+      doc.code ?? "",
+      doc.vendor ?? "",
+      doc.uom ?? "EA",
+      doc.unitCost ?? null,
+      doc.unitPrice ?? null,
+      searchText,
+      JSON.stringify(payload),
+    );
+  }
+
+  private async upsertPluginSearchDocuments() {
+    const plugins = await this.db.plugin.findMany({
+      where: { organizationId: this.organizationId, enabled: true },
+    });
+
+    for (const plugin of plugins) {
+      const tools = Array.isArray(plugin.toolDefinitions) ? plugin.toolDefinitions as Array<any> : [];
+      for (const tool of tools) {
+        if (tool?.outputType !== "line_items" && tool?.outputType !== "worksheet") continue;
+        const searchField = firstPluginSearchField(tool);
+        const isRemoteSearch = Boolean(searchField);
+        const sourceId = `${plugin.id}:${tool.id}:${isRemoteSearch ? searchField!.id : "run"}`;
+        const title = isRemoteSearch
+          ? plugin.name.replace(/\s+(product\s+)?search$/i, "").trim() || plugin.name
+          : tool.name || plugin.name;
+        await this.upsertLineItemSearchDocument({
+          sourceType: isRemoteSearch ? "external_action" : "plugin_tool",
+          sourceId,
+          actionType: isRemoteSearch ? "plugin_remote_search" : "plugin_tool",
+          title,
+          subtitle: isRemoteSearch
+            ? `Search ${plugin.name} and create line items`
+            : `Run ${plugin.name}${tool.name ? `: ${tool.name}` : ""}`,
+          category: (plugin.supportedCategories?.[0] as string | undefined) ?? plugin.category ?? "Actions",
+          entityType: (plugin.supportedCategories?.[0] as string | undefined) ?? plugin.category ?? "plugin",
+          searchText: searchTextFromParts([
+            plugin.name,
+            plugin.slug,
+            plugin.category,
+            plugin.description,
+            plugin.llmDescription,
+            plugin.tags,
+            plugin.supportedCategories,
+            tool.name,
+            tool.description,
+            tool.llmDescription,
+            tool.tags,
+            isRemoteSearch ? "search products vendor pricing external line items action" : "run create line items plugin action",
+          ]),
+          payload: {
+            pluginId: plugin.id,
+            pluginSlug: plugin.slug,
+            pluginName: plugin.name,
+            toolId: tool.id,
+            toolName: tool.name,
+            searchFieldId: searchField?.id,
+            queryParam: searchField?.searchConfig?.queryParam ?? "q",
+            populateFields: searchField?.searchConfig?.populateFields ?? {},
+          },
+        });
+      }
+    }
+  }
+
+  async rebuildLineItemSearchIndex(projectId?: string): Promise<{ indexed: number }> {
+    if (projectId) {
+      await this.requireProject(projectId);
+    }
+    await this.ensureLineItemSearchInfrastructure();
+
+    await this.db.$executeRawUnsafe(
+      `
+        DELETE FROM "LineItemSearchDocument"
+        WHERE "organizationId" = $1::text
+          AND ($2::text IS NULL OR "projectId" IS NULL OR "projectId" = $2::text)
+      `,
+      this.organizationId,
+      projectId ?? null,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, COALESCE(c."projectId", $2::text, ''), 'catalog_item', ci."id")),
+          $1::text,
+          COALESCE(c."projectId", $2::text),
+          'catalog_item',
+          ci."id",
+          'select',
+          COALESCE(NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
+          c."kind",
+          COALESCE(NULLIF(ci."name", ''), 'Catalog item'),
+          c."name",
+          ci."code",
+          COALESCE(ci."metadata"->>'vendor', ''),
+          COALESCE(NULLIF(linked_rate."rateUnit", ''), NULLIF(ci."unit", ''), 'EA'),
+          COALESCE(linked_rate."rateUnitCost", ci."unitCost"),
+          ci."unitPrice",
+          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", ci."metadata"::text),
+          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", ci."metadata"::text)),
+          jsonb_build_object(
+            'source', 'catalog',
+            'itemId', ci."id",
+            'catalogId', c."id",
+            'catalogName', c."name",
+            'catalogKind', c."kind",
+            'catalogCategory', COALESCE(NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
+            'rateScheduleItemId', linked_rate."rateScheduleItemId",
+            'scheduleId', linked_rate."scheduleId",
+            'scheduleName', linked_rate."scheduleName",
+            'scheduleCategory', linked_rate."scheduleCategory",
+            'rateScheduleLinked', linked_rate."rateScheduleItemId" IS NOT NULL,
+            'vendor', COALESCE(ci."metadata"->>'vendor', ''),
+            'description', ci."name",
+            'resourceComposition', jsonb_build_object(
+              'source', 'catalog',
+              'resources', jsonb_build_array(jsonb_build_object(
+                'componentType', 'catalog_item',
+                'itemId', ci."id",
+                'rateScheduleItemId', linked_rate."rateScheduleItemId",
+                'scheduleId', linked_rate."scheduleId",
+                'uom', COALESCE(NULLIF(linked_rate."rateUnit", ''), NULLIF(ci."unit", ''), 'EA'),
+                'unitCost', COALESCE(linked_rate."rateUnitCost", ci."unitCost"),
+                'unitPrice', ci."unitPrice"
+              ))
+            ),
+            'sourceEvidence', jsonb_build_object(
+              'source', 'catalog',
+              'itemId', ci."id",
+              'catalogId', c."id",
+              'catalogName', c."name",
+              'rateScheduleItemId', linked_rate."rateScheduleItemId",
+              'scheduleId', linked_rate."scheduleId",
+              'scheduleName', linked_rate."scheduleName",
+              'tierId', linked_rate."tierId"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "CatalogItem" ci
+        JOIN "Catalog" c ON c."id" = ci."catalogId"
+        LEFT JOIN LATERAL (
+          SELECT
+            rsi."id" AS "rateScheduleItemId",
+            rsi."scheduleId",
+            rs."name" AS "scheduleName",
+            rs."category" AS "scheduleCategory",
+            rsi."unit" AS "rateUnit",
+            tier."id" AS "tierId",
+            COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0) AS "rateUnitCost"
+          FROM "RateScheduleItem" rsi
+          JOIN "RateSchedule" rs ON rs."id" = rsi."scheduleId"
+          JOIN "QuoteRevision" qr ON qr."id" = rs."revisionId"
+          JOIN "Quote" q ON q."id" = qr."quoteId"
+          LEFT JOIN LATERAL (
+            SELECT "id"
+            FROM "RateScheduleTier" rst
+            WHERE rst."scheduleId" = rs."id"
+            ORDER BY rst."sortOrder" ASC
+            LIMIT 1
+          ) tier ON true
+          WHERE rsi."catalogItemId" = ci."id"
+            AND rs."organizationId" = $1::text
+            AND $2::text IS NOT NULL
+            AND q."projectId" = $2::text
+            AND q."currentRevisionId" = rs."revisionId"
+          ORDER BY
+            CASE WHEN rs."projectId" = $2::text THEN 0 ELSE 1 END,
+            rs."updatedAt" DESC,
+            rsi."sortOrder" ASC,
+            rsi."name" ASC
+          LIMIT 1
+        ) linked_rate ON true
+        WHERE c."organizationId" = $1::text
+          AND ($2::text IS NULL OR c."scope" = 'global' OR c."projectId" = $2::text)
+        ON CONFLICT ("id") DO UPDATE SET
+          "projectId" = EXCLUDED."projectId",
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "unitCost" = EXCLUDED."unitCost",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+      projectId ?? null,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, COALESCE(rs."projectId", q."projectId", ''), 'rate_schedule_item', rsi."id")),
+          $1::text,
+          COALESCE(rs."projectId", q."projectId"),
+          'rate_schedule_item',
+          rsi."id",
+          'select',
+          rs."category",
+          rs."category",
+          COALESCE(NULLIF(rsi."name", ''), 'Rate schedule item'),
+          rs."name",
+          rsi."code",
+          COALESCE(rsi."metadata"->>'vendor', ''),
+          COALESCE(NULLIF(rsi."unit", ''), 'HR'),
+          COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0),
+          NULL,
+          concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", rs."description", rsi."metadata"::text),
+          to_tsvector('english', concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", rs."description", rsi."metadata"::text)),
+          jsonb_build_object(
+            'source', 'rate_schedule',
+            'rateScheduleItemId', rsi."id",
+            'scheduleId', rs."id",
+            'scheduleName', rs."name",
+            'scheduleCategory', rs."category",
+            'description', rsi."name",
+            'resourceComposition', jsonb_build_object(
+              'source', 'rate_schedule',
+              'resources', jsonb_build_array(jsonb_build_object(
+                'componentType', 'rate_schedule_item',
+                'rateScheduleItemId', rsi."id",
+                'scheduleId', rs."id",
+                'uom', rsi."unit",
+                'unitCost', COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0)
+              ))
+            ),
+            'sourceEvidence', jsonb_build_object(
+              'source', 'rate_schedule',
+              'rateScheduleItemId', rsi."id",
+              'scheduleId', rs."id",
+              'scheduleName', rs."name",
+              'tierId', tier."id"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "RateScheduleItem" rsi
+        JOIN "RateSchedule" rs ON rs."id" = rsi."scheduleId"
+        LEFT JOIN "QuoteRevision" qr ON qr."id" = rs."revisionId"
+        LEFT JOIN "Quote" q ON q."id" = qr."quoteId"
+        LEFT JOIN LATERAL (
+          SELECT "id"
+          FROM "RateScheduleTier" rst
+          WHERE rst."scheduleId" = rs."id"
+          ORDER BY rst."sortOrder" ASC
+          LIMIT 1
+        ) tier ON true
+        WHERE rs."organizationId" = $1::text
+          AND rs."revisionId" IS NOT NULL
+          AND q."currentRevisionId" = rs."revisionId"
+          AND ($2::text IS NULL OR q."projectId" = $2::text OR rs."projectId" = $2::text)
+        ON CONFLICT ("id") DO UPDATE SET
+          "projectId" = EXCLUDED."projectId",
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "unitCost" = EXCLUDED."unitCost",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+      projectId ?? null,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, '', 'cost_resource', r."id")),
+          $1::text,
+          NULL,
+          'cost_resource',
+          r."id",
+          'select',
+          r."category",
+          r."resourceType",
+          r."name",
+          concat_ws(' ', r."manufacturer", r."manufacturerPartNumber"),
+          r."code",
+          r."manufacturer",
+          COALESCE(NULLIF(r."defaultUom", ''), 'EA'),
+          NULL,
+          NULL,
+          concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", array_to_string(r."aliases", ' '), array_to_string(r."tags", ' '), r."metadata"::text),
+          to_tsvector('english', concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", array_to_string(r."aliases", ' '), array_to_string(r."tags", ' '), r."metadata"::text)),
+          jsonb_build_object(
+            'source', 'cost_resource',
+            'costResourceId', r."id",
+            'itemId', r."catalogItemId",
+            'resourceCategory', r."category",
+            'resourceType', r."resourceType",
+            'manufacturer', r."manufacturer",
+            'manufacturerPartNumber', r."manufacturerPartNumber",
+            'description', r."description",
+            'resourceComposition', jsonb_build_object(
+              'source', 'cost_resource',
+              'resources', jsonb_build_array(jsonb_build_object(
+                'componentType', 'cost_resource',
+                'costResourceId', r."id",
+                'itemId', r."catalogItemId",
+                'uom', r."defaultUom"
+              ))
+            ),
+            'sourceEvidence', jsonb_build_object(
+              'source', 'cost_resource',
+              'costResourceId', r."id",
+              'itemId', r."catalogItemId",
+              'updatedAt', r."updatedAt"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "ResourceCatalogItem" r
+        WHERE r."organizationId" = $1::text
+          AND r."active" = true
+        ON CONFLICT ("id") DO UPDATE SET
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, COALESCE(ec."projectId", ''), 'effective_cost', ec."id")),
+          $1::text,
+          ec."projectId",
+          'effective_cost',
+          ec."id",
+          'select',
+          COALESCE(r."category", ''),
+          COALESCE(r."resourceType", ''),
+          COALESCE(r."name", ec."metadata"->'costItem'->>'name', 'Effective cost'),
+          concat_ws(' ', ec."vendorName", ec."region", ec."method"),
+          COALESCE(r."code", ec."metadata"->'costItem'->>'code', ''),
+          ec."vendorName",
+          COALESCE(NULLIF(ec."uom", ''), r."defaultUom", 'EA'),
+          ec."unitCost",
+          ec."unitPrice",
+          concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), ec."metadata"::text),
+          to_tsvector('english', concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), ec."metadata"::text)),
+          jsonb_build_object(
+            'source', 'cost_intelligence',
+            'effectiveCostId', ec."id",
+            'costResourceId', ec."resourceId",
+            'itemId', r."catalogItemId",
+            'costCategory', COALESCE(r."category", ''),
+            'resourceType', COALESCE(r."resourceType", ''),
+            'vendorName', ec."vendorName",
+            'region', ec."region",
+            'method', ec."method",
+            'description', COALESCE(r."description", r."name", ''),
+            'sourceNotes', concat_ws('; ', 'Cost Intelligence cost basis ' || ec."id", ec."method", NULLIF(ec."vendorName", '')),
+            'effectiveDate', ec."effectiveDate",
+            'expiresAt', ec."expiresAt",
+            'confidence', ec."confidence",
+            'sourceObservationId', ec."sourceObservationId",
+            'resourceComposition', jsonb_build_object(
+              'source', 'cost_intelligence',
+              'resources', jsonb_build_array(jsonb_build_object(
+                'componentType', 'cost_intelligence',
+                'effectiveCostId', ec."id",
+                'costResourceId', ec."resourceId",
+                'itemId', r."catalogItemId",
+                'uom', ec."uom",
+                'unitCost', ec."unitCost",
+                'unitPrice', ec."unitPrice"
+              ))
+            ),
+            'sourceEvidence', jsonb_build_object(
+              'source', 'cost_intelligence',
+              'effectiveCostId', ec."id",
+              'costResourceId', ec."resourceId",
+              'sourceObservationId', ec."sourceObservationId",
+              'vendorName', ec."vendorName",
+              'region', ec."region",
+              'method', ec."method",
+              'effectiveDate', ec."effectiveDate",
+              'expiresAt', ec."expiresAt",
+              'confidence', ec."confidence"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "EffectiveCost" ec
+        LEFT JOIN "ResourceCatalogItem" r ON r."id" = ec."resourceId"
+        LEFT JOIN "PriceObservation" po ON po."id" = ec."sourceObservationId"
+        WHERE ec."organizationId" = $1::text
+          AND ($2::text IS NULL OR ec."projectId" IS NULL OR ec."projectId" = $2::text)
+        ON CONFLICT ("id") DO UPDATE SET
+          "projectId" = EXCLUDED."projectId",
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "unitCost" = EXCLUDED."unitCost",
+          "unitPrice" = EXCLUDED."unitPrice",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+      projectId ?? null,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, '', 'labor_unit', lu."id")),
+          $1::text,
+          NULL,
+          'labor_unit',
+          lu."id",
+          'select',
+          COALESCE(NULLIF(lu."entityCategoryType", ''), 'Labour'),
+          COALESCE(NULLIF(lu."entityCategoryType", ''), 'Labour'),
+          lu."name",
+          concat_ws(' · ', NULLIF(lib."provider", ''), NULLIF(lu."category", ''), NULLIF(lu."className", ''), NULLIF(lu."subClassName", '')),
+          lu."code",
+          lib."provider",
+          COALESCE(NULLIF(lu."outputUom", ''), 'EA'),
+          NULL,
+          NULL,
+          concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), lu."metadata"::text),
+          to_tsvector('english', concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), lu."metadata"::text)),
+          jsonb_build_object(
+            'source', 'labor_unit',
+            'laborUnitId', lu."id",
+            'libraryId', lib."id",
+            'libraryName', lib."name",
+            'provider', lib."provider",
+            'discipline', lu."discipline",
+            'laborCategory', lu."category",
+            'className', lu."className",
+            'subClassName', lu."subClassName",
+            'catalogItemId', lu."catalogItemId",
+            'description', lu."description",
+            'unit1', lu."hoursNormal",
+            'hoursDifficult', lu."hoursDifficult",
+            'hoursVeryDifficult', lu."hoursVeryDifficult",
+            'defaultDifficulty', lu."defaultDifficulty",
+            'resourceComposition', jsonb_build_object(
+              'source', 'labor_unit',
+              'resources', jsonb_build_array(jsonb_build_object(
+                'componentType', 'labor_unit',
+                'laborUnitId', lu."id",
+                'catalogItemId', lu."catalogItemId",
+                'uom', lu."outputUom",
+                'hoursNormal', lu."hoursNormal",
+                'hoursDifficult', lu."hoursDifficult",
+                'hoursVeryDifficult', lu."hoursVeryDifficult"
+              ))
+            ),
+            'sourceEvidence', jsonb_build_object(
+              'source', 'labor_unit',
+              'laborUnitId', lu."id",
+              'libraryId', lu."libraryId",
+              'libraryProvider', lib."provider",
+              'defaultDifficulty', lu."defaultDifficulty"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "LaborUnit" lu
+        JOIN "LaborUnitLibrary" lib ON lib."id" = lu."libraryId"
+        WHERE (lib."organizationId" = $1::text OR lib."organizationId" IS NULL)
+        ON CONFLICT ("id") DO UPDATE SET
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "vendor" = EXCLUDED."vendor",
+          "uom" = EXCLUDED."uom",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+    );
+
+    await this.db.$executeRawUnsafe(
+      `
+        INSERT INTO "LineItemSearchDocument" (
+          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
+          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
+          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
+        )
+        SELECT
+          'lis_' || md5(concat_ws('|', $1::text, '', 'assembly', a."id")),
+          $1::text,
+          NULL,
+          'assembly',
+          a."id",
+          'open_assembly',
+          COALESCE(NULLIF(a."category", ''), 'Assembly'),
+          'Assembly',
+          a."name",
+          a."description",
+          a."code",
+          '',
+          COALESCE(NULLIF(a."unit", ''), 'EA'),
+          NULL,
+          NULL,
+          concat_ws(' ', a."name", a."code", a."description", a."category", a."unit", a."metadata"::text),
+          to_tsvector('english', concat_ws(' ', a."name", a."code", a."description", a."category", a."unit", a."metadata"::text)),
+          jsonb_build_object(
+            'source', 'assembly',
+            'assemblyId', a."id",
+            'assemblyCategory', a."category",
+            'unit', a."unit",
+            'code', a."code",
+            'description', a."description",
+            'sourceEvidence', jsonb_build_object(
+              'source', 'assembly',
+              'assemblyId', a."id",
+              'updatedAt', a."updatedAt"
+            )
+          ),
+          CURRENT_TIMESTAMP,
+          CURRENT_TIMESTAMP
+        FROM "Assembly" a
+        WHERE a."organizationId" = $1::text
+        ON CONFLICT ("id") DO UPDATE SET
+          "category" = EXCLUDED."category",
+          "entityType" = EXCLUDED."entityType",
+          "title" = EXCLUDED."title",
+          "subtitle" = EXCLUDED."subtitle",
+          "code" = EXCLUDED."code",
+          "uom" = EXCLUDED."uom",
+          "searchText" = EXCLUDED."searchText",
+          "searchVector" = EXCLUDED."searchVector",
+          "payload" = EXCLUDED."payload",
+          "updatedAt" = CURRENT_TIMESTAMP
+      `,
+      this.organizationId,
+    );
+
+    await this.upsertPluginSearchDocuments();
+
+    const countRows = await this.db.$queryRawUnsafe<Array<{ count: number | bigint }>>(
+      `
+        SELECT count(*)::int AS count
+        FROM "LineItemSearchDocument"
+        WHERE "organizationId" = $1::text
+          AND ($2::text IS NULL OR "projectId" IS NULL OR "projectId" = $2::text)
+      `,
+      this.organizationId,
+      projectId ?? null,
+    );
+    return { indexed: Number(countRows[0]?.count ?? 0) };
+  }
+
+  async searchLineItemCandidates(projectId: string, input: LineItemSearchInput = {}): Promise<LineItemSearchResult[]> {
+    await this.requireProject(projectId);
+    await this.ensureLineItemSearchInfrastructure();
+    if (input.refresh) {
+      await this.rebuildLineItemSearchIndex(projectId);
+    } else {
+      const countRows = await this.db.$queryRawUnsafe<Array<{ count: number | bigint }>>(
+        `
+          SELECT count(*)::int AS count
+          FROM "LineItemSearchDocument"
+          WHERE "organizationId" = $1::text
+            AND ("projectId" IS NULL OR "projectId" = $2::text)
+        `,
+        this.organizationId,
+        projectId,
+      );
+      if (Number(countRows[0]?.count ?? 0) === 0) {
+        await this.rebuildLineItemSearchIndex(projectId);
+      }
+    }
+
+    const q = input.q?.trim() ?? "";
+    const ftsQuery = expandLineItemFtsQuery(q);
+    const preferredCategory = input.preferredCategory?.trim() ?? "";
+    const sourceTypes = input.sourceTypes ?? [];
+    const disabledSourceTypes = input.disabledSourceTypes ?? [];
+    const disabledLaborLibraryIds = input.disabledLaborLibraryIds ?? [];
+    const disabledCatalogIds = input.disabledCatalogIds ?? [];
+    const limit = Math.min(100, Math.max(1, input.limit ?? 60));
+    const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const rows = await this.db.$queryRawUnsafe<Array<{
+      id: string;
+      sourceType: LineItemSearchSourceType;
+      sourceId: string;
+      actionType: LineItemSearchActionType;
+      projectId: string | null;
+      category: string;
+      entityType: string;
+      title: string;
+      subtitle: string;
+      code: string;
+      vendor: string;
+      uom: string;
+      unitCost: number | null;
+      unitPrice: number | null;
+      payload: unknown;
+      score: number;
+    }>>(
+      `
+        SELECT
+          "id",
+          "sourceType",
+          "sourceId",
+          "actionType",
+          "projectId",
+          "category",
+          "entityType",
+          "title",
+          "subtitle",
+          "code",
+          "vendor",
+          "uom",
+          "unitCost",
+          "unitPrice",
+          "payload",
+          (
+            CASE
+              WHEN $3::text <> '' AND (lower("category") = lower($3::text) OR lower("entityType") = lower($3::text)) THEN 4
+              ELSE 0
+            END
+            + CASE "sourceType"
+              WHEN 'catalog_item' THEN 1.5
+              WHEN 'rate_schedule_item' THEN 1.4
+              WHEN 'effective_cost' THEN 1.3
+              WHEN 'labor_unit' THEN 1.2
+              WHEN 'assembly' THEN 0.8
+              WHEN 'external_action' THEN 0.35
+              WHEN 'plugin_tool' THEN 0.25
+              ELSE 0
+            END
+            + CASE
+              WHEN NULLIF("payload"->>'rateScheduleItemId', '') IS NOT NULL THEN 1.75
+              ELSE 0
+            END
+            + CASE
+              WHEN $5::text = '' THEN 0
+              WHEN lower("title") = lower($5::text) THEN 10
+              WHEN lower("code") = lower($5::text) THEN 8
+              WHEN lower("title") LIKE lower($5::text) || '%' THEN 5
+              WHEN lower("code") LIKE lower($5::text) || '%' THEN 4
+              ELSE 0
+            END
+            + CASE
+              WHEN $6::text = '' THEN 0
+              WHEN "searchVector" @@ websearch_to_tsquery('english', $6::text) THEN 2
+              ELSE 0
+            END
+            + CASE
+              WHEN $5::text = '' THEN 0
+              WHEN "title" ILIKE '%' || $5::text || '%' THEN 1
+              WHEN "code" ILIKE '%' || $5::text || '%' THEN 1
+              WHEN "subtitle" ILIKE '%' || $5::text || '%' THEN 0.5
+              WHEN "vendor" ILIKE '%' || $5::text || '%' THEN 0.5
+              ELSE 0
+            END
+          )::double precision AS score
+        FROM "LineItemSearchDocument"
+        WHERE "organizationId" = $1::text
+          AND ("projectId" IS NULL OR "projectId" = $2::text)
+          AND ("sourceType" <> 'rate_schedule_item' OR "projectId" = $2::text)
+          AND (cardinality($4::text[]) = 0 OR "sourceType" = ANY($4::text[]))
+          AND (cardinality($9::text[]) = 0 OR "sourceType" <> ALL($9::text[]))
+          AND (
+            cardinality($10::text[]) = 0
+            OR "sourceType" <> 'labor_unit'
+            OR COALESCE("payload"->>'libraryId', '') <> ALL($10::text[])
+          )
+          AND (
+            cardinality($11::text[]) = 0
+            OR "sourceType" <> 'catalog_item'
+            OR COALESCE("payload"->>'catalogId', '') <> ALL($11::text[])
+          )
+          AND (
+            $5::text = ''
+            OR "sourceType" = 'external_action'
+            OR "searchVector" @@ websearch_to_tsquery('english', $6::text)
+            OR "title" ILIKE '%' || $5::text || '%'
+            OR "code" ILIKE '%' || $5::text || '%'
+            OR "subtitle" ILIKE '%' || $5::text || '%'
+            OR "vendor" ILIKE '%' || $5::text || '%'
+          )
+        ORDER BY score DESC, "title" ASC
+        LIMIT $7
+        OFFSET $8
+      `,
+      this.organizationId,
+      projectId,
+      preferredCategory,
+      sourceTypes,
+      q,
+      ftsQuery,
+      limit,
+      offset,
+      disabledSourceTypes,
+      disabledLaborLibraryIds,
+      disabledCatalogIds,
+    );
+
+    return rows.map((row) => ({
+      id: row.id,
+      sourceType: row.sourceType,
+      sourceId: row.sourceId,
+      actionType: row.actionType,
+      projectId: row.projectId ?? null,
+      category: row.category ?? "",
+      entityType: row.entityType ?? "",
+      title: row.title,
+      subtitle: row.subtitle ?? "",
+      code: row.code ?? "",
+      vendor: row.vendor ?? "",
+      uom: row.uom || "EA",
+      unitCost: row.unitCost ?? null,
+      unitPrice: row.unitPrice ?? null,
+      payload: parseSearchDocumentPayload(row.payload),
+      score: Number(row.score ?? 0),
+    }));
+  }
+
+  private async requireCatalog(catalogId: string) {
+    const catalog = await this.db.catalog.findFirst({
+      where: { id: catalogId, organizationId: this.organizationId },
+    });
+    if (!catalog) {
+      throw new Error(`Catalog ${catalogId} not found`);
+    }
+    return catalog;
+  }
+
+  private async requireCatalogItem(itemId: string) {
+    const item = await this.db.catalogItem.findFirst({
+      where: { id: itemId, catalog: { organizationId: this.organizationId } },
+    });
+    if (!item) {
+      throw new Error(`Catalog item ${itemId} not found`);
+    }
+    return item;
+  }
+
+  private async requireLaborUnitLibrary(libraryId: string) {
+    const library = await (this.db as any).laborUnitLibrary.findFirst({
+      where: {
+        id: libraryId,
+        OR: [
+          { organizationId: this.organizationId },
+          { organizationId: null },
+        ],
+      },
+    });
+    if (!library) {
+      throw new Error(`Labor unit catalog ${libraryId} not found`);
+    }
+    return library;
+  }
+
+  private async requireLaborUnit(unitId: string) {
+    const unit = await (this.db as any).laborUnit.findFirst({
+      where: {
+        id: unitId,
+        library: {
+          OR: [
+            { organizationId: this.organizationId },
+            { organizationId: null },
+          ],
+        },
+      },
+      include: { library: true },
+    });
+    if (!unit) {
+      throw new Error(`Labor unit ${unitId} not found`);
+    }
+    return unit;
+  }
+
+  private async requireCostResource(resourceId: string) {
+    const resource = await (this.db as any).resourceCatalogItem.findFirst({
+      where: { id: resourceId, organizationId: this.organizationId },
+    });
+    if (!resource) {
+      throw new Error(`Cost resource ${resourceId} not found`);
+    }
+    return resource;
+  }
+
+  private async requireEffectiveCost(effectiveCostId: string) {
+    const cost = await (this.db as any).effectiveCost.findFirst({
+      where: { id: effectiveCostId, organizationId: this.organizationId },
+      include: { resource: true },
+    });
+    if (!cost) {
+      throw new Error(`Effective cost ${effectiveCostId} not found`);
+    }
+    return cost;
+  }
+
+  private async validateWorksheetItemProvenanceRefs(input: {
+    costResourceId?: string | null;
+    effectiveCostId?: string | null;
+    laborUnitId?: string | null;
+  }) {
+    if (input.costResourceId) {
+      await this.requireCostResource(input.costResourceId);
+    }
+    if (input.effectiveCostId) {
+      const cost = await this.requireEffectiveCost(input.effectiveCostId);
+      if (input.costResourceId && cost.resourceId && cost.resourceId !== input.costResourceId) {
+        throw new Error(`Cost resource ${input.costResourceId} does not match effective cost ${input.effectiveCostId}`);
+      }
+    }
+    if (input.laborUnitId) {
+      await this.requireLaborUnit(input.laborUnitId);
+    }
+  }
+
+  private async requireDatasetRow(rowId: string) {
+    const row = await this.db.datasetRow.findFirst({
+      where: { id: rowId, dataset: { organizationId: this.organizationId } },
+    });
+    if (!row) {
+      throw new Error(`Dataset row ${rowId} not found`);
+    }
+    return row;
+  }
+
+  private async validateKnowledgeBookReferences(bookIds: string[] | undefined): Promise<void> {
+    if (!bookIds || bookIds.length === 0) return;
+    const uniqueIds = Array.from(new Set(bookIds.filter(Boolean)));
+    if (uniqueIds.length === 0) return;
+
+    const count = await this.db.knowledgeBook.count({
+      where: { id: { in: uniqueIds }, organizationId: this.organizationId },
+    });
+    if (count !== uniqueIds.length) {
+      throw new Error("One or more knowledge books were not found");
+    }
+  }
+
+  private async validateKnowledgeDocumentReferences(documentIds: string[] | undefined): Promise<void> {
+    if (!documentIds || documentIds.length === 0) return;
+    const uniqueIds = Array.from(new Set(documentIds.filter(Boolean)));
+    if (uniqueIds.length === 0) return;
+
+    const count = await this.db.knowledgeDocument.count({
+      where: { id: { in: uniqueIds }, organizationId: this.organizationId },
+    });
+    if (count !== uniqueIds.length) {
+      throw new Error("One or more knowledge documents were not found");
+    }
+  }
+
+  private async validateQuotePatchReferences(patch: QuotePatchInput): Promise<void> {
+    if (patch.customerId) {
+      const customer = await this.db.customer.findFirst({
+        where: { id: patch.customerId, organizationId: this.organizationId },
+        select: { id: true },
+      });
+      if (!customer) throw new Error(`Customer ${patch.customerId} not found`);
+    }
+
+    if (patch.customerContactId) {
+      const contact = await this.db.customerContact.findFirst({
+        where: { id: patch.customerContactId, customer: { organizationId: this.organizationId } },
+        include: { customer: { select: { id: true } } },
+      });
+      if (!contact) throw new Error(`Customer contact ${patch.customerContactId} not found`);
+      if (patch.customerId && contact.customer.id !== patch.customerId) {
+        throw new Error(`Customer contact ${patch.customerContactId} does not belong to customer ${patch.customerId}`);
+      }
+    }
+
+    if (patch.departmentId) {
+      const department = await this.db.department.findFirst({
+        where: { id: patch.departmentId, organizationId: this.organizationId },
+        select: { id: true },
+      });
+      if (!department) throw new Error(`Department ${patch.departmentId} not found`);
+    }
+
+    if (patch.userId) {
+      const user = await this.db.user.findFirst({
+        where: { id: patch.userId, organizationId: this.organizationId, active: true },
+        select: { id: true },
+      });
+      if (!user) throw new Error(`User ${patch.userId} not found`);
+    }
+  }
+
   // ── Build BidwrightStore snapshot for domain functions ──────────────────
 
   private async buildStoreSnapshot(projectId: string): Promise<BidwrightStore> {
@@ -1049,10 +2574,15 @@ export class PrismaApiStore {
     const quoteIds = quotes.map((q) => q.id);
     const revisions = await this.db.quoteRevision.findMany({ where: { quoteId: { in: quoteIds } } });
     const revisionIds = revisions.map((r) => r.id);
+    const worksheetFolders = await this.db.worksheetFolder.findMany({ where: { revisionId: { in: revisionIds } } });
     const worksheets = await this.db.worksheet.findMany({ where: { revisionId: { in: revisionIds } } });
     const worksheetIds = worksheets.map((w) => w.id);
-    const worksheetItems = await this.db.worksheetItem.findMany({ where: { worksheetId: { in: worksheetIds } } });
+    const worksheetItems = await this.db.worksheetItem.findMany({
+      where: { worksheetId: { in: worksheetIds } },
+      include: { entityCategory: true },
+    });
     const phases = await this.db.phase.findMany({ where: { revisionId: { in: revisionIds } } });
+    const estimateFactors = await this.db.estimateFactor.findMany({ where: { revisionId: { in: revisionIds } } });
     const adjustments = await this.db.adjustment.findMany({ where: { revisionId: { in: revisionIds } } });
     const summaryRows = await this.db.summaryRow.findMany({ where: { revisionId: { in: revisionIds } }, orderBy: { order: "asc" } });
     const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } } });
@@ -1110,9 +2640,11 @@ export class PrismaApiStore {
       sourceDocuments: sourceDocuments.map(mapSourceDocument),
       quotes: quotes.map(mapQuote),
       revisions: revisions.map(mapRevision),
+      worksheetFolders: worksheetFolders.map(mapWorksheetFolder),
       worksheets: worksheets.map(mapWorksheet),
       worksheetItems: worksheetItems.map(mapWorksheetItem),
       phases: phases.map(mapPhase),
+      estimateFactors: estimateFactors.map(mapEstimateFactor),
       adjustments: mappedAdjustments,
       modifiers: mappedModifiers,
       additionalLineItems: mappedAdditionalLineItems,
@@ -1164,15 +2696,19 @@ export class PrismaApiStore {
       return null;
     }
 
-    const [worksheets, phases, adjustments, revisionSchedules, entityCategories] = await Promise.all([
+    const [worksheets, phases, estimateFactors, adjustments, revisionSchedules, entityCategories] = await Promise.all([
       this.db.worksheet.findMany({
         where: { revisionId: revision.id },
-        include: { items: true },
+        include: { items: { include: { entityCategory: true } } },
         orderBy: { order: "asc" },
       }),
       this.db.phase.findMany({
         where: { revisionId: revision.id },
         orderBy: { order: "asc" },
+      }),
+      this.db.estimateFactor.findMany({
+        where: { revisionId: revision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
       }),
       this.db.adjustment.findMany({
         where: { revisionId: revision.id },
@@ -1210,6 +2746,8 @@ export class PrismaApiStore {
         adjustments.map(mapAdjustment),
         revisionSchedules.map(mapRateScheduleWithChildren),
         entityCategories.map(mapEntityCategory),
+        undefined,
+        estimateFactors.map(mapEstimateFactor),
       ),
     };
   }
@@ -1250,11 +2788,14 @@ export class PrismaApiStore {
       return null;
     }
 
-    const [aggregateRows, phaseRows, adjustmentRows, revisionSchedules, entityCategoryRows] = await Promise.all([
+    const [aggregateRows, phaseRows, activeFactorCount, adjustmentRows, revisionSchedules, entityCategoryRows] = await Promise.all([
       this.getRevisionItemAggregateRows(revision.id),
       this.db.phase.findMany({
         where: { revisionId: revision.id },
         orderBy: { order: "asc" },
+      }),
+      this.db.estimateFactor.count({
+        where: { revisionId: revision.id, active: true },
       }),
       this.db.adjustment.findMany({
         where: { revisionId: revision.id },
@@ -1268,6 +2809,12 @@ export class PrismaApiStore {
           }).then((rows) => rows.map(mapRateScheduleWithChildren)),
       this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } }),
     ]);
+
+    if (activeFactorCount > 0) {
+      const totals = await this.syncProjectEstimate(projectId, options.timestamp);
+      const currentRevision = await this.getCurrentRevisionSnapshot(projectId);
+      return currentRevision && totals ? { currentRevision, estimateTotals: totals } : null;
+    }
 
     const groupedAggregates = new Map<string, {
       phaseId: string | null;
@@ -1381,6 +2928,7 @@ export class PrismaApiStore {
         totalHours: totals.totalHours,
         breakoutPackage: totals.breakout as any,
         calculatedCategoryTotals: totals.categoryTotals as any,
+        pricingLadder: totals.pricingLadder as any,
       },
     });
 
@@ -1420,6 +2968,7 @@ export class PrismaApiStore {
           totalHours: totals.totalHours,
           breakoutPackage: totals.breakout as any,
           calculatedCategoryTotals: totals.categoryTotals as any,
+          pricingLadder: totals.pricingLadder as any,
         },
       });
 
@@ -2725,7 +4274,7 @@ export class PrismaApiStore {
         type: "Firm",
         status: "Open",
         defaultMarkup,
-        necaDifficulty: "Normal",
+        laborDifficulty: "Normal",
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -3124,6 +4673,23 @@ export class PrismaApiStore {
     const supervisionCoverageIssues = this.validateSupervisionCoverage(workspace, supervisionCoverageMode);
     validationIssues.push(...supervisionCoverageIssues);
 
+    const readinessValidation = validateEstimateWorkspace(workspace as any, {
+      ruleSetIds: ["readiness"],
+      referenceDate: new Date(),
+    });
+    const readinessBlockingIssues = readinessValidation.issues.filter((issue) =>
+      issue.severity === "error" || issue.severity === "critical",
+    );
+    validationIssues.push(...readinessBlockingIssues.map((issue) => ({
+      code: issue.ruleId,
+      message: issue.message,
+      severity: issue.severity,
+      category: issue.category,
+      element: issue.element,
+      suggestions: issue.suggestions,
+      details: issue.details,
+    })));
+
     const aiRunStatus = aiRunContext.aiRunStatus;
 
     if (estimateDefaults.benchmarkingEnabled) {
@@ -3213,6 +4779,11 @@ export class PrismaApiStore {
         statusCode: 400,
         details: {
           validationIssues,
+          readinessValidation: {
+            score: readinessValidation.score,
+            summary: readinessValidation.summary,
+            blockingIssueCount: readinessBlockingIssues.length,
+          },
           computedSummary,
         },
       });
@@ -3270,6 +4841,24 @@ export class PrismaApiStore {
             code: "ai_run_rebound",
             fromAiRunId: aiRunContext.boundAiRunId,
             toAiRunId: aiRunContext.effectiveAiRunId,
+          }]
+          : []),
+        ...(readinessValidation.issues.length > 0
+          ? [{
+            code: "estimate_readiness_validation",
+            score: readinessValidation.score.value,
+            grade: readinessValidation.score.grade,
+            issueCount: readinessValidation.issues.length,
+            blockingIssueCount: readinessBlockingIssues.length,
+            bySeverity: readinessValidation.summary.bySeverity,
+            failedRuleIds: readinessValidation.summary.failedRuleIds,
+            sampleIssues: readinessValidation.issues.slice(0, 20).map((issue) => ({
+              ruleId: issue.ruleId,
+              severity: issue.severity,
+              category: issue.category,
+              message: issue.message,
+              element: issue.element,
+            })),
           }]
           : []),
       ],
@@ -3848,6 +5437,72 @@ export class PrismaApiStore {
     return doc ? mapSourceDocument(doc) : null;
   }
 
+  async createSourceDocument(projectId: string, input: {
+    fileName: string;
+    fileType?: string;
+    documentType?: string;
+    pageCount?: number;
+    checksum?: string;
+    storagePath?: string;
+    extractedText?: string;
+    structuredData?: Record<string, unknown> | null;
+  }) {
+    await this.requireProject(projectId);
+    const document = await this.db.sourceDocument.create({
+      data: {
+        id: createId("doc"),
+        projectId,
+        fileName: input.fileName,
+        fileType: input.fileType ?? "",
+        documentType: input.documentType ?? "reference",
+        pageCount: input.pageCount ?? 0,
+        checksum: input.checksum ?? "",
+        storagePath: input.storagePath ?? "",
+        extractedText: input.extractedText ?? "",
+        structuredData: input.structuredData as Prisma.InputJsonValue | undefined,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return mapSourceDocument(document);
+  }
+
+  async updateDocument(projectId: string, documentId: string, patch: SourceDocumentPatchInput) {
+    await this.requireProject(projectId);
+    const document = await this.db.sourceDocument.findFirst({ where: { id: documentId, projectId } });
+    if (!document) throw new Error(`Document ${documentId} not found`);
+
+    const data: Prisma.SourceDocumentUpdateInput = {};
+    if (patch.fileName !== undefined) {
+      data.fileName = patch.fileName;
+      const ext = path.extname(patch.fileName).replace(/^\./, "").toLowerCase();
+      if (ext) data.fileType = ext;
+    }
+    if (patch.documentType !== undefined) data.documentType = patch.documentType;
+
+    const updated = await this.db.sourceDocument.update({ where: { id: documentId }, data });
+    return mapSourceDocument(updated);
+  }
+
+  async deleteDocument(projectId: string, documentId: string) {
+    await this.requireProject(projectId);
+    const document = await this.db.sourceDocument.findFirst({ where: { id: documentId, projectId } });
+    if (!document) throw new Error(`Document ${documentId} not found`);
+
+    await this.db.sourceDocument.delete({ where: { id: documentId } });
+
+    if (document.storagePath) {
+      const sharedRefs = await this.db.sourceDocument.count({
+        where: { storagePath: document.storagePath },
+      });
+      if (sharedRefs === 0) {
+        await rm(resolveApiPath(document.storagePath), { force: true }).catch(() => undefined);
+      }
+    }
+
+    return { deleted: true };
+  }
+
   // ── AI Runs ────────────────────────────────────────────────────────────
 
   async listAiRuns(projectId?: string) {
@@ -3863,6 +5518,10 @@ export class PrismaApiStore {
   }
 
   async createAiRun(input: { id: string; projectId: string; revisionId?: string; kind: string; status: string; model: string; input: any; output: any }) {
+    await this.requireProject(input.projectId);
+    if (input.revisionId) {
+      await this.requireRevisionForProject(input.projectId, input.revisionId);
+    }
     return this.db.aiRun.create({
       data: {
         id: input.id,
@@ -3878,6 +5537,11 @@ export class PrismaApiStore {
   }
 
   async updateAiRun(id: string, patch: { status?: string; output?: any }) {
+    const run = await this.db.aiRun.findFirst({
+      where: { id, project: { organizationId: this.organizationId } },
+      select: { id: true },
+    });
+    if (!run) throw new Error(`AI run ${id} not found`);
     return this.db.aiRun.update({
       where: { id },
       data: {
@@ -3888,11 +5552,14 @@ export class PrismaApiStore {
   }
 
   async getAiRun(id: string) {
-    const run = await this.db.aiRun.findFirst({ where: { id } });
+    const run = await this.db.aiRun.findFirst({
+      where: { id, project: { organizationId: this.organizationId } },
+    });
     return run ? mapAiRun(run) : null;
   }
 
   async getLatestAiRun(projectId: string, kind?: string) {
+    await this.requireProject(projectId);
     const where: any = { projectId };
     if (kind) where.kind = kind;
     const run = await this.db.aiRun.findFirst({ where, orderBy: { createdAt: "desc" } });
@@ -3938,6 +5605,9 @@ export class PrismaApiStore {
     analyticsBucket?: string | null;
     color?: string;
   }): Promise<EntityCategory> {
+    if (input.catalogId) {
+      await this.requireCatalog(input.catalogId);
+    }
     const maxOrder = await this.db.entityCategory.aggregate({
       where: { organizationId: this.organizationId },
       _max: { order: true },
@@ -3984,25 +5654,43 @@ export class PrismaApiStore {
     if (patch.calculationType !== undefined) data.calculationType = normalizeCalculationType(patch.calculationType);
     if (patch.calcFormula !== undefined) data.calcFormula = patch.calcFormula;
     if (patch.itemSource !== undefined) data.itemSource = patch.itemSource;
-    if (patch.catalogId !== undefined) data.catalogId = patch.catalogId;
+    if (patch.catalogId !== undefined) {
+      if (typeof patch.catalogId === "string" && patch.catalogId) {
+        await this.requireCatalog(patch.catalogId);
+      }
+      data.catalogId = patch.catalogId;
+    }
     if (patch.analyticsBucket !== undefined) data.analyticsBucket = patch.analyticsBucket;
     if (patch.color !== undefined) data.color = patch.color;
     if (patch.order !== undefined) data.order = patch.order;
     if (patch.enabled !== undefined) data.enabled = patch.enabled;
 
     const updated = await this.db.entityCategory.update({ where: { id }, data });
+    if (patch.name !== undefined || patch.entityType !== undefined) {
+      await this.db.worksheetItem.updateMany({
+        where: { categoryId: id },
+        data: {
+          category: updated.name,
+          entityType: updated.entityType,
+        },
+      });
+    }
     return mapEntityCategory(updated);
   }
 
-  async deleteEntityCategory(id: string): Promise<{ deleted: boolean }> {
-    const existing = await this.db.entityCategory.findFirst({
-      where: { id, organizationId: this.organizationId },
-    });
-    if (!existing) throw new Error(`Entity category ${id} not found`);
+	  async deleteEntityCategory(id: string): Promise<{ deleted: boolean }> {
+	    const existing = await this.db.entityCategory.findFirst({
+	      where: { id, organizationId: this.organizationId },
+	    });
+	    if (!existing) throw new Error(`Entity category ${id} not found`);
+    const usageCount = await this.db.worksheetItem.count({ where: { categoryId: id } });
+    if (usageCount > 0) {
+      throw new Error(`Entity category "${existing.name}" is used by ${usageCount} worksheet item(s) and cannot be deleted. Disable or rename it instead.`);
+    }
 
-    await this.db.entityCategory.delete({ where: { id } });
-    return { deleted: true };
-  }
+	    await this.db.entityCategory.delete({ where: { id } });
+	    return { deleted: true };
+	  }
 
   async reorderEntityCategories(orderedIds: string[]): Promise<void> {
     for (let i = 0; i < orderedIds.length; i++) {
@@ -4117,6 +5805,11 @@ export class PrismaApiStore {
   // ── Customer Contacts ─────────────────────────────────────────────────
 
   async listCustomerContacts(customerId: string): Promise<CustomerContact[]> {
+    const customer = await this.db.customer.findFirst({
+      where: { id: customerId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!customer) throw new Error(`Customer ${customerId} not found`);
     const contacts = await this.db.customerContact.findMany({
       where: { customerId },
       orderBy: { name: "asc" },
@@ -4261,6 +5954,7 @@ export class PrismaApiStore {
   // ── Workspace State ────────────────────────────────────────────────────
 
   async getWorkspaceState(projectId: string) {
+    await this.requireProject(projectId);
     const ws = await this.db.workspaceState.findFirst({ where: { projectId } });
     return ws ? mapWorkspaceState(ws) : null;
   }
@@ -4324,6 +6018,7 @@ export class PrismaApiStore {
     const data: any = { ...patch };
     if (patch.breakoutPackage !== undefined) data.breakoutPackage = patch.breakoutPackage as any;
     if (patch.calculatedCategoryTotals !== undefined) data.calculatedCategoryTotals = patch.calculatedCategoryTotals as any;
+    if (patch.pricingLadder !== undefined) data.pricingLadder = patch.pricingLadder as any;
     if (patch.pdfPreferences !== undefined) data.pdfPreferences = patch.pdfPreferences as any;
 
     const changedKeys = Object.keys(patch);
@@ -4367,20 +6062,39 @@ export class PrismaApiStore {
       description: decodeHtmlEntities(input.description),
       sourceNotes: decodeHtmlEntities(input.sourceNotes ?? ""),
     };
+    await this.validateWorksheetItemProvenanceRefs(normalizedInput);
+
+    const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
+    const catDef = resolveEntityCategoryForItemInput(entityCats, normalizedInput);
+    if (!catDef) {
+      throw new Error(
+        `Category "${normalizedInput.category}" is not configured. Choose a valid EntityCategory id or name before creating a worksheet item.`,
+      );
+    }
 
     const maxOrder = await this.db.worksheetItem.aggregate({
       where: { worksheetId },
       _max: { lineOrder: true },
     });
     const lineOrder = normalizedInput.lineOrder ?? ((maxOrder._max.lineOrder ?? 0) + 1);
+    let linkedCatalogClassification: Record<string, unknown> = {};
+    if (normalizedInput.itemId) {
+      const linkedCatalogItem = await this.requireCatalogItem(normalizedInput.itemId);
+      linkedCatalogClassification = catalogClassificationFromMetadata(linkedCatalogItem.metadata);
+    }
+    const classification = mergeWorksheetClassifications(linkedCatalogClassification, normalizedInput.classification);
+    const costCode = stringValue(normalizedInput.costCode) ?? costCodeFromClassification(classification);
 
     const item: WorksheetItem = {
       id: createId("li"),
-      worksheetId,
-      phaseId: normalizedInput.phaseId ?? null,
-      category: normalizedInput.category,
-      entityType: normalizedInput.entityType,
+	      worksheetId,
+	      phaseId: normalizedInput.phaseId ?? null,
+	      categoryId: catDef.id,
+	      category: catDef.name,
+	      entityType: catDef.entityType,
       entityName: normalizedInput.entityName,
+      classification,
+      costCode,
       vendor: normalizedInput.vendor ?? undefined,
       description: normalizedInput.description,
       quantity: normalizedInput.quantity,
@@ -4396,6 +6110,11 @@ export class PrismaApiStore {
       itemId: normalizedInput.itemId ?? null,
       tierUnits: normalizedInput.tierUnits ?? {},
       sourceNotes: normalizedInput.sourceNotes ?? "",
+      costResourceId: normalizedInput.costResourceId ?? null,
+      effectiveCostId: normalizedInput.effectiveCostId ?? null,
+      laborUnitId: normalizedInput.laborUnitId ?? null,
+      resourceComposition: normalizedInput.resourceComposition ?? {},
+      sourceEvidence: normalizedInput.sourceEvidence ?? {},
     };
 
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
@@ -4409,8 +6128,6 @@ export class PrismaApiStore {
     }));
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
-    const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
-    const catDef = entityCats.find((c) => c.name === item.category);
     const itemSource = catDef?.itemSource ?? "freeform";
 
     if (item.rateScheduleItemId) {
@@ -4433,13 +6150,6 @@ export class PrismaApiStore {
       );
     }
 
-    if (item.itemId) {
-      const catalogItem = await this.db.catalogItem.findFirst({ where: { id: item.itemId } });
-      if (!catalogItem) {
-        throw new Error(`Invalid itemId "${item.itemId}" — no matching catalog item found.`);
-      }
-    }
-
     // ── Resolve tierUnit keys to full tier IDs ────────────
     // Handles: exact IDs, tier names (e.g. "Regular"), and truncated ID prefixes
     if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
@@ -4452,14 +6162,18 @@ export class PrismaApiStore {
     const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx, { labourCost: labourCostCtx });
     Object.assign(item, calculated);
 
-    const created = await this.db.worksheetItem.create({
-      data: {
-        id: item.id,
-        worksheetId: item.worksheetId,
-        phaseId: item.phaseId,
-        category: item.category,
+	    const created = await this.db.worksheetItem.create({
+      include: { entityCategory: true },
+	      data: {
+	        id: item.id,
+	        worksheetId: item.worksheetId,
+	        phaseId: item.phaseId,
+	        categoryId: item.categoryId!,
+	        category: item.category,
         entityType: item.entityType,
         entityName: item.entityName,
+        classification: (item.classification ?? {}) as Prisma.InputJsonValue,
+        costCode: item.costCode ?? null,
         vendor: item.vendor,
         description: item.description,
         quantity: item.quantity,
@@ -4475,6 +6189,11 @@ export class PrismaApiStore {
         itemId: item.itemId ?? null,
         tierUnits: item.tierUnits ?? {},
         sourceNotes: item.sourceNotes ?? "",
+        costResourceId: item.costResourceId ?? null,
+        effectiveCostId: item.effectiveCostId ?? null,
+        laborUnitId: item.laborUnitId ?? null,
+        resourceComposition: toPrismaJson(item.resourceComposition ?? {}),
+        sourceEvidence: toPrismaJson(item.sourceEvidence ?? {}),
       },
     });
 
@@ -4500,17 +6219,21 @@ export class PrismaApiStore {
     if (!revision) {
       throw new Error(`Project ${projectId} not found`);
     }
+    if (input.folderId) {
+      await this.requireWorksheetFolderForRevision(input.folderId, revision.id, projectId);
+    }
 
     const maxOrder = await this.db.worksheet.aggregate({
       where: { revisionId: revision.id },
       _max: { order: true },
     });
-    const order = (maxOrder._max.order ?? 0) + 1;
+    const order = typeof input.order === "number" ? input.order : (maxOrder._max.order ?? 0) + 1;
 
     const worksheet = await this.db.worksheet.create({
       data: {
         id: createId("worksheet"),
         revisionId: revision.id,
+        folderId: input.folderId ?? null,
         name: input.name.trim() || `Worksheet ${order}`,
         order,
       },
@@ -4521,6 +6244,7 @@ export class PrismaApiStore {
       name: worksheet.name,
       before: null,
       after: mapWorksheet(worksheet),
+      folderId: worksheet.folderId ?? null,
     });
     await this.syncProjectEstimate(projectId);
     return mapWorksheet(worksheet);
@@ -4538,6 +6262,12 @@ export class PrismaApiStore {
     const data: any = {};
     if (typeof patch.name === "string") data.name = patch.name.trim() || worksheet.name;
     if (typeof patch.order === "number") data.order = patch.order;
+    if (patch.folderId !== undefined) {
+      if (patch.folderId) {
+        await this.requireWorksheetFolderForRevision(patch.folderId, revision.id, projectId);
+      }
+      data.folderId = patch.folderId ?? null;
+    }
 
     const worksheetBefore = mapWorksheet(worksheet);
     const updated = await this.db.worksheet.update({ where: { id: worksheetId }, data });
@@ -4550,6 +6280,127 @@ export class PrismaApiStore {
     });
     await this.syncProjectEstimate(projectId);
     return mapWorksheet(updated);
+  }
+
+  private async requireWorksheetFolderForRevision(folderId: string, revisionId: string, projectId: string) {
+    const folder = await this.db.worksheetFolder.findFirst({ where: { id: folderId, revisionId } });
+    if (!folder) {
+      throw new Error(`Worksheet folder ${folderId} not found for project ${projectId}`);
+    }
+    return folder;
+  }
+
+  private async assertWorksheetFolderParent(
+    projectId: string,
+    revisionId: string,
+    parentId: string | null | undefined,
+    movingFolderId?: string,
+  ) {
+    if (!parentId) return null;
+    const parent = await this.requireWorksheetFolderForRevision(parentId, revisionId, projectId);
+    if (movingFolderId && parentId === movingFolderId) {
+      throw new Error("A folder cannot be moved inside itself");
+    }
+    if (movingFolderId) {
+      let cursor: typeof parent | null = parent;
+      while (cursor?.parentId) {
+        if (cursor.parentId === movingFolderId) {
+          throw new Error("A folder cannot be moved inside one of its descendants");
+        }
+        cursor = await this.db.worksheetFolder.findFirst({
+          where: { id: cursor.parentId, revisionId },
+        });
+      }
+    }
+    return parent;
+  }
+
+  async createWorksheetFolder(projectId: string, input: CreateWorksheetFolderInput) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    await this.assertWorksheetFolderParent(projectId, revision.id, input.parentId);
+
+    const maxOrder = await this.db.worksheetFolder.aggregate({
+      where: { revisionId: revision.id, parentId: input.parentId ?? null },
+      _max: { order: true },
+    });
+    const order = typeof input.order === "number" ? input.order : (maxOrder._max.order ?? 0) + 1;
+
+    const folder = await this.db.worksheetFolder.create({
+      data: {
+        id: createId("worksheet-folder"),
+        revisionId: revision.id,
+        parentId: input.parentId ?? null,
+        name: input.name.trim() || `Folder ${order}`,
+        order,
+      },
+    });
+
+    await this.pushActivity(projectId, revision.id, "worksheet_folder_created", {
+      folderId: folder.id,
+      name: folder.name,
+      parentId: folder.parentId ?? null,
+      before: null,
+      after: mapWorksheetFolder(folder),
+    });
+    await this.syncProjectEstimate(projectId);
+    return mapWorksheetFolder(folder);
+  }
+
+  async updateWorksheetFolder(projectId: string, folderId: string, patch: WorksheetFolderPatchInput) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const folder = await this.requireWorksheetFolderForRevision(folderId, revision.id, projectId);
+
+    const data: any = {};
+    if (typeof patch.name === "string") data.name = patch.name.trim() || folder.name;
+    if (typeof patch.order === "number") data.order = patch.order;
+    if (patch.parentId !== undefined) {
+      await this.assertWorksheetFolderParent(projectId, revision.id, patch.parentId, folderId);
+      data.parentId = patch.parentId ?? null;
+    }
+
+    const before = mapWorksheetFolder(folder);
+    const updated = await this.db.worksheetFolder.update({ where: { id: folderId }, data });
+    await this.pushActivity(projectId, revision.id, "worksheet_folder_updated", {
+      folderId,
+      name: updated.name,
+      patch: Object.keys(data),
+      before,
+      after: mapWorksheetFolder(updated),
+    });
+    await this.syncProjectEstimate(projectId);
+    return mapWorksheetFolder(updated);
+  }
+
+  async deleteWorksheetFolder(projectId: string, folderId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const folder = await this.requireWorksheetFolderForRevision(folderId, revision.id, projectId);
+    const before = mapWorksheetFolder(folder);
+
+    await this.db.$transaction([
+      this.db.worksheetFolder.updateMany({
+        where: { revisionId: revision.id, parentId: folderId },
+        data: { parentId: folder.parentId ?? null },
+      }),
+      this.db.worksheet.updateMany({
+        where: { revisionId: revision.id, folderId },
+        data: { folderId: folder.parentId ?? null },
+      }),
+      this.db.worksheetFolder.delete({ where: { id: folderId } }),
+    ]);
+
+    await this.pushActivity(projectId, revision.id, "worksheet_folder_deleted", {
+      folderId,
+      name: folder.name,
+      parentId: folder.parentId ?? null,
+      before,
+      after: null,
+      promotedChildrenToParentId: folder.parentId ?? null,
+    });
+    await this.syncProjectEstimate(projectId);
+    return before;
   }
 
   async deleteWorksheet(projectId: string, worksheetId: string) {
@@ -4592,7 +6443,10 @@ export class PrismaApiStore {
   ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
-    const item = await this.db.worksheetItem.findFirst({ where: { id: itemId } });
+    const item = await this.db.worksheetItem.findFirst({
+      where: { id: itemId },
+      include: { entityCategory: true },
+    });
     if (!item) throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
     const worksheet = await this.db.worksheet.findFirst({ where: { id: item.worksheetId } });
 
@@ -4610,9 +6464,29 @@ export class PrismaApiStore {
 
     // Apply patch to a domain item for recalculation
     const domainItem = mapWorksheetItem(item);
+    const previousClassification = normalizeWorksheetClassification(domainItem.classification);
     Object.assign(domainItem, normalizedPatch);
-    if (normalizedPatch.vendor === null) {
-      domainItem.vendor = undefined;
+	    if (normalizedPatch.vendor === null) {
+	      domainItem.vendor = undefined;
+	    }
+    if (normalizedPatch.categoryId === null) {
+      throw new Error("Worksheet item categoryId is required and cannot be cleared.");
+    }
+	    await this.validateWorksheetItemProvenanceRefs(domainItem);
+    let linkedCatalogClassification: Record<string, unknown> = {};
+    if (normalizedPatch.itemId !== undefined && domainItem.itemId) {
+      const linkedCatalogItem = await this.requireCatalogItem(domainItem.itemId);
+      linkedCatalogClassification = catalogClassificationFromMetadata(linkedCatalogItem.metadata);
+    }
+    domainItem.classification = mergeWorksheetClassifications(
+      previousClassification,
+      linkedCatalogClassification,
+      normalizedPatch.classification,
+    );
+    if (normalizedPatch.costCode !== undefined) {
+      domainItem.costCode = stringValue(normalizedPatch.costCode);
+    } else {
+      domainItem.costCode = domainItem.costCode ?? costCodeFromClassification(domainItem.classification);
     }
 
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
@@ -4627,7 +6501,15 @@ export class PrismaApiStore {
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
     const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
-    const updateCatDef = updateEntityCats.find((c) => c.name === domainItem.category);
+    const updateCatDef = resolveEntityCategoryForItemInput(updateEntityCats, domainItem);
+    if (!updateCatDef) {
+      throw new Error(
+        `Category "${domainItem.category}" is not configured. Choose a valid EntityCategory id or name before updating this worksheet item.`,
+      );
+    }
+    domainItem.categoryId = updateCatDef.id;
+    domainItem.category = updateCatDef.name;
+    domainItem.entityType = updateCatDef.entityType;
     const updateItemSource = updateCatDef?.itemSource ?? "freeform";
 
     if (domainItem.rateScheduleItemId) {
@@ -4648,13 +6530,6 @@ export class PrismaApiStore {
         `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
         `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
       );
-    }
-
-    if (domainItem.itemId && normalizedPatch.itemId !== undefined) {
-      const catalogItem = await this.db.catalogItem.findFirst({ where: { id: domainItem.itemId } });
-      if (!catalogItem) {
-        throw new Error(`Invalid itemId "${domainItem.itemId}" — no matching catalog item found.`);
-      }
     }
 
     // ── Resolve tierUnit keys to full tier IDs ────────────
@@ -4718,13 +6593,17 @@ export class PrismaApiStore {
     const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx, { labourCost: updateLabourCostCtx });
     Object.assign(domainItem, calculated);
 
-    const updated = await this.db.worksheetItem.update({
-      where: { id: itemId },
-      data: {
-        phaseId: domainItem.phaseId,
-        category: domainItem.category,
+	    const updated = await this.db.worksheetItem.update({
+	      where: { id: itemId },
+      include: { entityCategory: true },
+	      data: {
+	        phaseId: domainItem.phaseId,
+	        categoryId: domainItem.categoryId!,
+	        category: domainItem.category,
         entityType: domainItem.entityType,
         entityName: domainItem.entityName,
+        classification: (domainItem.classification ?? {}) as Prisma.InputJsonValue,
+        costCode: domainItem.costCode ?? null,
         vendor: domainItem.vendor ?? null,
         description: domainItem.description,
         quantity: domainItem.quantity,
@@ -4740,6 +6619,11 @@ export class PrismaApiStore {
         itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},
         sourceNotes: domainItem.sourceNotes ?? "",
+        costResourceId: domainItem.costResourceId ?? null,
+        effectiveCostId: domainItem.effectiveCostId ?? null,
+        laborUnitId: domainItem.laborUnitId ?? null,
+        resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
+        sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
       },
     });
 
@@ -4814,15 +6698,27 @@ export class PrismaApiStore {
 
     const created: WorksheetItem[] = [];
 
-    for (let idx = 0; idx < items.length; idx++) {
-      const raw = items[idx];
-      const item: WorksheetItem = {
-        id: createId("li"),
-        worksheetId,
-        phaseId: raw.phaseId ? String(raw.phaseId) : null,
-        category: String(raw.category ?? "Material"),
-        entityType: String(raw.entityType ?? "Material"),
+	  for (let idx = 0; idx < items.length; idx++) {
+	    const raw = items[idx];
+	    const classification = normalizeWorksheetClassification(raw.classification);
+      const importCatDef = resolveEntityCategoryForItemInput(importEntityCats, {
+        categoryId: typeof raw.categoryId === "string" ? raw.categoryId : null,
+        category: typeof raw.category === "string" ? raw.category : "Material",
+        entityType: typeof raw.entityType === "string" ? raw.entityType : "Material",
+      });
+      if (!importCatDef) {
+        throw new Error(`Imported row ${idx + 1} has an unknown category "${String(raw.category ?? "")}".`);
+      }
+	    const item: WorksheetItem = {
+	      id: createId("li"),
+	      worksheetId,
+	      phaseId: raw.phaseId ? String(raw.phaseId) : null,
+	      categoryId: importCatDef.id,
+	      category: importCatDef.name,
+	      entityType: importCatDef.entityType,
         entityName: String(raw.entityName ?? raw.name ?? "Imported Item"),
+        classification,
+        costCode: stringValue(raw.costCode) ?? stringValue(raw.cost_code) ?? costCodeFromClassification(classification),
         vendor: raw.vendor ? String(raw.vendor) : undefined,
         description: String(raw.description ?? ""),
         quantity: Number(raw.quantity) || 1,
@@ -4834,21 +6730,33 @@ export class PrismaApiStore {
         unit2: Number(raw.unit2 ?? raw.LabourHourOver) || 0,
         unit3: Number(raw.unit3 ?? raw.LabourHourDouble) || 0,
         lineOrder: baseOrder + idx + 1,
-      };
+        costResourceId: typeof raw.costResourceId === "string" ? raw.costResourceId : null,
+        effectiveCostId: typeof raw.effectiveCostId === "string" ? raw.effectiveCostId : null,
+        laborUnitId: typeof raw.laborUnitId === "string" ? raw.laborUnitId : null,
+        resourceComposition: raw.resourceComposition && typeof raw.resourceComposition === "object" && !Array.isArray(raw.resourceComposition)
+          ? raw.resourceComposition as Record<string, unknown>
+          : {},
+        sourceEvidence: raw.sourceEvidence && typeof raw.sourceEvidence === "object" && !Array.isArray(raw.sourceEvidence)
+          ? raw.sourceEvidence as Record<string, unknown>
+          : {},
+	    };
+	    await this.validateWorksheetItemProvenanceRefs(item);
 
-      const importCatDef = importEntityCats.find((c) => c.name === item.category);
-      const importCalcType = (importCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+	    const importCalcType = (importCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
       const calculated = calculateLineItem(item, mappedRev, importCalcType, rateScheduleCtx, { labourCost: importLabourCostCtx });
       Object.assign(item, calculated);
 
       await this.db.worksheetItem.create({
         data: {
           id: item.id,
-          worksheetId: item.worksheetId,
-          phaseId: item.phaseId,
-          category: item.category,
+	          worksheetId: item.worksheetId,
+	          phaseId: item.phaseId,
+	          categoryId: item.categoryId!,
+	          category: item.category,
           entityType: item.entityType,
           entityName: item.entityName,
+          classification: (item.classification ?? {}) as Prisma.InputJsonValue,
+          costCode: item.costCode ?? null,
           vendor: item.vendor,
           description: item.description,
           quantity: item.quantity,
@@ -4862,6 +6770,11 @@ export class PrismaApiStore {
           lineOrder: item.lineOrder,
           tierUnits: item.tierUnits ?? {},
           sourceNotes: item.sourceNotes ?? "",
+          costResourceId: item.costResourceId ?? null,
+          effectiveCostId: item.effectiveCostId ?? null,
+          laborUnitId: item.laborUnitId ?? null,
+          resourceComposition: toPrismaJson(item.resourceComposition ?? {}),
+          sourceEvidence: toPrismaJson(item.sourceEvidence ?? {}),
         },
       });
 
@@ -5010,6 +6923,7 @@ export class PrismaApiStore {
           status: "draft",
           currentRevisionId: revisionId,
           customerExistingNew: customerSelection.customerExistingNew,
+          userId: this._userId,
           createdAt: now,
           updatedAt: now,
         },
@@ -5027,7 +6941,7 @@ export class PrismaApiStore {
           type: "Firm",
           status: "Open",
           defaultMarkup,
-          necaDifficulty: "Normal",
+          laborDifficulty: "Normal",
           createdAt: now,
           updatedAt: now,
         },
@@ -5494,25 +7408,63 @@ export class PrismaApiStore {
 
   // ── Phase CRUD ─────────────────────────────────────────────────────────
 
+  private async requirePhaseForRevision(phaseId: string, revisionId: string, projectId: string) {
+    const phase = await this.db.phase.findFirst({ where: { id: phaseId, revisionId } });
+    if (!phase) {
+      throw new Error(`Phase ${phaseId} not found for project ${projectId}`);
+    }
+    return phase;
+  }
+
+  private async assertPhaseParent(
+    projectId: string,
+    revisionId: string,
+    parentId: string | null | undefined,
+    movingPhaseId?: string,
+  ) {
+    if (!parentId) return null;
+    const parent = await this.requirePhaseForRevision(parentId, revisionId, projectId);
+    if (movingPhaseId && parentId === movingPhaseId) {
+      throw new Error("A phase cannot be moved inside itself");
+    }
+    if (movingPhaseId) {
+      let cursor: typeof parent | null = parent;
+      while (cursor?.parentId) {
+        if (cursor.parentId === movingPhaseId) {
+          throw new Error("A phase cannot be moved inside one of its descendants");
+        }
+        cursor = await this.db.phase.findFirst({
+          where: { id: cursor.parentId, revisionId },
+        });
+      }
+    }
+    return parent;
+  }
+
   async createPhase(projectId: string, revisionId: string, input: CreatePhaseInput) {
     await this.requireProject(projectId);
     const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
     if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+    await this.assertPhaseParent(projectId, revisionId, input.parentId);
 
     const maxOrder = await this.db.phase.aggregate({
-      where: { revisionId },
+      where: { revisionId, parentId: input.parentId ?? null },
       _max: { order: true },
     });
-    const order = (maxOrder._max.order ?? 0) + 1;
+    const order = typeof input.order === "number" ? input.order : (maxOrder._max.order ?? 0) + 1;
 
     const phase = await this.db.phase.create({
       data: {
         id: createId("phase"),
         revisionId,
+        parentId: input.parentId ?? null,
         number: input.number ?? String(order),
         name: input.name ?? `Phase ${order}`,
         description: input.description ?? "",
         order,
+        startDate: input.startDate ?? null,
+        endDate: input.endDate ?? null,
+        color: input.color ?? "",
       },
     });
 
@@ -5527,6 +7479,10 @@ export class PrismaApiStore {
     if (!phase) throw new Error(`Phase ${phaseId} not found for project ${projectId}`);
 
     const data: any = {};
+    if (patch.parentId !== undefined) {
+      await this.assertPhaseParent(projectId, phase.revisionId, patch.parentId, phaseId);
+      data.parentId = patch.parentId ?? null;
+    }
     if (typeof patch.number === "string") data.number = patch.number;
     if (typeof patch.name === "string") data.name = patch.name;
     if (typeof patch.description === "string") data.description = patch.description;
@@ -5549,14 +7505,24 @@ export class PrismaApiStore {
     const phase = await this.db.phase.findFirst({ where: { id: phaseId } });
     if (!phase) throw new Error(`Phase ${phaseId} not found for project ${projectId}`);
 
-    // Unset phase on items
-    await this.db.worksheetItem.updateMany({
-      where: { phaseId },
-      data: { phaseId: null },
+    await this.db.$transaction([
+      this.db.phase.updateMany({
+        where: { revisionId: phase.revisionId, parentId: phaseId },
+        data: { parentId: phase.parentId ?? null },
+      }),
+      this.db.worksheetItem.updateMany({
+        where: { phaseId },
+        data: { phaseId: null },
+      }),
+      this.db.phase.delete({ where: { id: phaseId } }),
+    ]);
+    await this.pushActivity(projectId, phase.revisionId, "phase_deleted", {
+      phaseId,
+      name: phase.name,
+      before: mapPhase(phase),
+      after: null,
+      promotedChildrenToParentId: phase.parentId ?? null,
     });
-
-    await this.db.phase.delete({ where: { id: phaseId } });
-    await this.pushActivity(projectId, phase.revisionId, "phase_deleted", { phaseId, name: phase.name, before: mapPhase(phase), after: null });
     await this.syncProjectEstimate(projectId);
     return mapPhase(phase);
   }
@@ -6137,6 +8103,9 @@ export class PrismaApiStore {
         name: input.name ?? "New Adjustment",
         description: input.description ?? "",
         type: input.type ?? "",
+        financialCategory: input.financialCategory ?? "other",
+        calculationBase: input.calculationBase ?? (input.pricingMode === "modifier" || input.kind === "modifier" ? "selected_scope" : "line_subtotal"),
+        active: input.active ?? true,
         appliesTo: input.appliesTo ?? "All",
         percentage: input.percentage ?? null,
         amount: input.amount ?? null,
@@ -6170,6 +8139,180 @@ export class PrismaApiStore {
     await this.db.adjustment.delete({ where: { id: adjustmentId } });
     await this.syncProjectEstimate(projectId);
     return mapAdjustment(adjustment);
+  }
+
+  async listEstimateFactors(projectId: string) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const factors = await this.db.estimateFactor.findMany({
+      where: { revisionId: revision.id },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    });
+    return factors.map(mapEstimateFactor);
+  }
+
+  async createEstimateFactor(projectId: string, revisionId: string, input: CreateEstimateFactorInput) {
+    await this.requireProject(projectId);
+    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    if (!revision) throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
+
+    const maxOrder = await this.db.estimateFactor.aggregate({
+      where: { revisionId },
+      _max: { order: true },
+    });
+
+    const factor = await this.db.estimateFactor.create({
+      data: {
+        id: createId("factor"),
+        revisionId,
+        order: input.order ?? ((maxOrder._max.order ?? -1) + 1),
+        name: input.name ?? "New Factor",
+        code: input.code ?? "",
+        description: input.description ?? "",
+        category: input.category ?? "Productivity",
+        impact: input.impact ?? "labor_hours",
+        value: input.value ?? 1,
+        active: input.active ?? true,
+        appliesTo: input.appliesTo ?? "Labour",
+        applicationScope: input.applicationScope ?? "global",
+        scope: (input.scope ?? { mode: "all" }) as any,
+        formulaType: input.formulaType ?? "fixed_multiplier",
+        parameters: (input.parameters ?? {}) as any,
+        confidence: input.confidence ?? "medium",
+        sourceType: input.sourceType ?? "custom",
+        sourceId: input.sourceId ?? null,
+        sourceRef: (input.sourceRef ?? {}) as any,
+        tags: input.tags ?? [],
+      },
+    });
+
+    await this.syncProjectEstimate(projectId);
+    return mapEstimateFactor(factor);
+  }
+
+  async updateEstimateFactor(projectId: string, factorId: string, patch: EstimateFactorPatchInput) {
+    await this.requireProject(projectId);
+    const factor = await this.db.estimateFactor.findFirst({ where: { id: factorId } });
+    if (!factor) throw new Error(`Estimate factor ${factorId} not found for project ${projectId}`);
+
+    const data: Prisma.EstimateFactorUpdateInput = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.impact !== undefined) data.impact = patch.impact;
+    if (patch.value !== undefined) data.value = patch.value;
+    if (patch.active !== undefined) data.active = patch.active;
+    if (patch.appliesTo !== undefined) data.appliesTo = patch.appliesTo;
+    if (patch.applicationScope !== undefined) data.applicationScope = patch.applicationScope;
+    if (patch.scope !== undefined) data.scope = patch.scope as any;
+    if (patch.formulaType !== undefined) data.formulaType = patch.formulaType;
+    if (patch.parameters !== undefined) data.parameters = patch.parameters as any;
+    if (patch.confidence !== undefined) data.confidence = patch.confidence;
+    if (patch.sourceType !== undefined) data.sourceType = patch.sourceType;
+    if (patch.sourceId !== undefined) data.sourceId = patch.sourceId;
+    if (patch.sourceRef !== undefined) data.sourceRef = patch.sourceRef as any;
+    if (patch.tags !== undefined) data.tags = patch.tags;
+    if (patch.order !== undefined) data.order = patch.order;
+
+    const updated = await this.db.estimateFactor.update({
+      where: { id: factorId },
+      data,
+    });
+
+    await this.syncProjectEstimate(projectId);
+    return mapEstimateFactor(updated);
+  }
+
+  async deleteEstimateFactor(projectId: string, factorId: string) {
+    await this.requireProject(projectId);
+    const factor = await this.db.estimateFactor.findFirst({ where: { id: factorId } });
+    if (!factor) throw new Error(`Estimate factor ${factorId} not found for project ${projectId}`);
+
+    await this.db.estimateFactor.delete({ where: { id: factorId } });
+    await this.syncProjectEstimate(projectId);
+    return mapEstimateFactor(factor);
+  }
+
+  async listEstimateFactorLibraryEntries() {
+    const entries = await this.db.estimateFactorLibraryEntry.findMany({
+      where: { organizationId: this.organizationId },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    });
+    return entries.map(mapEstimateFactorLibraryEntry);
+  }
+
+  async createEstimateFactorLibraryEntry(input: CreateEstimateFactorLibraryEntryInput) {
+    const maxOrder = await this.db.estimateFactorLibraryEntry.aggregate({
+      where: { organizationId: this.organizationId },
+      _max: { order: true },
+    });
+
+    const entry = await this.db.estimateFactorLibraryEntry.create({
+      data: {
+        id: createId("factorlib"),
+        organizationId: this.organizationId,
+        order: input.order ?? ((maxOrder._max.order ?? -1) + 1),
+        name: input.name ?? "New Factor",
+        code: input.code ?? "",
+        description: input.description ?? "",
+        category: input.category ?? "Productivity",
+        impact: input.impact ?? "labor_hours",
+        value: input.value ?? 1,
+        appliesTo: input.appliesTo ?? "Labour",
+        applicationScope: input.applicationScope ?? "both",
+        scope: (input.scope ?? { mode: "all" }) as any,
+        formulaType: input.formulaType ?? "fixed_multiplier",
+        parameters: (input.parameters ?? {}) as any,
+        confidence: input.confidence ?? "medium",
+        sourceType: input.sourceType ?? "custom",
+        sourceId: input.sourceId ?? null,
+        sourceRef: (input.sourceRef ?? {}) as any,
+        tags: input.tags ?? [],
+      },
+    });
+    return mapEstimateFactorLibraryEntry(entry);
+  }
+
+  async updateEstimateFactorLibraryEntry(entryId: string, patch: EstimateFactorLibraryEntryPatchInput) {
+    const existing = await this.db.estimateFactorLibraryEntry.findFirst({
+      where: { id: entryId, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Estimate factor library entry ${entryId} not found`);
+
+    const data: Prisma.EstimateFactorLibraryEntryUpdateInput = {};
+    if (patch.name !== undefined) data.name = patch.name;
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.impact !== undefined) data.impact = patch.impact;
+    if (patch.value !== undefined) data.value = patch.value;
+    if (patch.appliesTo !== undefined) data.appliesTo = patch.appliesTo;
+    if (patch.applicationScope !== undefined) data.applicationScope = patch.applicationScope;
+    if (patch.scope !== undefined) data.scope = patch.scope as any;
+    if (patch.formulaType !== undefined) data.formulaType = patch.formulaType;
+    if (patch.parameters !== undefined) data.parameters = patch.parameters as any;
+    if (patch.confidence !== undefined) data.confidence = patch.confidence;
+    if (patch.sourceType !== undefined) data.sourceType = patch.sourceType;
+    if (patch.sourceId !== undefined) data.sourceId = patch.sourceId;
+    if (patch.sourceRef !== undefined) data.sourceRef = patch.sourceRef as any;
+    if (patch.tags !== undefined) data.tags = patch.tags;
+    if (patch.order !== undefined) data.order = patch.order;
+
+    const updated = await this.db.estimateFactorLibraryEntry.update({
+      where: { id: entryId },
+      data,
+    });
+    return mapEstimateFactorLibraryEntry(updated);
+  }
+
+  async deleteEstimateFactorLibraryEntry(entryId: string) {
+    const existing = await this.db.estimateFactorLibraryEntry.findFirst({
+      where: { id: entryId, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Estimate factor library entry ${entryId} not found`);
+    await this.db.estimateFactorLibraryEntry.delete({ where: { id: entryId } });
+    return mapEstimateFactorLibraryEntry(existing);
   }
 
   async listModifiers(projectId: string) {
@@ -6417,20 +8560,29 @@ export class PrismaApiStore {
 
   private async syncSummaryBuilderFromStoredRows(projectId: string, revisionId: string) {
     const store = await this.buildStoreSnapshot(projectId);
-    const totals = summarizeProjectTotals(store, projectId);
-    if (!totals) {
-      return null;
-    }
-
     const revision = store.revisions.find((entry) => entry.id === revisionId);
     if (!revision) {
+      return null;
+    }
+    const existingBuilder = (revision.pdfPreferences as Record<string, unknown> | undefined)?.summaryBuilder as
+      | Partial<SummaryBuilderConfig>
+      | undefined;
+    const totals = summarizeProjectTotals(store, projectId, existingBuilder);
+    if (!totals) {
       return null;
     }
 
     const rows = (store.summaryRows ?? [])
       .filter((row) => row.revisionId === revisionId)
       .sort((left, right) => left.order - right.order);
-    const config = deriveSummaryBuilderFromLegacy(rows, revision.summaryLayoutPreset as SummaryPreset, totals);
+    const derived = deriveSummaryBuilderFromLegacy(rows, revision.summaryLayoutPreset as SummaryPreset, totals);
+    const config = normalizeSummaryBuilderConfig(
+      {
+        ...derived,
+        classification: existingBuilder?.classification ?? derived.classification,
+      },
+      totals,
+    );
     const currentPreferences = (revision.pdfPreferences as Record<string, unknown> | undefined) ?? {};
 
     await this.db.quoteRevision.update({
@@ -6481,6 +8633,10 @@ export class PrismaApiStore {
             sourceCategoryId: row.sourceCategoryId ?? null,
             sourceCategoryLabel: row.sourceCategoryLabel ?? null,
             sourcePhaseId: row.sourcePhaseId ?? null,
+            sourceWorksheetId: row.sourceWorksheetId ?? null,
+            sourceWorksheetLabel: row.sourceWorksheetLabel ?? null,
+            sourceClassificationId: row.sourceClassificationId ?? null,
+            sourceClassificationLabel: row.sourceClassificationLabel ?? null,
             sourceAdjustmentId: row.sourceAdjustmentId ?? null,
           },
         });
@@ -6506,12 +8662,14 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const { revision } = await this.requireCurrentRevision(projectId);
     const store = await this.buildStoreSnapshot(projectId);
-    const totals = summarizeProjectTotals(store, projectId);
-    if (!totals) {
+    const seedTotals = summarizeProjectTotals(store, projectId, input);
+    if (!seedTotals) {
       throw new Error(`Unable to resolve totals for project ${projectId}`);
     }
 
-    const normalized = normalizeSummaryBuilderConfig(input, totals);
+    const normalizedSeed = normalizeSummaryBuilderConfig(input, seedTotals);
+    const totals = summarizeProjectTotals(store, projectId, normalizedSeed) ?? seedTotals;
+    const normalized = normalizeSummaryBuilderConfig(normalizedSeed, totals);
     return this.persistSummaryBuilder(projectId, revision.id, normalized, totals);
   }
 
@@ -6544,6 +8702,10 @@ export class PrismaApiStore {
           sourceCategoryId: input.sourceCategoryId ?? null,
           sourceCategoryLabel: input.sourceCategoryLabel ?? null,
           sourcePhaseId: input.sourcePhaseId ?? null,
+          sourceWorksheetId: input.sourceWorksheetId ?? null,
+          sourceWorksheetLabel: input.sourceWorksheetLabel ?? null,
+          sourceClassificationId: input.sourceClassificationId ?? null,
+          sourceClassificationLabel: input.sourceClassificationLabel ?? null,
           sourceAdjustmentId: input.sourceAdjustmentId ?? null,
         },
       });
@@ -6574,6 +8736,10 @@ export class PrismaApiStore {
       data.sourceCategory = patch.sourceCategoryLabel;
     }
     if (patch.sourcePhaseId !== undefined) data.sourcePhaseId = patch.sourcePhaseId;
+    if (patch.sourceWorksheetId !== undefined) data.sourceWorksheetId = patch.sourceWorksheetId;
+    if (patch.sourceWorksheetLabel !== undefined) data.sourceWorksheetLabel = patch.sourceWorksheetLabel;
+    if (patch.sourceClassificationId !== undefined) data.sourceClassificationId = patch.sourceClassificationId;
+    if (patch.sourceClassificationLabel !== undefined) data.sourceClassificationLabel = patch.sourceClassificationLabel;
     if (patch.sourceAdjustmentId !== undefined) data.sourceAdjustmentId = patch.sourceAdjustmentId;
 
     const updated = await this.db.summaryRow.update({ where: { id: rowId }, data });
@@ -6634,9 +8800,11 @@ export class PrismaApiStore {
     }
 
     const store = await this.buildStoreSnapshot(projectId);
-    const totals = summarizeProjectTotals(store, projectId);
-    if (!totals) throw new Error(`Unable to generate summary preset for project ${projectId}`);
+    const seedTotals = summarizeProjectTotals(store, projectId);
+    if (!seedTotals) throw new Error(`Unable to generate summary preset for project ${projectId}`);
 
+    const seedConfig = createSummaryBuilderPreset(preset, seedTotals);
+    const totals = summarizeProjectTotals(store, projectId, seedConfig) ?? seedTotals;
     const config = createSummaryBuilderPreset(preset, totals);
     await this.persistSummaryBuilder(projectId, revision.id, config, totals);
     return this.listSummaryRows(projectId);
@@ -6664,17 +8832,41 @@ export class PrismaApiStore {
     return mapRateScheduleWithChildren(schedule);
   }
 
+  private async requireRateScheduleCategory(category: string | null | undefined): Promise<string> {
+    const value = typeof category === "string" ? category.trim() : "";
+    if (!value) throw new Error("Rate schedule category is required");
+    const entityCategory = await this.db.entityCategory.findFirst({
+      where: {
+        organizationId: this.organizationId,
+        enabled: true,
+        OR: [
+          { entityType: value },
+          { name: value },
+          { id: value },
+        ],
+      },
+    });
+    if (!entityCategory) {
+      throw new Error(`Rate schedule category "${value}" must match an enabled EntityCategory`);
+    }
+    return entityCategory.entityType?.trim() || entityCategory.name.trim();
+  }
+
   async createRateSchedule(input: {
-    name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean; metadata?: Record<string, unknown>;
+    name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
+    effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
   }): Promise<RateScheduleWithChildren> {
+    const category = await this.requireRateScheduleCategory(input.category);
     const created = await this.db.rateSchedule.create({
       data: {
         id: createId("rs"),
         organizationId: this.organizationId,
         name: input.name,
         description: input.description ?? "",
-        category: input.category ?? "labour",
+        category,
         scope: "global",
+        effectiveDate: input.effectiveDate ?? null,
+        expiryDate: input.expiryDate ?? null,
         defaultMarkup: input.defaultMarkup ?? 0,
         autoCalculate: input.autoCalculate ?? true,
         metadata: (input.metadata ?? {}) as any,
@@ -6693,7 +8885,7 @@ export class PrismaApiStore {
     const data: any = {};
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.description !== undefined) data.description = patch.description;
-    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.category !== undefined) data.category = await this.requireRateScheduleCategory(patch.category);
     if (patch.defaultMarkup !== undefined) data.defaultMarkup = patch.defaultMarkup;
     if (patch.autoCalculate !== undefined) data.autoCalculate = patch.autoCalculate;
     if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
@@ -6769,8 +8961,7 @@ export class PrismaApiStore {
     }
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
-    const catalogItem = await this.db.catalogItem.findUnique({ where: { id: input.catalogItemId } });
-    if (!catalogItem) throw new Error(`Catalog item ${input.catalogItemId} not found`);
+    const catalogItem = await this.requireCatalogItem(input.catalogItemId);
     const maxOrder = await this.db.rateScheduleItem.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
     await this.db.rateScheduleItem.create({
       data: {
@@ -6980,7 +9171,7 @@ export class PrismaApiStore {
           freightOnBoard: revData.freightOnBoard,
           status: revData.status,
           defaultMarkup: revData.defaultMarkup,
-          necaDifficulty: revData.necaDifficulty,
+          laborDifficulty: revData.laborDifficulty,
           followUpNote: revData.followUpNote,
           printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory,
@@ -6997,38 +9188,60 @@ export class PrismaApiStore {
           totalHours: revData.totalHours,
           breakoutPackage: revData.breakoutPackage as any,
           calculatedCategoryTotals: revData.calculatedCategoryTotals as any,
+          pricingLadder: revData.pricingLadder as any,
           summaryLayoutPreset: revData.summaryLayoutPreset,
           pdfPreferences: revData.pdfPreferences as any,
           createdAt: timestamp,
           updatedAt: timestamp,
-        },
+        } as any,
       });
 
       // Copy phases with ID mapping
       const phaseIdMap = new Map<string, string>();
       const oldPhases = await tx.phase.findMany({ where: { revisionId: currentRevision.id } });
       for (const oldPhase of oldPhases) {
-        const newPhaseId = createId("phase");
-        phaseIdMap.set(oldPhase.id, newPhaseId);
+        phaseIdMap.set(oldPhase.id, createId("phase"));
+      }
+      for (const oldPhase of oldPhases) {
+        const newPhaseId = phaseIdMap.get(oldPhase.id)!;
         await tx.phase.create({
-          data: { id: newPhaseId, revisionId: newRevisionId, number: oldPhase.number, name: oldPhase.name, description: oldPhase.description, order: oldPhase.order },
+          data: {
+            id: newPhaseId,
+            revisionId: newRevisionId,
+            parentId: oldPhase.parentId ? (phaseIdMap.get(oldPhase.parentId) ?? null) : null,
+            number: oldPhase.number,
+            name: oldPhase.name,
+            description: oldPhase.description,
+            order: oldPhase.order,
+            startDate: oldPhase.startDate,
+            endDate: oldPhase.endDate,
+            color: oldPhase.color,
+          },
         });
       }
 
       // Copy worksheets and items
+      const worksheetIdMap = new Map<string, string>();
+      const worksheetItemIdMap = new Map<string, string>();
       const oldWorksheets = await tx.worksheet.findMany({ where: { revisionId: currentRevision.id } });
       for (const oldWs of oldWorksheets) {
         const newWsId = createId("worksheet");
+        worksheetIdMap.set(oldWs.id, newWsId);
         await tx.worksheet.create({ data: { id: newWsId, revisionId: newRevisionId, name: oldWs.name, order: oldWs.order } });
 
         const oldItems = await tx.worksheetItem.findMany({ where: { worksheetId: oldWs.id } });
         for (const oldItem of oldItems) {
+          const newItemId = createId("li");
+          worksheetItemIdMap.set(oldItem.id, newItemId);
           await tx.worksheetItem.create({
             data: {
-              id: createId("li"),
+              id: newItemId,
               worksheetId: newWsId,
               phaseId: oldItem.phaseId ? (phaseIdMap.get(oldItem.phaseId) ?? null) : oldItem.phaseId,
-              category: oldItem.category, entityType: oldItem.entityType, entityName: oldItem.entityName,
+	              categoryId: oldItem.categoryId,
+	              category: oldItem.category, entityType: oldItem.entityType, entityName: oldItem.entityName,
+              classification: oldItem.classification ?? {},
+              costCode: oldItem.costCode ?? null,
               vendor: oldItem.vendor, description: oldItem.description, quantity: oldItem.quantity,
               uom: oldItem.uom, cost: oldItem.cost, markup: oldItem.markup, price: oldItem.price,
               unit1: oldItem.unit1, unit2: oldItem.unit2, unit3: oldItem.unit3,
@@ -7037,6 +9250,11 @@ export class PrismaApiStore {
               itemId: oldItem.itemId ?? null,
               tierUnits: oldItem.tierUnits ?? {},
               sourceNotes: oldItem.sourceNotes ?? "",
+              costResourceId: (oldItem as any).costResourceId ?? null,
+              effectiveCostId: (oldItem as any).effectiveCostId ?? null,
+              laborUnitId: (oldItem as any).laborUnitId ?? null,
+              resourceComposition: toPrismaJson((oldItem as any).resourceComposition ?? {}),
+              sourceEvidence: toPrismaJson((oldItem as any).sourceEvidence ?? {}),
             },
           });
         }
@@ -7061,10 +9279,45 @@ export class PrismaApiStore {
             name: adjustment.name,
             description: adjustment.description,
             type: adjustment.type,
+            financialCategory: adjustment.financialCategory,
+            calculationBase: adjustment.calculationBase,
+            active: adjustment.active,
             appliesTo: adjustment.appliesTo,
             percentage: adjustment.percentage,
             amount: adjustment.amount,
             show: adjustment.show,
+          },
+        });
+      }
+
+      // Copy estimate productivity factors with phase/worksheet scope remapping
+      const oldFactors = await tx.estimateFactor.findMany({
+        where: { revisionId: currentRevision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      });
+      for (const factor of oldFactors) {
+        await tx.estimateFactor.create({
+          data: {
+            id: createId("factor"),
+            revisionId: newRevisionId,
+            order: factor.order,
+            name: factor.name,
+            code: factor.code,
+            description: factor.description,
+            category: factor.category,
+            impact: factor.impact,
+            value: factor.value,
+            active: factor.active,
+            appliesTo: factor.appliesTo,
+            applicationScope: (factor as any).applicationScope ?? "global",
+            scope: remapEstimateFactorScope(factor.scope, phaseIdMap, worksheetIdMap, worksheetItemIdMap) as any,
+            formulaType: (factor as any).formulaType ?? "fixed_multiplier",
+            parameters: ((factor as any).parameters ?? {}) as any,
+            confidence: factor.confidence,
+            sourceType: factor.sourceType,
+            sourceId: factor.sourceId,
+            sourceRef: (factor.sourceRef ?? {}) as any,
+            tags: factor.tags,
           },
         });
       }
@@ -7089,6 +9342,10 @@ export class PrismaApiStore {
             sourceCategoryId: sourceRow.sourceCategoryId ?? null,
             sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
             sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
+            sourceWorksheetId: sourceRow.sourceWorksheetId ? (worksheetIdMap.get(sourceRow.sourceWorksheetId) ?? null) : null,
+            sourceWorksheetLabel: sourceRow.sourceWorksheetLabel ?? null,
+            sourceClassificationId: sourceRow.sourceClassificationId ?? null,
+            sourceClassificationLabel: sourceRow.sourceClassificationLabel ?? null,
             sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
           },
         });
@@ -7210,6 +9467,7 @@ export class PrismaApiStore {
       await tx.worksheetItem.deleteMany({ where: { worksheetId: { in: worksheetIds } } });
       await tx.worksheet.deleteMany({ where: { revisionId } });
       await tx.phase.deleteMany({ where: { revisionId } });
+      await tx.estimateFactor.deleteMany({ where: { revisionId } });
       await tx.adjustment.deleteMany({ where: { revisionId } });
       await tx.summaryRow.deleteMany({ where: { revisionId } });
       await tx.modifier.deleteMany({ where: { revisionId } });
@@ -7315,7 +9573,7 @@ export class PrismaApiStore {
           dateWorkStart: revData.dateWorkStart, dateWorkEnd: revData.dateWorkEnd,
           shippingMethod: revData.shippingMethod, shippingTerms: revData.shippingTerms,
           freightOnBoard: revData.freightOnBoard, status: revData.status,
-          defaultMarkup: revData.defaultMarkup, necaDifficulty: revData.necaDifficulty,
+          defaultMarkup: revData.defaultMarkup, laborDifficulty: revData.laborDifficulty,
           followUpNote: revData.followUpNote, printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory, printPhaseTotalOnly: revData.printPhaseTotalOnly,
           grandTotal: revData.grandTotal, regHours: revData.regHours, overHours: revData.overHours, doubleHours: revData.doubleHours,
@@ -7323,6 +9581,7 @@ export class PrismaApiStore {
           calculatedTotal: revData.calculatedTotal ?? 0, totalHours: revData.totalHours,
           breakoutPackage: revData.breakoutPackage as any,
           calculatedCategoryTotals: revData.calculatedCategoryTotals as any,
+          pricingLadder: revData.pricingLadder as any,
           summaryLayoutPreset: revData.summaryLayoutPreset,
           pdfPreferences: revData.pdfPreferences as any,
           createdAt: timestamp, updatedAt: timestamp,
@@ -7333,25 +9592,48 @@ export class PrismaApiStore {
       const phaseIdMap = new Map<string, string>();
       const oldPhases = await tx.phase.findMany({ where: { revisionId: sourceRevision.id } });
       for (const p of oldPhases) {
-        const newId = createId("phase");
-        phaseIdMap.set(p.id, newId);
-        await tx.phase.create({ data: { id: newId, revisionId: newRevisionId, number: p.number, name: p.name, description: p.description, order: p.order } });
+        phaseIdMap.set(p.id, createId("phase"));
+      }
+      for (const p of oldPhases) {
+        const newId = phaseIdMap.get(p.id)!;
+        await tx.phase.create({
+          data: {
+            id: newId,
+            revisionId: newRevisionId,
+            parentId: p.parentId ? (phaseIdMap.get(p.parentId) ?? null) : null,
+            number: p.number,
+            name: p.name,
+            description: p.description,
+            order: p.order,
+            startDate: p.startDate,
+            endDate: p.endDate,
+            color: p.color,
+          },
+        });
       }
 
       // Copy worksheets and items
       let firstWorksheetId: string | null = null;
+      const worksheetIdMap = new Map<string, string>();
+      const worksheetItemIdMap = new Map<string, string>();
       const oldWorksheets = await tx.worksheet.findMany({ where: { revisionId: sourceRevision.id } });
       for (const ws of oldWorksheets) {
         const newWsId = createId("worksheet");
+        worksheetIdMap.set(ws.id, newWsId);
         if (!firstWorksheetId) firstWorksheetId = newWsId;
         await tx.worksheet.create({ data: { id: newWsId, revisionId: newRevisionId, name: ws.name, order: ws.order } });
         const oldItems = await tx.worksheetItem.findMany({ where: { worksheetId: ws.id } });
         for (const it of oldItems) {
+          const newItemId = createId("li");
+          worksheetItemIdMap.set(it.id, newItemId);
           await tx.worksheetItem.create({
             data: {
-              id: createId("li"), worksheetId: newWsId,
+              id: newItemId, worksheetId: newWsId,
               phaseId: it.phaseId ? (phaseIdMap.get(it.phaseId) ?? null) : it.phaseId,
-              category: it.category, entityType: it.entityType, entityName: it.entityName,
+	              categoryId: it.categoryId,
+	              category: it.category, entityType: it.entityType, entityName: it.entityName,
+              classification: it.classification ?? {},
+              costCode: it.costCode ?? null,
               vendor: it.vendor, description: it.description, quantity: it.quantity,
               uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
               unit1: it.unit1, unit2: it.unit2, unit3: it.unit3,
@@ -7360,6 +9642,11 @@ export class PrismaApiStore {
               itemId: it.itemId ?? null,
               tierUnits: it.tierUnits ?? {},
               sourceNotes: it.sourceNotes ?? "",
+              costResourceId: (it as any).costResourceId ?? null,
+              effectiveCostId: (it as any).effectiveCostId ?? null,
+              laborUnitId: (it as any).laborUnitId ?? null,
+              resourceComposition: toPrismaJson((it as any).resourceComposition ?? {}),
+              sourceEvidence: toPrismaJson((it as any).sourceEvidence ?? {}),
             },
           });
         }
@@ -7383,10 +9670,44 @@ export class PrismaApiStore {
             name: adjustment.name,
             description: adjustment.description,
             type: adjustment.type,
+            financialCategory: adjustment.financialCategory,
+            calculationBase: adjustment.calculationBase,
+            active: adjustment.active,
             appliesTo: adjustment.appliesTo,
             percentage: adjustment.percentage,
             amount: adjustment.amount,
             show: adjustment.show,
+          },
+        });
+      }
+
+      // Copy estimate productivity factors with phase/worksheet scope remapping
+      for (const factor of await tx.estimateFactor.findMany({
+        where: { revisionId: sourceRevision.id },
+        orderBy: [{ order: "asc" }, { name: "asc" }],
+      })) {
+        await tx.estimateFactor.create({
+          data: {
+            id: createId("factor"),
+            revisionId: newRevisionId,
+            order: factor.order,
+            name: factor.name,
+            code: factor.code,
+            description: factor.description,
+            category: factor.category,
+            impact: factor.impact,
+            value: factor.value,
+            active: factor.active,
+            appliesTo: factor.appliesTo,
+            applicationScope: (factor as any).applicationScope ?? "global",
+            scope: remapEstimateFactorScope(factor.scope, phaseIdMap, worksheetIdMap, worksheetItemIdMap) as any,
+            formulaType: (factor as any).formulaType ?? "fixed_multiplier",
+            parameters: ((factor as any).parameters ?? {}) as any,
+            confidence: factor.confidence,
+            sourceType: factor.sourceType,
+            sourceId: factor.sourceId,
+            sourceRef: (factor.sourceRef ?? {}) as any,
+            tags: factor.tags,
           },
         });
       }
@@ -7410,6 +9731,10 @@ export class PrismaApiStore {
             sourceCategoryId: sourceRow.sourceCategoryId ?? null,
             sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
             sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
+            sourceWorksheetId: sourceRow.sourceWorksheetId ? (worksheetIdMap.get(sourceRow.sourceWorksheetId) ?? null) : null,
+            sourceWorksheetLabel: sourceRow.sourceWorksheetLabel ?? null,
+            sourceClassificationId: sourceRow.sourceClassificationId ?? null,
+            sourceClassificationLabel: sourceRow.sourceClassificationLabel ?? null,
             sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
           },
         });
@@ -7475,8 +9800,18 @@ export class PrismaApiStore {
 
   async updateQuote(projectId: string, patch: QuotePatchInput) {
     await this.requireProject(projectId);
+    await this.validateQuotePatchReferences(patch);
     const quote = await this.db.quote.findFirst({ where: { projectId } });
     if (!quote) throw new Error(`Quote not found for project ${projectId}`);
+    if (patch.customerContactId && !patch.customerId && quote.customerId) {
+      const contact = await this.db.customerContact.findFirst({
+        where: { id: patch.customerContactId, customerId: quote.customerId },
+        select: { id: true },
+      });
+      if (!contact) {
+        throw new Error(`Customer contact ${patch.customerContactId} does not belong to customer ${quote.customerId}`);
+      }
+    }
 
     const before = {
       id: quote.id,
@@ -7529,6 +9864,7 @@ export class PrismaApiStore {
         await tx.worksheetItem.deleteMany({ where: { worksheetId: { in: otherWsIds } } });
         await tx.worksheet.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.phase.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
+        await tx.estimateFactor.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.adjustment.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.summaryRow.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
         await tx.modifier.deleteMany({ where: { revisionId: { in: otherRevisionIds } } });
@@ -7727,6 +10063,7 @@ export class PrismaApiStore {
   }
 
   async listActivities(projectId: string) {
+    await this.requireProject(projectId);
     const activities = await this.db.activity.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
@@ -7786,9 +10123,24 @@ export class PrismaApiStore {
     } else if (type === "item_deleted") {
       // Revert: recreate the item from the before snapshot
       const snapshot = before!;
+      const categories = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
+      const categoryDef = resolveEntityCategoryForItemInput(categories, {
+        categoryId: typeof snapshot.categoryId === "string" ? snapshot.categoryId : null,
+        category: typeof snapshot.category === "string" ? snapshot.category : null,
+        entityType: typeof snapshot.entityType === "string" ? snapshot.entityType : null,
+      });
+      if (!categoryDef) {
+        throw Object.assign(new Error("Cannot revert — the original item category no longer exists."), { statusCode: 409 });
+      }
       revertBefore = null;
-      await this.db.worksheetItem.create({ data: snapshot as any });
-      revertAfter = snapshot;
+      const restoredSnapshot = {
+        ...snapshot,
+        categoryId: categoryDef.id,
+        category: categoryDef.name,
+        entityType: categoryDef.entityType,
+      };
+      await this.db.worksheetItem.create({ data: restoredSnapshot as any });
+      revertAfter = restoredSnapshot;
     } else if (type === "revision_updated") {
       const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId! } });
       if (!revision) throw Object.assign(new Error("Cannot revert — the revision no longer exists"), { statusCode: 409 });
@@ -7801,8 +10153,14 @@ export class PrismaApiStore {
       if (!phase) throw Object.assign(new Error("Cannot revert — the phase no longer exists"), { statusCode: 409 });
       revertBefore = mapPhase(phase) as any;
       revertAfter = null;
-      await this.db.worksheetItem.updateMany({ where: { phaseId }, data: { phaseId: null } });
-      await this.db.phase.delete({ where: { id: phaseId } });
+      await this.db.$transaction([
+        this.db.phase.updateMany({
+          where: { revisionId: phase.revisionId, parentId: phaseId },
+          data: { parentId: phase.parentId ?? null },
+        }),
+        this.db.worksheetItem.updateMany({ where: { phaseId }, data: { phaseId: null } }),
+        this.db.phase.delete({ where: { id: phaseId } }),
+      ]);
     } else if (type === "phase_updated") {
       const phaseId = data.phaseId as string;
       const phase = await this.db.phase.findFirst({ where: { id: phaseId } });
@@ -7813,7 +10171,24 @@ export class PrismaApiStore {
     } else if (type === "phase_deleted") {
       const snapshot = before!;
       revertBefore = null;
-      await this.db.phase.create({ data: { id: snapshot.id as string, revisionId: snapshot.revisionId as string, number: snapshot.number as string, name: snapshot.name as string, description: (snapshot.description as string) ?? "", order: (snapshot.order as number) ?? 0, startDate: (snapshot.startDate as string) ?? null, endDate: (snapshot.endDate as string) ?? null, color: (snapshot.color as string) ?? "" } });
+      const parentId = snapshot.parentId as string | null | undefined;
+      const parent = parentId
+        ? await this.db.phase.findFirst({ where: { id: parentId, revisionId: snapshot.revisionId as string } })
+        : null;
+      await this.db.phase.create({
+        data: {
+          id: snapshot.id as string,
+          revisionId: snapshot.revisionId as string,
+          parentId: parent ? parent.id : null,
+          number: snapshot.number as string,
+          name: snapshot.name as string,
+          description: (snapshot.description as string) ?? "",
+          order: (snapshot.order as number) ?? 0,
+          startDate: (snapshot.startDate as string) ?? null,
+          endDate: (snapshot.endDate as string) ?? null,
+          color: (snapshot.color as string) ?? "",
+        },
+      });
       revertAfter = snapshot;
     } else if (type === "schedule_task_created") {
       const taskId = (after?.id ?? data.taskId) as string;
@@ -8010,8 +10385,8 @@ export class PrismaApiStore {
         organizationId: this.organizationId,
         name: input.name,
         kind: input.kind || "materials",
-        scope: input.scope || "global",
-        projectId: input.projectId ?? null,
+        scope: "global",
+        projectId: null,
         description: input.description ?? "",
       },
     });
@@ -8019,14 +10394,13 @@ export class PrismaApiStore {
   }
 
   async updateCatalog(catalogId: string, patch: CatalogPatchInput) {
-    const catalog = await this.db.catalog.findFirst({ where: { id: catalogId, organizationId: this.organizationId } });
-    if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+    await this.requireCatalog(catalogId);
 
     const data: any = {};
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.kind !== undefined) data.kind = patch.kind;
-    if (patch.scope !== undefined) data.scope = patch.scope;
-    if (patch.projectId !== undefined) data.projectId = patch.projectId ?? null;
+    if (patch.scope !== undefined) data.scope = "global";
+    if (patch.projectId !== undefined) data.projectId = null;
     if (patch.description !== undefined) data.description = patch.description;
 
     const updated = await this.db.catalog.update({ where: { id: catalogId }, data });
@@ -8034,21 +10408,20 @@ export class PrismaApiStore {
   }
 
   async deleteCatalog(catalogId: string) {
-    const catalog = await this.db.catalog.findFirst({ where: { id: catalogId, organizationId: this.organizationId } });
-    if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+    await this.requireCatalog(catalogId);
     await this.db.catalogItem.deleteMany({ where: { catalogId } });
     await this.db.catalog.delete({ where: { id: catalogId } });
     return { deleted: true };
   }
 
   async listCatalogItems(catalogId: string) {
+    await this.requireCatalog(catalogId);
     const items = await this.db.catalogItem.findMany({ where: { catalogId } });
     return items.map(mapCatalogItem);
   }
 
   async createCatalogItem(catalogId: string, input: CreateCatalogItemInput) {
-    const catalog = await this.db.catalog.findFirst({ where: { id: catalogId, organizationId: this.organizationId } });
-    if (!catalog) throw new Error(`Catalog ${catalogId} not found`);
+    await this.requireCatalog(catalogId);
 
     const item = await this.db.catalogItem.create({
       data: {
@@ -8066,8 +10439,7 @@ export class PrismaApiStore {
   }
 
   async updateCatalogItem(itemId: string, patch: CatalogItemPatchInput) {
-    const item = await this.db.catalogItem.findFirst({ where: { id: itemId } });
-    if (!item) throw new Error(`Catalog item ${itemId} not found`);
+    const item = await this.requireCatalogItem(itemId);
 
     const data: any = {};
     if (patch.code !== undefined) data.code = patch.code;
@@ -8087,8 +10459,7 @@ export class PrismaApiStore {
   }
 
   async deleteCatalogItem(itemId: string) {
-    const item = await this.db.catalogItem.findFirst({ where: { id: itemId } });
-    if (!item) throw new Error(`Catalog item ${itemId} not found`);
+    await this.requireCatalogItem(itemId);
     await this.db.catalogItem.delete({ where: { id: itemId } });
     return { deleted: true };
   }
@@ -8129,7 +10500,7 @@ export class PrismaApiStore {
 
   async searchCatalogItems(query: string, catalogId?: string) {
     const catalogIds = catalogId
-      ? [catalogId]
+      ? [(await this.requireCatalog(catalogId)).id]
       : (await this.db.catalog.findMany({ where: { organizationId: this.organizationId }, select: { id: true } })).map((c) => c.id);
 
     const items = await this.db.catalogItem.findMany({
@@ -8145,6 +10516,384 @@ export class PrismaApiStore {
         (typeof (i.metadata as any)?.category === "string" && (i.metadata as any).category.toLowerCase().includes(q))
       )
       .map(mapCatalogItem);
+  }
+
+  // ── Labor Unit Libraries ────────────────────────────────────────────────
+
+  async listLaborUnitLibraries(
+    scope: "organization" | "all" = "all",
+  ): Promise<LaborUnitLibrary[]> {
+    const where =
+      scope === "organization"
+        ? { organizationId: this.organizationId }
+        : { OR: [{ organizationId: this.organizationId }, { organizationId: null }] };
+    const rows = await (this.db as any).laborUnitLibrary.findMany({
+      where,
+      include: { _count: { select: { units: true } } },
+      orderBy: [{ provider: "asc" }, { name: "asc" }],
+    });
+    return rows.map(mapLaborUnitLibrary);
+  }
+
+  async getLaborUnitLibrary(libraryId: string): Promise<LaborUnitLibrary | null> {
+    const row = await (this.db as any).laborUnitLibrary.findFirst({
+      where: {
+        id: libraryId,
+        OR: [{ organizationId: this.organizationId }, { organizationId: null }],
+      },
+      include: { _count: { select: { units: true } } },
+    });
+    return row ? mapLaborUnitLibrary(row) : null;
+  }
+
+  async createLaborUnitLibrary(input: CreateLaborUnitLibraryInput): Promise<LaborUnitLibrary> {
+    const row = await (this.db as any).laborUnitLibrary.create({
+      data: {
+        id: createId("lul"),
+        organizationId: this.organizationId,
+        cabinetId: input.cabinetId ?? null,
+        name: input.name.trim(),
+        description: input.description ?? "",
+        provider: input.provider ?? "",
+        discipline: input.discipline ?? "",
+        source: input.source ?? "manual",
+        sourceDescription: input.sourceDescription ?? "",
+        sourceDatasetId: input.sourceDatasetId ?? null,
+        tags: input.tags ?? [],
+        metadata: (input.metadata ?? {}) as any,
+      },
+      include: { _count: { select: { units: true } } },
+    });
+    return mapLaborUnitLibrary(row);
+  }
+
+  async updateLaborUnitLibrary(libraryId: string, patch: LaborUnitLibraryPatchInput): Promise<LaborUnitLibrary> {
+    const existing = await this.requireLaborUnitLibrary(libraryId);
+    const data: any = {};
+    if (patch.name !== undefined) data.name = patch.name.trim();
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.provider !== undefined) data.provider = patch.provider;
+    if (patch.discipline !== undefined) data.discipline = patch.discipline;
+    if (patch.source !== undefined) data.source = patch.source;
+    if (patch.sourceDescription !== undefined) data.sourceDescription = patch.sourceDescription;
+    if (patch.sourceDatasetId !== undefined) data.sourceDatasetId = patch.sourceDatasetId ?? null;
+    if (patch.cabinetId !== undefined) data.cabinetId = patch.cabinetId ?? null;
+    if (patch.tags !== undefined) data.tags = patch.tags;
+    if (patch.metadata !== undefined) data.metadata = { ...((existing.metadata as any) ?? {}), ...patch.metadata };
+
+    const row = await (this.db as any).laborUnitLibrary.update({
+      where: { id: libraryId },
+      data,
+      include: { _count: { select: { units: true } } },
+    });
+    return mapLaborUnitLibrary(row);
+  }
+
+  async deleteLaborUnitLibrary(libraryId: string): Promise<{ deleted: true }> {
+    await this.requireLaborUnitLibrary(libraryId);
+    await (this.db as any).laborUnitLibrary.delete({ where: { id: libraryId } });
+    return { deleted: true };
+  }
+
+  async listLaborUnits(input: {
+    libraryId?: string;
+    q?: string;
+    provider?: string;
+    category?: string;
+    className?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<{ units: LaborUnit[]; total: number }> {
+    const accessibleLibrary =
+      input.libraryId
+        ? {
+            id: input.libraryId,
+            OR: [
+              { organizationId: this.organizationId },
+              { organizationId: null },
+            ],
+          }
+        : {
+            OR: [
+              { organizationId: this.organizationId },
+              { organizationId: null },
+            ],
+          };
+    const where: any = {
+      library: accessibleLibrary,
+    };
+    if (input.provider?.trim()) {
+      where.library = { ...accessibleLibrary, provider: input.provider.trim() };
+    }
+    if (input.category?.trim()) where.category = input.category.trim();
+    if (input.className?.trim()) where.className = input.className.trim();
+    if (input.q?.trim()) {
+      const q = input.q.trim();
+      where.OR = [
+        { code: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
+        { description: { contains: q, mode: "insensitive" } },
+        { category: { contains: q, mode: "insensitive" } },
+        { className: { contains: q, mode: "insensitive" } },
+        { subClassName: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const [total, rows] = await Promise.all([
+      (this.db as any).laborUnit.count({ where }),
+      (this.db as any).laborUnit.findMany({
+        where,
+        include: { library: true },
+        orderBy: [{ category: "asc" }, { className: "asc" }, { subClassName: "asc" }, { sortOrder: "asc" }],
+        skip: Math.max(0, input.offset ?? 0),
+        take: Math.min(1000, Math.max(1, input.limit ?? 250)),
+      }),
+    ]);
+    return { units: rows.map(mapLaborUnit), total };
+  }
+
+  async listLaborUnitTree(input: LaborUnitTreeInput = {}): Promise<{ nodes: LaborUnitTreeGroup[]; units: LaborUnit[]; total: number }> {
+    const parentType = input.parentType ?? "root";
+    const accessibleLibrary =
+      input.libraryId
+        ? {
+            id: input.libraryId,
+            OR: [
+              { organizationId: this.organizationId },
+              { organizationId: null },
+            ],
+          }
+        : {
+            OR: [
+              { organizationId: this.organizationId },
+              { organizationId: null },
+            ],
+          };
+    const where: any = {
+      library: accessibleLibrary,
+    };
+    if (input.libraryId?.trim()) where.libraryId = input.libraryId.trim();
+    if (input.category != null) where.category = input.category;
+    if (input.className != null) where.className = input.className;
+    if (input.subClassName != null) where.subClassName = input.subClassName;
+    if (input.q?.trim()) {
+      const q = input.q.trim();
+      where.OR = [
+        { code: { contains: q, mode: "insensitive" } },
+        { name: { contains: q, mode: "insensitive" } },
+        { description: { contains: q, mode: "insensitive" } },
+        { category: { contains: q, mode: "insensitive" } },
+        { className: { contains: q, mode: "insensitive" } },
+        { subClassName: { contains: q, mode: "insensitive" } },
+      ];
+    }
+
+    const countOf = (row: any) => row._count?._all ?? 0;
+    const hoursOf = (row: any) => Number(row._sum?.hoursNormal ?? 0);
+    const groupId = (parts: Array<string | null | undefined>) =>
+      `labor-unit-tree:${parts.map((part) => encodeURIComponent(part ?? "")).join("/")}`;
+    const labelFor = (value: string | null | undefined, fallback: string) => value?.trim() || fallback;
+
+    if (parentType === "subclass") {
+      const [total, rows] = await Promise.all([
+        (this.db as any).laborUnit.count({ where }),
+        (this.db as any).laborUnit.findMany({
+          where,
+          include: { library: true },
+          orderBy: [{ sortOrder: "asc" }, { code: "asc" }, { name: "asc" }],
+          skip: Math.max(0, input.offset ?? 0),
+          take: Math.min(1000, Math.max(1, input.limit ?? 250)),
+        }),
+      ]);
+      return { nodes: [], units: rows.map(mapLaborUnit), total };
+    }
+
+    if (parentType === "root") {
+      const rows = await (this.db as any).laborUnit.groupBy({
+        by: ["libraryId"],
+        where,
+        _count: { _all: true },
+        _sum: { hoursNormal: true },
+      });
+      const libraries = await (this.db as any).laborUnitLibrary.findMany({
+        where: {
+          id: { in: rows.map((row: any) => row.libraryId) },
+          OR: [
+            { organizationId: this.organizationId },
+            { organizationId: null },
+          ],
+        },
+      });
+      const libraryById = new Map<string, any>(libraries.map((library: any) => [library.id, library]));
+      const nodes = rows
+        .map((row: any) => {
+          const library = libraryById.get(row.libraryId);
+          return {
+            id: groupId(["catalog", row.libraryId]),
+            level: "catalog" as const,
+            label: labelFor(library?.name, "Unknown catalog"),
+            libraryId: row.libraryId,
+            category: "",
+            className: "",
+            subClassName: "",
+            unitCount: countOf(row),
+            normalHoursTotal: hoursOf(row),
+          };
+        })
+        .sort((left: LaborUnitTreeGroup, right: LaborUnitTreeGroup) =>
+          left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: "base" }),
+        );
+      return { nodes, units: [], total: nodes.length };
+    }
+
+    const nextLevel =
+      parentType === "catalog" ? "category" :
+      parentType === "category" ? "class" :
+      "subclass";
+    const by =
+      nextLevel === "category" ? ["category"] :
+      nextLevel === "class" ? ["className"] :
+      ["subClassName"];
+    const rows = await (this.db as any).laborUnit.groupBy({
+      by,
+      where,
+      _count: { _all: true },
+      _sum: { hoursNormal: true },
+      orderBy: by.map((field) => ({ [field]: "asc" })),
+    });
+    const nodes = rows.map((row: any) => {
+      const category = nextLevel === "category" ? row.category ?? "" : input.category ?? "";
+      const className = nextLevel === "class" ? row.className ?? "" : input.className ?? "";
+      const subClassName = nextLevel === "subclass" ? row.subClassName ?? "" : input.subClassName ?? "";
+      return {
+        id: groupId([nextLevel, input.libraryId, category, className, subClassName]),
+        level: nextLevel,
+        label: nextLevel === "category"
+          ? labelFor(category, "Uncategorized")
+          : nextLevel === "class"
+            ? labelFor(className, "Unclassified")
+            : labelFor(subClassName, "No subclass"),
+        libraryId: input.libraryId ?? null,
+        category,
+        className,
+        subClassName,
+        unitCount: countOf(row),
+        normalHoursTotal: hoursOf(row),
+      } satisfies LaborUnitTreeGroup;
+    });
+
+    return { nodes, units: [], total: nodes.length };
+  }
+
+  async getLaborUnit(unitId: string): Promise<LaborUnit | null> {
+    const row = await (this.db as any).laborUnit.findFirst({
+      where: {
+        id: unitId,
+        library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] },
+      },
+    });
+    return row ? mapLaborUnit(row) : null;
+  }
+
+  async createLaborUnit(libraryId: string, input: CreateLaborUnitInput): Promise<LaborUnit> {
+    await this.requireLaborUnitLibrary(libraryId);
+    if (input.catalogItemId) {
+      await this.requireCatalogItem(input.catalogItemId);
+    }
+    const row = await (this.db as any).laborUnit.create({
+      data: {
+        id: createId("lu"),
+        libraryId,
+        catalogItemId: input.catalogItemId ?? null,
+        code: input.code ?? "",
+        name: input.name.trim(),
+        description: input.description ?? "",
+        discipline: input.discipline ?? "",
+        category: input.category ?? "",
+        className: input.className ?? "",
+        subClassName: input.subClassName ?? "",
+        outputUom: input.outputUom ?? "EA",
+        hoursNormal: input.hoursNormal,
+        hoursDifficult: input.hoursDifficult ?? null,
+        hoursVeryDifficult: input.hoursVeryDifficult ?? null,
+        defaultDifficulty: input.defaultDifficulty ?? "normal",
+        entityCategoryType: input.entityCategoryType ?? "Labour",
+        tags: input.tags ?? [],
+        sourceRef: (input.sourceRef ?? {}) as any,
+        metadata: (input.metadata ?? {}) as any,
+        sortOrder: input.sortOrder ?? 0,
+      },
+    });
+    return mapLaborUnit(row);
+  }
+
+  async updateLaborUnit(unitId: string, patch: LaborUnitPatchInput): Promise<LaborUnit> {
+    const existing = await this.requireLaborUnit(unitId);
+    if (patch.catalogItemId) {
+      await this.requireCatalogItem(patch.catalogItemId);
+    }
+
+    const data: any = {};
+    if (patch.catalogItemId !== undefined) data.catalogItemId = patch.catalogItemId ?? null;
+    if (patch.code !== undefined) data.code = patch.code;
+    if (patch.name !== undefined) data.name = patch.name.trim();
+    if (patch.description !== undefined) data.description = patch.description;
+    if (patch.discipline !== undefined) data.discipline = patch.discipline;
+    if (patch.category !== undefined) data.category = patch.category;
+    if (patch.className !== undefined) data.className = patch.className;
+    if (patch.subClassName !== undefined) data.subClassName = patch.subClassName;
+    if (patch.outputUom !== undefined) data.outputUom = patch.outputUom;
+    if (patch.hoursNormal !== undefined) data.hoursNormal = patch.hoursNormal;
+    if (patch.hoursDifficult !== undefined) data.hoursDifficult = patch.hoursDifficult ?? null;
+    if (patch.hoursVeryDifficult !== undefined) data.hoursVeryDifficult = patch.hoursVeryDifficult ?? null;
+    if (patch.defaultDifficulty !== undefined) data.defaultDifficulty = patch.defaultDifficulty;
+    if (patch.entityCategoryType !== undefined) data.entityCategoryType = patch.entityCategoryType;
+    if (patch.tags !== undefined) data.tags = patch.tags;
+    if (patch.sourceRef !== undefined) data.sourceRef = { ...((existing.sourceRef as any) ?? {}), ...patch.sourceRef };
+    if (patch.metadata !== undefined) data.metadata = { ...((existing.metadata as any) ?? {}), ...patch.metadata };
+    if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
+
+    const row = await (this.db as any).laborUnit.update({ where: { id: unitId }, data });
+    return mapLaborUnit(row);
+  }
+
+  async deleteLaborUnit(unitId: string): Promise<{ deleted: true }> {
+    await this.requireLaborUnit(unitId);
+    await (this.db as any).laborUnit.delete({ where: { id: unitId } });
+    return { deleted: true };
+  }
+
+  async resolveLaborUnitByHierarchy(
+    providerLabel: string,
+    input: { category?: unknown; class?: unknown; className?: unknown; subClass?: unknown; subClassName?: unknown },
+  ): Promise<LaborUnit | null> {
+    const provider = String(providerLabel ?? "").trim();
+    const category = String(input.category ?? "").trim();
+    const className = String(input.class ?? input.className ?? "").trim();
+    const subClassName = String(input.subClass ?? input.subClassName ?? "").trim();
+    if (!provider || !category || !className) {
+      return null;
+    }
+
+    const rows = await (this.db as any).laborUnit.findMany({
+      where: {
+        library: {
+          provider,
+          OR: [{ organizationId: this.organizationId }, { organizationId: null }],
+        },
+        category,
+        className,
+      },
+      include: { library: true },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+      take: 100,
+    });
+    rows.sort((a: any, b: any) => Number(!a.library?.organizationId) - Number(!b.library?.organizationId));
+    const exact = subClassName
+      ? rows.find((row: any) => String(row.subClassName ?? "").trim() === subClassName)
+      : undefined;
+    const fallback = rows.find((row: any) => !String(row.subClassName ?? "").trim()) ?? rows[0];
+    return exact || fallback ? mapLaborUnit(exact ?? fallback) : null;
   }
 
   // ── Assembly CRUD ──────────────────────────────────────────────────────
@@ -8303,6 +11052,10 @@ export class PrismaApiStore {
         componentType: input.componentType,
         catalogItemId: input.catalogItemId ?? null,
         rateScheduleItemId: input.rateScheduleItemId ?? null,
+        laborUnitId: input.laborUnitId ?? null,
+        laborDifficulty: input.laborDifficulty ?? "normal",
+        costResourceId: input.costResourceId ?? null,
+        effectiveCostId: input.effectiveCostId ?? null,
         subAssemblyId: input.subAssemblyId ?? null,
         quantityExpr: input.quantityExpr ?? "1",
         description: input.description ?? "",
@@ -8333,12 +11086,18 @@ export class PrismaApiStore {
       patch.componentType !== undefined ||
       patch.catalogItemId !== undefined ||
       patch.rateScheduleItemId !== undefined ||
+      patch.laborUnitId !== undefined ||
+      patch.costResourceId !== undefined ||
+      patch.effectiveCostId !== undefined ||
       patch.subAssemblyId !== undefined
     ) {
       await this.validateAssemblyComponentRefs(assemblyId, {
         componentType: patch.componentType ?? (existing.componentType as any),
         catalogItemId: patch.catalogItemId ?? existing.catalogItemId,
         rateScheduleItemId: patch.rateScheduleItemId ?? existing.rateScheduleItemId,
+        laborUnitId: patch.laborUnitId ?? existing.laborUnitId,
+        costResourceId: patch.costResourceId !== undefined ? patch.costResourceId : undefined,
+        effectiveCostId: patch.effectiveCostId ?? (existing as any).effectiveCostId,
         subAssemblyId: patch.subAssemblyId ?? existing.subAssemblyId,
       });
     }
@@ -8347,6 +11106,10 @@ export class PrismaApiStore {
     if (patch.componentType !== undefined) data.componentType = patch.componentType;
     if (patch.catalogItemId !== undefined) data.catalogItemId = patch.catalogItemId ?? null;
     if (patch.rateScheduleItemId !== undefined) data.rateScheduleItemId = patch.rateScheduleItemId ?? null;
+    if (patch.laborUnitId !== undefined) data.laborUnitId = patch.laborUnitId ?? null;
+    if (patch.laborDifficulty !== undefined) data.laborDifficulty = patch.laborDifficulty;
+    if (patch.costResourceId !== undefined) data.costResourceId = patch.costResourceId ?? null;
+    if (patch.effectiveCostId !== undefined) data.effectiveCostId = patch.effectiveCostId ?? null;
     if (patch.subAssemblyId !== undefined) data.subAssemblyId = patch.subAssemblyId ?? null;
     if (patch.quantityExpr !== undefined) data.quantityExpr = patch.quantityExpr;
     if (patch.description !== undefined) data.description = patch.description;
@@ -8389,6 +11152,9 @@ export class PrismaApiStore {
       componentType: AssemblyComponentInput["componentType"];
       catalogItemId?: string | null;
       rateScheduleItemId?: string | null;
+      laborUnitId?: string | null;
+      costResourceId?: string | null;
+      effectiveCostId?: string | null;
       subAssemblyId?: string | null;
     },
   ): Promise<void> {
@@ -8412,6 +11178,44 @@ export class PrismaApiStore {
         select: { id: true },
       });
       if (!rsi) throw new Error(`Rate-schedule item ${input.rateScheduleItemId} not found in this organization`);
+    } else if (input.componentType === "labor_unit") {
+      if (!input.laborUnitId) throw new Error("laborUnitId is required for labor_unit components");
+      if (!input.rateScheduleItemId) throw new Error("rateScheduleItemId is required for labor_unit components");
+      const unit = await (this.db as any).laborUnit.findFirst({
+        where: {
+          id: input.laborUnitId,
+          library: {
+            OR: [
+              { organizationId: this.organizationId },
+              { organizationId: null },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      if (!unit) throw new Error(`Labor unit ${input.laborUnitId} not found in this organization`);
+      const rsi = await this.db.rateScheduleItem.findFirst({
+        where: {
+          id: input.rateScheduleItemId,
+          schedule: { organizationId: this.organizationId },
+        },
+        select: { id: true },
+      });
+      if (!rsi) throw new Error(`Rate-schedule item ${input.rateScheduleItemId} not found in this organization`);
+    } else if (input.componentType === "cost_intelligence") {
+      if (!input.effectiveCostId) throw new Error("effectiveCostId is required for cost_intelligence components");
+      const cost = await (this.db as any).effectiveCost.findFirst({
+        where: {
+          id: input.effectiveCostId,
+          organizationId: this.organizationId,
+          ...(input.costResourceId ? { resourceId: input.costResourceId } : {}),
+        },
+        select: { id: true, resourceId: true },
+      });
+      if (!cost) throw new Error(`Cost intelligence cost ${input.effectiveCostId} not found in this organization`);
+      if (input.costResourceId && cost.resourceId !== input.costResourceId) {
+        throw new Error(`Cost resource ${input.costResourceId} does not match effective cost ${input.effectiveCostId}`);
+      }
     } else if (input.componentType === "sub_assembly") {
       if (!input.subAssemblyId) throw new Error("subAssemblyId is required for sub_assembly components");
       if (input.subAssemblyId === assemblyId) {
@@ -8472,6 +11276,10 @@ export class PrismaApiStore {
           componentType: c.componentType,
           catalogItemId: c.catalogItemId,
           rateScheduleItemId: c.rateScheduleItemId,
+          laborUnitId: c.laborUnitId,
+          laborDifficulty: c.laborDifficulty,
+          costResourceId: c.costResourceId,
+          effectiveCostId: c.effectiveCostId,
           subAssemblyId: c.subAssemblyId,
           quantityExpr: c.quantityExpr,
           description: c.description,
@@ -8494,12 +11302,14 @@ export class PrismaApiStore {
     assemblyMap: Map<string, AssemblyDefinition>;
     catalogMap: Map<string, CatalogItemRef>;
     rateMap: Map<string, RateScheduleItemRef>;
+    laborMap: Map<string, LaborUnitRef>;
+    effectiveCostMap: Map<string, EffectiveCostRef>;
   }> {
     const assemblyMap = await this.buildAssemblyDefinitionMap();
 
     const allComponents = await this.db.assemblyComponent.findMany({
       where: { assembly: { organizationId: this.organizationId } },
-      select: { catalogItemId: true, rateScheduleItemId: true },
+      select: { catalogItemId: true, rateScheduleItemId: true, laborUnitId: true, effectiveCostId: true },
     });
     const catalogItemIds = Array.from(
       new Set(allComponents.map((c) => c.catalogItemId).filter((id): id is string => Boolean(id))),
@@ -8507,12 +11317,45 @@ export class PrismaApiStore {
     const rateScheduleItemIds = Array.from(
       new Set(allComponents.map((c) => c.rateScheduleItemId).filter((id): id is string => Boolean(id))),
     );
+    const laborUnitIds = Array.from(
+      new Set(allComponents.map((c) => c.laborUnitId).filter((id): id is string => Boolean(id))),
+    );
+    const effectiveCostIds = Array.from(
+      new Set(
+        allComponents
+          .map((c: any) => c.effectiveCostId)
+          .filter((id: unknown): id is string => typeof id === "string" && id.length > 0),
+      ),
+    );
 
     const catalogRows = catalogItemIds.length > 0
-      ? await this.db.catalogItem.findMany({ where: { id: { in: catalogItemIds } } })
+      ? await this.db.catalogItem.findMany({
+          where: { id: { in: catalogItemIds }, catalog: { organizationId: this.organizationId } },
+        })
       : [];
     const rateRows = rateScheduleItemIds.length > 0
-      ? await this.db.rateScheduleItem.findMany({ where: { id: { in: rateScheduleItemIds } } })
+      ? await this.db.rateScheduleItem.findMany({
+          where: { id: { in: rateScheduleItemIds }, schedule: { organizationId: this.organizationId } },
+        })
+      : [];
+    const laborRows = laborUnitIds.length > 0
+      ? await (this.db as any).laborUnit.findMany({
+          where: {
+            id: { in: laborUnitIds },
+            library: {
+              OR: [
+                { organizationId: this.organizationId },
+                { organizationId: null },
+              ],
+            },
+          },
+        })
+      : [];
+    const effectiveCostRows = effectiveCostIds.length > 0
+      ? await (this.db as any).effectiveCost.findMany({
+          where: { id: { in: effectiveCostIds }, organizationId: this.organizationId },
+          include: { resource: true },
+        })
       : [];
 
     const catalogMap = new Map<string, CatalogItemRef>(
@@ -8534,8 +11377,65 @@ export class PrismaApiStore {
         },
       ]),
     );
+    const laborMap = new Map<string, LaborUnitRef>(
+      laborRows.map((unit: any) => [
+        unit.id,
+        {
+          id: unit.id,
+          code: unit.code,
+          name: unit.name,
+          description: unit.description,
+          category: unit.category,
+          className: unit.className,
+          subClassName: unit.subClassName,
+          outputUom: unit.outputUom,
+          hoursNormal: unit.hoursNormal,
+          hoursDifficult: unit.hoursDifficult ?? null,
+          hoursVeryDifficult: unit.hoursVeryDifficult ?? null,
+          defaultDifficulty: unit.defaultDifficulty,
+          entityCategoryType: unit.entityCategoryType,
+        },
+      ]),
+    );
+    const metadataString = (metadata: unknown, key: string) => {
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+      const value = (metadata as Record<string, unknown>)[key];
+      return typeof value === "string" ? value : "";
+    };
+    const metadataObject = (metadata: unknown, key: string) => {
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
+      const value = (metadata as Record<string, unknown>)[key];
+      return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+    };
+    const effectiveCostMap = new Map<string, EffectiveCostRef>(
+      effectiveCostRows.map((cost: any) => {
+        const costItem = metadataObject(cost.metadata, "costItem");
+        return [
+          cost.id,
+          {
+            id: cost.id,
+            resourceId: cost.resourceId ?? null,
+            catalogItemId: cost.resource?.catalogItemId ?? null,
+            code: cost.resource?.code || metadataString(costItem, "code"),
+            name: cost.resource?.name || metadataString(costItem, "name") || "Cost intelligence item",
+            description: cost.resource?.description || metadataString(costItem, "description"),
+            category: cost.resource?.category || metadataString(costItem, "category"),
+            resourceType: cost.resource?.resourceType || metadataString(costItem, "resourceType"),
+            defaultUom: cost.resource?.defaultUom || metadataString(costItem, "defaultUom") || cost.uom || "EA",
+            uom: cost.uom,
+            unitCost: cost.unitCost,
+            unitPrice: cost.unitPrice ?? null,
+            vendorName: cost.vendorName ?? "",
+            region: cost.region ?? "",
+            method: cost.method ?? "",
+            effectiveDate: cost.effectiveDate ?? null,
+            confidence: cost.confidence ?? null,
+          },
+        ] as const;
+      }),
+    );
 
-    return { assemblyMap, catalogMap, rateMap };
+    return { assemblyMap, catalogMap, rateMap, laborMap, effectiveCostMap };
   }
 
   async previewAssemblyExpansion(
@@ -8548,6 +11448,9 @@ export class PrismaApiStore {
       componentType: string;
       catalogItemId?: string;
       rateScheduleItemId?: string;
+      laborUnitId?: string;
+      costResourceId?: string;
+      effectiveCostId?: string;
       category: string;
       entityName: string;
       description: string;
@@ -8559,16 +11462,37 @@ export class PrismaApiStore {
       lineCost: number;
       linePrice: number;
     }>;
+    resourceRollup: Array<{
+      key: string;
+      componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "mixed";
+      catalogItemId?: string;
+      rateScheduleItemId?: string;
+      laborUnitId?: string;
+      costResourceId?: string;
+      effectiveCostId?: string;
+      category: string;
+      entityName: string;
+      uom: string;
+      quantity: number;
+      lineCost: number;
+      linePrice: number;
+      averageUnitCost: number;
+      averageUnitPrice: number;
+      componentCount: number;
+      componentPaths: string[][];
+    }>;
     totals: { cost: number; price: number; lineCount: number };
     warnings: string[];
   }> {
     await this.requireAssembly(assemblyId);
-    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
+    const { assemblyMap, catalogMap, rateMap, laborMap, effectiveCostMap } = await this.buildExpansionContext();
 
     const expansion = expandAssembly(assemblyId, quantity, parameterValues ?? {}, {
       assemblies: assemblyMap,
       catalogItems: catalogMap,
       rateScheduleItems: rateMap,
+      laborUnits: laborMap,
+      effectiveCosts: effectiveCostMap,
     });
 
     let totalCost = 0;
@@ -8581,9 +11505,12 @@ export class PrismaApiStore {
       return {
         componentPath: it.componentPath,
         componentType: it.componentType,
-        catalogItemId: it.catalogItemId,
-        rateScheduleItemId: it.rateScheduleItemId,
-        category: it.category,
+	        catalogItemId: it.catalogItemId,
+	        rateScheduleItemId: it.rateScheduleItemId,
+	        laborUnitId: it.laborUnitId,
+	        costResourceId: it.costResourceId,
+	        effectiveCostId: it.effectiveCostId,
+	        category: it.category,
         entityName: it.entityName,
         description: it.description,
         quantity: it.quantity,
@@ -8598,6 +11525,7 @@ export class PrismaApiStore {
 
     return {
       items,
+      resourceRollup: summarizeExpandedAssemblyResources(expansion.items),
       totals: { cost: totalCost, price: totalPrice, lineCount: items.length },
       warnings: expansion.warnings,
     };
@@ -8619,12 +11547,18 @@ export class PrismaApiStore {
 
     await this.requireAssembly(input.assemblyId);
 
-    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
+    const { assemblyMap, catalogMap, rateMap, laborMap, effectiveCostMap } = await this.buildExpansionContext();
     const expansion = expandAssembly(
       input.assemblyId,
       input.quantity,
       input.parameterValues ?? {},
-      { assemblies: assemblyMap, catalogItems: catalogMap, rateScheduleItems: rateMap },
+      {
+        assemblies: assemblyMap,
+        catalogItems: catalogMap,
+        rateScheduleItems: rateMap,
+        laborUnits: laborMap,
+        effectiveCosts: effectiveCostMap,
+      },
     );
 
     if (expansion.items.length === 0) {
@@ -8669,20 +11603,30 @@ export class PrismaApiStore {
     projectId: string,
     worksheetId: string,
     instanceId: string,
-    assemblyId: string,
-    expandedItems: Array<{
-      catalogItemId?: string;
-      rateScheduleItemId?: string;
-      category: string;
-      entityType: string;
+	    assemblyId: string,
+	    expandedItems: Array<{
+	      catalogItemId?: string;
+	      rateScheduleItemId?: string;
+	      laborUnitId?: string;
+	      costResourceId?: string;
+	      effectiveCostId?: string;
+	      componentPath?: string[];
+	      componentType?: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "mixed";
+	      category: string;
+	      entityType: string;
       entityName: string;
       description: string;
       quantity: number;
       uom: string;
-      unitCost: number;
-      unitPrice: number;
-      markup: number;
-      notes: string;
+      unit1?: number;
+      unit2?: number;
+      unit3?: number;
+      tierUnits?: Record<string, number>;
+	      unitCost: number;
+	      unitPrice: number;
+	      markup: number;
+	      vendor?: string;
+	      notes: string;
     }>,
   ): Promise<WorksheetItem[]> {
     const maxOrder = await this.db.worksheetItem.aggregate({
@@ -8696,23 +11640,64 @@ export class PrismaApiStore {
       const baseInput: CreateWorksheetItemInput = {
         phaseId: null,
         category: expanded.category,
-        entityType: expanded.entityType,
-        entityName: expanded.entityName,
-        description: expanded.description,
-        quantity: expanded.quantity,
+	        entityType: expanded.entityType,
+	        entityName: expanded.entityName,
+	        description: expanded.description,
+	        vendor: expanded.vendor ?? null,
+	        quantity: expanded.quantity,
         uom: expanded.uom,
         cost: expanded.unitCost,
         markup: expanded.markup,
         price: expanded.unitPrice,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
-        rateScheduleItemId: expanded.rateScheduleItemId ?? null,
-        itemId: expanded.catalogItemId ?? null,
-        tierUnits: {},
-        sourceNotes: expanded.notes,
-        lineOrder: nextLineOrder++,
-      };
+        unit1: expanded.unit1 ?? 0,
+        unit2: expanded.unit2 ?? 0,
+        unit3: expanded.unit3 ?? 0,
+	        rateScheduleItemId: expanded.rateScheduleItemId ?? null,
+	        itemId: expanded.catalogItemId ?? null,
+	        tierUnits: expanded.tierUnits ?? {},
+	        sourceNotes: expanded.notes,
+	        costResourceId: expanded.costResourceId ?? null,
+	        effectiveCostId: expanded.effectiveCostId ?? null,
+	        laborUnitId: expanded.laborUnitId ?? null,
+	        resourceComposition: {
+	          source: "assembly",
+	          assemblyId,
+	          instanceId,
+	          unitCost: expanded.unitCost,
+	          unitPrice: expanded.unitPrice,
+	          totalCost: expanded.quantity * expanded.unitCost,
+	          totalPrice: expanded.quantity * expanded.unitPrice * (1 + (expanded.markup ?? 0)),
+	          resources: [{
+	            type: expanded.componentType,
+	            category: expanded.category,
+	            name: expanded.entityName,
+	            description: expanded.description,
+	            quantity: expanded.quantity,
+	            uom: expanded.uom,
+	            unitCost: expanded.unitCost,
+	            unitPrice: expanded.unitPrice,
+	            catalogItemId: expanded.catalogItemId ?? null,
+	            rateScheduleItemId: expanded.rateScheduleItemId ?? null,
+	            laborUnitId: expanded.laborUnitId ?? null,
+	            costResourceId: expanded.costResourceId ?? null,
+	            effectiveCostId: expanded.effectiveCostId ?? null,
+	            componentPath: expanded.componentPath,
+	          }],
+	        },
+	        sourceEvidence: {
+	          source: "assembly",
+	          assemblyId,
+	          instanceId,
+	          componentType: expanded.componentType,
+	          componentPath: expanded.componentPath,
+	          catalogItemId: expanded.catalogItemId ?? null,
+	          rateScheduleItemId: expanded.rateScheduleItemId ?? null,
+	          laborUnitId: expanded.laborUnitId ?? null,
+	          costResourceId: expanded.costResourceId ?? null,
+	          effectiveCostId: expanded.effectiveCostId ?? null,
+	        },
+	        lineOrder: nextLineOrder++,
+	      };
 
       const { item } = await this.createWorksheetItemWithSnapshot(projectId, worksheetId, baseInput);
       await this.db.worksheetItem.update({
@@ -8726,7 +11711,16 @@ export class PrismaApiStore {
 
   // ── Assembly Instance Operations ───────────────────────────────────────
 
-  async listAssemblyInstancesForWorksheet(worksheetId: string): Promise<AssemblyInstanceRecord[]> {
+  async listAssemblyInstancesForWorksheet(projectId: string, worksheetId: string): Promise<AssemblyInstanceRecord[]> {
+    await this.requireProject(projectId);
+    const worksheet = await this.db.worksheet.findFirst({
+      where: {
+        id: worksheetId,
+        revision: { quote: { projectId, project: { organizationId: this.organizationId } } },
+      },
+      select: { id: true },
+    });
+    if (!worksheet) throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
     const rows = await this.db.assemblyInstance.findMany({
       where: { worksheetId },
       include: {
@@ -8745,7 +11739,12 @@ export class PrismaApiStore {
     instanceId: string,
   ): Promise<{ deleted: true; itemCount: number }> {
     await this.requireProject(projectId);
-    const instance = await this.db.assemblyInstance.findFirst({ where: { id: instanceId } });
+    const instance = await this.db.assemblyInstance.findFirst({
+      where: {
+        id: instanceId,
+        worksheet: { revision: { quote: { projectId, project: { organizationId: this.organizationId } } } },
+      },
+    });
     if (!instance) throw new Error(`Assembly instance ${instanceId} not found`);
 
     const items = await this.db.worksheetItem.findMany({
@@ -8776,7 +11775,12 @@ export class PrismaApiStore {
     overrides?: { quantity?: number; parameterValues?: Record<string, number | string>; phaseId?: string | null },
   ): Promise<{ items: WorksheetItem[]; warnings: string[]; instanceId: string; itemCount: number }> {
     await this.requireProject(projectId);
-    const instance = await this.db.assemblyInstance.findFirst({ where: { id: instanceId } });
+    const instance = await this.db.assemblyInstance.findFirst({
+      where: {
+        id: instanceId,
+        worksheet: { revision: { quote: { projectId, project: { organizationId: this.organizationId } } } },
+      },
+    });
     if (!instance) throw new Error(`Assembly instance ${instanceId} not found`);
     if (!instance.assemblyId) throw new Error(`Assembly instance ${instanceId} has no source assembly to re-sync from`);
 
@@ -8788,11 +11792,13 @@ export class PrismaApiStore {
     const nextPhase = overrides?.phaseId !== undefined ? overrides.phaseId : instance.phaseId;
 
     await this.requireAssembly(instance.assemblyId);
-    const { assemblyMap, catalogMap, rateMap } = await this.buildExpansionContext();
+    const { assemblyMap, catalogMap, rateMap, laborMap, effectiveCostMap } = await this.buildExpansionContext();
     const expansion = expandAssembly(instance.assemblyId, nextQuantity, nextParams, {
       assemblies: assemblyMap,
       catalogItems: catalogMap,
       rateScheduleItems: rateMap,
+      laborUnits: laborMap,
+      effectiveCosts: effectiveCostMap,
     });
 
     // Delete the existing line items for this instance.
@@ -8848,6 +11854,8 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     if (!revision) throw new Error(`Project ${projectId} has no active revision`);
+    const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId, revisionId: revision.id } });
+    if (!worksheet) throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);
 
     const items = await this.db.worksheetItem.findMany({
       where: { id: { in: input.worksheetItemIds }, worksheetId },
@@ -8988,6 +11996,29 @@ export class PrismaApiStore {
   async updateFileNode(nodeId: string, patch: FileNodePatchInput) {
     const node = await this.db.fileNode.findFirst({ where: { id: nodeId } });
     if (!node) throw new Error(`File node ${nodeId} not found`);
+
+    if (patch.parentId !== undefined && patch.parentId !== null) {
+      const parent = await this.db.fileNode.findFirst({
+        where: { id: patch.parentId, projectId: node.projectId },
+      });
+      if (!parent || parent.type !== "directory") {
+        throw new Error(`Parent directory ${patch.parentId} not found`);
+      }
+
+      if (node.type === "directory") {
+        let current: typeof parent | null = parent;
+        while (current) {
+          if (current.id === nodeId) {
+            throw new Error("Cannot move a directory inside itself");
+          }
+          current = current.parentId
+            ? await this.db.fileNode.findFirst({
+                where: { id: current.parentId, projectId: node.projectId },
+              })
+            : null;
+        }
+      }
+    }
 
     const data: any = { updatedAt: new Date() };
     if (patch.name !== undefined) data.name = patch.name;
@@ -9278,7 +12309,11 @@ export class PrismaApiStore {
     if (!revision) return;
 
     const entityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
-    const catDef = entityCats.find((c) => c.name === item.category);
+    const catDef = resolveEntityCategoryForItemInput(entityCats, {
+      categoryId: (item as any).categoryId ?? null,
+      category: item.category,
+      entityType: item.entityType,
+    });
 
     const revisionSchedules = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
@@ -9369,34 +12404,48 @@ export class PrismaApiStore {
       if (!headerName) return -1;
       return headers.indexOf(headerName);
     };
+    const readCell = (row: string[], mappedField: string): string => {
+      const index = getColumn(mappedField);
+      return index >= 0 ? row[index] ?? "" : "";
+    };
+    const parseNumber = (value: string, fallback = 0): number => {
+      const cleaned = String(value ?? "").replace(/[$,\s]/g, "");
+      const parsed = Number.parseFloat(cleaned);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    };
+    const parseMarkup = (value: string, fallback = 0.2): number => {
+      if (!value) return fallback;
+      const cleaned = String(value).trim();
+      const parsed = parseNumber(cleaned.replace(/%$/, ""), fallback);
+      if (!Number.isFinite(parsed)) return fallback;
+      if (cleaned.endsWith("%")) return parsed / 100;
+      return parsed > 1 ? parsed / 100 : parsed;
+    };
 
     for (const row of rows) {
-      const entityNameIdx = getColumn("entityName");
-      const entityName = entityNameIdx >= 0 ? row[entityNameIdx] : "";
+      const description = readCell(row, "description");
+      const entityName = readCell(row, "entityName") || description;
       if (!entityName) continue;
 
-      const descIdx = getColumn("description");
-      const qtyIdx = getColumn("quantity");
-      const uomIdx = getColumn("uom");
-      const costIdx = getColumn("cost");
-      const priceIdx = getColumn("price");
-      const categoryIdx = getColumn("category");
-      const vendorIdx = getColumn("vendor");
+      const category = readCell(row, "category") || "Material";
+      const entityType = readCell(row, "entityType") || category || "Material";
+      const lineOrder = parseNumber(readCell(row, "lineOrder"), Number.NaN);
 
       const input: CreateWorksheetItemInput = {
-        category: categoryIdx >= 0 && row[categoryIdx] ? row[categoryIdx] : "Material",
-        entityType: "Material",
+        category,
+        entityType,
         entityName,
-        vendor: vendorIdx >= 0 ? row[vendorIdx] : undefined,
-        description: descIdx >= 0 ? row[descIdx] : "",
-        quantity: qtyIdx >= 0 ? parseFloat(row[qtyIdx]) || 1 : 1,
-        uom: uomIdx >= 0 && row[uomIdx] ? row[uomIdx] : "EA",
-        cost: costIdx >= 0 ? parseFloat(row[costIdx]) || 0 : 0,
-        markup: 0.2,
-        price: priceIdx >= 0 ? parseFloat(row[priceIdx]) || 0 : 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
+        vendor: readCell(row, "vendor") || undefined,
+        description,
+        quantity: parseNumber(readCell(row, "quantity"), 1) || 1,
+        uom: readCell(row, "uom") || "EA",
+        cost: parseNumber(readCell(row, "cost"), 0),
+        markup: parseMarkup(readCell(row, "markup"), 0.2),
+        price: parseNumber(readCell(row, "price"), 0),
+        unit1: parseNumber(readCell(row, "unit1"), 0),
+        unit2: parseNumber(readCell(row, "unit2"), 0),
+        unit3: parseNumber(readCell(row, "unit3"), 0),
+        ...(Number.isFinite(lineOrder) ? { lineOrder } : {}),
       };
 
       await this.createWorksheetItem(projectId, worksheetId, input);
@@ -9550,17 +12599,26 @@ export class PrismaApiStore {
     const mappedRevision = mapRevision(revision);
     const appliedLineItemIds: string[] = [];
 
-    for (let index = 0; index < lineItems.length; index += 1) {
-      const sourceItem = lineItems[index];
-      const existing = orderedExisting[index];
-      const preserveLineOrder = existing?.worksheetId === resolvedWorksheetId;
-
-      const domainItem: WorksheetItem = {
-        id: existing?.id ?? createId("li"),
-        worksheetId: resolvedWorksheetId,
-        phaseId: sourceItem.phaseId ?? null,
+	  for (let index = 0; index < lineItems.length; index += 1) {
+	    const sourceItem = lineItems[index];
+	    const existing = orderedExisting[index];
+	    const preserveLineOrder = existing?.worksheetId === resolvedWorksheetId;
+      const categoryDef = resolveEntityCategoryForItemInput(entityCategories, {
+        categoryId: (sourceItem as any).categoryId ?? null,
         category: sourceItem.category,
         entityType: sourceItem.entityType,
+      });
+      if (!categoryDef) {
+        throw new Error(`Plugin line item "${sourceItem.entityName}" has an unknown category "${sourceItem.category}".`);
+      }
+
+	    const domainItem: WorksheetItem = {
+	      id: existing?.id ?? createId("li"),
+	      worksheetId: resolvedWorksheetId,
+	      phaseId: sourceItem.phaseId ?? null,
+	      categoryId: categoryDef.id,
+	      category: categoryDef.name,
+	      entityType: categoryDef.entityType,
         entityName: sourceItem.entityName,
         vendor: sourceItem.vendor ?? undefined,
         description: sourceItem.description,
@@ -9577,10 +12635,15 @@ export class PrismaApiStore {
         itemId: sourceItem.itemId ?? null,
         tierUnits: sourceItem.tierUnits ?? {},
         sourceNotes: sourceItem.sourceNotes ?? "",
+        costResourceId: sourceItem.costResourceId ?? null,
+        effectiveCostId: sourceItem.effectiveCostId ?? null,
+        laborUnitId: sourceItem.laborUnitId ?? null,
+        resourceComposition: sourceItem.resourceComposition ?? {},
+        sourceEvidence: sourceItem.sourceEvidence ?? {},
       };
+      await this.validateWorksheetItemProvenanceRefs(domainItem);
 
-      const categoryDef = entityCategories.find((candidate) => candidate.name === domainItem.category);
-      const calcType = (categoryDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+	    const calcType = (categoryDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
       const itemSource = categoryDef?.itemSource ?? "freeform";
 
       if (domainItem.rateScheduleItemId) {
@@ -9620,12 +12683,15 @@ export class PrismaApiStore {
       if (existing) {
         const updated = await this.db.worksheetItem.update({
           where: { id: existing.id },
-          data: {
-            worksheetId: domainItem.worksheetId,
-            phaseId: domainItem.phaseId,
-            category: domainItem.category,
+	          data: {
+	            worksheetId: domainItem.worksheetId,
+	            phaseId: domainItem.phaseId,
+	            categoryId: domainItem.categoryId!,
+	            category: domainItem.category,
             entityType: domainItem.entityType,
             entityName: domainItem.entityName,
+            classification: (domainItem.classification ?? {}) as Prisma.InputJsonValue,
+            costCode: domainItem.costCode ?? null,
             vendor: domainItem.vendor ?? null,
             description: domainItem.description,
             quantity: domainItem.quantity,
@@ -9641,6 +12707,11 @@ export class PrismaApiStore {
             itemId: domainItem.itemId ?? null,
             tierUnits: domainItem.tierUnits ?? {},
             sourceNotes: domainItem.sourceNotes ?? "",
+            costResourceId: domainItem.costResourceId ?? null,
+            effectiveCostId: domainItem.effectiveCostId ?? null,
+            laborUnitId: domainItem.laborUnitId ?? null,
+            resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
+            sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
           },
         });
 
@@ -9656,14 +12727,17 @@ export class PrismaApiStore {
         continue;
       }
 
-      const created = await this.db.worksheetItem.create({
-        data: {
-          id: domainItem.id,
-          worksheetId: domainItem.worksheetId,
-          phaseId: domainItem.phaseId,
-          category: domainItem.category,
+	      const created = await this.db.worksheetItem.create({
+	        data: {
+	          id: domainItem.id,
+	          worksheetId: domainItem.worksheetId,
+	          phaseId: domainItem.phaseId,
+	          categoryId: domainItem.categoryId!,
+	          category: domainItem.category,
           entityType: domainItem.entityType,
           entityName: domainItem.entityName,
+          classification: (domainItem.classification ?? {}) as Prisma.InputJsonValue,
+          costCode: domainItem.costCode ?? null,
           vendor: domainItem.vendor ?? null,
           description: domainItem.description,
           quantity: domainItem.quantity,
@@ -9679,6 +12753,11 @@ export class PrismaApiStore {
           itemId: domainItem.itemId ?? null,
           tierUnits: domainItem.tierUnits ?? {},
           sourceNotes: domainItem.sourceNotes ?? "",
+          costResourceId: domainItem.costResourceId ?? null,
+          effectiveCostId: domainItem.effectiveCostId ?? null,
+          laborUnitId: domainItem.laborUnitId ?? null,
+          resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
+          sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
         },
       });
 
@@ -9768,7 +12847,7 @@ export class PrismaApiStore {
       toolId,
       input,
       formState: opts?.formState,
-      revisionDifficulty: revision?.necaDifficulty ?? undefined,
+      revisionDifficulty: revision?.laborDifficulty ?? undefined,
       lookupDatasetRows: async (datasetRef) => {
         const resolved = await this._resolveDatasetRecordForRead(datasetRef);
         if (!resolved) {
@@ -9785,12 +12864,35 @@ export class PrismaApiStore {
         return resolved ? ((resolved.dataset.columns as DatasetColumn[]) ?? []) : [];
       },
       resolveRateScheduleItem: async (rateScheduleItemId) => {
-        const schedules = await this.db.rateSchedule.findMany({
-          where: { revisionId },
-          include: { items: true },
+        const match = await this.db.rateScheduleItem.findFirst({
+          where: { id: rateScheduleItemId, schedule: { revisionId, organizationId: this.organizationId } },
+          include: { schedule: true },
         });
-        const match = schedules.flatMap((schedule) => schedule.items ?? []).find((item) => item.id === rateScheduleItemId);
-        return match ? { id: match.id, name: match.name } : null;
+        if (!match) return null;
+        const category = match.schedule?.category ?? "";
+        const entityCategory = category
+          ? await this.db.entityCategory.findFirst({
+              where: {
+                organizationId: this.organizationId,
+                enabled: true,
+                OR: [
+                  { entityType: category },
+                  { name: category },
+                  { id: category },
+                ],
+              },
+              select: { entityType: true, name: true },
+            })
+          : null;
+        return {
+          id: match.id,
+          name: match.name,
+          category: entityCategory?.name ?? category,
+          entityCategoryType: entityCategory?.entityType ?? category,
+        };
+      },
+      lookupLaborUnit: async (providerLabel, labourInput) => {
+        return this.resolveLaborUnitByHierarchy(providerLabel, labourInput);
       },
     });
 
@@ -9900,8 +13002,13 @@ export class PrismaApiStore {
             unit3: item.unit3 ?? 0, phaseId: item.phaseId,
             rateScheduleItemId: item.rateScheduleItemId ?? null,
             itemId: item.itemId ?? null,
+            costResourceId: item.costResourceId ?? null,
+            effectiveCostId: item.effectiveCostId ?? null,
+            laborUnitId: item.laborUnitId ?? null,
             tierUnits: item.tierUnits,
             sourceNotes: item.sourceNotes,
+            resourceComposition: item.resourceComposition ?? {},
+            sourceEvidence: item.sourceEvidence ?? {},
           });
           appliedItemIds.push(created.id);
         }
@@ -9921,8 +13028,13 @@ export class PrismaApiStore {
           unit3: item.unit3 ?? 0, phaseId: item.phaseId,
           rateScheduleItemId: item.rateScheduleItemId ?? null,
           itemId: item.itemId ?? null,
+          costResourceId: item.costResourceId ?? null,
+          effectiveCostId: item.effectiveCostId ?? null,
+          laborUnitId: item.laborUnitId ?? null,
           tierUnits: item.tierUnits,
           sourceNotes: item.sourceNotes,
+          resourceComposition: item.resourceComposition ?? {},
+          sourceEvidence: item.sourceEvidence ?? {},
         });
         appliedItemIds.push(created.id);
       }
@@ -10059,6 +13171,7 @@ export class PrismaApiStore {
   }
 
   async listPluginExecutions(projectId: string) {
+    await this.requireProject(projectId);
     const executions = await this.db.pluginExecution.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
@@ -10073,12 +13186,14 @@ export class PrismaApiStore {
       where: { organizationId: this.organizationId },
     });
     if (!settings) return structuredClone(DEFAULT_SETTINGS);
+    const defaults = { ...DEFAULT_SETTINGS.defaults, ...((settings.defaults as any) ?? {}) };
+    defaults.uoms = normalizeUomLibrary(defaults.uoms);
     return {
-      general: (settings.general as any) ?? DEFAULT_SETTINGS.general,
-      email: (settings.email as any) ?? DEFAULT_SETTINGS.email,
-      defaults: (settings.defaults as any) ?? DEFAULT_SETTINGS.defaults,
-      integrations: (settings.integrations as any) ?? DEFAULT_SETTINGS.integrations,
-      brand: (settings.brand as any) ?? DEFAULT_BRAND,
+      general: { ...DEFAULT_SETTINGS.general, ...((settings.general as any) ?? {}) },
+      email: { ...DEFAULT_SETTINGS.email, ...((settings.email as any) ?? {}) },
+      defaults,
+      integrations: { ...DEFAULT_SETTINGS.integrations, ...((settings.integrations as any) ?? {}) },
+      brand: { ...DEFAULT_BRAND, ...((settings.brand as any) ?? {}) },
       termsAndConditions: settings.termsAndConditions ?? "",
     } as AppSettings;
   }
@@ -10089,7 +13204,13 @@ export class PrismaApiStore {
     const merged = {
       general: patch.general ? { ...existing.general, ...patch.general } : existing.general,
       email: patch.email ? { ...existing.email, ...patch.email } : existing.email,
-      defaults: patch.defaults ? { ...existing.defaults, ...patch.defaults } : existing.defaults,
+      defaults: patch.defaults
+        ? {
+            ...existing.defaults,
+            ...patch.defaults,
+            uoms: normalizeUomLibrary((patch.defaults as any).uoms ?? (existing.defaults as any).uoms),
+          }
+        : { ...existing.defaults, uoms: normalizeUomLibrary((existing.defaults as any).uoms) },
       integrations: patch.integrations ? { ...existing.integrations, ...patch.integrations } : existing.integrations,
       brand: patch.brand ? { ...existing.brand, ...patch.brand } : existing.brand,
       termsAndConditions: patch.termsAndConditions ?? existing.termsAndConditions ?? "",
@@ -10294,6 +13415,7 @@ export class PrismaApiStore {
   async listKnowledgeBooks(projectId?: string): Promise<KnowledgeBook[]> {
     const where: any = { organizationId: this.organizationId };
     if (projectId) {
+      await this.requireProject(projectId);
       // Show global books + books scoped to this specific project
       where.OR = [{ projectId }, { scope: "global" }];
     } else {
@@ -10321,6 +13443,7 @@ export class PrismaApiStore {
     storagePath?: string | null;
   }): Promise<KnowledgeBook> {
     await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "book");
+    await this.requireProjectReference(input.projectId ?? null);
 
     const book = await this.db.knowledgeBook.create({
       data: {
@@ -10352,7 +13475,10 @@ export class PrismaApiStore {
     if (patch.description !== undefined) data.description = patch.description;
     if (patch.category !== undefined) data.category = patch.category;
     if (patch.scope !== undefined) data.scope = patch.scope;
-    if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.projectId !== undefined) {
+      await this.requireProjectReference(patch.projectId ?? null);
+      data.projectId = patch.projectId;
+    }
     if (patch.cabinetId !== undefined) {
       await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "book");
       data.cabinetId = patch.cabinetId ?? null;
@@ -10377,6 +13503,8 @@ export class PrismaApiStore {
   }
 
   async listKnowledgeChunks(bookId: string): Promise<KnowledgeChunk[]> {
+    const book = await this.getKnowledgeBook(bookId);
+    if (!book) throw new Error(`Knowledge book ${bookId} not found`);
     const chunks = await this.db.knowledgeChunk.findMany({
       where: { bookId },
       orderBy: { order: "asc" },
@@ -10385,6 +13513,8 @@ export class PrismaApiStore {
   }
 
   async listKnowledgeChunksPaginated(bookId: string, limit: number, offset: number): Promise<{ chunks: KnowledgeChunk[]; total: number }> {
+    const book = await this.getKnowledgeBook(bookId);
+    if (!book) throw new Error(`Knowledge book ${bookId} not found`);
     const [chunks, total] = await Promise.all([
       this.db.knowledgeChunk.findMany({
         where: { bookId },
@@ -10434,8 +13564,11 @@ export class PrismaApiStore {
     if (terms.length === 0) return [];
 
     const where: any = {};
-    if (bookId) where.bookId = bookId;
-    else {
+    if (bookId) {
+      const book = await this.getKnowledgeBook(bookId);
+      if (!book) return [];
+      where.bookId = book.id;
+    } else {
       const bookIds = (await this.db.knowledgeBook.findMany({ where: { organizationId: this.organizationId }, select: { id: true } })).map((b) => b.id);
       where.bookId = { in: bookIds };
     }
@@ -10495,6 +13628,7 @@ export class PrismaApiStore {
   async listKnowledgeDocuments(projectId?: string): Promise<KnowledgeDocument[]> {
     const where: any = { organizationId: this.organizationId };
     if (projectId) {
+      await this.requireProject(projectId);
       where.OR = [{ projectId }, { scope: "global" }];
     } else {
       where.scope = "global";
@@ -10526,6 +13660,7 @@ export class PrismaApiStore {
     const title = input.title.trim();
     if (!title) throw new Error("Document title is required");
     await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "document");
+    await this.requireProjectReference(input.projectId ?? null);
 
     const document = await this.db.knowledgeDocument.create({
       data: {
@@ -10560,7 +13695,10 @@ export class PrismaApiStore {
     if (patch.description !== undefined) data.description = patch.description;
     if (patch.category !== undefined) data.category = patch.category;
     if (patch.scope !== undefined) data.scope = patch.scope;
-    if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.projectId !== undefined) {
+      await this.requireProjectReference(patch.projectId ?? null);
+      data.projectId = patch.projectId;
+    }
     if (patch.cabinetId !== undefined) {
       await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "document");
       data.cabinetId = patch.cabinetId ?? null;
@@ -10891,6 +14029,7 @@ export class PrismaApiStore {
   async listDatasets(projectId?: string): Promise<Dataset[]> {
     const where: any = { organizationId: this.organizationId, isTemplate: false };
     if (projectId) {
+      await this.requireProject(projectId);
       where.OR = [{ projectId }, { scope: "global" }];
     }
     const datasets = await this.db.dataset.findMany({ where });
@@ -10917,6 +14056,7 @@ export class PrismaApiStore {
     tags?: string[];
   }): Promise<Dataset> {
     await this.validateKnowledgeLibraryItemCabinet(input.cabinetId ?? null, "dataset");
+    await this.requireProjectReference(input.projectId ?? null);
 
     const dataset = await this.db.dataset.create({
       data: {
@@ -10950,7 +14090,10 @@ export class PrismaApiStore {
     if (patch.description !== undefined) data.description = patch.description;
     if (patch.category !== undefined) data.category = patch.category;
     if (patch.scope !== undefined) data.scope = patch.scope;
-    if (patch.projectId !== undefined) data.projectId = patch.projectId;
+    if (patch.projectId !== undefined) {
+      await this.requireProjectReference(patch.projectId ?? null);
+      data.projectId = patch.projectId;
+    }
     if (patch.cabinetId !== undefined) {
       await this.validateKnowledgeLibraryItemCabinet(patch.cabinetId ?? null, "dataset");
       data.cabinetId = patch.cabinetId ?? null;
@@ -11005,7 +14148,9 @@ export class PrismaApiStore {
   }
 
   async getDatasetRow(rowId: string): Promise<DatasetRow | null> {
-    const row = await this.db.datasetRow.findFirst({ where: { id: rowId } });
+    const row = await this.db.datasetRow.findFirst({
+      where: { id: rowId, dataset: { organizationId: this.organizationId } },
+    });
     return row ? mapDatasetRow(row) : null;
   }
 
@@ -11066,8 +14211,7 @@ export class PrismaApiStore {
   }
 
   async updateDatasetRow(rowId: string, data: Record<string, unknown>): Promise<DatasetRow> {
-    const row = await this.db.datasetRow.findFirst({ where: { id: rowId } });
-    if (!row) throw new Error(`Dataset row ${rowId} not found`);
+    const row = await this.requireDatasetRow(rowId);
 
     const updated = await this.db.datasetRow.update({
       where: { id: rowId },
@@ -11077,8 +14221,7 @@ export class PrismaApiStore {
   }
 
   async deleteDatasetRow(rowId: string): Promise<DatasetRow> {
-    const row = await this.db.datasetRow.findFirst({ where: { id: rowId } });
-    if (!row) throw new Error(`Dataset row ${rowId} not found`);
+    const row = await this.requireDatasetRow(rowId);
 
     await this.db.datasetRow.delete({ where: { id: rowId } });
     const remaining = await this.db.datasetRow.count({ where: { datasetId: row.datasetId } });
@@ -11423,6 +14566,9 @@ export class PrismaApiStore {
     enabled?: boolean;
     order?: number;
   }): Promise<any> {
+    await this.validateKnowledgeBookReferences(input.knowledgeBookIds);
+    await this.validateKnowledgeDocumentReferences(input.knowledgeDocumentIds);
+
     const row = await this.db.estimatorPersona.create({
       data: {
         organizationId: this.organizationId,
@@ -11463,6 +14609,14 @@ export class PrismaApiStore {
     enabled?: boolean;
     order?: number;
   }): Promise<any> {
+    const existing = await this.db.estimatorPersona.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Estimator persona ${id} not found`);
+
+    await this.validateKnowledgeBookReferences(patch.knowledgeBookIds);
+    await this.validateKnowledgeDocumentReferences(patch.knowledgeDocumentIds);
+
     const {
       defaultAssumptions,
       productivityGuidance,
@@ -11483,6 +14637,11 @@ export class PrismaApiStore {
   }
 
   async deleteEstimatorPersona(id: string): Promise<void> {
+    const existing = await this.db.estimatorPersona.findFirst({
+      where: { id, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!existing) throw new Error(`Estimator persona ${id} not found`);
     await this.db.estimatorPersona.delete({ where: { id } });
   }
 }
@@ -11492,187 +14651,6 @@ export class PrismaApiStore {
 export function createApiStore(organizationId: string): PrismaApiStore {
   return new PrismaApiStore(sharedPrisma, organizationId);
 }
-
-// ── Dataset Library (system-level templates, not org-scoped) ─────────────────
-
-export const datasetLibrary = {
-  async listTemplates(): Promise<Dataset[]> {
-    const datasets = await sharedPrisma.dataset.findMany({
-      where: { isTemplate: true },
-      orderBy: { name: "asc" },
-    });
-    return datasets.map(mapDataset);
-  },
-
-  async getTemplate(id: string): Promise<Dataset | null> {
-    const dataset = await sharedPrisma.dataset.findFirst({
-      where: { id, isTemplate: true },
-    });
-    return dataset ? mapDataset(dataset) : null;
-  },
-
-  async createTemplate(input: {
-    name: string;
-    description: string;
-    category: Dataset["category"];
-    columns: Dataset["columns"];
-    source?: Dataset["source"];
-    sourceDescription?: string;
-  }): Promise<Dataset> {
-    const dataset = await sharedPrisma.dataset.create({
-      data: {
-        id: createId("ds"),
-        organizationId: null,
-        name: input.name,
-        description: input.description,
-        category: input.category,
-        scope: "global",
-        columns: input.columns as any,
-        source: input.source ?? "import",
-        sourceDescription: input.sourceDescription ?? "",
-        isTemplate: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      },
-    });
-    return mapDataset(dataset);
-  },
-
-  async updateTemplate(
-    id: string,
-    patch: Partial<Pick<Dataset, "name" | "description" | "category" | "columns" | "sourceDescription">>,
-  ): Promise<Dataset> {
-    const existing = await sharedPrisma.dataset.findFirst({ where: { id, isTemplate: true } });
-    if (!existing) throw new Error(`Template ${id} not found`);
-
-    const data: any = { updatedAt: new Date() };
-    if (patch.name !== undefined) data.name = patch.name;
-    if (patch.description !== undefined) data.description = patch.description;
-    if (patch.category !== undefined) data.category = patch.category;
-    if (patch.columns !== undefined) data.columns = patch.columns as any;
-    if (patch.sourceDescription !== undefined) data.sourceDescription = patch.sourceDescription;
-
-    const updated = await sharedPrisma.dataset.update({ where: { id }, data });
-    return mapDataset(updated);
-  },
-
-  async deleteTemplate(id: string): Promise<void> {
-    const existing = await sharedPrisma.dataset.findFirst({ where: { id, isTemplate: true } });
-    if (!existing) throw new Error(`Template ${id} not found`);
-    await sharedPrisma.datasetRow.deleteMany({ where: { datasetId: id } });
-    await sharedPrisma.dataset.delete({ where: { id } });
-  },
-
-  async getTemplateRows(
-    id: string,
-    limit = 100,
-    offset = 0,
-    filter?: string,
-  ): Promise<{ rows: DatasetRow[]; total: number }> {
-    const allRows = await sharedPrisma.datasetRow.findMany({
-      where: { datasetId: id },
-      orderBy: { order: "asc" },
-    });
-    let mapped = allRows.map(mapDatasetRow);
-    if (filter) {
-      const lf = filter.toLowerCase();
-      mapped = mapped.filter((r) => JSON.stringify(r.data).toLowerCase().includes(lf));
-    }
-    const total = mapped.length;
-    return { rows: mapped.slice(offset, offset + limit), total };
-  },
-
-  async createTemplateRowsBatch(
-    datasetId: string,
-    rows: Array<Record<string, unknown>>,
-  ): Promise<number> {
-    const now = new Date();
-    const existing = await sharedPrisma.datasetRow.count({ where: { datasetId } });
-    const BATCH = 500;
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH);
-      await sharedPrisma.datasetRow.createMany({
-        data: batch.map((data, idx) => ({
-          id: createId("dr"),
-          datasetId,
-          data: data as any,
-          order: existing + i + idx,
-          createdAt: now,
-          updatedAt: now,
-        })),
-      });
-    }
-    await sharedPrisma.dataset.update({
-      where: { id: datasetId },
-      data: { rowCount: existing + rows.length, updatedAt: now },
-    });
-    return rows.length;
-  },
-
-  async deleteTemplateRows(id: string): Promise<void> {
-    await sharedPrisma.datasetRow.deleteMany({ where: { datasetId: id } });
-    await sharedPrisma.dataset.update({
-      where: { id },
-      data: { rowCount: 0, updatedAt: new Date() },
-    });
-  },
-
-  async adoptTemplate(templateId: string, organizationId: string): Promise<Dataset> {
-    const template = await sharedPrisma.dataset.findFirst({
-      where: { id: templateId, isTemplate: true },
-    });
-    if (!template) throw new Error(`Template ${templateId} not found`);
-
-    const now = new Date();
-    const newId = createId("ds");
-
-    const dataset = await sharedPrisma.dataset.create({
-      data: {
-        id: newId,
-        organizationId,
-        name: template.name,
-        description: template.description,
-        category: template.category,
-        scope: "global",
-        columns: template.columns as any,
-        source: "library",
-        sourceDescription: `Adopted from template: ${template.name}`,
-        isTemplate: false,
-        sourceTemplateId: templateId,
-        createdAt: now,
-        updatedAt: now,
-      },
-    });
-
-    // Clone all rows in batches
-    const allRows = await sharedPrisma.datasetRow.findMany({
-      where: { datasetId: templateId },
-      orderBy: { order: "asc" },
-    });
-
-    const BATCH = 500;
-    for (let i = 0; i < allRows.length; i += BATCH) {
-      const batch = allRows.slice(i, i + BATCH);
-      await sharedPrisma.datasetRow.createMany({
-        data: batch.map((r, idx) => ({
-          id: createId("dr"),
-          datasetId: newId,
-          data: r.data as any,
-          order: i + idx,
-          createdAt: now,
-          updatedAt: now,
-        })),
-      });
-    }
-
-    await sharedPrisma.dataset.update({
-      where: { id: newId },
-      data: { rowCount: allRows.length, updatedAt: now },
-    });
-
-    return mapDataset({ ...dataset, rowCount: allRows.length });
-  },
-};
 
 // ── Catalog Library (global templates) ──────────────────────────────────────
 

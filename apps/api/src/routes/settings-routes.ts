@@ -10,6 +10,7 @@ const personaSchema = z.object({
   description: z.string().default(""),
   systemPrompt: z.string().default(""),
   knowledgeBookIds: z.array(z.string()).default([]),
+  knowledgeDocumentIds: z.array(z.string()).default([]),
   datasetTags: z.array(z.string()).default([]),
   packageBuckets: z.array(z.string()).default([]),
   defaultAssumptions: z.record(z.unknown()).default({}),

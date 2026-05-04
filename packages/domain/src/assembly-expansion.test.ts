@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import {
   type AssemblyDefinition,
   type CatalogItemRef,
+  type EffectiveCostRef,
   type ExpansionContext,
   type RateScheduleItemRef,
   evalExpression,
   expandAssembly,
   findAssemblyCycles,
+  summarizeExpandedAssemblyResources,
 } from "./assembly-expansion";
 
 // ── Expression evaluator tests ────────────────────────────────────────────
@@ -67,11 +69,13 @@ function makeContext(opts: {
   assemblies?: AssemblyDefinition[];
   catalogItems?: CatalogItemRef[];
   rateScheduleItems?: RateScheduleItemRef[];
+  effectiveCosts?: EffectiveCostRef[];
 }): ExpansionContext {
   return {
     assemblies: new Map((opts.assemblies ?? []).map((a) => [a.id, a])),
     catalogItems: new Map((opts.catalogItems ?? []).map((c) => [c.id, c])),
     rateScheduleItems: new Map((opts.rateScheduleItems ?? []).map((r) => [r.id, r])),
+    effectiveCosts: new Map((opts.effectiveCosts ?? []).map((c) => [c.id, c])),
   };
 }
 
@@ -112,6 +116,67 @@ test("expandAssembly emits a leaf item for a simple catalog component", () => {
   assert.equal(items[0]!.quantity, 2);
   assert.equal(items[0]!.unitCost, 12.5);
   assert.equal(items[0]!.uom, "SHT");
+});
+
+test("expandAssembly emits a leaf item for a cost intelligence component", () => {
+  const ctx = makeContext({
+    assemblies: [
+      {
+        id: "asm-cost",
+        name: "Vendor-priced conduit kit",
+        parameters: [{ key: "runs", defaultValue: "3" }],
+        components: [
+          {
+            id: "c1",
+            componentType: "cost_intelligence",
+            effectiveCostId: "ecost-conduit",
+            quantityExpr: "runs * 10",
+            markupOverride: 0.15,
+          },
+        ],
+      },
+    ],
+    effectiveCosts: [
+      {
+        id: "ecost-conduit",
+        resourceId: "rci-conduit",
+        catalogItemId: "ci-conduit",
+        code: "EMT-34",
+        name: "3/4 in EMT conduit",
+        description: "Vendor observed 3/4 in EMT conduit",
+        category: "Material",
+        resourceType: "material",
+        defaultUom: "LF",
+        uom: "LF",
+        unitCost: 1.75,
+        unitPrice: null,
+        vendorName: "North Supply",
+        method: "latest_observation",
+        effectiveDate: "2026-05-01",
+        confidence: 0.82,
+      },
+    ],
+  });
+
+  const { items, warnings } = expandAssembly("asm-cost", 2, {}, ctx);
+
+  assert.equal(warnings.length, 0);
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.componentType, "cost_intelligence");
+  assert.equal(items[0]!.effectiveCostId, "ecost-conduit");
+  assert.equal(items[0]!.costResourceId, "rci-conduit");
+  assert.equal(items[0]!.catalogItemId, "ci-conduit");
+  assert.equal(items[0]!.entityName, "3/4 in EMT conduit");
+  assert.equal(items[0]!.quantity, 60);
+  assert.equal(items[0]!.unitCost, 1.75);
+  assert.equal(items[0]!.unitPrice, 1.75);
+  assert.equal(items[0]!.vendor, "North Supply");
+
+  const rollup = summarizeExpandedAssemblyResources(items);
+  assert.equal(rollup.length, 1);
+  assert.equal(rollup[0]!.componentType, "cost_intelligence");
+  assert.equal(rollup[0]!.lineCost, 105);
+  assert.equal(rollup[0]!.linePrice, 120.75);
 });
 
 test("expandAssembly applies the outer quantity multiplier", () => {
@@ -398,6 +463,69 @@ test("expandAssembly applies uom and markup overrides", () => {
   assert.equal(items[0]!.uom, "BX");
   assert.equal(items[0]!.markup, 0.25);
   assert.equal(items[0]!.unitCost, 1.5);
+});
+
+test("summarizeExpandedAssemblyResources groups repeated recipe resources", () => {
+  const ctx = makeContext({
+    assemblies: [
+      {
+        id: "asm-wall",
+        name: "Wall",
+        parameters: [],
+        components: [
+          {
+            id: "c1",
+            componentType: "catalog_item",
+            catalogItemId: "ci-stud",
+            quantityExpr: "2",
+            category: "Material",
+          },
+          {
+            id: "c2",
+            componentType: "catalog_item",
+            catalogItemId: "ci-stud",
+            quantityExpr: "3",
+            category: "Material",
+          },
+          {
+            id: "c3",
+            componentType: "rate_schedule_item",
+            rateScheduleItemId: "rsi-carpenter",
+            quantityExpr: "1.5",
+            category: "Labour",
+          },
+        ],
+      },
+    ],
+    catalogItems: [
+      { id: "ci-stud", name: "Stud", unit: "EA", unitCost: 4, unitPrice: 6 },
+    ],
+    rateScheduleItems: [
+      {
+        id: "rsi-carpenter",
+        name: "Carpenter",
+        unit: "HR",
+        rates: { standard: 100 },
+        costRates: { standard: 80 },
+      },
+    ],
+  });
+
+  const { items } = expandAssembly("asm-wall", 2, {}, ctx);
+  const rollup = summarizeExpandedAssemblyResources(items);
+
+  assert.equal(rollup.length, 2);
+  const labour = rollup.find((entry) => entry.category === "Labour");
+  const material = rollup.find((entry) => entry.category === "Material");
+
+  assert.equal(material?.entityName, "Stud");
+  assert.equal(material?.quantity, 10);
+  assert.equal(material?.lineCost, 40);
+  assert.equal(material?.linePrice, 60);
+  assert.equal(material?.componentCount, 2);
+  assert.equal(labour?.quantity, 3);
+  assert.equal(labour?.lineCost, 240);
+  assert.equal(labour?.averageUnitPrice, 100);
 });
 
 test("findAssemblyCycles detects direct and indirect cycles", () => {

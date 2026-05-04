@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useSearchParams } from "next/navigation";
 import {
   BookOpen,
   ChevronDown,
@@ -11,7 +12,8 @@ import {
   Download,
   Eye,
   FileText,
-  Library,
+  Filter,
+  Info,
   Loader2,
   Maximize2,
   Minus,
@@ -23,6 +25,8 @@ import {
   Check,
   Trash2,
   Upload,
+  Save,
+  UserRound,
   X,
   ZoomIn,
   ZoomOut,
@@ -86,8 +90,6 @@ import {
   updateDatasetRow,
   deleteDatasetRow,
   searchDatasetRows,
-  listDatasetLibrary,
-  adoptDatasetTemplate,
   extractDatasetsFromBook,
   connectCliStream,
   stopCliSession,
@@ -139,6 +141,10 @@ function categoryLabel(cat: string) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function countLabel(count: number, label: string) {
+  return `${count.toLocaleString()} ${label}${count === 1 ? "" : "s"}`;
+}
+
 function statusTone(status: string) {
   switch (status) {
     case "indexed":
@@ -161,6 +167,30 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function bookMetadataText(book: KnowledgeBookRecord, key: string) {
+  const value = book.metadata?.[key];
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean).join(", ");
+  }
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function bookAuthor(book: KnowledgeBookRecord) {
+  return (
+    bookMetadataText(book, "author") ||
+    bookMetadataText(book, "authors") ||
+    bookMetadataText(book, "creator") ||
+    ""
+  );
+}
+
+function formatShortDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
 }
 
 function compareByName<T extends { name: string }>(left: T, right: T) {
@@ -247,21 +277,32 @@ function highlightSearchSnippet(text: string, query: string) {
 // ────────────────────────────────────────────────────────────────────
 
 export function KnowledgePage({
+  embedded = false,
   initialBooks,
   initialDocuments,
   initialCabinets,
   initialDatasets,
 }: {
+  embedded?: boolean;
   initialBooks: KnowledgeBookRecord[];
   initialDocuments: KnowledgeDocumentRecord[];
   initialCabinets: KnowledgeLibraryCabinetRecord[];
   initialDatasets: DatasetRecord[];
 }) {
-  const [tab, setTab] = useState<Tab>("books");
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const initialTab: Tab = tabParam === "pages" || tabParam === "datasets" ? tabParam : "books";
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [books, setBooks] = useState(initialBooks);
   const [documents, setDocuments] = useState(initialDocuments);
   const [cabinets, setCabinets] = useState(initialCabinets);
   const [datasets, setDatasets] = useState(initialDatasets);
+
+  useEffect(() => {
+    if (tabParam === "books" || tabParam === "pages" || tabParam === "datasets") {
+      setTab(tabParam);
+    }
+  }, [tabParam]);
 
   const refreshBooks = useCallback(async () => {
     try {
@@ -296,7 +337,8 @@ export function KnowledgePage({
   }, [refreshBooks, refreshDocuments, refreshCabinets, refreshDatasets]);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-5">
+    <div className={cn("flex h-full min-h-0 flex-col", embedded ? "gap-3" : "gap-5")}>
+      {!embedded && (
       <FadeIn>
       <div className="flex items-center justify-between">
         <div>
@@ -307,9 +349,10 @@ export function KnowledgePage({
         </div>
       </div>
       </FadeIn>
+      )}
 
       {/* Tab bar */}
-      <FadeIn delay={0.05}>
+      <FadeIn delay={0.05} className="shrink-0">
       <div className="flex items-center gap-1 border-b border-line">
         {(
           [
@@ -395,6 +438,8 @@ function BooksTab({
   const [bookToDelete, setBookToDelete] = useState<KnowledgeBookRecord | null>(null);
   const [deletingBookId, setDeletingBookId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(24);
   const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
   const [movingBook, setMovingBook] = useState<KnowledgeBookRecord | null>(null);
   const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
@@ -443,11 +488,25 @@ function BooksTab({
         return (
           book.name.toLowerCase().includes(query) ||
           book.description.toLowerCase().includes(query) ||
-          book.sourceFileName.toLowerCase().includes(query)
+          book.sourceFileName.toLowerCase().includes(query) ||
+          bookAuthor(book).toLowerCase().includes(query)
         );
       });
   }, [books, searchQuery, view, visibleCabinetIds]);
 
+  useEffect(() => {
+    setPage(0);
+  }, [pageSize, searchQuery, view]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages - 1));
+  }, [totalPages]);
+
+  const visibleBooks = filtered.slice(page * pageSize, (page + 1) * pageSize);
+  const pageStart = filtered.length === 0 ? 0 : page * pageSize + 1;
+  const pageEnd = Math.min(filtered.length, (page + 1) * pageSize);
   const selectedBook = books.find((b) => b.id === selectedBookId) ?? null;
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
 
@@ -534,83 +593,114 @@ function BooksTab({
     }
   };
 
-  return (
-    <>
-    <div className="grid h-full min-h-0 gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-      <div className="min-w-0 min-h-0">
-          <CabinetDirectorySidebar
-            cabinets={bookCabinets}
-            emptyLabel="Organize books into folders on the left."
-            itemLabelPlural="Books"
+	  return (
+	    <>
+	    <div className="grid h-full min-h-0 gap-4 overflow-hidden xl:grid-cols-[280px_minmax(0,1fr)]">
+	      <div className="min-h-0 min-w-0 overflow-hidden">
+	          <CabinetDirectorySidebar
+	            cabinets={bookCabinets}
+	            emptyLabel="Organize books into folders on the left."
+	            itemLabelPlural="Books"
             onCreateCabinet={handleCreateCabinet}
             onDeleteCabinet={handleDeleteCabinet}
             onRenameCabinet={handleRenameCabinet}
             selectedView={view}
-            onSelectView={setView}
-          />
-      </div>
+	            onSelectView={setView}
+	          />
+	      </div>
 
-      <div className="min-w-0 space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-fg">{activeFolderLabel}</h2>
-            <p className="mt-0.5 text-xs text-fg/40">
-              {filtered.length} books
-              {view.kind === "cabinet" ? ` in ${activeFolderLabel}` : ""}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-              <Input
-                className="h-8 pl-8 text-xs"
-                placeholder="Search books..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            <Button size="sm" onClick={() => setShowCreateModal(true)}>
-              <Upload className="h-3.5 w-3.5" />
-              Upload Book
-            </Button>
-          </div>
-        </div>
+	      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
+	        <div className="shrink-0 border-b border-line bg-panel px-3 py-2.5">
+	          <div className="flex flex-wrap items-end justify-between gap-3">
+	            <div className="min-w-0">
+	              <h2 className="truncate text-sm font-semibold text-fg">{activeFolderLabel}</h2>
+	              <p className="mt-0.5 truncate text-xs text-fg/40">
+	                {filtered.length} books
+	                {view.kind === "cabinet" ? ` in ${activeFolderLabel}` : ""}
+	              </p>
+	            </div>
+	            <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+	              <div className="relative min-w-[200px] flex-1 md:max-w-sm">
+	                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+	                <Input
+	                  className="h-8 pl-8 text-xs"
+	                  placeholder="Search books, authors, files..."
+	                  value={searchQuery}
+	                  onChange={(e) => setSearchQuery(e.target.value)}
+	                />
+	              </div>
+	              <Button size="sm" onClick={() => setShowCreateModal(true)}>
+	                <Upload className="h-3.5 w-3.5" />
+	                Upload Book
+	              </Button>
+	            </div>
+	          </div>
+	        </div>
 
-        {error && (
-          <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
-            {error}
-          </div>
-        )}
+	        {error && (
+	          <div className="mx-3 mt-3 shrink-0 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
+	            {error}
+	          </div>
+	        )}
 
-        {filtered.length === 0 ? (
-          <EmptyState>
-            <BookOpen className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-            <p className="text-sm text-fg/50">No books in this folder.</p>
-            <p className="mt-1 text-xs text-fg/30">
-              Upload a reference book or move an existing one into this folder.
-            </p>
-          </EmptyState>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((book) => (
-              <BookCard
-                key={book.id}
-                book={book}
-                cabinetLabel={cabinetPathLabel(book.cabinetId, cabinetsById)}
-                selected={book.id === selectedBookId}
-                onMove={() => {
-                  setMovingBook(book);
-                  setMoveTargetCabinetId(book.cabinetId ?? "__root__");
-                }}
-                onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
-                onDelete={() => setBookToDelete(book)}
-              />
-            ))}
-          </div>
-        )}
+	        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+	          {filtered.length === 0 ? (
+	            <EmptyState>
+	              <BookOpen className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+	              <p className="text-sm text-fg/50">No books in this folder.</p>
+	              <p className="mt-1 text-xs text-fg/30">
+	                Upload a reference book or move an existing one into this folder.
+	              </p>
+	            </EmptyState>
+	          ) : (
+	            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+	              {visibleBooks.map((book) => (
+	                <BookCard
+	                  key={book.id}
+	                  book={book}
+	                  cabinetLabel={cabinetPathLabel(book.cabinetId, cabinetsById)}
+	                  selected={book.id === selectedBookId}
+	                  onMove={() => {
+	                    setMovingBook(book);
+	                    setMoveTargetCabinetId(book.cabinetId ?? "__root__");
+	                  }}
+	                  onSelect={() => setSelectedBookId(book.id === selectedBookId ? null : book.id)}
+	                  onDelete={() => setBookToDelete(book)}
+	                />
+	              ))}
+	            </div>
+	          )}
+	        </div>
 
-        {showCreateModal && (
-          <CreateBookModal
+	        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line bg-panel2/20 px-3 py-2 text-[11px] text-fg/45">
+	          <span>
+	            Showing {pageStart}-{pageEnd} of {filtered.length} books
+	          </span>
+	          <div className="flex items-center gap-2">
+	            <Select
+	              value={String(pageSize)}
+	              onValueChange={(value) => setPageSize(Number(value))}
+	              options={[
+	                { value: "12", label: "12" },
+	                { value: "24", label: "24" },
+	                { value: "48", label: "48" },
+	              ]}
+	              size="xs"
+	              ariaLabel="Book page size"
+	              triggerClassName="h-7 w-20"
+	            />
+	            <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0}>
+	              Prev
+	            </Button>
+	            <span className="tabular-nums">Page {page + 1} / {totalPages}</span>
+	            <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1}>
+	              Next
+	            </Button>
+	          </div>
+	        </div>
+
+	        {showCreateModal && (
+	          <CreateBookModal
             defaultCabinetId={defaultCabinetId}
             onClose={() => setShowCreateModal(false)}
             onCreated={() => {
@@ -684,64 +774,90 @@ function BookCard({
   onDelete: () => void;
 }) {
   const [imgError, setImgError] = useState(false);
+  const author = bookAuthor(book);
+  const publisher = bookMetadataText(book, "publisher");
+  const publishedYear = bookMetadataText(book, "publishedYear") || bookMetadataText(book, "year");
+  const statusLabel = book.status === "uploading"
+    ? "Uploading"
+    : book.status === "processing"
+      ? book.chunkCount > 0
+        ? "Embedding"
+        : "Processing"
+      : categoryLabel(book.status);
+  const secondaryLine = [publisher, publishedYear].filter(Boolean).join(" / ");
 
   return (
-    <Card
+    <div
+      role="button"
+      tabIndex={0}
       className={cn(
-        "cursor-pointer transition-all hover:ring-1 hover:ring-accent/30",
-        selected && "ring-2 ring-accent"
+        "group flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border border-line bg-bg/40 text-left shadow-sm outline-none transition-all hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-[0_16px_42px_hsl(var(--fg)/0.10)] focus-visible:ring-2 focus-visible:ring-accent/35",
+        selected && "border-accent/60 ring-2 ring-accent/25"
       )}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
     >
-      {/* Thumbnail */}
-      <div className="relative h-36 bg-panel2 rounded-t-lg overflow-hidden flex items-center justify-center">
+      <div className="relative aspect-[4/5] w-full overflow-hidden rounded-t-lg bg-panel2">
         {book.storagePath && !imgError ? (
           <img
             src={getBookThumbnailUrl(book.id)}
             alt={book.name}
-            className="w-full h-full object-contain"
+            className="absolute inset-0 h-full w-full object-cover"
             onError={() => setImgError(true)}
           />
         ) : (
-          <BookOpen className="h-12 w-12 text-fg/10" />
+          <div className="absolute inset-0 flex flex-col justify-between bg-panel2 px-5 py-5">
+            <BookOpen className="h-9 w-9 text-fg/20" />
+            <div className="min-w-0">
+              <div className="line-clamp-4 text-lg font-semibold leading-tight text-fg/75">{book.name}</div>
+              <div className="mt-3 h-1 w-14 rounded-full bg-accent/45" />
+            </div>
+          </div>
         )}
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-3 bg-black/10" />
+        <div className="pointer-events-none absolute inset-0 rounded-t-lg ring-1 ring-inset ring-black/10" />
         <Badge
           tone={statusTone(book.status)}
-          className="absolute top-2 right-2 text-[10px]"
+          className="absolute right-2 top-2 max-w-[calc(100%-1rem)] gap-1 truncate bg-panel/90 text-[10px] shadow-sm backdrop-blur"
         >
           {(book.status === "uploading" || book.status === "processing") && (
             <Loader2 className="h-2.5 w-2.5 animate-spin" />
           )}
-          {book.status === "uploading"
-            ? "Extracting text..."
-            : book.status === "processing"
-              ? book.chunkCount > 0
-                ? `Embedding ${book.chunkCount} chunks...`
-                : "Processing..."
-              : book.status}
+          {statusLabel}
         </Badge>
       </div>
 
-      {/* Info */}
-      <div className="px-3 py-2.5">
-        <h3 className="text-sm font-medium text-fg truncate">{book.name}</h3>
-        <p className="text-[11px] text-fg/40 mt-0.5 truncate">{book.sourceFileName}</p>
+      <div className="flex flex-1 flex-col px-3 py-3">
+        <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-fg">{book.name}</h3>
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-fg/45">
+          <UserRound className="h-3 w-3 shrink-0 text-fg/30" />
+          <span className="truncate">{author || "No author set"}</span>
+        </div>
+        {secondaryLine && (
+          <p className="mt-0.5 truncate text-[11px] text-fg/35">{secondaryLine}</p>
+        )}
         {cabinetLabel && (
           <p className="mt-1 truncate text-[11px] text-fg/35">{cabinetLabel}</p>
         )}
-        <div className="flex flex-wrap items-center gap-1.5 mt-2">
-          <Badge tone="default">{categoryLabel(book.category)}</Badge>
-          <Badge tone={scopeTone(book.scope)}>{book.scope}</Badge>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <Badge tone="default" className="text-[10px]">{categoryLabel(book.category)}</Badge>
+          <Badge tone={scopeTone(book.scope)} className="text-[10px]">{book.scope}</Badge>
         </div>
-        <div className="flex items-center justify-between mt-2 gap-2">
-          <span className="text-[10px] text-fg/30">
-            {book.pageCount} pages · {book.chunkCount} chunks · {formatBytes(book.sourceFileSize)}
+        <div className="mt-3 flex items-center justify-between gap-2 border-t border-line/65 pt-2">
+          <span className="min-w-0 truncate text-[10px] text-fg/35">
+            {book.pageCount} pages / {book.chunkCount} chunks / {formatBytes(book.sourceFileSize)}
           </span>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             {onMove && (
               <Button
                 variant="secondary"
                 size="xs"
+                title="Move book"
                 onClick={(e) => {
                   e.stopPropagation();
                   onMove();
@@ -753,6 +869,7 @@ function BookCard({
             <Button
               variant="danger"
               size="xs"
+              title="Delete book"
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();
@@ -763,13 +880,34 @@ function BookCard({
           </div>
         </div>
       </div>
-    </Card>
+    </div>
   );
 }
 
-type DetailTab = "view" | "chunks" | "search" | "datasets";
+type DetailTab = "details" | "view" | "chunks" | "search" | "datasets";
 type BookSearchHit = { id: string; text: string; score: number; sectionTitle?: string; pageNumber?: number };
 type PdfSearchTarget = { key: string; pageNumber: number; text: string; query: string };
+type BookDetailsFormState = {
+  name: string;
+  author: string;
+  category: KnowledgeBookRecord["category"];
+  description: string;
+  publisher: string;
+  edition: string;
+  publishedYear: string;
+};
+
+function bookDetailsFormFromRecord(book: KnowledgeBookRecord): BookDetailsFormState {
+  return {
+    name: book.name ?? "",
+    author: bookAuthor(book),
+    category: book.category,
+    description: book.description ?? "",
+    publisher: bookMetadataText(book, "publisher"),
+    edition: bookMetadataText(book, "edition"),
+    publishedYear: bookMetadataText(book, "publishedYear") || bookMetadataText(book, "year"),
+  };
+}
 
 function BookDetailPanel({
   book,
@@ -790,6 +928,10 @@ function BookDetailPanel({
   const [loadingChunks, setLoadingChunks] = useState(false);
   const [chunkSearch, setChunkSearch] = useState("");
   const [showAddChunk, setShowAddChunk] = useState(false);
+  const [detailsForm, setDetailsForm] = useState<BookDetailsFormState>(() => bookDetailsFormFromRecord(book));
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+  const [detailsSaved, setDetailsSaved] = useState(false);
 
   const CHUNK_PAGE_SIZE = 50;
 
@@ -844,6 +986,9 @@ function BookDetailPanel({
     setHighlightedChunkId(null);
     setPendingChunkScrollId(null);
     setPdfSearchTarget(null);
+    setDetailsForm(bookDetailsFormFromRecord(book));
+    setDetailsError("");
+    setDetailsSaved(false);
   }, [book.id]);
 
   const loadMoreChunks = async () => {
@@ -872,6 +1017,42 @@ function BookDetailPanel({
   };
 
   const hasPdf = book.sourceFileName.toLowerCase().endsWith(".pdf") && !!book.storagePath;
+
+  const updateDetailsForm = useCallback(<K extends keyof BookDetailsFormState,>(field: K, value: BookDetailsFormState[K]) => {
+    setDetailsForm((current) => ({ ...current, [field]: value }));
+    setDetailsSaved(false);
+    setDetailsError("");
+  }, []);
+
+  const handleSaveDetails = useCallback(async () => {
+    if (!detailsForm.name.trim()) {
+      setDetailsError("Title is required.");
+      return;
+    }
+
+    setSavingDetails(true);
+    setDetailsError("");
+    try {
+      await updateKnowledgeBook(book.id, {
+        name: detailsForm.name.trim(),
+        description: detailsForm.description.trim(),
+        category: detailsForm.category,
+        metadata: {
+          author: detailsForm.author.trim(),
+          publisher: detailsForm.publisher.trim(),
+          edition: detailsForm.edition.trim(),
+          publishedYear: detailsForm.publishedYear.trim(),
+          year: detailsForm.publishedYear.trim(),
+        },
+      });
+      setDetailsSaved(true);
+      await Promise.resolve(onRefresh());
+    } catch (err) {
+      setDetailsError(err instanceof Error ? err.message : "Failed to save book details.");
+    } finally {
+      setSavingDetails(false);
+    }
+  }, [book.id, detailsForm, onRefresh]);
 
   const handleOpenSearchHit = useCallback(async (hit: BookSearchHit) => {
     setOpeningSearchHitId(hit.id);
@@ -945,6 +1126,7 @@ function BookDetailPanel({
   const fileUrl = getBookFileUrl(book.id);
 
   const detailTabs: Array<{ key: DetailTab; label: string; icon: typeof Eye; count?: number }> = [
+    { key: "details", label: "Details", icon: Info },
     ...(hasPdf ? [{ key: "view" as const, label: "View", icon: Eye }] : []),
     { key: "chunks", label: "Chunks", icon: FileText },
     { key: "search", label: "Search", icon: Search },
@@ -1021,11 +1203,143 @@ function BookDetailPanel({
         ))}
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto">
-        <AnimatePresence mode="wait">
-        {detailTab === "view" && hasPdf && (
-          <motion.div key="view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex flex-col h-full">
+	      {/* Tab content */}
+	      <div className="flex-1 overflow-auto">
+	        <AnimatePresence mode="wait">
+        {detailTab === "details" && (
+          <motion.div key="details" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="space-y-4 p-4">
+            <div className="grid gap-4 sm:grid-cols-[128px_minmax(0,1fr)]">
+              <div className="relative aspect-[4/5] overflow-hidden rounded-lg border border-line bg-panel2 shadow-sm">
+                {book.storagePath ? (
+                  <img
+                    src={getBookThumbnailUrl(book.id)}
+                    alt={book.name}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <BookOpen className="h-10 w-10 text-fg/15" />
+                  </div>
+                )}
+                <div className="pointer-events-none absolute inset-y-0 left-0 w-2 bg-black/10" />
+                <div className="pointer-events-none absolute inset-0 rounded-lg ring-1 ring-inset ring-black/10" />
+              </div>
+
+              <div className="min-w-0 rounded-lg border border-line bg-bg/35 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Source File</div>
+                    <div className="mt-1 truncate text-sm font-medium text-fg">{book.sourceFileName}</div>
+                  </div>
+                  <Badge tone={statusTone(book.status)}>{book.status}</Badge>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-fg/45">
+                  <div className="rounded-md border border-line/65 bg-panel px-2 py-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-fg/30">Pages</div>
+                    <div className="mt-0.5 font-semibold text-fg">{book.pageCount}</div>
+                  </div>
+                  <div className="rounded-md border border-line/65 bg-panel px-2 py-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-fg/30">Chunks</div>
+                    <div className="mt-0.5 font-semibold text-fg">{book.chunkCount}</div>
+                  </div>
+                  <div className="rounded-md border border-line/65 bg-panel px-2 py-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-fg/30">Size</div>
+                    <div className="mt-0.5 font-semibold text-fg">{formatBytes(book.sourceFileSize)}</div>
+                  </div>
+                  <div className="rounded-md border border-line/65 bg-panel px-2 py-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-fg/30">Updated</div>
+                    <div className="mt-0.5 truncate font-semibold text-fg">{formatShortDate(book.updatedAt)}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {detailsError && (
+              <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{detailsError}</div>
+            )}
+            {detailsSaved && !detailsError && (
+              <div className="rounded-lg border border-success/25 bg-success/8 px-3 py-2 text-xs text-success">Book details saved.</div>
+            )}
+
+            <div className="grid gap-3">
+              <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                Title
+                <Input
+                  className="h-8 text-xs"
+                  value={detailsForm.name}
+                  onChange={(event) => updateDetailsForm("name", event.target.value)}
+                />
+              </label>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  Author
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="Author or organization"
+                    value={detailsForm.author}
+                    onChange={(event) => updateDetailsForm("author", event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  Category
+                  <Select
+                    value={detailsForm.category}
+                    onValueChange={(value) => updateDetailsForm("category", value as KnowledgeBookRecord["category"])}
+                    options={BOOK_CATEGORIES.map((category) => ({ value: category, label: categoryLabel(category) }))}
+                    size="sm"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  Publisher
+                  <Input
+                    className="h-8 text-xs"
+                    value={detailsForm.publisher}
+                    onChange={(event) => updateDetailsForm("publisher", event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  Edition
+                  <Input
+                    className="h-8 text-xs"
+                    value={detailsForm.edition}
+                    onChange={(event) => updateDetailsForm("edition", event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  Year
+                  <Input
+                    className="h-8 text-xs"
+                    value={detailsForm.publishedYear}
+                    onChange={(event) => updateDetailsForm("publishedYear", event.target.value)}
+                  />
+                </label>
+              </div>
+
+              <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                Description
+                <Textarea
+                  className="min-h-24 text-xs"
+                  value={detailsForm.description}
+                  onChange={(event) => updateDetailsForm("description", event.target.value)}
+                />
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end border-t border-line pt-3">
+              <Button size="sm" onClick={() => void handleSaveDetails()} disabled={savingDetails}>
+                {savingDetails ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                {savingDetails ? "Saving" : "Save Details"}
+              </Button>
+            </div>
+          </motion.div>
+        )}
+
+	        {detailTab === "view" && hasPdf && (
+	          <motion.div key="view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex flex-col h-full">
             {/* PDF controls */}
             <div className="flex items-center justify-center gap-2 px-3 py-2 border-b border-line bg-panel2/30">
               <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
@@ -2072,7 +2386,7 @@ function CreateBookModal({
             <Label className="text-xs">Name</Label>
             <Input
               className="mt-1 text-xs"
-              placeholder="e.g., NECA Manual of Labour Units"
+              placeholder="e.g., Company Labor Unit Manual"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -2135,7 +2449,7 @@ function DatasetListPaginated({
 }) {
   const [page, setPage] = useState(0);
   const pageSize = 20;
-  const totalPages = Math.ceil(datasets.length / pageSize);
+  const totalPages = Math.max(1, Math.ceil(datasets.length / pageSize));
   const visible = datasets.slice(page * pageSize, (page + 1) * pageSize);
 
   useEffect(() => {
@@ -2143,43 +2457,44 @@ function DatasetListPaginated({
   }, [datasets]);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs text-fg/40">
-        <span>{datasets.length} datasets</span>
-        {totalPages > 1 && (
-          <div className="flex items-center gap-2">
-            <button
-              className="hover:text-fg disabled:opacity-30"
-              disabled={page === 0}
-              onClick={() => setPage((p) => p - 1)}
-            >
-              ← Prev
-            </button>
-            <span>
-              {page + 1} / {totalPages}
-            </span>
-            <button
-              className="hover:text-fg disabled:opacity-30"
-              disabled={page >= totalPages - 1}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next →
-            </button>
-          </div>
-        )}
-      </div>
-      {visible.map((dataset) => (
-        <DatasetListItem
-          key={dataset.id}
-          cabinetLabel={cabinetPathLabel(dataset.cabinetId, cabinetsById)}
-          dataset={dataset}
-          onClick={() => onSelect(dataset.id)}
-          onDelete={async () => onDelete(dataset.id)}
-          onMove={() => onMove(dataset)}
-        />
-      ))}
+    <div className="flex h-full min-h-0 flex-col gap-2">
       {totalPages > 1 && (
-        <div className="flex justify-center pt-2">
+        <div className="flex shrink-0 items-center justify-end gap-2 text-xs text-fg/40">
+          <button
+            className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-fg disabled:opacity-30"
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+          >
+            <ChevronLeft className="h-3 w-3" />
+            Prev
+          </button>
+          <span>
+            Page {page + 1} of {totalPages}
+          </span>
+          <button
+            className="inline-flex items-center gap-1 rounded px-1 py-0.5 hover:text-fg disabled:opacity-30"
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+            <ChevronRight className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        {visible.map((dataset) => (
+          <DatasetListItem
+            key={dataset.id}
+            cabinetLabel={cabinetPathLabel(dataset.cabinetId, cabinetsById)}
+            dataset={dataset}
+            onClick={() => onSelect(dataset.id)}
+            onDelete={async () => onDelete(dataset.id)}
+            onMove={() => onMove(dataset)}
+          />
+        ))}
+      </div>
+      {totalPages > 1 && (
+        <div className="flex shrink-0 justify-center pt-2">
           <div className="flex items-center gap-1">
             {Array.from({ length: Math.min(totalPages, 10) }, (_, i) => (
               <button
@@ -2220,10 +2535,10 @@ function DatasetsTab({
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetRecord | null>(null);
   const [deletingDatasetId, setDeletingDatasetId] = useState<string | null>(null);
-  const [showLibrary, setShowLibrary] = useState(false);
-  const [libraryDatasets, setLibraryDatasets] = useState<DatasetRecord[]>([]);
-  const [adopting, setAdopting] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("__all__");
+  const [categoryFilter, setCategoryFilter] = useState("__all__");
+  const [sourceBookFilter, setSourceBookFilter] = useState("__all__");
   const [view, setView] = useState<LibraryDirectoryView>({ kind: "all" });
   const [movingDataset, setMovingDataset] = useState<DatasetRecord | null>(null);
   const [moveTargetCabinetId, setMoveTargetCabinetId] = useState("__root__");
@@ -2245,6 +2560,43 @@ function DatasetsTab({
     [datasetCabinets, view],
   );
 
+  const sourceOptions = useMemo(() => {
+    const sources = Array.from(new Set(datasets.map((dataset) => dataset.source))).sort();
+    return [
+      { value: "__all__", label: "All sources" },
+      ...sources.map((source) => ({ value: source, label: categoryLabel(source) })),
+    ];
+  }, [datasets]);
+
+  const categoryOptions = useMemo(() => {
+    const categories = Array.from(new Set(datasets.map((dataset) => dataset.category))).sort();
+    return [
+      { value: "__all__", label: "All categories" },
+      ...categories.map((category) => ({ value: category, label: categoryLabel(category) })),
+    ];
+  }, [datasets]);
+
+  const sourceBookOptions = useMemo(() => {
+    const sourceBookIds = Array.from(new Set(datasets.map((dataset) => dataset.sourceBookId).filter(Boolean) as string[]));
+    const hasUnlinkedDatasets = datasets.some((dataset) => !dataset.sourceBookId);
+    return [
+      { value: "__all__", label: "All books" },
+      ...(hasUnlinkedDatasets ? [{ value: "__none__", label: "No source book" }] : []),
+      ...sourceBookIds
+        .map((bookId) => ({
+          value: bookId,
+          label: books.find((book) => book.id === bookId)?.name ?? "Unknown book",
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ];
+  }, [books, datasets]);
+
+  const activeMetadataFilterCount =
+    (sourceFilter !== "__all__" ? 1 : 0) +
+    (categoryFilter !== "__all__" ? 1 : 0) +
+    (sourceBookFilter !== "__all__" ? 1 : 0);
+  const hasActiveFilters = searchQuery.trim() !== "" || activeMetadataFilterCount > 0;
+
   useEffect(() => {
     if (view.kind === "cabinet" && !cabinetsById.has(view.cabinetId)) {
       setView({ kind: "all" });
@@ -2260,13 +2612,28 @@ function DatasetsTab({
     return datasets
       .filter((dataset) => matchesLibraryView(dataset.cabinetId, view, visibleCabinetIds))
       .filter((dataset) => {
+        if (sourceFilter !== "__all__" && dataset.source !== sourceFilter) return false;
+        if (categoryFilter !== "__all__" && dataset.category !== categoryFilter) return false;
+        if (sourceBookFilter === "__none__" && dataset.sourceBookId) return false;
+        if (sourceBookFilter !== "__all__" && sourceBookFilter !== "__none__" && dataset.sourceBookId !== sourceBookFilter) return false;
         if (!query) return true;
+        const sourceBook = dataset.sourceBookId ? books.find((book) => book.id === dataset.sourceBookId) : null;
         return (
           dataset.name.toLowerCase().includes(query) ||
-          dataset.description.toLowerCase().includes(query)
+          dataset.description.toLowerCase().includes(query) ||
+          dataset.sourceDescription.toLowerCase().includes(query) ||
+          categoryLabel(dataset.category).toLowerCase().includes(query) ||
+          categoryLabel(dataset.source).toLowerCase().includes(query) ||
+          (sourceBook?.name.toLowerCase().includes(query) ?? false) ||
+          (dataset.tags ?? []).some((tag) => tag.toLowerCase().includes(query))
         );
       });
-  }, [datasets, searchQuery, view, visibleCabinetIds]);
+  }, [books, categoryFilter, datasets, searchQuery, sourceBookFilter, sourceFilter, view, visibleCabinetIds]);
+
+  const folderDatasetCount = useMemo(
+    () => datasets.filter((dataset) => matchesLibraryView(dataset.cabinetId, view, visibleCabinetIds)).length,
+    [datasets, view, visibleCabinetIds],
+  );
 
   const selectedDataset = datasets.find((d) => d.id === selectedDatasetId);
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
@@ -2276,6 +2643,17 @@ function DatasetsTab({
       : view.kind === "unassigned"
         ? "Unassigned Datasets"
         : cabinetsById.get(view.cabinetId)?.name ?? "Dataset Folder";
+  const resultLabel =
+    hasActiveFilters && filtered.length !== folderDatasetCount
+      ? `${filtered.length.toLocaleString()} of ${countLabel(folderDatasetCount, "dataset")}`
+      : countLabel(filtered.length, "dataset");
+
+  const clearDatasetFilters = () => {
+    setSearchQuery("");
+    setSourceFilter("__all__");
+    setCategoryFilter("__all__");
+    setSourceBookFilter("__all__");
+  };
 
   const handleCreateCabinet = async (parentId: string | null) => {
     try {
@@ -2369,40 +2747,69 @@ function DatasetsTab({
           />
         </div>
 
-        <div className="min-w-0 space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-fg">{activeFolderLabel}</h2>
-              <p className="mt-0.5 text-xs text-fg/40">
-                {filtered.length} datasets
+        <div className="flex min-h-0 min-w-0 flex-col gap-4 overflow-hidden">
+          <div className="grid shrink-0 grid-cols-[minmax(0,0.85fr)_minmax(0,1.45fr)_16px_minmax(0,0.9fr)_minmax(0,1fr)_minmax(0,1.1fr)_minmax(0,0.95fr)] items-end gap-2 overflow-hidden">
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold text-fg" title={activeFolderLabel}>
+                {activeFolderLabel}
+              </h2>
+              <p className="mt-0.5 truncate text-xs text-fg/40">
+                {resultLabel}
                 {view.kind === "cabinet" ? ` in ${activeFolderLabel}` : ""}
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-                <Input
-                  className="h-8 pl-8 text-xs"
-                  placeholder="Search datasets..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                />
-              </div>
-              <Button size="sm" variant="secondary" onClick={async () => {
-                try {
-                  setLibraryDatasets(await listDatasetLibrary());
-                  setError(null);
-                } catch (err) {
-                  setError(err instanceof Error ? err.message : "Failed to load dataset library");
-                }
-                setShowLibrary(true);
-              }}>
-                <Library className="h-3.5 w-3.5" />
-                Browse Library
-              </Button>
-              <Button size="sm" onClick={() => setShowCreateModal(true)}>
-                <Plus className="h-3.5 w-3.5" />
-                Create Dataset
+            <div className="relative min-w-0">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+              <Input
+                className="h-8 min-w-0 truncate pl-8 text-xs"
+                placeholder="Search datasets..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <div className="flex h-8 min-w-0 items-center justify-center text-fg/30" title="Dataset filters">
+              <Filter className="h-3.5 w-3.5 shrink-0" />
+            </div>
+            <Select
+              ariaLabel="Source"
+              className="min-w-0"
+              size="sm"
+              value={sourceFilter}
+              onValueChange={setSourceFilter}
+              options={sourceOptions}
+            />
+            <Select
+              ariaLabel="Category"
+              className="min-w-0"
+              size="sm"
+              value={categoryFilter}
+              onValueChange={setCategoryFilter}
+              options={categoryOptions}
+            />
+            <Select
+              ariaLabel="Source book"
+              className="min-w-0"
+              size="sm"
+              value={sourceBookFilter}
+              onValueChange={setSourceBookFilter}
+              options={sourceBookOptions}
+            />
+            <div className="flex min-w-0 items-center justify-end gap-1">
+              {hasActiveFilters && (
+                <Button
+                  size="sm"
+                  className="h-8 min-w-0 flex-[0_1_2rem] overflow-hidden px-0"
+                  variant="ghost"
+                  onClick={clearDatasetFilters}
+                  title="Clear dataset filters"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span className="sr-only">Clear dataset filters</span>
+                </Button>
+              )}
+              <Button size="sm" className="min-w-0 flex-1 overflow-hidden px-2.5" onClick={() => setShowCreateModal(true)}>
+                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 truncate">Create Dataset</span>
               </Button>
             </div>
           </div>
@@ -2413,36 +2820,38 @@ function DatasetsTab({
             </div>
           )}
 
-      {selectedDataset ? (
-        <DatasetDetail
-          dataset={selectedDataset}
-          books={books}
-          onBack={() => setSelectedDatasetId(null)}
-          onRefresh={onRefresh}
-        />
-      ) : filtered.length === 0 ? (
-        <EmptyState>
-          <Database className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-          <p className="text-sm text-fg/50">No datasets in this folder.</p>
-          <p className="mt-1 text-xs text-fg/30">
-            Create structured datasets for labour units, equipment rates, and more.
-          </p>
-        </EmptyState>
-      ) : (
-        <DatasetListPaginated
-          cabinetsById={cabinetsById}
-          datasets={filtered}
-          onSelect={(id) => setSelectedDatasetId(id)}
-          onDelete={(id) => {
-            const target = datasets.find((dataset) => dataset.id === id) ?? null;
-            setDatasetToDelete(target);
-          }}
-          onMove={(dataset) => {
-            setMovingDataset(dataset);
-            setMoveTargetCabinetId(dataset.cabinetId ?? "__root__");
-          }}
-        />
-      )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            {selectedDataset ? (
+              <DatasetDetail
+                dataset={selectedDataset}
+                books={books}
+                onBack={() => setSelectedDatasetId(null)}
+                onRefresh={onRefresh}
+              />
+            ) : filtered.length === 0 ? (
+              <EmptyState>
+                <Database className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+                <p className="text-sm text-fg/50">No datasets in this folder.</p>
+                <p className="mt-1 text-xs text-fg/30">
+                  Create structured datasets for labor units, equipment rates, and more.
+                </p>
+              </EmptyState>
+            ) : (
+              <DatasetListPaginated
+                cabinetsById={cabinetsById}
+                datasets={filtered}
+                onSelect={(id) => setSelectedDatasetId(id)}
+                onDelete={(id) => {
+                  const target = datasets.find((dataset) => dataset.id === id) ?? null;
+                  setDatasetToDelete(target);
+                }}
+                onMove={(dataset) => {
+                  setMovingDataset(dataset);
+                  setMoveTargetCabinetId(dataset.cabinetId ?? "__root__");
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -2455,84 +2864,6 @@ function DatasetsTab({
             onRefresh();
           }}
         />,
-        document.body,
-      )}
-
-      {typeof document !== "undefined" && showLibrary && createPortal(
-        <ModalBackdrop open={showLibrary} onClose={() => setShowLibrary(false)} size="lg">
-          <div className="bg-panel border border-line rounded-xl shadow-xl p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-fg">Dataset Library</h3>
-                <p className="mt-0.5 text-xs text-fg/40">Add standard datasets to your organization</p>
-              </div>
-              <button onClick={() => setShowLibrary(false)} className="rounded p-1 text-fg/40 hover:bg-panel2">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {libraryDatasets.length === 0 ? (
-              <div className="py-6 text-center text-sm text-fg/40">
-                No datasets available in the library yet.
-              </div>
-            ) : (
-              <div className="max-h-[60vh] space-y-3 overflow-y-auto">
-                {libraryDatasets.map((tmpl) => {
-                  const alreadyAdopted = datasets.some((d) => d.sourceTemplateId === tmpl.id);
-                  return (
-                    <div key={tmpl.id} className="rounded-lg border border-line p-4 transition-colors hover:border-accent/30">
-                      <div className="flex items-start justify-between">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <Database className="h-4 w-4 shrink-0 text-accent" />
-                            <span className="text-sm font-medium text-fg">{tmpl.name}</span>
-                            <Badge tone="info" className="text-[10px]">{categoryLabel(tmpl.category)}</Badge>
-                          </div>
-                          <p className="ml-6 mt-1 text-xs text-fg/50">{tmpl.description}</p>
-                          <div className="ml-6 mt-1 text-xs text-fg/30">
-                            {tmpl.rowCount.toLocaleString()} rows · {tmpl.columns.length} columns
-                          </div>
-                        </div>
-                        <div className="ml-4 shrink-0">
-                          {alreadyAdopted ? (
-                            <Badge tone="success" className="text-[10px]">Added</Badge>
-                          ) : (
-                            <Button
-                              variant="accent"
-                              size="xs"
-                              disabled={adopting === tmpl.id}
-                              onClick={async () => {
-                                setAdopting(tmpl.id);
-                                try {
-                                  const adopted = await adoptDatasetTemplate(tmpl.id);
-                                  if (defaultCabinetId) {
-                                    await updateDataset(adopted.id, { cabinetId: defaultCabinetId });
-                                  }
-                                  await onRefresh();
-                                  setError(null);
-                                } catch (err) {
-                                  setError(err instanceof Error ? err.message : "Failed to add dataset from library");
-                                } finally {
-                                  setAdopting(null);
-                                }
-                              }}
-                            >
-                              {adopting === tmpl.id ? (
-                                <><Loader2 className="h-3 w-3 animate-spin" /> Adding...</>
-                              ) : (
-                                <><Plus className="h-3 w-3" /> Add</>
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </ModalBackdrop>,
         document.body,
       )}
 
@@ -2769,8 +3100,8 @@ function DatasetDetail({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+      <div className="flex shrink-0 items-center gap-3">
         <Button variant="ghost" size="xs" onClick={onBack}>
           &larr; Back
         </Button>
@@ -2808,7 +3139,7 @@ function DatasetDetail({
       </div>
 
       {/* Column definitions badges */}
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex shrink-0 flex-wrap gap-1.5">
         {dataset.columns.map((col) => (
           <span
             key={col.key}
@@ -2823,7 +3154,7 @@ function DatasetDetail({
       </div>
 
       {/* Controls */}
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <div className="relative flex-1 max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
           <Input
@@ -2855,7 +3186,7 @@ function DatasetDetail({
       </div>
 
       {/* Data table */}
-      <div className="rounded-lg border border-line overflow-auto max-h-[500px]">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-line">
         <table className="w-full text-xs">
           <thead className="bg-panel2 sticky top-0 z-10">
             <tr>
@@ -2941,7 +3272,7 @@ function DatasetDetail({
 
       {/* Pagination */}
       {total > pageSize && (
-        <div className="flex items-center justify-between text-xs text-fg/50">
+        <div className="flex shrink-0 items-center justify-between text-xs text-fg/50">
           <span>
             Showing {page * pageSize + 1}&ndash;{Math.min((page + 1) * pageSize, total)} of {total}
           </span>
@@ -2972,11 +3303,13 @@ function DatasetDetail({
       )}
 
       {showAddRow && (
-        <AddRowForm
-          columns={dataset.columns}
-          onClose={() => setShowAddRow(false)}
-          onAdd={handleAddRow}
-        />
+        <div className="shrink-0 overflow-auto">
+          <AddRowForm
+            columns={dataset.columns}
+            onClose={() => setShowAddRow(false)}
+            onAdd={handleAddRow}
+          />
+        </div>
       )}
     </div>
   );
@@ -3142,7 +3475,7 @@ function CreateDatasetModal({
             <Label className="text-xs">Name</Label>
             <Input
               className="mt-1 text-xs"
-              placeholder="e.g., NECA Labour Units"
+              placeholder="e.g., Company Labor Units"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />

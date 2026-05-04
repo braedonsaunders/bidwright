@@ -7,11 +7,11 @@ import { webhookInManifest } from "./webhook-in.js";
 import { hubspotManifest } from "./hubspot.js";
 import { slackManifest } from "./slack.js";
 import { microsoft365Manifest } from "./microsoft365.js";
+import { netsuiteManifest } from "./netsuite.js";
 import { quickbooksManifest } from "./quickbooks.js";
 import { procoreManifest } from "./procore.js";
 import { salesforceManifest } from "./salesforce.js";
 import { googleWorkspaceManifest } from "./google-workspace.js";
-import { netsuiteManifest } from "./netsuite.js";
 import { sftpCsvManifest } from "./sftp-csv.js";
 
 /**
@@ -36,8 +36,8 @@ const rawBuiltins: IntegrationManifest[] = [
   microsoft365Manifest,
   googleWorkspaceManifest,
   // Accounting / ERP
-  quickbooksManifest,
   netsuiteManifest,
+  quickbooksManifest,
   // Construction PM
   procoreManifest,
   // Storage / data
@@ -83,6 +83,6 @@ export function listBuiltinManifestSummaries(): Array<{
 export {
   genericRestManifest, webhookOutManifest, webhookInManifest,
   hubspotManifest, slackManifest, microsoft365Manifest,
-  quickbooksManifest, procoreManifest, salesforceManifest,
-  googleWorkspaceManifest, netsuiteManifest, sftpCsvManifest,
+  netsuiteManifest, quickbooksManifest, procoreManifest, salesforceManifest,
+  googleWorkspaceManifest, sftpCsvManifest,
 };

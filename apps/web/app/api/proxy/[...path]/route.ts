@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 
+export const runtime = "nodejs";
+
 const INTERNAL_API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? "http://localhost:4001";
 
 function buildTargetUrl(pathSegments: string[], request: NextRequest) {
@@ -20,8 +22,16 @@ async function proxyRequest(request: NextRequest, context: { params: Promise<{ p
   headers.delete("host");
   headers.delete("connection");
   headers.delete("content-length");
+  headers.delete("expect");
+  headers.delete("keep-alive");
+  headers.delete("proxy-authenticate");
+  headers.delete("proxy-authorization");
+  headers.delete("te");
+  headers.delete("trailer");
+  headers.delete("transfer-encoding");
+  headers.delete("upgrade");
 
-  const init: RequestInit = {
+  const init: RequestInit & { duplex?: "half" } = {
     method: request.method,
     headers,
     redirect: "manual",
@@ -29,10 +39,16 @@ async function proxyRequest(request: NextRequest, context: { params: Promise<{ p
   };
 
   if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = await request.arrayBuffer();
+    init.body = request.body;
+    init.duplex = "half";
   }
 
-  const upstream = await fetch(targetUrl, init);
+  const upstream = await fetch(targetUrl, init).catch((err) => (
+    new Response(JSON.stringify({ error: err instanceof Error ? err.message : "Proxy request failed" }), {
+      status: 502,
+      headers: { "content-type": "application/json" },
+    })
+  ));
   const responseHeaders = new Headers(upstream.headers);
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");

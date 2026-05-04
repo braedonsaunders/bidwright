@@ -113,6 +113,16 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
 }
 
 export async function seedSampleProjects(prisma: PrismaClient, store: BidwrightStore, organizationId: string) {
+  const entityCategories = await prisma.entityCategory.findMany({ where: { organizationId } });
+  const categoryByName = new Map(entityCategories.map((category) => [category.name, category]));
+  const fallbackCategory =
+    categoryByName.get("Material") ??
+    entityCategories.find((category) => category.enabled) ??
+    entityCategories[0];
+  if (!fallbackCategory) {
+    throw new Error("Cannot seed sample worksheet items without at least one EntityCategory");
+  }
+
   for (const project of store.projects) {
     await prisma.project.create({
       data: {
@@ -164,9 +174,10 @@ export async function seedSampleProjects(prisma: PrismaClient, store: BidwrightS
               id: w.id, name: w.name, order: w.order,
               items: {
                 create: store.worksheetItems
-                  .filter((i) => i.worksheetId === w.id)
-                  .map((i) => ({
-                    id: i.id, category: i.category, entityType: i.entityType, entityName: i.entityName,
+	                  .filter((i) => i.worksheetId === w.id)
+	                  .map((i) => ({
+	                    entityCategory: { connect: { id: (categoryByName.get(i.category) ?? fallbackCategory).id } },
+	                    id: i.id, category: i.category, entityType: i.entityType, entityName: i.entityName,
                     description: i.description, quantity: i.quantity, uom: i.uom,
                     cost: i.cost, markup: i.markup, price: i.price,
                     unit1: i.unit1, unit2: i.unit2,
@@ -456,7 +467,7 @@ const PERSONAS = [
 - Follow project scope and user instructions for additional subcontracted items.
 
 ### Key Knowledge to Search
-- NECA labor units for conduit and wire installation
+- Company labor units for conduit and wire installation
 - Cable pulling tension calculations for long runs
 - Termination hours by wire size and type
 - Lighting fixture installation rates by type

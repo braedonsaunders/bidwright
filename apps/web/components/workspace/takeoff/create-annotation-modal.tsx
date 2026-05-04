@@ -132,7 +132,7 @@ export function CreateAnnotationModal({
     <ModalBackdrop open={open} onClose={onClose} size="md">
       <Card>
         <CardHeader>
-          <CardTitle>New Annotation</CardTitle>
+          <CardTitle>New Takeoff Mark</CardTitle>
         </CardHeader>
         <CardBody>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -155,7 +155,7 @@ export function CreateAnnotationModal({
               <Label htmlFor="ann-label">Label</Label>
               <Input
                 id="ann-label"
-                placeholder={selectedType?.label ?? "Annotation label..."}
+                placeholder={selectedType?.label ?? "Takeoff mark label..."}
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
               />

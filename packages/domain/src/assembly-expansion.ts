@@ -1,14 +1,13 @@
 // Expansion engine for assemblies.
 //
 // An assembly is a reusable kit composed of catalog items, rate-schedule items,
-// and nested sub-assemblies. Every component carries a `quantityExpr` — either
+// labor units, cost intelligence costs, and nested sub-assemblies. Every component carries a `quantityExpr` — either
 // a literal number or an expression like `wallHeight * 2 + 1` that references
 // the assembly's named parameters. Sub-assembly components additionally carry
 // `parameterBindings`, expressions evaluated in the parent scope that supply
 // values for the child assembly's parameters.
 //
-// Expansion produces a flat list of leaf components (catalog or rate-schedule
-// items) along with their resolved quantities, ready to be snapshotted into
+// Expansion produces a flat list of leaf components along with their resolved quantities, ready to be snapshotted into
 // WorksheetItem rows. The engine is pure — no I/O — so callers must build a
 // lookup context up-front.
 
@@ -22,9 +21,13 @@ export interface AssemblyParameterDefinition {
 
 export interface AssemblyComponentDefinition {
   id: string;
-  componentType: "catalog_item" | "rate_schedule_item" | "sub_assembly";
+  componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "sub_assembly";
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
+  laborUnitId?: string | null;
+  laborDifficulty?: "normal" | "difficult" | "very_difficult" | string | null;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
   subAssemblyId?: string | null;
   quantityExpr: string;
   description?: string;
@@ -63,28 +66,94 @@ export interface RateScheduleItemRef {
   costRates?: Record<string, number>;
 }
 
+export interface LaborUnitRef {
+  id: string;
+  code?: string;
+  name: string;
+  description?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  outputUom?: string;
+  hoursNormal: number;
+  hoursDifficult?: number | null;
+  hoursVeryDifficult?: number | null;
+  defaultDifficulty?: "normal" | "difficult" | "very_difficult" | string | null;
+  entityCategoryType?: string | null;
+}
+
+export interface EffectiveCostRef {
+  id: string;
+  resourceId?: string | null;
+  catalogItemId?: string | null;
+  code?: string;
+  name: string;
+  description?: string;
+  category?: string;
+  resourceType?: string;
+  defaultUom?: string;
+  uom: string;
+  unitCost: number;
+  unitPrice?: number | null;
+  vendorName?: string;
+  region?: string;
+  method?: string;
+  effectiveDate?: string | null;
+  confidence?: number | null;
+}
+
 export interface ExpansionContext {
   assemblies: ReadonlyMap<string, AssemblyDefinition>;
   catalogItems: ReadonlyMap<string, CatalogItemRef>;
   rateScheduleItems: ReadonlyMap<string, RateScheduleItemRef>;
+  laborUnits?: ReadonlyMap<string, LaborUnitRef>;
+  effectiveCosts?: ReadonlyMap<string, EffectiveCostRef>;
 }
 
 export interface ExpandedComponent {
   componentPath: string[];
-  componentType: "catalog_item" | "rate_schedule_item";
+  componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence";
   catalogItemId?: string;
   rateScheduleItemId?: string;
+  laborUnitId?: string;
+  costResourceId?: string;
+  effectiveCostId?: string;
   category: string;
   entityType: string;
   entityName: string;
   description: string;
   quantity: number;
   uom: string;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
+  tierUnits?: Record<string, number>;
   unitCost: number;
   unitPrice: number;
   markup: number;
+  vendor?: string;
   notes: string;
   sortOrder: number;
+}
+
+export interface AssemblyResourceRollup {
+  key: string;
+  componentType: "catalog_item" | "rate_schedule_item" | "labor_unit" | "cost_intelligence" | "mixed";
+  catalogItemId?: string;
+  rateScheduleItemId?: string;
+  laborUnitId?: string;
+  costResourceId?: string;
+  effectiveCostId?: string;
+  category: string;
+  entityName: string;
+  uom: string;
+  quantity: number;
+  lineCost: number;
+  linePrice: number;
+  averageUnitCost: number;
+  averageUnitPrice: number;
+  componentCount: number;
+  componentPaths: string[][];
 }
 
 export interface ExpansionResult {
@@ -259,6 +328,25 @@ export function expandAssembly(
     }
   }
 
+  function normalizeLaborDifficulty(value: string | null | undefined): "normal" | "difficult" | "very_difficult" {
+    const normalized = (value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (normalized === "difficult") return "difficult";
+    if (normalized === "very_difficult" || normalized === "verydifficult" || normalized === "extreme") {
+      return "very_difficult";
+    }
+    return "normal";
+  }
+
+  function laborUnitHoursPerOutput(unit: LaborUnitRef, difficulty: "normal" | "difficult" | "very_difficult") {
+    if (difficulty === "very_difficult") {
+      return unit.hoursVeryDifficult ?? unit.hoursDifficult ?? unit.hoursNormal;
+    }
+    if (difficulty === "difficult") {
+      return unit.hoursDifficult ?? unit.hoursNormal;
+    }
+    return unit.hoursNormal;
+  }
+
   function recurse(
     assemblyId: string,
     multiplier: number,
@@ -397,6 +485,103 @@ export function expandAssembly(
           continue;
         }
 
+        if (component.componentType === "labor_unit") {
+          if (!component.laborUnitId) {
+            warnings.push(`Labor-unit component ${component.id} missing laborUnitId`);
+            continue;
+          }
+          if (!component.rateScheduleItemId) {
+            warnings.push(`Labor-unit component ${component.id} missing rateScheduleItemId`);
+            continue;
+          }
+          const laborUnit = ctx.laborUnits?.get(component.laborUnitId);
+          if (!laborUnit) {
+            warnings.push(`Labor unit ${component.laborUnitId} not found in expansion context`);
+            continue;
+          }
+          const rsi = ctx.rateScheduleItems.get(component.rateScheduleItemId);
+          if (!rsi) {
+            warnings.push(
+              `Rate-schedule item ${component.rateScheduleItemId} not found in expansion context`,
+            );
+            continue;
+          }
+
+          const difficulty = normalizeLaborDifficulty(component.laborDifficulty ?? laborUnit.defaultDifficulty);
+          const hoursPerOutput = laborUnitHoursPerOutput(laborUnit, difficulty);
+          const totalHours = roundQuantity(qty * hoursPerOutput);
+          const rates = Object.values(rsi.rates ?? {});
+          const costRates = Object.values(rsi.costRates ?? {});
+          const outputUom = component.uomOverride || laborUnit.outputUom || "EA";
+          const unitName = laborUnit.name || [laborUnit.category, laborUnit.className, laborUnit.subClassName].filter(Boolean).join(" - ");
+
+          items.push({
+            componentPath: [...pathLabels, assembly.name],
+            componentType: "labor_unit",
+            laborUnitId: laborUnit.id,
+            rateScheduleItemId: rsi.id,
+            category: component.category || laborUnit.entityCategoryType || "Labour",
+            entityType: laborUnit.entityCategoryType || component.category || "Labour",
+            entityName: rsi.name,
+            description: component.description || `${unitName} (${roundQuantity(qty)} ${outputUom} @ ${hoursPerOutput} hr/${outputUom})`,
+            quantity: 1,
+            uom: "HR",
+            unit1: totalHours,
+            unit2: 0,
+            unit3: 0,
+            unitCost: component.costOverride ?? ((costRates[0] ?? 0) * totalHours),
+            unitPrice: (rates[0] ?? 0) * totalHours,
+            markup: component.markupOverride ?? 0,
+            notes: component.notes || `Labor unit ${difficulty.replace("_", " ")}: ${hoursPerOutput} hr/${outputUom} x ${roundQuantity(qty)} ${outputUom}.`,
+            sortOrder: lineCounter++,
+          });
+          continue;
+        }
+
+        if (component.componentType === "cost_intelligence") {
+          if (!component.effectiveCostId) {
+            warnings.push(`Cost intelligence component ${component.id} missing effectiveCostId`);
+            continue;
+          }
+          const cost = ctx.effectiveCosts?.get(component.effectiveCostId);
+          if (!cost) {
+            warnings.push(`Cost intelligence cost ${component.effectiveCostId} not found in expansion context`);
+            continue;
+          }
+          const category = component.category || cost.category || cost.resourceType || "Material";
+          const vendor = cost.vendorName?.trim() || "";
+          const sourceParts = [
+            `Cost Intelligence cost basis ${cost.id}`,
+            cost.method,
+            vendor ? `vendor ${vendor}` : "",
+            cost.effectiveDate ? `effective ${cost.effectiveDate}` : "",
+            Number.isFinite(cost.confidence ?? NaN)
+              ? `confidence ${Math.round((cost.confidence ?? 0) * 100)}%`
+              : "",
+          ].filter(Boolean);
+
+          items.push({
+            componentPath: [...pathLabels, assembly.name],
+            componentType: "cost_intelligence",
+            catalogItemId: cost.catalogItemId ?? undefined,
+            costResourceId: cost.resourceId ?? undefined,
+            effectiveCostId: cost.id,
+            category,
+            entityType: category,
+            entityName: cost.name,
+            description: component.description || cost.description || cost.name,
+            quantity: qty,
+            uom: component.uomOverride || cost.uom || cost.defaultUom || "EA",
+            unitCost: component.costOverride ?? cost.unitCost,
+            unitPrice: cost.unitPrice ?? cost.unitCost,
+            markup: component.markupOverride ?? 0,
+            vendor: vendor || undefined,
+            notes: component.notes || sourceParts.join("; "),
+            sortOrder: lineCounter++,
+          });
+          continue;
+        }
+
         warnings.push(`Unknown component type "${component.componentType}" on ${component.id}`);
       }
     } finally {
@@ -407,6 +592,81 @@ export function expandAssembly(
   recurse(rootAssemblyId, outerQuantity, numericOverrides, []);
 
   return { items, warnings };
+}
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function roundQuantity(value: number): number {
+  return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
+}
+
+function expandedResourceKey(item: ExpandedComponent): string {
+  if (item.laborUnitId && item.rateScheduleItemId) return `labor_unit:${item.laborUnitId}:${item.rateScheduleItemId}:${item.uom}`;
+  if (item.effectiveCostId) return `cost_intelligence:${item.effectiveCostId}:${item.uom}`;
+  if (item.costResourceId) return `cost_resource:${item.costResourceId}:${item.uom}`;
+  if (item.catalogItemId) return `catalog_item:${item.catalogItemId}:${item.uom}`;
+  if (item.rateScheduleItemId) return `rate_schedule_item:${item.rateScheduleItemId}:${item.uom}`;
+  return `${item.componentType}:${item.category.trim().toLowerCase()}:${item.entityName.trim().toLowerCase()}:${item.uom}`;
+}
+
+export function summarizeExpandedAssemblyResources(
+  items: readonly ExpandedComponent[],
+): AssemblyResourceRollup[] {
+  const groups = new Map<string, AssemblyResourceRollup>();
+
+  for (const item of items) {
+    const key = expandedResourceKey(item);
+    const lineCost = item.quantity * item.unitCost;
+    const linePrice = item.quantity * item.unitPrice * (1 + (item.markup ?? 0));
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.lineCost += lineCost;
+      existing.linePrice += linePrice;
+      existing.componentCount += 1;
+      existing.componentPaths.push(item.componentPath);
+      if (existing.category !== item.category) existing.category = "Mixed";
+      if (existing.componentType !== item.componentType) existing.componentType = "mixed";
+      continue;
+    }
+
+    groups.set(key, {
+      key,
+      componentType: item.componentType,
+      catalogItemId: item.catalogItemId,
+      rateScheduleItemId: item.rateScheduleItemId,
+      laborUnitId: item.laborUnitId,
+      costResourceId: item.costResourceId,
+      effectiveCostId: item.effectiveCostId,
+      category: item.category,
+      entityName: item.entityName,
+      uom: item.uom,
+      quantity: item.quantity,
+      lineCost,
+      linePrice,
+      averageUnitCost: 0,
+      averageUnitPrice: 0,
+      componentCount: 1,
+      componentPaths: [item.componentPath],
+    });
+  }
+
+  return Array.from(groups.values())
+    .map((entry) => ({
+      ...entry,
+      quantity: roundQuantity(entry.quantity),
+      lineCost: roundMoney(entry.lineCost),
+      linePrice: roundMoney(entry.linePrice),
+      averageUnitCost: entry.quantity > 0 ? roundMoney(entry.lineCost / entry.quantity) : 0,
+      averageUnitPrice: entry.quantity > 0 ? roundMoney(entry.linePrice / entry.quantity) : 0,
+    }))
+    .sort((left, right) => {
+      const categorySort = left.category.localeCompare(right.category);
+      return categorySort !== 0 ? categorySort : right.lineCost - left.lineCost;
+    });
 }
 
 // ── Static analysis helpers ───────────────────────────────────────────────

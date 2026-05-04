@@ -72,7 +72,8 @@ export async function catalogRoutes(app: FastifyInstance) {
       return analysis;
     } catch (err: any) {
       request.log.error(err, "Catalog import analyze failed");
-      return reply.code(500).send({ error: err?.message ?? "Analyze failed" });
+      const statusCode = typeof err?.statusCode === "number" ? err.statusCode : 500;
+      return reply.code(statusCode).send({ error: err?.message ?? "Analyze failed" });
     }
   });
 

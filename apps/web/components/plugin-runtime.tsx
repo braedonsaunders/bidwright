@@ -44,8 +44,6 @@ import {
 } from "@/lib/api";
 import { resolveApiUrl } from "@/lib/api/client";
 import {
-  computeNecaExtendedDuration,
-  computeNecaTemperatureAdjustment,
   datasetRowMatchesFilters,
   getDatasetCellValue,
   getDatasetCellNumber,
@@ -191,10 +189,7 @@ function useDatasetOptions(
 // ── Rate schedule options hook ──────────────────────────────────────
 
 function normalizeRateScheduleToken(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/\blabour\b/g, "labor");
+  return value.trim();
 }
 
 function asSourceList(value: string | string[] | undefined): string[] {
@@ -489,40 +484,11 @@ function evaluateFormula(
     // eslint-disable-next-line no-new-func
     const fn = new Function(
       "daysBetween",
-      "necaTemperatureLostProductivity",
-      "necaTemperatureAdditionalHours",
-      "necaExtendedRecommendedWorkers",
-      "necaExtendedAdditionalHours",
       ...Object.keys(values),
       `"use strict"; try { return (${formula}); } catch { return 0; }`
     );
     const result = fn(
       daysBetween,
-      (temperature: unknown, temperatureUnit: unknown, humidity: unknown) =>
-        computeNecaTemperatureAdjustment({
-          temperature: toNumber(temperature),
-          temperatureUnit: String(temperatureUnit ?? "F"),
-          humidity: toNumber(humidity),
-          baseHours: 0,
-        }).lostProductivityPercent,
-      (baseHours: unknown, temperature: unknown, temperatureUnit: unknown, humidity: unknown) =>
-        computeNecaTemperatureAdjustment({
-          baseHours: toNumber(baseHours),
-          temperature: toNumber(temperature),
-          temperatureUnit: String(temperatureUnit ?? "F"),
-          humidity: toNumber(humidity),
-        }).additionalHours,
-      (baseHours: unknown) =>
-        computeNecaExtendedDuration({
-          baseHours: toNumber(baseHours),
-          monthsExtended: 1,
-        }).recommendedWorkers,
-      (baseHours: unknown, workers: unknown, monthsExtended: unknown) =>
-        computeNecaExtendedDuration({
-          baseHours: toNumber(baseHours),
-          workers: toNumber(workers) || undefined,
-          monthsExtended: toNumber(monthsExtended),
-        }).totalAdditionalHours,
       ...Object.keys(values).map((k) => values[k])
     );
     return typeof result === "number" && isFinite(result) ? result : 0;

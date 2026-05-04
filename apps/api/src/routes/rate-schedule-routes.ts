@@ -14,6 +14,8 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
       const body = request.body as {
         name: string; description?: string; category?: string;
         defaultMarkup?: number; autoCalculate?: boolean;
+        effectiveDate?: string | null; expiryDate?: string | null;
+        metadata?: Record<string, unknown>;
       };
       const created = await request.store!.createRateSchedule(body);
       reply.code(201);

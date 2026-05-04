@@ -15,6 +15,20 @@ interface ImportRateSchedulesModalProps {
   onError: (msg: string) => void;
 }
 
+function formatScheduleDate(value: string | null | undefined) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "";
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(parsed);
+}
+
+function formatScheduleDateRange(start: string | null | undefined, end: string | null | undefined) {
+  if (start && end) return `${formatScheduleDate(start)} - ${formatScheduleDate(end)}`;
+  if (start) return `From ${formatScheduleDate(start)}`;
+  if (end) return `Until ${formatScheduleDate(end)}`;
+  return "";
+}
+
 export function ImportRateSchedulesModal({
   open,
   onClose,
@@ -60,7 +74,9 @@ export function ImportRateSchedulesModal({
           (s) =>
             s.name.toLowerCase().includes(q) ||
             (s.description?.toLowerCase().includes(q) ?? false) ||
-            s.category.toLowerCase().includes(q),
+            s.category.toLowerCase().includes(q) ||
+            (s.effectiveDate?.toLowerCase().includes(q) ?? false) ||
+            (s.expiryDate?.toLowerCase().includes(q) ?? false),
         )
       : schedules;
 
@@ -209,6 +225,7 @@ export function ImportRateSchedulesModal({
                     {items.map((s) => {
                       const isSelected = selected.has(s.id);
                       const alreadyImported = existingScheduleIds.includes(s.id);
+                      const effectiveRange = formatScheduleDateRange(s.effectiveDate, s.expiryDate);
                       return (
                         <button
                           key={s.id}
@@ -242,6 +259,9 @@ export function ImportRateSchedulesModal({
                             </div>
                             {s.description && (
                               <p className="mt-0.5 truncate text-xs text-fg/45">{s.description}</p>
+                            )}
+                            {effectiveRange && (
+                              <p className="mt-0.5 truncate text-[11px] text-fg/35">{effectiveRange}</p>
                             )}
                           </div>
                           <div className="shrink-0 text-[10px] text-fg/35 tabular-nums">

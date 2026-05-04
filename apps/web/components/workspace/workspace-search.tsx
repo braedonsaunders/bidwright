@@ -27,7 +27,7 @@ interface SearchResult {
 
 /* ─── Helpers ─── */
 
-const CATEGORY_ORDER = ["Setup", "Customer", "Line Items", "Phases", "Adjustments", "Conditions", "Documents"];
+const CATEGORY_ORDER = ["Setup", "Customer", "Line Items", "Phases", "Adjustments", "Conditions", "Files"];
 const MAX_PER_CATEGORY = 8;
 const MAX_TOTAL = 40;
 const CONTEXT_RADIUS = 50;
@@ -40,7 +40,7 @@ const CATEGORY_ICONS: Record<string, typeof Search> = {
   "Phases": Hash,
   "Adjustments": SlidersHorizontal,
   "Conditions": ListChecks,
-  "Documents": FileText,
+  "Files": FileText,
 };
 
 function snippetAround(text: string, query: string, radius = CONTEXT_RADIUS): string {
@@ -186,13 +186,13 @@ function buildSearchIndex(workspace: ProjectWorkspaceData): Array<Omit<SearchRes
     });
   }
 
-  // Documents (file names + extracted text)
+  // Files (file names + extracted text)
   for (const doc of (workspace.sourceDocuments ?? [])) {
     const extracted = (doc.extractedText || "").slice(0, EXTRACTED_TEXT_CAP);
     const text = [doc.fileName, extracted].join(" ");
     entries.push({
       id: `doc-${doc.id}`,
-      category: "Documents",
+      category: "Files",
       icon: FileText,
       label: doc.fileName,
       searchText: text.toLowerCase(),

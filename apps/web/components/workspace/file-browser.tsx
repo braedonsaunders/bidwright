@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   AlertTriangle,
+  ArrowRight,
   Box,
   Check,
   ChevronDown,
@@ -44,6 +45,7 @@ import {
 import { createPortal } from "react-dom";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import dynamic from "next/dynamic";
+import { loadPdfJs } from "@/lib/pdfjs-loader";
 
 const RichTextEditor = dynamic(
   () => import("./editors/rich-text-editor").then((m) => ({ default: m.RichTextEditor })),
@@ -109,13 +111,16 @@ import type {
 import {
   createFileNode,
   deleteFileNode,
+  deleteSourceDocument,
   getFileDownloadUrl,
   getDocumentDownloadUrl,
   getFileTree,
   listModelAssets,
   saveFileNodeContent,
   updateFileNode,
+  updateSourceDocument,
   uploadFile,
+  uploadSourceDocument,
 } from "@/lib/api";
 import type { SourceDocumentStructuredData } from "@/lib/api";
 import {
@@ -127,7 +132,11 @@ import {
   CardTitle,
   EmptyState,
   Input,
+  Label,
+  ModalBackdrop,
+  Select,
 } from "@/components/ui";
+import { BidwrightMark } from "@/components/brand-logo";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
@@ -190,6 +199,8 @@ const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
 const DXF_EXTENSIONS = new Set(["dxf", "dwg"]);
 const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz"]);
 const RTF_EXTENSIONS = new Set(["rtf"]);
+const FILE_NODE_DND_TYPE = "application/x-bidwright-file-node";
+const ROOT_PARENT_VALUE = "__root__";
 
 /* ─── Helpers ─── */
 
@@ -432,6 +443,75 @@ function filterTree(items: TreeItem[], query: string): TreeItem[] {
   return prune(items);
 }
 
+function isInternalFileNodeDrag(e: React.DragEvent) {
+  return Array.from(e.dataTransfer.types).includes(FILE_NODE_DND_TYPE);
+}
+
+function isDescendantFileNode(nodes: FileNode[], nodeId: string, ancestorId: string) {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  let current = byId.get(nodeId);
+  while (current?.parentId) {
+    if (current.parentId === ancestorId) return true;
+    current = byId.get(current.parentId);
+  }
+  return false;
+}
+
+function getFileNodePath(nodes: FileNode[], node: FileNode) {
+  const byId = new Map(nodes.map((entry) => [entry.id, entry]));
+  const parts = [node.name];
+  let current = node.parentId ? byId.get(node.parentId) : undefined;
+  while (current) {
+    parts.unshift(current.name);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return parts.join(" / ");
+}
+
+function buildMoveTargetOptions(nodes: FileNode[], movingNodeId?: string) {
+  const directories = nodes
+    .filter((node) => node.type === "directory")
+    .filter((node) => {
+      if (!movingNodeId) return true;
+      if (node.id === movingNodeId) return false;
+      return !isDescendantFileNode(nodes, node.id, movingNodeId);
+    })
+    .map((node) => ({ value: node.id, label: getFileNodePath(nodes, node) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+
+  return [{ value: ROOT_PARENT_VALUE, label: "Files" }, ...directories];
+}
+
+function buildSourceDocumentMoveTargetOptions() {
+  return FOLDER_CONFIG.map((folder) => ({
+    value: folder.documentType,
+    label: folder.label,
+  }));
+}
+
+function getMutableItemId(item: TreeItem) {
+  if (item.fileNode) return `fn:${item.fileNode.id}`;
+  if (item.sourceDocument) return `doc:${item.sourceDocument.id}`;
+  return null;
+}
+
+function findMutableTreeItem(items: TreeItem[], mutableId: string): TreeItem | null {
+  for (const item of items) {
+    if (getMutableItemId(item) === mutableId) return item;
+    const found = findMutableTreeItem(item.children, mutableId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function renameSourceDocumentPath(document: SourceDocument, nextName: string) {
+  const cleanName = nextName.replace(/[\\/]/g, "-").trim();
+  const segments = splitSourceDocumentPath(document.fileName);
+  if (segments.length === 0) return cleanName;
+  segments[segments.length - 1] = cleanName;
+  return segments.join("/");
+}
+
 /* ─── PDF Preview (lazy loaded) ─── */
 
 function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
@@ -460,13 +540,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
           pdfDocRef.current = null;
         }
 
-        const pdfjs = await import("pdfjs-dist");
-        if (typeof window !== "undefined" && !pdfjs.GlobalWorkerOptions.workerSrc) {
-          pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-            "pdfjs-dist/build/pdf.worker.min.mjs",
-            import.meta.url
-          ).toString();
-        }
+        const pdfjs = await loadPdfJs();
 
         const loadingTask = pdfjs.getDocument({ url, withCredentials: true });
         const doc = await loadingTask.promise;
@@ -710,6 +784,44 @@ function ImagePreview({ url, fileName }: { url: string; fileName: string }) {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/* ─── Empty Preview State ─── */
+
+function EmptyPreviewState() {
+  return (
+    <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-panel/90 px-6">
+      <motion.div
+        aria-hidden
+        className="absolute inset-0 opacity-20 [background-image:linear-gradient(hsl(var(--fg)/0.07)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.05)_1px,transparent_1px)] [background-size:32px_32px]"
+        animate={{ backgroundPosition: ["0px 0px", "60px 60px"] }}
+        transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
+      />
+      <motion.div
+        aria-hidden
+        className="absolute inset-x-0 top-[18%] h-px bg-[linear-gradient(90deg,transparent,hsl(var(--accent)),hsl(169_62%_44%),transparent)]"
+        animate={{ top: ["22%", "72%", "22%"], opacity: [0.05, 0.18, 0.05] }}
+        transition={{ duration: 8.5, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        initial={{ opacity: 0, y: 14, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: 0.25, ease: "easeOut" }}
+        className="relative z-10 flex flex-col items-center text-center"
+      >
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex items-center gap-3">
+            <BidwrightMark className="h-12 w-12" />
+            <span className="text-3xl font-semibold tracking-normal text-fg sm:text-4xl">Bidwright</span>
+          </div>
+          <div className="flex flex-col items-center gap-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-fg/30">Construction estimating</p>
+            <p className="text-sm font-medium text-fg/50">Click a file to view.</p>
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -1049,7 +1161,19 @@ function TreeNode({
   toggleExpand,
   selectedId,
   onSelect,
-  onContextAction,
+  onOpenContextMenu,
+  renamingId,
+  renameValue,
+  onRenameValueChange,
+  onCommitRename,
+  onCancelRename,
+  onMoveNode,
+  canMoveNode,
+  onUploadFiles,
+  draggingNodeId,
+  setDraggingNodeId,
+  dropTargetId,
+  setDropTargetId,
 }: {
   item: TreeItem;
   depth: number;
@@ -1057,11 +1181,108 @@ function TreeNode({
   toggleExpand: (id: string) => void;
   selectedId: string | null;
   onSelect: (item: TreeItem) => void;
-  onContextAction: (action: string, item: TreeItem) => void;
+  onOpenContextMenu: (item: TreeItem, position: { x: number; y: number }) => void;
+  renamingId: string | null;
+  renameValue: string;
+  onRenameValueChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+  onMoveNode: (nodeId: string, parentId: string | null) => void;
+  canMoveNode: (nodeId: string, parentId: string | null) => boolean;
+  onUploadFiles: (files: FileList | File[], parentId?: string | null, documentType?: string) => void;
+  draggingNodeId: string | null;
+  setDraggingNodeId: (nodeId: string | null) => void;
+  dropTargetId: string | null;
+  setDropTargetId: (nodeId: string | null) => void;
 }) {
   const isExpanded = expandedSet.has(item.id);
   const isSelected = selectedId === item.id;
-  const [showMenu, setShowMenu] = useState(false);
+  const itemMutableId = getMutableItemId(item);
+  const isRenaming = Boolean(itemMutableId && itemMutableId === renamingId);
+  const isDropTarget = (item.fileNode?.id ?? item.id) === dropTargetId && item.type === "directory";
+  const isDragging = item.fileNode?.id === draggingNodeId;
+  const skipBlurRenameRef = useRef(false);
+  const ext = getFileExtension(item.name);
+  const isImage = IMAGE_EXTENSIONS.has(ext);
+  const isPdf = PDF_EXTENSIONS.has(ext);
+
+  const openContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onSelect(item);
+    onOpenContextMenu(item, { x: e.clientX, y: e.clientY });
+  };
+
+  const openButtonMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    onSelect(item);
+    onOpenContextMenu(item, { x: rect.right - 4, y: rect.bottom + 4 });
+  };
+
+  const handleDragStart = (e: React.DragEvent) => {
+    if (!item.fileNode) return;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData(FILE_NODE_DND_TYPE, item.fileNode.id);
+    e.dataTransfer.setData("text/plain", item.name);
+    setDraggingNodeId(item.fileNode.id);
+  };
+
+  const handleDragEnd = () => {
+    setDraggingNodeId(null);
+    setDropTargetId(null);
+  };
+
+  const handleDirectoryDragOver = (e: React.DragEvent) => {
+    if (item.type !== "directory" || (!item.fileNode && !item.isAutoFolder)) return;
+    if (isInternalFileNodeDrag(e)) {
+      const draggedId = e.dataTransfer.getData(FILE_NODE_DND_TYPE) || draggingNodeId;
+      if (draggedId && item.fileNode && canMoveNode(draggedId, item.fileNode.id)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        setDropTargetId(item.fileNode.id);
+      }
+      return;
+    }
+    if (Array.from(e.dataTransfer.types).includes("Files")) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      setDropTargetId(item.fileNode?.id ?? item.id);
+    }
+  };
+
+  const handleDirectoryDrop = (e: React.DragEvent) => {
+    if (item.type !== "directory" || (!item.fileNode && !item.isAutoFolder)) return;
+    if (isInternalFileNodeDrag(e)) {
+      const draggedId = e.dataTransfer.getData(FILE_NODE_DND_TYPE) || draggingNodeId;
+      if (draggedId && item.fileNode) {
+        e.preventDefault();
+        e.stopPropagation();
+        onMoveNode(draggedId, item.fileNode.id);
+      }
+      setDropTargetId(null);
+      return;
+    }
+    if (e.dataTransfer.files.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      onUploadFiles(e.dataTransfer.files, item.fileNode?.id, item.documentType);
+      setDropTargetId(null);
+    }
+  };
+
+  const fileIcon = isPdf ? (
+    <FileText className="h-3.5 w-3.5 shrink-0 text-danger/70" />
+  ) : isImage ? (
+    <ImageIcon className="h-3.5 w-3.5 shrink-0 text-success/70" />
+  ) : item.sourceDocument ? (
+    <FileText className="h-3.5 w-3.5 shrink-0" />
+  ) : (
+    <File className="h-3.5 w-3.5 shrink-0" />
+  );
 
   if (item.type === "directory") {
     return (
@@ -1071,19 +1292,24 @@ function TreeNode({
             "group flex items-center gap-1 rounded-md px-2 py-1.5 text-xs transition-colors cursor-pointer",
             isSelected
               ? "bg-accent/10 text-accent"
-              : "text-fg/70 hover:bg-panel2/60 hover:text-fg"
+              : "text-fg/70 hover:bg-panel2/60 hover:text-fg",
+            isDropTarget && "bg-accent/10 ring-1 ring-accent/40",
+            isDragging && "opacity-40"
           )}
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
           onClick={() => {
             toggleExpand(item.id);
             onSelect(item);
           }}
-          onContextMenu={(e) => {
-            if (!item.isAutoFolder) {
-              e.preventDefault();
-              setShowMenu(true);
-            }
+          onContextMenu={openContextMenu}
+          draggable={Boolean(item.fileNode)}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragOver={handleDirectoryDragOver}
+          onDragLeave={() => {
+            if (dropTargetId === (item.fileNode?.id ?? item.id)) setDropTargetId(null);
           }}
+          onDrop={handleDirectoryDrop}
         >
           {isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fg/40" />
@@ -1095,52 +1321,41 @@ function TreeNode({
           ) : (
             <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
           )}
-          <span className="flex-1 truncate font-medium">{item.name}</span>
+          {isRenaming ? (
+            <input
+              className="h-6 min-w-0 flex-1 rounded-md border border-accent/40 bg-bg px-2 text-xs font-medium text-fg outline-none"
+              value={renameValue}
+              onChange={(e) => onRenameValueChange(e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onCommitRename();
+                if (e.key === "Escape") {
+                  skipBlurRenameRef.current = true;
+                  onCancelRename();
+                }
+              }}
+              onBlur={() => {
+                if (skipBlurRenameRef.current) {
+                  skipBlurRenameRef.current = false;
+                  return;
+                }
+                onCommitRename();
+              }}
+              autoFocus
+            />
+          ) : (
+            <span className="flex-1 truncate font-medium">{item.name}</span>
+          )}
           <span className="text-[10px] text-fg/30">{item.children.length}</span>
 
-          {!item.isAutoFolder && (
-            <div className="relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(!showMenu);
-                }}
-                className="opacity-0 group-hover:opacity-100 text-fg/30 hover:text-fg/60 transition-opacity"
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </button>
-              {showMenu && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowMenu(false)}
-                  />
-                  <div className="absolute right-0 top-5 z-50 min-w-[120px] rounded-lg border border-line bg-panel shadow-lg py-1">
-                    <button
-                      className="w-full px-3 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(false);
-                        onContextAction("rename", item);
-                      }}
-                    >
-                      Rename
-                    </button>
-                    <button
-                      className="w-full px-3 py-1.5 text-left text-xs text-danger hover:bg-panel2"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(false);
-                        onContextAction("delete", item);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          <button
+            type="button"
+            title="File actions"
+            onClick={openButtonMenu}
+            className="rounded p-0.5 text-fg/30 opacity-0 transition-opacity hover:bg-panel2 hover:text-fg/70 group-hover:opacity-100 focus:opacity-100"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </button>
         </div>
 
         <AnimatePresence>
@@ -1170,7 +1385,19 @@ function TreeNode({
                       toggleExpand={toggleExpand}
                       selectedId={selectedId}
                       onSelect={onSelect}
-                      onContextAction={onContextAction}
+                      onOpenContextMenu={onOpenContextMenu}
+                      renamingId={renamingId}
+                      renameValue={renameValue}
+                      onRenameValueChange={onRenameValueChange}
+                      onCommitRename={onCommitRename}
+                      onCancelRename={onCancelRename}
+                      onMoveNode={onMoveNode}
+                      canMoveNode={canMoveNode}
+                      onUploadFiles={onUploadFiles}
+                      draggingNodeId={draggingNodeId}
+                      setDraggingNodeId={setDraggingNodeId}
+                      dropTargetId={dropTargetId}
+                      setDropTargetId={setDropTargetId}
                     />
                   ))
                 )}
@@ -1182,39 +1409,264 @@ function TreeNode({
     );
   }
 
-  // File node
-  const ext = getFileExtension(item.name);
-  const isImage = IMAGE_EXTENSIONS.has(ext);
-  const isPdf = PDF_EXTENSIONS.has(ext);
-
   return (
     <div
       className={cn(
         "group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors cursor-pointer",
         isSelected
           ? "bg-accent/10 text-accent"
-          : "text-fg/60 hover:bg-panel2/60 hover:text-fg"
+          : "text-fg/60 hover:bg-panel2/60 hover:text-fg",
+        isDragging && "opacity-40"
       )}
       style={{ paddingLeft: `${depth * 12 + 8}px` }}
       onClick={() => onSelect(item)}
+      onContextMenu={openContextMenu}
+      draggable={Boolean(item.fileNode)}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
       {...(item.sourceDocument ? { "data-document-id": item.sourceDocument.id } : {})}
     >
-      {isPdf ? (
-        <FileText className="h-3.5 w-3.5 shrink-0 text-danger/70" />
-      ) : isImage ? (
-        <ImageIcon className="h-3.5 w-3.5 shrink-0 text-success/70" />
-      ) : item.sourceDocument ? (
-        <FileText className="h-3.5 w-3.5 shrink-0" />
+      {fileIcon}
+      {isRenaming ? (
+        <input
+          className="h-6 min-w-0 flex-1 rounded-md border border-accent/40 bg-bg px-2 text-xs text-fg outline-none"
+          value={renameValue}
+          onChange={(e) => onRenameValueChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onCommitRename();
+            if (e.key === "Escape") {
+              skipBlurRenameRef.current = true;
+              onCancelRename();
+            }
+          }}
+          onBlur={() => {
+            if (skipBlurRenameRef.current) {
+              skipBlurRenameRef.current = false;
+              return;
+            }
+            onCommitRename();
+          }}
+          autoFocus
+        />
       ) : (
-        <File className="h-3.5 w-3.5 shrink-0" />
+        <span className="flex-1 truncate">{item.name}</span>
       )}
-      <span className="flex-1 truncate">{item.name}</span>
       {item.pageCount != null && item.pageCount > 0 && (
         <span className="shrink-0 text-[10px] text-fg/30">
           {item.pageCount}p
         </span>
       )}
+      <button
+        type="button"
+        title="File actions"
+        onClick={openButtonMenu}
+        className="rounded p-0.5 text-fg/30 opacity-0 transition-opacity hover:bg-panel2 hover:text-fg/70 group-hover:opacity-100 focus:opacity-100"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
     </div>
+  );
+}
+
+type FileContextAction = "open" | "new-folder" | "upload" | "rename" | "move" | "delete";
+
+function FileTreeContextMenu({
+  menu,
+  projectId,
+  onClose,
+  onAction,
+}: {
+  menu: { item: TreeItem; x: number; y: number } | null;
+  projectId: string;
+  onClose: () => void;
+  onAction: (action: FileContextAction, item: TreeItem) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!menu) {
+      setPosition(null);
+      return;
+    }
+    const element = menuRef.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    const gutter = 8;
+    const left = Math.max(gutter, Math.min(menu.x, window.innerWidth - rect.width - gutter));
+    const opensUp = menu.y + rect.height > window.innerHeight - gutter;
+    const top = Math.max(gutter, opensUp ? menu.y - rect.height : menu.y);
+    setPosition({ left, top });
+  }, [menu]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menu, onClose]);
+
+  if (!menu) return null;
+
+  const { item } = menu;
+  const canModify = Boolean(item.fileNode || item.sourceDocument);
+  const canUploadInside = item.type === "directory" && Boolean(item.fileNode || item.isAutoFolder);
+  const canCreateInside = item.type === "directory" && Boolean(item.fileNode);
+  const downloadUrl = item.type === "file" ? getDownloadUrl(item, projectId, false) : null;
+  const menuItemClass =
+    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/70 outline-none transition-colors hover:bg-panel2 hover:text-fg";
+
+  const button = (action: FileContextAction, label: string, icon: React.ReactNode, className?: string) => (
+    <button
+      type="button"
+      className={cn(menuItemClass, className)}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onAction(action, item);
+      }}
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+    </button>
+  );
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className="fixed z-[250] min-w-[190px] rounded-lg border border-line bg-panel p-1 shadow-xl"
+      style={{
+        left: position?.left ?? menu.x,
+        top: position?.top ?? menu.y,
+        visibility: position ? "visible" : "hidden",
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
+      {downloadUrl && (
+        <a
+          href={downloadUrl}
+          download
+          className={menuItemClass}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onClose}
+        >
+          <Download className="h-3.5 w-3.5" />
+          <span className="flex-1">Download</span>
+        </a>
+      )}
+      {canUploadInside && (
+        <>
+          <div className="my-1 h-px bg-line" />
+          {canCreateInside && button("new-folder", "New Folder Here", <FolderPlus className="h-3.5 w-3.5" />)}
+          {button("upload", "Upload Here", <Upload className="h-3.5 w-3.5" />)}
+        </>
+      )}
+      {canModify && (
+        <>
+          <div className="my-1 h-px bg-line" />
+          {button("rename", "Rename", <Edit3 className="h-3.5 w-3.5" />)}
+          {button("move", "Move To...", <ArrowRight className="h-3.5 w-3.5" />)}
+          {button("delete", "Delete", <Trash2 className="h-3.5 w-3.5" />, "text-danger hover:text-danger")}
+        </>
+      )}
+    </div>,
+    document.body
+  );
+}
+
+function MoveFileModal({
+  item,
+  nodes,
+  targetId,
+  onTargetChange,
+  onClose,
+  onConfirm,
+}: {
+  item: TreeItem | null;
+  nodes: FileNode[];
+  targetId: string;
+  onTargetChange: (targetId: string) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const fileNode = item?.fileNode;
+  const sourceDocument = item?.sourceDocument;
+  const options = useMemo(() => {
+    if (sourceDocument) return buildSourceDocumentMoveTargetOptions();
+    return buildMoveTargetOptions(nodes, fileNode?.id);
+  }, [fileNode?.id, nodes, sourceDocument]);
+  const nextParentId = targetId === ROOT_PARENT_VALUE ? null : targetId;
+  const currentParentId = fileNode?.parentId ?? null;
+  const isSameLocation = fileNode
+    ? nextParentId === currentParentId
+    : sourceDocument
+      ? targetId === sourceDocument.documentType
+      : true;
+
+  return (
+    <ModalBackdrop open={Boolean(item && (fileNode || sourceDocument))} onClose={onClose} size="sm">
+      <Card>
+        <CardHeader>
+          <CardTitle>Move File</CardTitle>
+          <p className="mt-1 text-xs text-fg/50">
+            Choose a destination for <span className="font-medium text-fg/70">{item?.name}</span>.
+          </p>
+        </CardHeader>
+        <CardBody className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Destination</Label>
+            <Select value={targetId} onValueChange={onTargetChange} options={options} />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button variant="accent" size="sm" onClick={onConfirm} disabled={isSameLocation}>
+              Move
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+    </ModalBackdrop>
+  );
+}
+
+function DeleteFileModal({
+  item,
+  onClose,
+  onConfirm,
+}: {
+  item: TreeItem | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const childCount = item?.type === "directory" ? item.children.length : 0;
+
+  return (
+    <ModalBackdrop open={Boolean(item?.fileNode || item?.sourceDocument)} onClose={onClose} size="sm">
+      <Card>
+        <CardHeader>
+          <CardTitle>Delete {item?.type === "directory" ? "Folder" : "File"}</CardTitle>
+          <p className="mt-1 text-xs text-fg/50">
+            This will permanently delete <span className="font-medium text-fg/70">{item?.name}</span>
+            {childCount > 0 ? ` and ${childCount} nested item${childCount === 1 ? "" : "s"}` : ""}.
+          </p>
+        </CardHeader>
+        <CardBody className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" size="sm" onClick={onConfirm}>Delete</Button>
+        </CardBody>
+      </Card>
+    </ModalBackdrop>
   );
 }
 
@@ -1223,6 +1675,8 @@ function TreeNode({
 export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingUploadParentIdRef = useRef<string | null | undefined>(undefined);
+  const pendingUploadDocumentTypeRef = useRef<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     new Set(["auto-specs", "auto-drawings"])
@@ -1232,6 +1686,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   const [editorFileName, setEditorFileName] = useState("");
   const [modelEditorFileNodeId, setModelEditorFileNodeId] = useState<string | null>(null);
   const [userNodes, setUserNodes] = useState<FileNode[]>([]);
+  const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>(workspace.sourceDocuments ?? []);
   const [loadingNodes, setLoadingNodes] = useState(true);
 
   // Upload state
@@ -1246,6 +1701,14 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   // Rename
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  // Tree actions
+  const [contextMenu, setContextMenu] = useState<{ item: TreeItem; x: number; y: number } | null>(null);
+  const [movingItem, setMovingItem] = useState<TreeItem | null>(null);
+  const [moveTargetId, setMoveTargetId] = useState(ROOT_PARENT_VALUE);
+  const [deletingItem, setDeletingItem] = useState<TreeItem | null>(null);
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   // Error feedback
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -1263,12 +1726,16 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       .finally(() => setLoadingNodes(false));
   }, [projectId]);
 
+  useEffect(() => {
+    setSourceDocuments(workspace.sourceDocuments ?? []);
+  }, [workspace.sourceDocuments]);
+
   // Build tree
   const tree = useMemo(() => {
-    const autoFolders = buildAutoFolders(workspace.sourceDocuments ?? []);
+    const autoFolders = buildAutoFolders(sourceDocuments);
     const userTree = buildTreeFromNodes(userNodes);
     return [...autoFolders, ...userTree];
-  }, [workspace.sourceDocuments, userNodes]);
+  }, [sourceDocuments, userNodes]);
 
   const filteredTree = useMemo(
     () => filterTree(tree, searchQuery),
@@ -1287,6 +1754,13 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     return findItem(tree);
   }, [tree, selectedId]);
 
+  const activeFileParentId = useMemo(() => {
+    if (!selectedItem?.fileNode) return null;
+    return selectedItem.type === "directory"
+      ? selectedItem.fileNode.id
+      : selectedItem.fileNode.parentId ?? null;
+  }, [selectedItem]);
+
   const toggleExpand = useCallback((id: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -1303,45 +1777,113 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   // ── Upload handling ────────────────────────────────────────────────────
 
-  const handleUploadFiles = useCallback(async (files: FileList | File[]) => {
+  const handleUploadFiles = useCallback(async (files: FileList | File[], parentOverride?: string | null, documentTypeOverride?: string) => {
     if (files.length === 0) return;
     setUploading(true);
     setErrorMessage(null);
 
     // Determine parent: if a directory is selected, upload into it
-    let parentId: string | null = null;
-    if (selectedItem?.type === "directory" && selectedItem.fileNode) {
-      parentId = selectedItem.fileNode.id;
-    }
+    const parentId = parentOverride !== undefined ? parentOverride : activeFileParentId;
+    const shouldUploadAsFileNode = Boolean(parentId) || Boolean(selectedItem?.fileNode);
+    const documentType = documentTypeOverride ?? selectedItem?.documentType ?? selectedItem?.sourceDocument?.documentType ?? "reference";
 
     try {
       for (const file of Array.from(files)) {
-        const node = await uploadFile(projectId, file, parentId);
-        setUserNodes((prev) => [...prev, node]);
+        if (shouldUploadAsFileNode) {
+          const node = await uploadFile(projectId, file, parentId);
+          setUserNodes((prev) => [...prev, node]);
+        } else {
+          const document = await uploadSourceDocument(projectId, file, { documentType });
+          setSourceDocuments((prev) => [...prev, document]);
+        }
       }
       // Expand parent if uploading into a folder
       if (parentId) {
         setExpandedFolders((prev) => new Set([...prev, parentId!]));
+      } else {
+        const folderKey = FOLDER_CONFIG.find((folder) => folder.documentType === documentType)?.key;
+        if (folderKey) setExpandedFolders((prev) => new Set([...prev, `auto-${folderKey}`]));
       }
     } catch (err) {
       showError(`Upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setUploading(false);
     }
-  }, [projectId, selectedItem, showError]);
+  }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError]);
+
+  const openFilePickerForParent = useCallback((parentId?: string | null, documentType?: string) => {
+    pendingUploadParentIdRef.current = parentId;
+    pendingUploadDocumentTypeRef.current = documentType;
+    fileInputRef.current?.click();
+  }, []);
+
+  const canMoveNode = useCallback((nodeId: string, parentId: string | null) => {
+    const node = userNodes.find((entry) => entry.id === nodeId);
+    if (!node) return false;
+    if ((node.parentId ?? null) === parentId) return false;
+    if (!parentId) return true;
+    const parent = userNodes.find((entry) => entry.id === parentId);
+    if (!parent || parent.type !== "directory") return false;
+    if (node.type === "directory") {
+      if (parentId === node.id) return false;
+      if (isDescendantFileNode(userNodes, parentId, node.id)) return false;
+    }
+    return true;
+  }, [userNodes]);
+
+  const handleMoveNode = useCallback(async (nodeId: string, parentId: string | null) => {
+    const node = userNodes.find((entry) => entry.id === nodeId);
+    if (!node) return;
+    if (!canMoveNode(nodeId, parentId)) {
+      showError("That file cannot be moved to the selected folder.");
+      return;
+    }
+    try {
+      const updated = await updateFileNode(projectId, nodeId, { parentId });
+      setUserNodes((prev) => prev.map((entry) => entry.id === nodeId ? updated : entry));
+      if (parentId) {
+        setExpandedFolders((prev) => new Set([...prev, parentId]));
+      }
+      setMovingItem(null);
+    } catch (err) {
+      showError(`Failed to move: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [canMoveNode, projectId, showError, userNodes]);
+
+  const handleMoveSourceDocument = useCallback(async (documentId: string, documentType: string) => {
+    try {
+      const updated = await updateSourceDocument(projectId, documentId, { documentType });
+      setSourceDocuments((prev) => prev.map((document) => document.id === updated.id ? updated : document));
+      setMovingItem(null);
+      setExpandedFolders((prev) => new Set([...prev, `auto-${FOLDER_CONFIG.find((folder) => folder.documentType === documentType)?.key ?? "other"}`]));
+    } catch (err) {
+      showError(`Failed to move: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [projectId, showError]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files.length > 0) {
-      handleUploadFiles(e.dataTransfer.files);
+    setDropTargetId(null);
+    if (isInternalFileNodeDrag(e)) {
+      const draggedId = e.dataTransfer.getData(FILE_NODE_DND_TYPE) || draggingNodeId;
+      if (draggedId) void handleMoveNode(draggedId, null);
+      return;
     }
-  }, [handleUploadFiles]);
+    if (e.dataTransfer.files.length > 0) {
+      handleUploadFiles(e.dataTransfer.files, null);
+    }
+  }, [draggingNodeId, handleMoveNode, handleUploadFiles]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (isInternalFileNodeDrag(e)) {
+      e.dataTransfer.dropEffect = "move";
+      setDropTargetId(null);
+      return;
+    }
     setDragActive(true);
   }, []);
 
@@ -1374,53 +1916,125 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   }, [projectId, newFolderName, newFolderParentId, showError]);
 
   const handleRename = useCallback(async () => {
-    if (!renamingId || !renameValue.trim()) return;
-    try {
-      const updated = await updateFileNode(projectId, renamingId, {
-        name: renameValue.trim(),
-      });
-      setUserNodes((prev) =>
-        prev.map((n) => (n.id === renamingId ? updated : n))
-      );
+    if (!renamingId) return;
+    const nextName = renameValue.trim();
+    if (!nextName) {
+      showError("File name cannot be empty.");
+      return;
+    }
+    const item = findMutableTreeItem(tree, renamingId);
+    if (!item) {
       setRenamingId(null);
+      setRenameValue("");
+      return;
+    }
+    if (item.name === nextName) {
+      setRenamingId(null);
+      setRenameValue("");
+      return;
+    }
+    try {
+      if (item.fileNode) {
+        const updated = await updateFileNode(projectId, item.fileNode.id, {
+          name: nextName,
+        });
+        setUserNodes((prev) =>
+          prev.map((n) => (n.id === item.fileNode!.id ? updated : n))
+        );
+      } else if (item.sourceDocument) {
+        const updated = await updateSourceDocument(projectId, item.sourceDocument.id, {
+          fileName: renameSourceDocumentPath(item.sourceDocument, nextName),
+        });
+        setSourceDocuments((prev) => prev.map((document) => document.id === updated.id ? updated : document));
+      }
+      setRenamingId(null);
+      setRenameValue("");
     } catch (err) {
       showError(`Failed to rename: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, renamingId, renameValue, showError]);
+  }, [projectId, renamingId, renameValue, showError, tree]);
 
   const handleDelete = useCallback(async (item: TreeItem) => {
-    if (!item.fileNode) return;
+    if (!item.fileNode && !item.sourceDocument) return;
     try {
-      await deleteFileNode(projectId, item.fileNode.id);
-      setUserNodes((prev) => {
-        const toDelete = new Set<string>([item.fileNode!.id]);
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const n of prev) {
-            if (n.parentId && toDelete.has(n.parentId) && !toDelete.has(n.id)) {
-              toDelete.add(n.id);
-              changed = true;
-            }
+      if (item.sourceDocument) {
+        await deleteSourceDocument(projectId, item.sourceDocument.id);
+        setSourceDocuments((prev) => prev.filter((document) => document.id !== item.sourceDocument!.id));
+        if (selectedId === item.id) setSelectedId(null);
+        setDeletingItem(null);
+        return;
+      }
+
+      const fileNode = item.fileNode;
+      if (!fileNode) return;
+
+      await deleteFileNode(projectId, fileNode.id);
+      const deletedIds = new Set<string>([fileNode.id]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const n of userNodes) {
+          if (n.parentId && deletedIds.has(n.parentId) && !deletedIds.has(n.id)) {
+            deletedIds.add(n.id);
+            changed = true;
           }
         }
-        return prev.filter((n) => !toDelete.has(n.id));
-      });
-      if (selectedId === item.id) setSelectedId(null);
-      if (modelEditorFileNodeId === item.fileNode.id) setModelEditorFileNodeId(null);
+      }
+      setUserNodes((prev) => prev.filter((n) => !deletedIds.has(n.id)));
+      if (selectedId && deletedIds.has(selectedId)) setSelectedId(null);
+      if (modelEditorFileNodeId === fileNode.id) setModelEditorFileNodeId(null);
+      setDeletingItem(null);
     } catch (err) {
       showError(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [modelEditorFileNodeId, projectId, selectedId, showError]);
+  }, [modelEditorFileNodeId, projectId, selectedId, showError, userNodes]);
 
-  const handleContextAction = useCallback((action: string, item: TreeItem) => {
-    if (action === "rename" && item.fileNode) {
-      setRenamingId(item.fileNode.id);
+  const handleCancelRename = useCallback(() => {
+    setRenamingId(null);
+    setRenameValue("");
+  }, []);
+
+  const handleOpenContextMenu = useCallback((item: TreeItem, position: { x: number; y: number }) => {
+    setContextMenu({ item, ...position });
+  }, []);
+
+  const handleContextAction = useCallback((action: FileContextAction, item: TreeItem) => {
+    setContextMenu(null);
+    if (action === "open") {
+      handleSelect(item);
+      if (item.type === "directory") {
+        setExpandedFolders((prev) => new Set([...prev, item.id]));
+      }
+    } else if (action === "new-folder" && item.fileNode && item.type === "directory") {
+      setCreatingFolder(true);
+      setNewFolderParentId(item.fileNode.id);
+      setExpandedFolders((prev) => new Set([...prev, item.fileNode!.id]));
+    } else if (action === "upload" && item.type === "directory") {
+      openFilePickerForParent(item.fileNode?.id, item.documentType);
+    } else if (action === "rename") {
+      const mutableId = getMutableItemId(item);
+      if (!mutableId) return;
+      setRenamingId(mutableId);
       setRenameValue(item.name);
+      setSelectedId(item.id);
+    } else if (action === "move" && (item.fileNode || item.sourceDocument)) {
+      setMovingItem(item);
+      setMoveTargetId(item.fileNode?.parentId ?? item.sourceDocument?.documentType ?? ROOT_PARENT_VALUE);
     } else if (action === "delete") {
-      handleDelete(item);
+      setDeletingItem(item);
     }
-  }, [handleDelete]);
+  }, [handleSelect, openFilePickerForParent]);
+
+  const handleConfirmMove = useCallback(() => {
+    if (movingItem?.fileNode) {
+      const parentId = moveTargetId === ROOT_PARENT_VALUE ? null : moveTargetId;
+      void handleMoveNode(movingItem.fileNode.id, parentId);
+      return;
+    }
+    if (movingItem?.sourceDocument) {
+      void handleMoveSourceDocument(movingItem.sourceDocument.id, moveTargetId);
+    }
+  }, [handleMoveNode, handleMoveSourceDocument, moveTargetId, movingItem]);
 
   // ── Preview URL ────────────────────────────────────────────────────────
 
@@ -1611,23 +2225,26 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       const safeName = fileName.endsWith(`.${extension}`) ? fileName : `${fileName}.${extension}`;
       const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
       const file = new globalThis.File([blob], safeName, { type: mimeType });
-      const node = await uploadFile(projectId, file);
+      const node = await uploadFile(projectId, file, activeFileParentId);
       // Refresh tree
       const updatedNodes = await getFileTree(projectId);
       setUserNodes(updatedNodes);
+      if (activeFileParentId) {
+        setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
+      }
       // Select the new file
       setSelectedId(node.id);
       setEditorMode("none");
     } catch (err) {
       showError(`Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, showError]);
+  }, [activeFileParentId, projectId, showError]);
 
   const handleCreateModelDocument = useCallback(async () => {
     try {
       const name = nextUntitledModelName(userNodes);
       const node = await createFileNode(projectId, {
-        parentId: null,
+        parentId: activeFileParentId,
         name,
         type: "file",
         fileType: "cd",
@@ -1635,6 +2252,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         metadata: { kind: "bidwright-model", native: true },
       });
       setUserNodes((prev) => [...prev, node]);
+      if (activeFileParentId) {
+        setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
+      }
       setSelectedId(node.id);
       setEditorFileName(node.name);
       setModelEditorFileNodeId(node.id);
@@ -1642,7 +2262,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } catch (err) {
       showError(`Failed to create model: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, showError, userNodes]);
+  }, [activeFileParentId, projectId, showError, userNodes]);
 
   const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
     try {
@@ -1720,9 +2340,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       )}
     </div>
   ) : !selectedItem ? (
-    <div className="flex-1 flex items-center justify-center">
-      <EmptyState>Click a file or folder in the tree to view its details and preview.</EmptyState>
-    </div>
+    <EmptyPreviewState />
   ) : selectedItem.type === "directory" ? (
     <div className="flex-1 flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-line">
@@ -1734,10 +2352,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       <CardBody className="flex-1">
         <div className="space-y-4">
           <div><p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Contents</p><p className="mt-1 text-sm text-fg/70">{selectedItem.children.length} item{selectedItem.children.length !== 1 ? "s" : ""}</p></div>
-          {selectedItem.fileNode && (
+          {(selectedItem.fileNode || selectedItem.sourceDocument) && (
             <div className="flex gap-2 pt-2">
-              <Button variant="secondary" size="xs" onClick={() => { setRenamingId(selectedItem.fileNode!.id); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /> Rename</Button>
-              <Button variant="danger" size="xs" onClick={() => handleDelete(selectedItem)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
+              <Button variant="secondary" size="xs" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /> Rename</Button>
+              <Button variant="danger" size="xs" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
             </div>
           )}
         </div>
@@ -1808,7 +2426,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         {/* ─── Left Panel: File Tree ─── */}
         <div className="flex flex-col overflow-hidden border-r border-line" style={{ width: `${leftPanelWidth}%` }}>
           <CardHeader className="flex flex-row items-center justify-between gap-3 shrink-0">
-            <CardTitle>Project Documents</CardTitle>
+            <CardTitle>Project Files</CardTitle>
             <div className="flex items-center gap-1.5">
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
@@ -1828,7 +2446,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setCreatingFolder(true);
-                        setNewFolderParentId(null);
+                        setNewFolderParentId(activeFileParentId);
+                        if (activeFileParentId) {
+                          setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
+                        }
                       }}
                     >
                       <FolderPlus className="h-3.5 w-3.5" />
@@ -1905,7 +2526,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     </DropdownMenu.Label>
                     <DropdownMenu.Item
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
-                      onSelect={() => fileInputRef.current?.click()}
+                      onSelect={() => openFilePickerForParent(activeFileParentId)}
                     >
                       <Upload className="h-3.5 w-3.5" />
                       Upload Files
@@ -1919,7 +2540,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 multiple
                 className="hidden"
                 onChange={(e) => {
-                  if (e.target.files) handleUploadFiles(e.target.files);
+                  const parentId = pendingUploadParentIdRef.current;
+                  const documentType = pendingUploadDocumentTypeRef.current;
+                  pendingUploadParentIdRef.current = undefined;
+                  pendingUploadDocumentTypeRef.current = undefined;
+                  if (e.target.files) handleUploadFiles(e.target.files, parentId, documentType);
                   e.target.value = "";
                 }}
               />
@@ -1984,45 +2609,6 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             )}
           </AnimatePresence>
 
-          {/* Rename input */}
-          <AnimatePresence>
-            {renamingId && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="border-b border-line px-4 py-2"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Edit3 className="h-3.5 w-3.5 text-fg/40 shrink-0" />
-                  <Input
-                    className="h-7 text-xs flex-1"
-                    placeholder="New name..."
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleRename();
-                      if (e.key === "Escape") setRenamingId(null);
-                    }}
-                    autoFocus
-                  />
-                  <button
-                    onClick={handleRename}
-                    className="text-success hover:text-success/80"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setRenamingId(null)}
-                    className="text-fg/40 hover:text-fg/60"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* Error banner */}
           <AnimatePresence>
             {errorMessage && (
@@ -2072,7 +2658,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               </div>
             ) : filteredTree.length === 0 ? (
               <EmptyState className="mt-4">
-                No documents or files yet. Upload files or drag and drop.
+                No files yet. Upload files or drag and drop.
               </EmptyState>
             ) : (
               filteredTree.map((item) => (
@@ -2084,7 +2670,19 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   toggleExpand={toggleExpand}
                   selectedId={selectedId}
                   onSelect={handleSelect}
-                  onContextAction={handleContextAction}
+                  onOpenContextMenu={handleOpenContextMenu}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
+                  onRenameValueChange={setRenameValue}
+                  onCommitRename={handleRename}
+                  onCancelRename={handleCancelRename}
+                  onMoveNode={(nodeId, parentId) => void handleMoveNode(nodeId, parentId)}
+                  canMoveNode={canMoveNode}
+                  onUploadFiles={(files, parentId, documentType) => void handleUploadFiles(files, parentId, documentType)}
+                  draggingNodeId={draggingNodeId}
+                  setDraggingNodeId={setDraggingNodeId}
+                  dropTargetId={dropTargetId}
+                  setDropTargetId={setDropTargetId}
                 />
               ))
             )}
@@ -2126,10 +2724,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   {downloadUrl && (
                     <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
                   )}
-                  {selectedItem.fileNode && (
+                  {(selectedItem.fileNode || selectedItem.sourceDocument) && (
                     <>
-                      <Button variant="secondary" size="xs" onClick={() => { setRenamingId(selectedItem.fileNode!.id); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /></Button>
-                      <Button variant="danger" size="xs" onClick={() => handleDelete(selectedItem)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="secondary" size="xs" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="danger" size="xs" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </>
                   )}
                 </div>
@@ -2197,6 +2795,30 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         </div>,
         detachedContainer
       )}
+
+      <FileTreeContextMenu
+        menu={contextMenu}
+        projectId={projectId}
+        onClose={() => setContextMenu(null)}
+        onAction={handleContextAction}
+      />
+
+      <MoveFileModal
+        item={movingItem}
+        nodes={userNodes}
+        targetId={moveTargetId}
+        onTargetChange={setMoveTargetId}
+        onClose={() => setMovingItem(null)}
+        onConfirm={handleConfirmMove}
+      />
+
+      <DeleteFileModal
+        item={deletingItem}
+        onClose={() => setDeletingItem(null)}
+        onConfirm={() => {
+          if (deletingItem) void handleDelete(deletingItem);
+        }}
+      />
     </div>
   );
 }

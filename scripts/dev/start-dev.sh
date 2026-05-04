@@ -156,6 +156,7 @@ echo ""
 
 set -m
 DATABASE_URL="$DATABASE_URL" REDIS_URL="$REDIS_URL" DATA_DIR="$DATA_DIR" \
+  BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS=1 \
   pnpm --parallel --filter @bidwright/web --filter @bidwright/api --filter @bidwright/worker dev &
 APP_PID=$!
 

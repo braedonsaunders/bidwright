@@ -78,6 +78,101 @@ export function registerQuoteTools(server: McpServer) {
 
   function invalidateWs() { cachedWs = null; }
 
+  function normalizeCategoryToolKey(value: unknown) {
+    return typeof value === "string" ? value.trim().toLowerCase() : "";
+  }
+
+  function findEntityCategory(
+    categories: any[],
+    input: { categoryId?: string | null; category?: string | null; entityType?: string | null },
+  ) {
+    const categoryId = normalizeCategoryToolKey(input.categoryId);
+    if (categoryId) {
+      const byId = categories.find((category: any) => normalizeCategoryToolKey(category.id) === categoryId);
+      if (byId) return byId;
+      return null;
+    }
+
+    const names = [input.category, input.entityType].map(normalizeCategoryToolKey).filter(Boolean);
+    for (const name of names) {
+      const match = categories.find((category: any) =>
+        normalizeCategoryToolKey(category.name) === name ||
+        normalizeCategoryToolKey(category.entityType) === name
+      );
+      if (match) return match;
+    }
+
+    return null;
+  }
+
+  function folderPath(ws: any, folderId?: string | null): string {
+    if (!folderId) return "";
+    const folders: any[] = ws.worksheetFolders || [];
+    const byId = new Map<string, any>(folders.map((folder: any) => [folder.id, folder]));
+    const parts: string[] = [];
+    const seen = new Set<string>();
+    let cursor = byId.get(folderId);
+    while (cursor && !seen.has(cursor.id)) {
+      seen.add(cursor.id);
+      parts.unshift(cursor.name);
+      cursor = cursor.parentId ? byId.get(cursor.parentId) : null;
+    }
+    return parts.join(" / ");
+  }
+
+  function worksheetTreeSummary(ws: any) {
+    const folders = ws.worksheetFolders || [];
+    const worksheets = ws.worksheets || [];
+    return {
+      folders: folders.map((folder: any) => {
+        const childWorksheetIds = worksheets
+          .filter((worksheet: any) => worksheet.folderId === folder.id)
+          .map((worksheet: any) => worksheet.id);
+        return {
+          id: folder.id,
+          name: folder.name,
+          parentId: folder.parentId ?? null,
+          path: folderPath(ws, folder.id),
+          childWorksheetIds,
+        };
+      }),
+      worksheets: worksheets.map((worksheet: any) => ({
+        id: worksheet.id,
+        name: worksheet.name,
+        folderId: worksheet.folderId ?? null,
+        path: [folderPath(ws, worksheet.folderId), worksheet.name].filter(Boolean).join(" / "),
+        itemCount: (worksheet.items || []).length,
+        priceTotal: (worksheet.items || []).reduce((sum: number, item: any) => sum + (item.price || 0), 0),
+      })),
+    };
+  }
+
+  async function ensureWorksheetFolderPath(path?: string | null): Promise<string | null> {
+    if (!path?.trim()) return null;
+    const parts = path.split("/").map((part) => part.trim()).filter(Boolean);
+    if (parts.length === 0) return null;
+
+    let ws = await getWs();
+    let parentId: string | null = null;
+    for (const part of parts) {
+      const existing = (ws.worksheetFolders || []).find(
+        (folder: any) => folder.name.toLowerCase() === part.toLowerCase() && (folder.parentId ?? null) === parentId,
+      );
+      if (existing) {
+        parentId = existing.id;
+        continue;
+      }
+      const data = await apiPost(projectPath("/worksheet-folders"), { name: part, parentId });
+      ws = (data as any).workspace || data;
+      cachedWs = { data: ws, at: Date.now() };
+      const created = (ws.worksheetFolders || []).find(
+        (folder: any) => folder.name === part && (folder.parentId ?? null) === parentId,
+      );
+      parentId = created?.id ?? null;
+    }
+    return parentId;
+  }
+
   // ── Tool gating — state-based prerequisite checks ───────────────────
   // Gates check actual workspace state, not session history.
   // Resumed sessions / existing quotes pass automatically if data exists.
@@ -153,7 +248,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── getWorkspace ──────────────────────────────────────────
   server.tool(
     "getWorkspace",
-    "Get the current quote workspace — all worksheets, items, phases, modifiers, conditions, totals. Call this to understand the current state of the estimate.",
+    "Get the current quote workspace — all worksheets, items, phases, estimate factors, modifiers, conditions, totals. Call this to understand the current state of the estimate.",
     {},
     async () => {
       const data = await apiGet(projectPath("/workspace"));
@@ -167,10 +262,57 @@ export function registerQuoteTools(server: McpServer) {
           breakoutStyle: rev.breakoutStyle, defaultMarkup: rev.defaultMarkup,
         },
         worksheets: (ws.worksheets || []).map((w: any) => ({
-          id: w.id, name: w.name, itemCount: (w.items || []).length,
+          id: w.id,
+          name: w.name,
+          folderId: w.folderId ?? null,
+          path: [folderPath(ws, w.folderId), w.name].filter(Boolean).join(" / "),
+          itemCount: (w.items || []).length,
+          structuredSourceCount: (w.items || []).filter((item: any) =>
+            item.rateScheduleItemId ||
+            item.itemId ||
+            item.costResourceId ||
+            item.effectiveCostId ||
+            item.laborUnitId ||
+            (Array.isArray(item.resourceComposition?.resources) && item.resourceComposition.resources.length > 0)
+          ).length,
+        })),
+        worksheetFolders: (ws.worksheetFolders || []).map((folder: any) => ({
+          id: folder.id,
+          name: folder.name,
+          parentId: folder.parentId ?? null,
+          path: folderPath(ws, folder.id),
         })),
         totalItems: (ws.worksheets || []).reduce((sum: number, w: any) => sum + (w.items || []).length, 0),
+        totalStructuredSourceItems: (ws.worksheets || []).reduce((sum: number, w: any) => sum + (w.items || []).filter((item: any) =>
+          item.rateScheduleItemId ||
+          item.itemId ||
+          item.costResourceId ||
+          item.effectiveCostId ||
+          item.laborUnitId ||
+          (Array.isArray(item.resourceComposition?.resources) && item.resourceComposition.resources.length > 0)
+        ).length, 0),
         phases: (ws.phases || []).map((p: any) => ({ id: p.id, name: p.name })),
+        estimateFactors: (ws.estimateFactors || []).map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          code: f.code,
+          impact: f.impact,
+          value: f.value,
+          active: f.active,
+          appliesTo: f.appliesTo,
+          scope: f.scope,
+          confidence: f.confidence,
+          sourceType: f.sourceType,
+          sourceId: f.sourceId,
+        })),
+        factorTotals: (ws.estimate?.totals?.factorTotals || []).map((entry: any) => ({
+          id: entry.id,
+          label: entry.label,
+          targetCount: entry.targetCount,
+          valueDelta: entry.valueDelta,
+          costDelta: entry.costDelta,
+          hoursDelta: entry.hoursDelta,
+        })),
         modifiers: (ws.modifiers || []).map((m: any) => ({
           id: m.id, name: m.name, type: m.type, appliesTo: m.appliesTo,
           percentage: m.percentage, amount: m.amount, show: m.show,
@@ -194,10 +336,21 @@ export function registerQuoteTools(server: McpServer) {
     }
   );
 
+  // ── getWorksheetTree ──────────────────────────────────────
+  server.tool(
+    "getWorksheetTree",
+    "Get the worksheet folder tree for the current quote. Folders organize worksheets; line items still belong to worksheets.",
+    {},
+    async () => {
+      const ws = await getWs();
+      return { content: [{ type: "text" as const, text: JSON.stringify(worksheetTreeSummary(ws), null, 2) }] };
+    }
+  );
+
   // ── getItemConfig ─────────────────────────────────────────
   server.tool(
     "getItemConfig",
-    `Discover how line items work in this organization. Returns entity categories (with calculation types), available rate schedule items, and catalog items. CALL THIS FIRST before creating any line items. Categories with itemSource=rate_schedule need rateScheduleItemId. Freeform categories use their editable fields directly.`,
+    `Discover how line items work in this organization. Returns entity categories (with calculation types), available rate schedule items, and catalog items. CALL THIS FIRST before creating any line items. Use searchLineItemCandidates/recommendCostSource for cost-intelligence resources, labor units, assemblies, and canonical source provenance before creating priced rows.`,
     {},
     async () => {
       const data = await apiGet(projectPath("/workspace"));
@@ -279,6 +432,8 @@ export function registerQuoteTools(server: McpServer) {
         instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
+      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, call searchLineItemCandidates or recommendCostSource with the scope phrase and preferred category. If a result exists, preserve its rateScheduleItemId/itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use listLaborUnits for labour productivity and previewAssembly for assembly-backed scope. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no structured candidate exists, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
+
       // If no categories configured, provide default guidance
       if (entityCategories.length === 0) {
         instructions = `No entity categories configured for this organization. Use these standard categories when creating items:\n` +
@@ -345,41 +500,145 @@ export function registerQuoteTools(server: McpServer) {
   // ── createWorksheet ───────────────────────────────────────
   server.tool(
     "createWorksheet",
-    "Create a new worksheet (cost breakdown section) in the quote. Use clear names like '01 - General Requirements', '02 - Process Piping', etc.",
-    { name: z.string().describe("Worksheet name"), description: z.string().optional().describe("Optional description") },
-    async ({ name, description }) => {
+    "Create a new worksheet (cost breakdown section) in the quote. Use folderId or folderPath for large estimates. Folders organize worksheets; line items still belong to worksheets.",
+    {
+      name: z.string().describe("Worksheet name"),
+      description: z.string().optional().describe("Optional description"),
+      folderId: z.string().nullable().optional().describe("Existing worksheet folder ID"),
+      folderPath: z.string().optional().describe("Folder path to create/use, e.g. 'Mechanical / Field Install'"),
+    },
+    async ({ name, description, folderId, folderPath }) => {
       const gateError = await checkGate("createWorksheet");
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
-      const data = await apiPost(projectPath("/worksheets"), { name, description });
+      const resolvedFolderId = folderId ?? await ensureWorksheetFolderPath(folderPath);
+      const data = await apiPost(projectPath("/worksheets"), { name, description, folderId: resolvedFolderId });
       // Extract the worksheet ID from the response
       const worksheets = (data as any)?.workspace?.worksheets ?? [];
-      const created = worksheets.find((w: any) => w.name === name);
+      const created = worksheets.find((w: any) => w.name === name && (w.folderId ?? null) === (resolvedFolderId ?? null));
       const wsId = created?.id ?? "unknown";
       invalidateWs();
-      return { content: [{ type: "text" as const, text: `Created worksheet: ${name} (worksheetId: ${wsId})` }] };
+      const path = created ? [folderPath || "", name].filter(Boolean).join(" / ") : name;
+      return { content: [{ type: "text" as const, text: `Created worksheet: ${path} (worksheetId: ${wsId})` }] };
+    }
+  );
+
+  // ── createWorksheetFolder ─────────────────────────────────
+  server.tool(
+    "createWorksheetFolder",
+    "Create a worksheet folder for organizing large estimates. Folders do not contain line items directly; worksheets do.",
+    {
+      name: z.string().describe("Folder name"),
+      parentId: z.string().nullable().optional().describe("Optional parent folder ID"),
+      parentPath: z.string().optional().describe("Optional parent path to create/use, e.g. 'Mechanical'"),
+    },
+    async ({ name, parentId, parentPath }) => {
+      const resolvedParentId = parentId ?? await ensureWorksheetFolderPath(parentPath);
+      const data = await apiPost(projectPath("/worksheet-folders"), { name, parentId: resolvedParentId });
+      const ws = (data as any).workspace || data;
+      const folder = (ws.worksheetFolders || []).find((entry: any) => entry.name === name && (entry.parentId ?? null) === (resolvedParentId ?? null));
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Created worksheet folder: ${folder ? folderPath(ws, folder.id) : name}${folder?.id ? ` (folderId: ${folder.id})` : ""}` }] };
+    }
+  );
+
+  // ── updateWorksheetFolder ─────────────────────────────────
+  server.tool(
+    "updateWorksheetFolder",
+    "Rename or move a worksheet folder.",
+    {
+      folderId: z.string(),
+      name: z.string().optional(),
+      parentId: z.string().nullable().optional(),
+      parentPath: z.string().optional().describe("Destination parent path to create/use"),
+    },
+    async ({ folderId, name, parentId, parentPath }) => {
+      const patch: Record<string, unknown> = {};
+      if (name) patch.name = name;
+      if (parentId !== undefined || parentPath !== undefined) {
+        patch.parentId = parentId !== undefined ? parentId : await ensureWorksheetFolderPath(parentPath);
+      }
+      await apiPatch(projectPath(`/worksheet-folders/${folderId}`), patch);
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Updated worksheet folder ${folderId}` }] };
+    }
+  );
+
+  // ── deleteWorksheetFolder ─────────────────────────────────
+  server.tool(
+    "deleteWorksheetFolder",
+    "Delete a worksheet folder. Child folders and worksheets are moved up one level; line items are not deleted.",
+    { folderId: z.string() },
+    async ({ folderId }) => {
+      await apiDelete(projectPath(`/worksheet-folders/${folderId}`));
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Deleted worksheet folder ${folderId}` }] };
+    }
+  );
+
+  // ── moveWorksheet ─────────────────────────────────────────
+  server.tool(
+    "moveWorksheet",
+    "Move a worksheet into a folder, or to the top level with folderId=null. This does not change line items.",
+    {
+      worksheetId: z.string(),
+      folderId: z.string().nullable().optional(),
+      folderPath: z.string().optional().describe("Destination folder path to create/use"),
+    },
+    async ({ worksheetId, folderId, folderPath }) => {
+      const resolvedFolderId = folderId !== undefined ? folderId : await ensureWorksheetFolderPath(folderPath);
+      await apiPatch(projectPath(`/worksheets/${worksheetId}`), { folderId: resolvedFolderId ?? null });
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Moved worksheet ${worksheetId}` }] };
+    }
+  );
+
+  // ── moveWorksheetFolder ───────────────────────────────────
+  server.tool(
+    "moveWorksheetFolder",
+    "Move a worksheet folder under another folder, or to the top level with parentId=null.",
+    {
+      folderId: z.string(),
+      parentId: z.string().nullable().optional(),
+      parentPath: z.string().optional().describe("Destination parent path to create/use"),
+    },
+    async ({ folderId, parentId, parentPath }) => {
+      const resolvedParentId = parentId !== undefined ? parentId : await ensureWorksheetFolderPath(parentPath);
+      await apiPatch(projectPath(`/worksheet-folders/${folderId}`), { parentId: resolvedParentId ?? null });
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Moved worksheet folder ${folderId}` }] };
     }
   );
 
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: category is REQUIRED and must match exactly from getItemConfig. For rate_schedule categories (itemSource=rate_schedule), set rateScheduleItemId and use the rate item name as entityName. Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly. UOM must be from the category's validUoms list.`,
+    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For rate_schedule categories (itemSource=rate_schedule), set rateScheduleItemId and use the rate item name as entityName. Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly. UOM must be from the category's validUoms list.`,
     {
       worksheetId: z.string().describe("ID of the worksheet"),
       entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
-      category: z.string().describe("Category name — MUST match exactly from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use the correct category for each item type."),
+      categoryId: z.string().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this over category name so renames cannot affect the row."),
+      category: z.string().optional().describe("Category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use categoryId when available."),
+      entityType: z.string().optional().describe("Legacy entity type/category type. The server canonicalizes this from categoryId when provided."),
       description: z.string().default("").describe("Description with document reference and assumptions"),
       quantity: z.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
       uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
       cost: z.number().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
       markup: z.number().default(0).describe("Markup percentage. For markup-eligible categories, apply the revision defaultMarkup from getItemConfig."),
+      price: z.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
       tierUnits: z.record(z.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
       unit1: z.number().default(0).describe("Unit 1 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
       unit2: z.number().default(0).describe("Unit 2 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
       unit3: z.number().default(0).describe("Unit 3 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
+      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from searchLineItemCandidates/recommendCostSource."),
+      effectiveCostId: z.string().nullable().optional().describe("Effective cost ID from cost intelligence. Preserve this when a priced effective_cost candidate is selected."),
+      laborUnitId: z.string().nullable().optional().describe("Labor unit ID for labour productivity sources."),
+      resourceComposition: z.record(z.unknown()).optional().describe("Structured resource rollup from a search candidate, recommendation, or assembly expansion."),
+      sourceEvidence: z.record(z.unknown()).optional().describe("Structured provenance from a search candidate, recommendation, or source document."),
+      classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
+      costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
       phaseId: z.string().optional().describe("Phase ID"),
       sourceNotes: z.string().default("").describe(
         "MANDATORY: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions for this item"
@@ -390,18 +649,28 @@ export function registerQuoteTools(server: McpServer) {
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
       const { worksheetId, ...rest } = input;
-      const cat = rest.category;
-      if (!cat) {
-        return { content: [{ type: "text" as const, text: "ERROR: category is required. Use the exact category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material')." }], isError: true };
+      const requestedCategory = rest.category;
+      const requestedCategoryId = rest.categoryId;
+      if (!requestedCategory && !requestedCategoryId) {
+        return { content: [{ type: "text" as const, text: "ERROR: categoryId or category is required. Prefer the stable categoryId from getItemConfig." }], isError: true };
       }
+      let resolvedCategory: any = null;
 
       // ── Dynamic validation from workspace (entity categories + rate schedules) ──
       try {
         const ws = await getWs(); // reuses cached fetch from gate check
         const entityCategories = ws.entityCategories || [];
-        const catConfig = entityCategories.find((c: any) => c.name === cat || c.entityType === cat);
+        const catConfig = findEntityCategory(entityCategories, {
+          categoryId: requestedCategoryId,
+          category: requestedCategory,
+          entityType: rest.entityType,
+        });
 
         if (catConfig) {
+          resolvedCategory = catConfig;
+          rest.categoryId = catConfig.id;
+          rest.category = catConfig.name;
+          rest.entityType = catConfig.entityType;
           const src = catConfig.itemSource || "freeform";
           const calcType = catConfig.calculationType || "manual";
 
@@ -414,16 +683,16 @@ export function registerQuoteTools(server: McpServer) {
                 rest.uom = catConfig.defaultUom || validUoms[0];
               }
             } else if (!validUoms.includes(rest.uom)) {
-              return { content: [{ type: "text" as const, text: `ERROR: UOM "${rest.uom}" is not valid for category "${cat}". Valid UOMs: ${validUoms.join(", ")}. Use one of these or omit uom to use the default (${catConfig.defaultUom}).` }], isError: true };
+              return { content: [{ type: "text" as const, text: `ERROR: UOM "${rest.uom}" is not valid for category "${catConfig.name}". Valid UOMs: ${validUoms.join(", ")}. Use one of these or omit uom to use the default (${catConfig.defaultUom}).` }], isError: true };
             }
           }
 
           // Validate itemSource requirements
           if (src === "rate_schedule" && !rest.rateScheduleItemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call getItemConfig to see available rate schedule items\n2. Set rateScheduleItemId to a valid item ID\nWithout this, the item will have no linked rate.` }], isError: true };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call getItemConfig to see available rate schedule items\n2. Set rateScheduleItemId to a valid item ID\nWithout this, the item will have no linked rate.` }], isError: true };
           }
           if (src === "catalog" && !rest.itemId) {
-            return { content: [{ type: "text" as const, text: `WARNING: Category "${cat}" is configured with itemSource=catalog but no itemId was provided. Item will be created without linked catalog pricing.` }] };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call searchLineItemCandidates or getItemConfig, then retry with a valid itemId.` }], isError: true };
           }
 
           // Validate rateScheduleItemId actually exists in revision rate schedules
@@ -443,7 +712,10 @@ export function registerQuoteTools(server: McpServer) {
           if (rest.itemId) {
             const catalogItems = (ws.catalogItems || []);
             const catalogs = ws.catalogs || [];
-            const allCatItems = catalogs.flatMap((c: any) => catalogItems.filter((ci: any) => ci.catalogId === c.id).map((ci: any) => ({ id: ci.id, name: ci.name })));
+            const allCatItems = catalogs.flatMap((c: any) => [
+              ...(c.items || []).map((ci: any) => ({ id: ci.id, name: ci.name })),
+              ...catalogItems.filter((ci: any) => ci.catalogId === c.id).map((ci: any) => ({ id: ci.id, name: ci.name })),
+            ]);
             const match = allCatItems.find((ci: any) => ci.id === rest.itemId);
             if (!match) {
               return { content: [{ type: "text" as const, text: `ERROR: itemId "${rest.itemId}" does not match any catalog item. Call getItemConfig to check available catalog items, then retry with a valid itemId.` }], isError: true };
@@ -453,7 +725,7 @@ export function registerQuoteTools(server: McpServer) {
           // Validate calculationType requirements
           const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
           if ((calcType === "tiered_rate" || calcType === "duration_rate") && src === "rate_schedule" && !hasTierUnits && !rest.unit1 && !rest.unit2 && !rest.unit3) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${cat}" uses ${calcType} calculation with rate-schedule pricing, so unit values are required. Set tierUnits or unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so unit values are required. Set tierUnits or unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
           }
 
           // Auto-apply default markup for markup-eligible categories when not explicitly set
@@ -473,8 +745,12 @@ export function registerQuoteTools(server: McpServer) {
       // Normalize markup to decimal: agent may send 15 for 15%, DB stores 0.15
       const normalizedMarkup = (rest.markup || 0) > 1 ? (rest.markup || 0) / 100 : (rest.markup || 0);
       rest.markup = normalizedMarkup;
-      const price = (rest.cost || 0) * (1 + normalizedMarkup);
-      const body = { ...rest, category: cat, entityType: cat, price };
+      const price = rest.price ?? (rest.cost || 0) * (1 + normalizedMarkup);
+      const cat = resolvedCategory?.name ?? requestedCategory ?? rest.category;
+      if (!cat) {
+        return { content: [{ type: "text" as const, text: "ERROR: categoryId could not be resolved from the current workspace. Call getItemConfig and retry with a valid categoryId or category name." }], isError: true };
+      }
+      const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat, price };
       try {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
         invalidateWs();
@@ -494,23 +770,32 @@ export function registerQuoteTools(server: McpServer) {
     {
       itemId: z.string().describe("Line item ID"),
       entityName: z.string().optional(),
+      categoryId: z.string().nullable().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this when changing category."),
       category: z.string().optional(),
       description: z.string().optional(),
       quantity: z.number().optional(),
       uom: z.string().optional(),
       cost: z.number().optional(),
       markup: z.number().optional(),
+      price: z.number().optional(),
       unit1: z.number().optional(),
       unit2: z.number().optional(),
       unit3: z.number().optional(),
       rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
+      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID. Pass null to clear."),
+      effectiveCostId: z.string().nullable().optional().describe("Effective cost ID. Pass null to clear."),
+      laborUnitId: z.string().nullable().optional().describe("Labor unit ID. Pass null to clear."),
+      resourceComposition: z.record(z.unknown()).optional(),
+      sourceEvidence: z.record(z.unknown()).optional(),
       tierUnits: z.record(z.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
+      classification: z.record(z.unknown()).optional().describe("Construction classification JSON, e.g. { masterformat: '03 30 00' }."),
+      costCode: z.string().nullable().optional().describe("Internal cost code. Pass null to clear."),
       phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
       sourceNotes: z.string().optional(),
-      catalogItemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
+      catalogItemId: z.string().nullable().optional().describe("Catalog item ID for catalog-backed categories. Pass null to clear."),
     },
     async ({ itemId, catalogItemId, ...patch }) => {
-      if (catalogItemId) (patch as any).itemId = catalogItemId;
+      if (catalogItemId !== undefined) (patch as any).itemId = catalogItemId;
       // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
       if ((patch as any).markup !== undefined && (patch as any).markup > 1) {
         (patch as any).markup = (patch as any).markup / 100;
@@ -740,6 +1025,198 @@ export function registerQuoteTools(server: McpServer) {
       if (worksheetId) params.set("worksheetId", worksheetId);
       const data = await apiGet(projectPath(`/worksheet-items/search?${params}`));
       return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // ESTIMATE FACTORS — productivity, difficulty, weather, access
+  // ═══════════════════════════════════════════════════════════
+
+  const factorImpactSchema = z.enum(["labor_hours", "resource_units", "direct_cost", "sell_price"]);
+  const factorConfidenceSchema = z.enum(["high", "medium", "low"]);
+  const factorSourceTypeSchema = z.enum(["library", "knowledge", "labor_unit", "condition_difficulty", "neca_difficulty", "custom", "agent"]);
+  const factorApplicationScopeSchema = z.enum(["global", "line", "both"]);
+  const factorFormulaTypeSchema = z.enum(["fixed_multiplier", "per_unit_scale", "condition_score", "temperature_productivity", "neca_condition_score", "extended_duration"]);
+  const factorScopeSchema = z.object({
+    mode: z.enum(["all", "line", "category", "phase", "worksheet", "classification", "labor_unit", "cost_code", "text"]).optional(),
+    worksheetItemIds: z.array(z.string()).optional(),
+    categoryIds: z.array(z.string()).optional(),
+    categoryNames: z.array(z.string()).optional(),
+    analyticsBuckets: z.array(z.string()).optional(),
+    phaseIds: z.array(z.string()).optional(),
+    worksheetIds: z.array(z.string()).optional(),
+    classificationCodes: z.array(z.string()).optional(),
+    laborUnitIds: z.array(z.string()).optional(),
+    costCodes: z.array(z.string()).optional(),
+    text: z.array(z.string()).optional(),
+  }).passthrough();
+
+  server.tool(
+    "listEstimateFactorLibrary",
+    "List built-in and organization estimate productivity factors. Use this after reading knowledge books and labor units to seed weather, access, safety, schedule, methods, or condition difficulty factors.",
+    {},
+    async () => {
+      const data = await apiGet(projectPath("/factors/library"));
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "createEstimateFactorLibraryEntry",
+    "Create a reusable organization factor library entry. Use this when a researched factor should be available on future estimates; include sourceRef evidence from books, labor units, condition score sheets, or human-approved assumptions.",
+    {
+      name: z.string(),
+      code: z.string().optional(),
+      description: z.string().optional(),
+      category: z.string().default("Productivity"),
+      impact: factorImpactSchema.default("labor_hours"),
+      value: z.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
+      appliesTo: z.string().default("Labour"),
+      applicationScope: factorApplicationScopeSchema.default("both"),
+      scope: factorScopeSchema.default({ mode: "all" }),
+      formulaType: factorFormulaTypeSchema.default("fixed_multiplier"),
+      parameters: z.record(z.unknown()).default({}),
+      confidence: factorConfidenceSchema.default("medium"),
+      sourceType: factorSourceTypeSchema.default("agent"),
+      sourceId: z.string().nullable().optional(),
+      sourceRef: z.record(z.unknown()).default({}),
+      tags: z.array(z.string()).default([]),
+    },
+    async (input) => {
+      const data = await apiPost("/factor-library", input);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "updateEstimateFactorLibraryEntry",
+    "Update an editable organization factor library entry. Factory research presets are returned by the library listing as templates; organization entries are fully editable.",
+    {
+      entryId: z.string(),
+      name: z.string().optional(),
+      code: z.string().optional(),
+      description: z.string().optional(),
+      category: z.string().optional(),
+      impact: factorImpactSchema.optional(),
+      value: z.number().min(0.05).max(10).optional(),
+      appliesTo: z.string().optional(),
+      applicationScope: factorApplicationScopeSchema.optional(),
+      scope: factorScopeSchema.optional(),
+      formulaType: factorFormulaTypeSchema.optional(),
+      parameters: z.record(z.unknown()).optional(),
+      confidence: factorConfidenceSchema.optional(),
+      sourceType: factorSourceTypeSchema.optional(),
+      sourceId: z.string().nullable().optional(),
+      sourceRef: z.record(z.unknown()).optional(),
+      tags: z.array(z.string()).optional(),
+    },
+    async ({ entryId, ...patch }) => {
+      const data = await apiPatch(`/factor-library/${entryId}`, patch);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "deleteEstimateFactorLibraryEntry",
+    "Delete an editable organization factor library entry.",
+    { entryId: z.string() },
+    async ({ entryId }) => {
+      await apiDelete(`/factor-library/${entryId}`);
+      return { content: [{ type: "text" as const, text: `Deleted factor library entry ${entryId}` }] };
+    }
+  );
+
+  server.tool(
+    "listEstimateFactors",
+    "List estimate factors already applied to the current revision, including calculated target counts and value/cost/hour deltas.",
+    {},
+    async () => {
+      const ws = await getWs();
+      const data = {
+        factors: ws.estimateFactors || [],
+        factorTotals: ws.estimate?.totals?.factorTotals || [],
+        beforeFactors: {
+          lineSubtotal: ws.estimate?.totals?.lineSubtotalBeforeFactors,
+          cost: ws.estimate?.totals?.costBeforeFactors,
+          hours: ws.estimate?.totals?.totalHoursBeforeFactors,
+        },
+        afterFactors: {
+          lineSubtotal: ws.estimate?.totals?.pricingLadder?.lineSubtotal ?? ws.estimate?.totals?.subtotal,
+          cost: ws.estimate?.totals?.cost,
+          hours: ws.estimate?.totals?.totalHours,
+        },
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    "createEstimateFactor",
+    `Create an estimate productivity factor. Factors affect worksheet-derived production before rollups and quote modifiers. Use sourceType/sourceRef to cite the basis: knowledge book page, labor-unit difficulty column, condition difficulty bridge, or custom assumption. value is a multiplier: 1.10 = +10%, 0.92 = -8%.`,
+    {
+      name: z.string().describe("Factor name, e.g. Winter Weather, Confined Space, Shop Prefabrication"),
+      code: z.string().optional(),
+      description: z.string().optional(),
+      category: z.string().default("Productivity"),
+      impact: factorImpactSchema.default("labor_hours"),
+      value: z.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
+      active: z.boolean().default(true),
+      appliesTo: z.string().default("Labour"),
+      applicationScope: factorApplicationScopeSchema.default("global"),
+      scope: factorScopeSchema.default({ mode: "all" }).describe("Scope filters. For labor items use {mode:'category', analyticsBuckets:['labour']}; for a phase use phaseIds."),
+      formulaType: factorFormulaTypeSchema.default("fixed_multiplier"),
+      parameters: z.record(z.unknown()).default({}).describe("Formula inputs. For line factors use scope.worksheetItemIds; for condition scores use score/maxScore; for temperature use temperature, temperatureUnit, humidity."),
+      confidence: factorConfidenceSchema.default("medium"),
+      sourceType: factorSourceTypeSchema.default("agent"),
+      sourceId: z.string().nullable().optional(),
+      sourceRef: z.record(z.unknown()).default({}).describe("Evidence such as {bookId,page,quote,reasoning,presetId,laborUnitId}"),
+      tags: z.array(z.string()).default([]),
+    },
+    async (input) => {
+      await apiPost(projectPath("/factors"), input);
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Created estimate factor: ${input.name}` }] };
+    }
+  );
+
+  server.tool(
+    "updateEstimateFactor",
+    "Update an estimate productivity factor. Use this to refine scope, multiplier, evidence, confidence, active state, or source references.",
+    {
+      factorId: z.string(),
+      name: z.string().optional(),
+      code: z.string().optional(),
+      description: z.string().optional(),
+      category: z.string().optional(),
+      impact: factorImpactSchema.optional(),
+      value: z.number().min(0.05).max(10).optional(),
+      active: z.boolean().optional(),
+      appliesTo: z.string().optional(),
+      applicationScope: factorApplicationScopeSchema.optional(),
+      scope: factorScopeSchema.optional(),
+      formulaType: factorFormulaTypeSchema.optional(),
+      parameters: z.record(z.unknown()).optional(),
+      confidence: factorConfidenceSchema.optional(),
+      sourceType: factorSourceTypeSchema.optional(),
+      sourceId: z.string().nullable().optional(),
+      sourceRef: z.record(z.unknown()).optional(),
+      tags: z.array(z.string()).optional(),
+    },
+    async ({ factorId, ...patch }) => {
+      await apiPatch(projectPath(`/factors/${factorId}`), patch);
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Updated estimate factor ${factorId}` }] };
+    }
+  );
+
+  server.tool(
+    "deleteEstimateFactor",
+    "Delete an estimate factor from the current revision.",
+    { factorId: z.string() },
+    async ({ factorId }) => {
+      await apiDelete(projectPath(`/factors/${factorId}`));
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: `Deleted estimate factor ${factorId}` }] };
     }
   );
 
@@ -1052,9 +1529,9 @@ export function registerQuoteTools(server: McpServer) {
   // ── applySummaryPreset ──────────────────────────────────────
   server.tool(
     "applySummaryPreset",
-    "Apply a summary preset to configure quote breakout. Presets: quick_total (single total), by_category (per category), by_phase (per phase), by_worksheet (per worksheet), phase_x_category (phases with category detail), custom (empty). After applying, rows can be individually customized.",
+    "Apply a summary preset to configure quote breakout. Presets: quick_total (single total), by_category (per category), by_phase (per phase), by_worksheet (per worksheet), by_masterformat_division, by_uniformat_division, by_omniclass_division, by_uniclass_division, by_din276_division, by_nrm_division, by_icms_division, by_cost_code, phase_x_category (phases with category detail), custom (empty). After applying, rows can be individually customized.",
     {
-      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "phase_x_category", "custom"]).describe("Preset name"),
+      preset: z.enum(["quick_total", "by_category", "by_phase", "by_worksheet", "by_masterformat_division", "by_uniformat_division", "by_omniclass_division", "by_uniclass_division", "by_din276_division", "by_nrm_division", "by_icms_division", "by_cost_code", "phase_x_category", "custom"]).describe("Preset name"),
     },
     async ({ preset }) => {
       await apiPost(projectPath("/summary-rows/apply-preset"), { preset });

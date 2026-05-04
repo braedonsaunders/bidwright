@@ -144,7 +144,7 @@ if [[ "${DEPLOY_MODE}" == "build" ]]; then
 fi
 cleanup_db_migrate_container
 compose run --rm db-migrate
-compose run --rm db-migrate sh -lc "pnpm --filter @bidwright/db exec tsx src/run-seed-datasets.ts && pnpm --filter @bidwright/db exec tsx src/run-seed-plugins.ts"
+compose run --rm db-migrate sh -lc "pnpm --filter @bidwright/db exec tsx src/run-seed-plugins.ts"
 
 if [[ "${DEPLOY_MODE}" == "build" ]]; then
   compose_up_profiles up -d --build --remove-orphans api web worker

@@ -1,10 +1,12 @@
 const DEFAULT_API_BASE_URL = "http://localhost:4001";
+const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 // In production we front the API behind the same public origin via Traefik, so
 // the browser should prefer its current origin if no public build-time API URL
 // was injected into the bundle.
 export const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  configuredApiBaseUrl ??
+  (process.env.NODE_ENV === "development" ? DEFAULT_API_BASE_URL : null) ??
   (typeof window !== "undefined" ? window.location.origin : null) ??
   DEFAULT_API_BASE_URL;
 

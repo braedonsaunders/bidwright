@@ -48,6 +48,7 @@ export interface BidwrightModelSelectionMessage {
 export interface BidwrightModelLineItemDraft {
   worksheetId?: string;
   worksheetName?: string;
+  categoryId?: string | null;
   category: string;
   entityType: string;
   entityName: string;

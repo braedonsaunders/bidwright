@@ -1,14 +1,10 @@
 import type { CalculationType } from "./calculation-types";
+import type { UnitOfMeasure } from "./uom";
 
 export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted" | "estimating";
 export type QuoteStatus = "draft" | "review" | "submitted" | "awarded" | "lost";
 export type AiRunStatus = "queued" | "running" | "complete" | "failed";
-export type CatalogKind =
-  | "labor"
-  | "equipment"
-  | "materials"
-  | "knowledge_library"
-  | "rate_book";
+export type CatalogKind = string;
 
 export interface Project {
   id: string;
@@ -143,7 +139,7 @@ export interface QuoteRevision {
   freightOnBoard: string;
   status: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup: number;
-  necaDifficulty: string;
+  laborDifficulty: string;
   followUpNote: string;
   printEmptyNotesColumn: boolean;
   printCategory: string[];
@@ -156,6 +152,7 @@ export interface QuoteRevision {
   calculatedCategoryTotals: unknown[];
   summaryLayoutPreset: SummaryPreset;
   pdfPreferences: Record<string, unknown>;
+  pricingLadder: PricingLadderSnapshot;
   subtotal: number;
   cost: number;
   estimatedProfit: number;
@@ -169,6 +166,15 @@ export interface QuoteRevision {
 export interface Worksheet {
   id: string;
   revisionId: string;
+  folderId?: string | null;
+  name: string;
+  order: number;
+}
+
+export interface WorksheetFolder {
+  id: string;
+  revisionId: string;
+  parentId?: string | null;
   name: string;
   order: number;
 }
@@ -177,9 +183,12 @@ export interface WorksheetItem {
   id: string;
   worksheetId: string;
   phaseId?: string | null;
+  categoryId?: string | null;
   category: string;
   entityType: string;
   entityName: string;
+  classification?: WorksheetItemClassification;
+  costCode?: string | null;
   vendor?: string;
   description: string;
   quantity: number;
@@ -195,6 +204,11 @@ export interface WorksheetItem {
   itemId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
   sourceAssemblyId?: string | null;
   assemblyInstanceId?: string | null;
 }
@@ -202,6 +216,7 @@ export interface WorksheetItem {
 export interface Phase {
   id: string;
   revisionId: string;
+  parentId?: string | null;
   number: string;
   name: string;
   description: string;
@@ -338,6 +353,22 @@ export type AdjustmentPricingMode =
   | "line_item_additional"
   | "line_item_standalone"
   | "custom_total";
+export type AdjustmentFinancialCategory =
+  | "overhead"
+  | "profit"
+  | "tax"
+  | "contingency"
+  | "insurance"
+  | "bond"
+  | "allowance"
+  | "alternate"
+  | "fee"
+  | "other";
+export type AdjustmentCalculationBase =
+  | "selected_scope"
+  | "line_subtotal"
+  | "direct_cost"
+  | "cumulative";
 
 export interface Adjustment {
   id: string;
@@ -348,10 +379,87 @@ export interface Adjustment {
   name: string;
   description: string;
   type: string;
+  financialCategory: AdjustmentFinancialCategory | string;
+  calculationBase: AdjustmentCalculationBase | string;
+  active: boolean;
   appliesTo: string;
   percentage: number | null;
   amount: number | null;
   show: "Yes" | "No";
+}
+
+export type EstimateFactorImpact = "labor_hours" | "resource_units" | "direct_cost" | "sell_price";
+export type EstimateFactorConfidence = "high" | "medium" | "low";
+export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
+export type EstimateFactorApplicationScope = "global" | "line" | "both";
+export type EstimateFactorFormulaType =
+  | "fixed_multiplier"
+  | "per_unit_scale"
+  | "condition_score"
+  | "temperature_productivity"
+  | "neca_condition_score"
+  | "extended_duration";
+
+export interface EstimateFactorScope {
+  mode?: "all" | "line" | "category" | "phase" | "worksheet" | "classification" | "labor_unit" | "cost_code" | "text";
+  worksheetItemIds?: string[];
+  categoryIds?: string[];
+  categoryNames?: string[];
+  analyticsBuckets?: string[];
+  phaseIds?: string[];
+  worksheetIds?: string[];
+  classificationCodes?: string[];
+  laborUnitIds?: string[];
+  costCodes?: string[];
+  text?: string[];
+  [key: string]: unknown;
+}
+
+export interface EstimateFactor {
+  id: string;
+  revisionId: string;
+  order: number;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  value: number;
+  active: boolean;
+  appliesTo: string;
+  applicationScope: EstimateFactorApplicationScope;
+  scope: EstimateFactorScope;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef: Record<string, unknown>;
+  tags: string[];
+}
+
+export interface EstimateFactorLibraryEntry {
+  id: string;
+  organizationId: string;
+  order: number;
+  name: string;
+  code: string;
+  description: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  value: number;
+  appliesTo: string;
+  applicationScope: EstimateFactorApplicationScope;
+  scope: EstimateFactorScope;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef: Record<string, unknown>;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Modifier {
@@ -379,11 +487,43 @@ export interface AdditionalLineItem {
   amount: number;
 }
 
-export type SummaryRowType = "category" | "phase" | "adjustment" | "heading" | "separator" | "subtotal";
+export type ConstructionClassificationStandard =
+  | "masterformat"
+  | "uniformat"
+  | "omniclass"
+  | "uniclass"
+  | "din276"
+  | "nrm"
+  | "icms"
+  | "cost_code";
+export type ConstructionClassificationLevel = "division" | "section" | "full";
+export type WorksheetItemClassification = Record<string, unknown>;
+
+export interface SummaryBuilderClassificationConfig {
+  standard: ConstructionClassificationStandard;
+  level: ConstructionClassificationLevel;
+  includeUnclassified: boolean;
+}
+
+export type SummaryRowType = "category" | "phase" | "worksheet" | "classification" | "adjustment" | "heading" | "separator" | "subtotal";
 export type SummaryRowStyle = "normal" | "bold" | "indent" | "highlight";
-export type SummaryPreset = "quick_total" | "by_category" | "by_phase" | "by_worksheet" | "phase_x_category" | "custom";
+export type SummaryPreset =
+  | "quick_total"
+  | "by_category"
+  | "by_phase"
+  | "by_worksheet"
+  | "by_masterformat_division"
+  | "by_uniformat_division"
+  | "by_omniclass_division"
+  | "by_uniclass_division"
+  | "by_din276_division"
+  | "by_nrm_division"
+  | "by_icms_division"
+  | "by_cost_code"
+  | "phase_x_category"
+  | "custom";
 export type SummaryBuilderMode = "total" | "grouped" | "pivot";
-export type SummaryBuilderDimension = "none" | "phase" | "category" | "worksheet";
+export type SummaryBuilderDimension = "none" | "phase" | "category" | "worksheet" | "classification";
 
 export interface SummaryBuilderAxisItem {
   key: string;
@@ -401,6 +541,7 @@ export interface SummaryBuilderConfig {
   columnDimension: SummaryBuilderDimension;
   rows: SummaryBuilderAxisItem[];
   columns: SummaryBuilderAxisItem[];
+  classification: SummaryBuilderClassificationConfig;
   totals: {
     label: string;
     visible: boolean;
@@ -420,6 +561,10 @@ export interface SummaryRow {
   sourceCategoryId?: string | null;
   sourceCategoryLabel?: string | null;
   sourcePhaseId?: string | null;
+  sourceWorksheetId?: string | null;
+  sourceWorksheetLabel?: string | null;
+  sourceClassificationId?: string | null;
+  sourceClassificationLabel?: string | null;
   sourceAdjustmentId?: string | null;
 
   // Manual rows: direct value entry (not backed by items)
@@ -472,7 +617,158 @@ export interface CatalogItem {
   metadata: Record<string, unknown>;
 }
 
-export type AssemblyComponentType = "catalog_item" | "rate_schedule_item" | "sub_assembly";
+// ── Labor Units ─────────────────────────────────────────────────────────
+
+export interface LaborUnitLibrary {
+  id: string;
+  organizationId: string | null;
+  cabinetId: string | null;
+  name: string;
+  description: string;
+  provider: string;
+  discipline: string;
+  source: "manual" | "import" | "library" | "plugin";
+  sourceDescription: string;
+  sourceDatasetId: string | null;
+  tags: string[];
+  isTemplate: boolean;
+  sourceTemplateId: string | null;
+  metadata: Record<string, unknown>;
+  unitCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LaborUnit {
+  id: string;
+  libraryId: string;
+  catalogItemId: string | null;
+  code: string;
+  name: string;
+  description: string;
+  discipline: string;
+  category: string;
+  className: string;
+  subClassName: string;
+  outputUom: string;
+  hoursNormal: number;
+  hoursDifficult: number | null;
+  hoursVeryDifficult: number | null;
+  defaultDifficulty: "normal" | "difficult" | "very_difficult";
+  entityCategoryType: string;
+  tags: string[];
+  sourceRef: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Cost Intelligence ─────────────────────────────────────────────────
+
+export type ResourceCatalogItemType =
+  | "material"
+  | "labour"
+  | "equipment"
+  | "subcontractor"
+  | "consumable"
+  | "other";
+
+export type CostObservationDocumentType =
+  | "manual"
+  | "vendor_pdf"
+  | "invoice"
+  | "receipt"
+  | "quote"
+  | "price_list"
+  | "catalog_import"
+  | "integration";
+
+export type EffectiveCostMethod =
+  | "latest_observation"
+  | "weighted_average"
+  | "manual"
+  | "contract";
+
+export interface ResourceCatalogItem {
+  id: string;
+  organizationId: string;
+  catalogItemId: string | null;
+  resourceType: string;
+  category: string;
+  code: string;
+  name: string;
+  normalizedName: string;
+  description: string;
+  manufacturer: string;
+  manufacturerPartNumber: string;
+  defaultUom: string;
+  aliases: string[];
+  tags: string[];
+  metadata: Record<string, unknown>;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CostObservation {
+  id: string;
+  organizationId: string;
+  resourceId: string | null;
+  projectId: string | null;
+  sourceDocumentId: string | null;
+  vendorName: string;
+  vendorSku: string;
+  documentType: string;
+  observedAt: string;
+  effectiveDate: string | null;
+  quantity: number;
+  observedUom: string;
+  unitCost: number;
+  unitPrice: number | null;
+  currency: string;
+  freight: number;
+  tax: number;
+  discount: number;
+  confidence: number;
+  fingerprint: string;
+  sourceRef: Record<string, unknown>;
+  rawText: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EffectiveCost {
+  id: string;
+  organizationId: string;
+  resourceId: string | null;
+  resource?: ResourceCatalogItem | null;
+  projectId: string | null;
+  vendorName: string;
+  region: string;
+  uom: string;
+  unitCost: number;
+  unitPrice: number | null;
+  currency: string;
+  effectiveDate: string | null;
+  expiresAt: string | null;
+  sourceObservationId: string | null;
+  sourceObservation?: CostObservation | null;
+  method: string;
+  sampleSize: number;
+  confidence: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AssemblyComponentType =
+  | "catalog_item"
+  | "rate_schedule_item"
+  | "labor_unit"
+  | "cost_intelligence"
+  | "sub_assembly";
 
 export interface AssemblyParameter {
   id: string;
@@ -492,6 +788,10 @@ export interface AssemblyComponent {
   componentType: AssemblyComponentType;
   catalogItemId: string | null;
   rateScheduleItemId: string | null;
+  laborUnitId: string | null;
+  laborDifficulty: "normal" | "difficult" | "very_difficult";
+  costResourceId: string | null;
+  effectiveCostId: string | null;
   subAssemblyId: string | null;
   quantityExpr: string;
   description: string;
@@ -629,7 +929,6 @@ export interface Citation {
 // ── Rate Schedules ──────────────────────────────────────────────────────
 
 export type RateScheduleScope = "global" | "revision";
-export type RateScheduleCategory = "labour" | "equipment" | "materials" | "general";
 
 export interface RateScheduleTier {
   id: string;
@@ -1007,7 +1306,7 @@ export interface PluginScoringCriterion {
 
 export interface PluginScoringEffect {
   type: "revision_patch" | "modifier" | "both";
-  // For revision_patch: which field to write (e.g., "necaDifficulty", "defaultMarkup")
+  // For revision_patch: which field to write (e.g., "laborDifficulty", "defaultMarkup")
   revisionField?: string;
   // For modifier: create/update a quote modifier from the scoring result
   modifier?: {
@@ -1090,6 +1389,11 @@ export interface PluginOutputLineItem {
   itemId?: string | null;
   tierUnits?: Record<string, number>;
   sourceNotes?: string;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
@@ -1106,7 +1410,7 @@ export interface PluginOutputTextContent {
 }
 
 export interface PluginOutputRevisionPatch {
-  field: string;           // e.g., "necaDifficulty", "defaultMarkup"
+  field: string;           // e.g., "laborDifficulty", "defaultMarkup"
   value: unknown;
 }
 
@@ -1186,10 +1490,8 @@ export interface PluginToolOutputTemplate {
 }
 
 export type PluginToolExecutionDefinition =
-  | { type: "dataset_labour_units"; datasetId: string; providerLabel: string }
+  | { type: "labor_units"; providerLabel: string }
   | { type: "scoring_result_patch"; scoringId: string; revisionField: string; summaryTitle?: string }
-  | { type: "neca_temperature_adjustment" }
-  | { type: "neca_extended_duration" }
   | {
       type: "table_hours";
       tableId: string;
@@ -1330,6 +1632,7 @@ export interface AppSettings {
     dateFormat: string;
     fiscalYearStart: number;
     maxAgentIterations?: number;
+    uoms?: UnitOfMeasure[];
     benchmarkingEnabled?: boolean;
     benchmarkMinimumSimilarity?: number;
     benchmarkMaximumComparables?: number;
@@ -1527,9 +1830,11 @@ export interface BidwrightStore {
   sourceDocuments: SourceDocument[];
   quotes: Quote[];
   revisions: QuoteRevision[];
+  worksheetFolders?: WorksheetFolder[];
   worksheets: Worksheet[];
   worksheetItems: WorksheetItem[];
   phases: Phase[];
+  estimateFactors?: EstimateFactor[];
   adjustments: Adjustment[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
@@ -1595,6 +1900,15 @@ export interface SourceTotalEntry {
   margin: number;
   phaseId?: string | null;
   phaseLabel?: string | null;
+  worksheetId?: string | null;
+  worksheetLabel?: string | null;
+  categoryId?: string | null;
+  categoryLabel?: string | null;
+  legacyCategoryId?: string | null;
+  classificationStandard?: ConstructionClassificationStandard;
+  classificationLevel?: ConstructionClassificationLevel;
+  classificationCode?: string | null;
+  classificationLabel?: string | null;
 }
 
 export interface AdjustmentTotalEntry {
@@ -1603,17 +1917,101 @@ export interface AdjustmentTotalEntry {
   kind: AdjustmentKind;
   pricingMode: AdjustmentPricingMode;
   type: string;
+  financialCategory: AdjustmentFinancialCategory | string;
+  calculationBase: AdjustmentCalculationBase | string;
+  active: boolean;
   appliesTo: string;
   show: "Yes" | "No";
   affectsSubtotal: boolean;
+  baseAmount: number;
+  runningTotal: number;
   value: number;
   cost: number;
   margin: number;
 }
 
+export interface EstimateFactorTotalEntry {
+  id: string;
+  label: string;
+  category: string;
+  impact: EstimateFactorImpact;
+  active: boolean;
+  appliesTo: string;
+  applicationScope: EstimateFactorApplicationScope;
+  value: number;
+  formulaType: EstimateFactorFormulaType;
+  parameters: Record<string, unknown>;
+  targetCount: number;
+  targetLineItemIds: string[];
+  baseValue: number;
+  baseCost: number;
+  baseHours: number;
+  valueDelta: number;
+  costDelta: number;
+  hoursDelta: number;
+  effectiveValue: number;
+  effectiveCost: number;
+  effectiveHours: number;
+  scope: EstimateFactorScope;
+  confidence: EstimateFactorConfidence;
+  sourceType: EstimateFactorSourceType;
+  sourceId?: string | null;
+  sourceRef: Record<string, unknown>;
+}
+
+export interface PricingLadderRow {
+  id: string;
+  label: string;
+  rowType: "base" | "factor" | "adjustment" | "total" | "profit";
+  financialCategory: AdjustmentFinancialCategory | string;
+  pricingMode?: AdjustmentPricingMode;
+  calculationBase?: AdjustmentCalculationBase | string;
+  appliesTo?: string;
+  percentage?: number | null;
+  fixedAmount?: number | null;
+  baseAmount: number;
+  value: number;
+  cost: number;
+  margin: number;
+  runningTotal: number;
+  affectsTotal: boolean;
+  visible: boolean;
+  active: boolean;
+  sourceAdjustmentId?: string | null;
+  sourceFactorId?: string | null;
+}
+
+export interface PricingLadderSnapshot {
+  version: 1;
+  directCost: number;
+  lineSubtotal: number;
+  adjustmentTotal: number;
+  netTotal: number;
+  grandTotal: number;
+  internalProfit: number;
+  internalMargin: number;
+  rows: PricingLadderRow[];
+}
+
+export interface CostBreakdownEntry {
+  id: string;
+  label: string;
+  type: string;
+  value: number;
+  cost: number;
+  margin: number;
+  quantity: number;
+  itemCount: number;
+  shareOfCost: number;
+}
+
 export interface RevisionTotals {
   subtotal: number;
   cost: number;
+  lineSubtotalBeforeFactors?: number;
+  costBeforeFactors?: number;
+  totalHoursBeforeFactors?: number;
+  adjustedLineItems: WorksheetItem[];
   estimatedProfit: number;
   estimatedMargin: number;
   calculatedTotal: number;
@@ -1627,7 +2025,14 @@ export interface RevisionTotals {
   worksheetTotals: SourceTotalEntry[];
   worksheetCategoryTotals: SourceTotalEntry[];
   worksheetPhaseTotals: SourceTotalEntry[];
+  classificationTotals: SourceTotalEntry[];
+  phaseClassificationTotals: SourceTotalEntry[];
+  worksheetClassificationTotals: SourceTotalEntry[];
+  categoryClassificationTotals: SourceTotalEntry[];
+  factorTotals: EstimateFactorTotalEntry[];
   adjustmentTotals: AdjustmentTotalEntry[];
+  pricingLadder: PricingLadderSnapshot;
+  costBreakdown: CostBreakdownEntry[];
   tierUnitTotals?: Record<string, number>;
   breakout: BreakoutEntry[];
 }
@@ -1637,8 +2042,11 @@ export interface ProjectWorkspace {
   sourceDocuments: SourceDocument[];
   quote: Quote;
   currentRevision: QuoteRevision;
+  revisions: QuoteRevision[];
+  worksheetFolders: WorksheetFolder[];
   worksheets: Array<Worksheet & { items: WorksheetItem[] }>;
   phases: Phase[];
+  estimateFactors: EstimateFactor[];
   adjustments: Adjustment[];
   modifiers: Modifier[];
   additionalLineItems: AdditionalLineItem[];
