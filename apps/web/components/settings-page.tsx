@@ -9,6 +9,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Globe,
   KeyRound,
@@ -2439,6 +2440,8 @@ function settingsFactorInput(draft: SettingsFactorDraft, baseSourceRef?: Record<
   };
 }
 
+const FACTOR_LIBRARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+
 function FactorLibraryManager() {
   const [entries, setEntries] = useState<EstimateFactorLibraryRecord[]>([]);
   const [query, setQuery] = useState("");
@@ -2447,6 +2450,8 @@ function FactorLibraryManager() {
   const [drawer, setDrawer] = useState<SettingsFactorDrawer | null>(null);
   const [draft, setDraft] = useState<SettingsFactorDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageIndex, setPageIndex] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2475,6 +2480,17 @@ function FactorLibraryManager() {
   }, [entries, query]);
 
   const orgCount = entries.length;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePageIndex = Math.min(pageIndex, totalPages - 1);
+  const pageRows = useMemo(
+    () => filtered.slice(safePageIndex * pageSize, safePageIndex * pageSize + pageSize),
+    [filtered, safePageIndex, pageSize],
+  );
+
+  // Reset to page 0 whenever search/page-size changes so users don't land on an empty page.
+  useEffect(() => {
+    setPageIndex(0);
+  }, [query, pageSize]);
 
   async function saveDrawer() {
     if (!drawer || !draft) return;
@@ -2525,13 +2541,27 @@ function FactorLibraryManager() {
         </div>
       </CardHeader>
       <CardBody className="space-y-3">
-        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search factor library" className="max-w-md text-xs" />
+        <div className="flex items-center gap-3">
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search factor library"
+            className="max-w-md text-xs"
+          />
+          <Select
+            className="w-32"
+            value={String(pageSize)}
+            onValueChange={(v) => setPageSize(Number(v) || 25)}
+            options={FACTOR_LIBRARY_PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n} per page` }))}
+          />
+        </div>
         {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div> : null}
         {loading ? (
           <div className="flex items-center gap-2 py-8 text-xs text-fg/45"><Loader2 className="h-4 w-4 animate-spin" /> Loading factors...</div>
         ) : (
+          <>
           <div className="overflow-hidden rounded-lg border border-line">
-            <div className="grid grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_96px] bg-panel2/60 px-3 py-2 text-[10px] font-medium uppercase text-fg/35">
+            <div className="grid grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_56px] bg-panel2/60 px-3 py-2 text-[10px] font-medium uppercase text-fg/35">
               <div>Factor</div>
               <div>Category</div>
               <div>Impact</div>
@@ -2539,20 +2569,21 @@ function FactorLibraryManager() {
               <div>Evidence</div>
               <div />
             </div>
-            {filtered.length === 0 ? (
-              <div className="px-3 py-8 text-center text-xs text-fg/40">No matching factors.</div>
-            ) : filtered.map((entry) => {
+            {pageRows.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-fg/40">
+                {query ? "No matching factors." : "No factors yet. Click \"Add Factor\" to add one."}
+              </div>
+            ) : pageRows.map((entry) => {
               const criteriaCount = Array.isArray((entry.sourceRef as any)?.scoreSheet?.criteria) ? (entry.sourceRef as any).scoreSheet.criteria.length : 0;
               return (
-                <div key={entry.id} className="grid grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_96px] items-center gap-2 border-t border-line px-3 py-2 text-xs">
+                <div
+                  key={entry.id}
+                  onClick={() => setDrawer({ mode: "edit", entry })}
+                  className="grid cursor-pointer grid-cols-[minmax(240px,1fr)_130px_120px_120px_minmax(180px,0.8fr)_56px] items-center gap-2 border-t border-line px-3 py-2 text-xs hover:bg-panel2/40 transition-colors"
+                >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <button
-                        className="truncate text-left font-medium text-fg hover:text-accent"
-                        onClick={() => setDrawer({ mode: "edit", entry })}
-                      >
-                        {entry.name}
-                      </button>
+                      <span className="truncate text-left font-medium text-fg">{entry.name}</span>
                       <Badge tone="default">Org</Badge>
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-fg/40">{entry.code || entry.id}</div>
@@ -2566,9 +2597,18 @@ function FactorLibraryManager() {
                     <div className="truncate text-fg/55">{settingsFactorSourceText(entry.sourceRef, "locator") || settingsFactorSourceText(entry.sourceRef, "title") || settingsFactorSourceLabel(entry.sourceType)}</div>
                     {criteriaCount ? <div className="mt-0.5 text-[10px] text-fg/35">{criteriaCount} criteria</div> : null}
                   </div>
-                  <div className="flex justify-end gap-1">
-                    <Button variant="ghost" size="xs" className="h-8 px-2" onClick={() => setDrawer({ mode: "edit", entry })}>Edit</Button>
-                    <Button variant="ghost" size="xs" className="h-8 px-2" onClick={() => deleteEntry(entry)} disabled={saving}>
+                  <div className="flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="h-8 px-2"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteEntry(entry);
+                      }}
+                      disabled={saving}
+                      title="Delete"
+                    >
                       <Trash2 className="h-3.5 w-3.5 text-danger" />
                     </Button>
                   </div>
@@ -2576,6 +2616,39 @@ function FactorLibraryManager() {
               );
             })}
           </div>
+          {filtered.length > 0 && (
+            <div className="flex items-center justify-between text-xs text-fg/50">
+              <span>
+                Showing {safePageIndex * pageSize + 1}–
+                {Math.min((safePageIndex + 1) * pageSize, filtered.length)} of {filtered.length}
+                {filtered.length !== entries.length && ` (filtered from ${entries.length})`}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={safePageIndex === 0}
+                  onClick={() => setPageIndex(Math.max(0, safePageIndex - 1))}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Prev
+                </Button>
+                <span className="text-fg/40">
+                  Page {safePageIndex + 1} / {totalPages}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={safePageIndex >= totalPages - 1}
+                  onClick={() => setPageIndex(Math.min(totalPages - 1, safePageIndex + 1))}
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+          </>
         )}
       </CardBody>
 

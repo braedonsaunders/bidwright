@@ -971,6 +971,24 @@ export function registerCliRoutes(app: FastifyInstance) {
     const project = workspace.project || {} as any;
     const quote = workspace.quote || {} as any;
     const revision = workspace.currentRevision || {} as any;
+
+    // ── Block while document extraction is still running ────────────────
+    // The ingestion worker creates SourceDocument rows incrementally and may
+    // delete-and-replace them when extraction completes. Generating the
+    // CLAUDE.md / AGENTS.md / GEMINI.md manifest from a partial workspace
+    // produces stale doc IDs that the agent can't resolve, which sends it
+    // down expensive shell-OCR fallback paths. Refuse to start until the
+    // project's ingestion status reaches a ready state.
+    const ingestionStatus = (project.ingestionStatus ?? "unknown") as string;
+    const READY_STATUSES = new Set(["ready", "review", "quoted", "estimating"]);
+    if (!READY_STATUSES.has(ingestionStatus)) {
+      return reply.code(409).send({
+        error: "Document extraction is still in progress. Wait for the project's documents to finish processing before starting an AI run.",
+        ingestionStatus,
+        retryable: ingestionStatus === "queued" || ingestionStatus === "processing",
+      });
+    }
+
     const effectiveScope = typeof scope === "string" && scope.trim()
       ? scope.trim()
       : typeof project.scope === "string" && project.scope.trim()
