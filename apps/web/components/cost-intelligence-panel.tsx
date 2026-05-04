@@ -1201,8 +1201,11 @@ export function CostIntelligencePanel({
   const candidatePages = Math.max(1, Math.ceil(reviewCandidates.length / candidatePageSize));
   const visibleCandidates = reviewCandidates.slice(evidencePage * candidatePageSize, (evidencePage + 1) * candidatePageSize);
   const selectedCost = useMemo(
-    () => effectiveCosts.find((cost) => cost.id === selectedCostId) ?? null,
-    [effectiveCosts, selectedCostId],
+    () =>
+      effectiveCosts.find((cost) => cost.id === selectedCostId) ??
+      vendorDetailCosts.find((cost) => cost.id === selectedCostId) ??
+      null,
+    [effectiveCosts, selectedCostId, vendorDetailCosts],
   );
   const resourceOptions: SearchablePickerOption[] = useMemo(
     () => resources.map((resource) => ({
@@ -1581,14 +1584,26 @@ export function CostIntelligencePanel({
     setCostFormError(null);
   }
 
-  function openEditCostDrawerForProduct(product: VendorProductTableRow) {
-    if (!product.resourceId) return;
-    const match = effectiveCosts.find(
+  function findCostForProduct(product: VendorProductTableRow): EffectiveCostRecord | null {
+    if (!product.resourceId) return null;
+    const matchByDimensions = (pool: EffectiveCostRecord[]) => pool.find(
       (cost) =>
         cost.resourceId === product.resourceId &&
         (cost.uom || "").toUpperCase() === (product.uom || "").toUpperCase() &&
         (cost.currency || "").toUpperCase() === (product.currency || "").toUpperCase(),
-    ) ?? effectiveCosts.find((cost) => cost.resourceId === product.resourceId);
+    );
+    const matchByResource = (pool: EffectiveCostRecord[]) => pool.find((cost) => cost.resourceId === product.resourceId);
+    return (
+      matchByDimensions(effectiveCosts) ??
+      matchByDimensions(vendorDetailCosts) ??
+      matchByResource(effectiveCosts) ??
+      matchByResource(vendorDetailCosts) ??
+      null
+    );
+  }
+
+  function openEditCostDrawerForProduct(product: VendorProductTableRow) {
+    const match = findCostForProduct(product);
     if (!match) return;
     openEditCostDrawer(match);
   }
@@ -2837,10 +2852,7 @@ export function CostIntelligencePanel({
                                 <tbody>
                                   {visibleVendorProducts.map((product, index) => {
                                     const trendPct = productTrendPercent(product);
-                                    const clickable = Boolean(
-                                      product.resourceId &&
-                                        effectiveCosts.some((cost) => cost.resourceId === product.resourceId),
-                                    );
+                                    const clickable = Boolean(findCostForProduct(product));
                                     return (
                                       <motion.tr
                                         key={product.key}
