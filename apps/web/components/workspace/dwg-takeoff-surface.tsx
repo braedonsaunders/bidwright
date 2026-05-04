@@ -1194,9 +1194,6 @@ export function DwgTakeoffSurface({
         cost: 0,
         markup: workspace.currentRevision.defaultMarkup ?? 0.2,
         price: 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
         sourceNotes: [
           `From DWG takeoff: ${activeDocument?.fileName ?? "drawing"}`,
           `${formatNumber(quantity)} ${unit}`,

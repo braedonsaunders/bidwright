@@ -627,18 +627,18 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM actively for pr
 ### Quantity Ã— Units â€” CRITICAL for Rate Schedule Categories
 
 **For any category with \`itemSource=rate_schedule\`** (check \`getItemConfig\` to see which categories this applies to):
-- \`quantity\` = **MULTIPLIER** on the unit values. What this means depends on the category â€” it could be crew size, number of units, etc.
-- \`tierUnits\` / \`unit1\` / \`unit2\` / \`unit3\` = **values PER quantity**. Check the category's \`unitLabels\` to understand what each unit field represents (e.g. "Reg Hrs", "OT Hrs", "Duration").
-- The calc engine computes: **total cost = Î£(units Ã— tier rate) Ã— quantity**
+- \`quantity\` = **MULTIPLIER** on the tier hour values. What this means depends on the category â€” it could be crew size, number of units, etc.
+- \`tierUnits\` = JSON map keyed by **RateScheduleTier id** with hour values per quantity. Each schedule defines its own tiers (e.g. Regular, Overtime, Doubletime). Get tier ids from \`getItemConfig\`.
+- The calc engine computes: **total cost = Î£(tierUnits[tierId] Ã— tier rate) Ã— quantity**
 
-**The key rule:** quantity Ã— units must make logical sense for the item. Always think about what the multiplication produces.
+**The key rule:** quantity Ã— tierUnits must make logical sense for the item. Always think about what the multiplication produces.
 
-**Examples** (assuming a category with unitLabels \`{unit1: "Reg Hrs", unit2: "OT Hrs"}\`):
-- 1 person for 80 regular hours â†’ \`quantity=1\`, \`tierUnits={"Regular": 80}\`
-- 4 people working 200 hours each â†’ \`quantity=4\`, \`tierUnits={"Regular": 200}\`
-- 2 people, 160 regular + 40 overtime each â†’ \`quantity=2\`, \`tierUnits={"Regular": 160, "Overtime": 40}\`
+**Examples**:
+- 1 person for 80 regular hours â†’ \`quantity=1\`, \`tierUnits={"<reg-tier-id>": 80}\`
+- 4 people working 200 hours each â†’ \`quantity=4\`, \`tierUnits={"<reg-tier-id>": 200}\`
+- 2 people, 160 regular + 40 overtime each â†’ \`quantity=2\`, \`tierUnits={"<reg-tier-id>": 160, "<ot-tier-id>": 40}\`
 
-**NEVER confuse quantity with total units.** Setting quantity=80 and unit1=80 means 80 Ã— 80 = 6,400 total units, which is almost certainly wrong. Ask yourself: does this line item really need a quantity of 80?
+**NEVER confuse quantity with total tier hours.** Setting quantity=80 and a tierUnits entry of 80 means 80 Ã— 80 = 6,400 total hours, which is almost certainly wrong. Ask yourself: does this line item really need a quantity of 80?
 
 ### Markup Rules
 

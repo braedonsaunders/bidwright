@@ -58,9 +58,7 @@ export interface BidwrightModelLineItemDraft {
   cost: number;
   markup: number;
   price: number;
-  unit1: number;
-  unit2: number;
-  unit3: number;
+  tierUnits?: Record<string, number>;
   sourceNotes: string;
   source?: {
     kind: "model-selection";

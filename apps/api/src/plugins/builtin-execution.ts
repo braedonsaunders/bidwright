@@ -18,6 +18,8 @@ interface RateScheduleSelection {
   name: string;
   category?: string;
   entityCategoryType?: string;
+  /** Tier id for the schedule's regular (multiplier 1.0) tier, when known. */
+  regularTierId?: string;
 }
 
 export interface BuiltinPluginExecutionContext {
@@ -214,6 +216,7 @@ function normalizeDifficulty(value: string) {
 
 function buildLabourLineItem(args: {
   rateScheduleItemId: string;
+  regularTierId?: string;
   entityName: string;
   category?: string;
   entityType?: string;
@@ -222,6 +225,10 @@ function buildLabourLineItem(args: {
   sourceNotes: string;
 }) {
   const hours = roundHours(args.hours);
+  const tierUnits: Record<string, number> = {};
+  if (args.regularTierId && hours > 0) {
+    tierUnits[args.regularTierId] = hours;
+  }
   const lineItem: PluginOutputLineItem = {
     category: args.category || args.entityType || "Labour",
     entityType: args.entityType || args.category || "Labour",
@@ -232,10 +239,8 @@ function buildLabourLineItem(args: {
     cost: 0,
     markup: 0,
     price: 0,
-    unit1: hours,
-    unit2: 0,
-    unit3: 0,
     rateScheduleItemId: args.rateScheduleItemId,
+    tierUnits,
     sourceNotes: args.sourceNotes,
   };
   return lineItem;
@@ -285,6 +290,7 @@ async function executeLaborUnitsTool(
     lineItems: [
       buildLabourLineItem({
         rateScheduleItemId: serviceItem.id,
+            regularTierId: serviceItem.regularTierId,
         entityName: serviceItem.name,
         category: serviceItem.category || laborUnit.entityCategoryType || "Labour",
         entityType: serviceItem.entityCategoryType || laborUnit.entityCategoryType || serviceItem.category || "Labour",
@@ -389,6 +395,7 @@ export async function executeBuiltinPluginTool(
         lineItems: [
           buildLabourLineItem({
             rateScheduleItemId: serviceItem.id,
+            regularTierId: serviceItem.regularTierId,
             entityName: serviceItem.name,
             description,
             hours: totalHours,
@@ -432,6 +439,7 @@ export async function executeBuiltinPluginTool(
         lineItems: [
           buildLabourLineItem({
             rateScheduleItemId: serviceItem.id,
+            regularTierId: serviceItem.regularTierId,
             entityName: serviceItem.name,
             description: toStringValue(ctx.input.description) || execution.descriptionDefault,
             hours: result.totalHours,
@@ -466,6 +474,7 @@ export async function executeBuiltinPluginTool(
         lineItems: [
           buildLabourLineItem({
             rateScheduleItemId: serviceItem.id,
+            regularTierId: serviceItem.regularTierId,
             entityName: serviceItem.name,
             description: toStringValue(ctx.input.description) || execution.descriptionDefault,
             hours: result.totalHours,

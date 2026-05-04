@@ -16,9 +16,6 @@ const baseItem: WorksheetItem = {
   cost: 0,
   markup: 0,
   price: 0,
-  unit1: 0,
-  unit2: 0,
-  unit3: 0,
   lineOrder: 0,
 };
 

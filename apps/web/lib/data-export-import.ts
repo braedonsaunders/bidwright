@@ -30,22 +30,6 @@ import {
   addRateScheduleItem,
   deleteRateScheduleTier,
   deleteRateScheduleItem,
-  listLabourCostTables,
-  getLabourCostTable,
-  createLabourCostTable,
-  createLabourCostEntry,
-  updateLabourCostTable,
-  updateLabourCostEntry,
-  deleteLabourCostTable,
-  deleteLabourCostEntry,
-  listBurdenPeriods,
-  createBurdenPeriod,
-  updateBurdenPeriod,
-  deleteBurdenPeriod,
-  listTravelPolicies,
-  createTravelPolicy,
-  updateTravelPolicy,
-  deleteTravelPolicy,
   getCustomers,
   getCustomer,
   createCustomer,
@@ -72,9 +56,6 @@ export interface BidwrightExportData {
   entityCategories?: ExportEntityCategory[];
   catalogs?: ExportCatalog[];
   rateSchedules?: ExportRateSchedule[];
-  labourCostTables?: ExportLabourCostTable[];
-  burdenPeriods?: ExportBurdenPeriod[];
-  travelPolicies?: ExportTravelPolicy[];
   customers?: ExportCustomer[];
   conditionLibrary?: ExportConditionEntry[];
 }
@@ -142,55 +123,9 @@ interface ExportRateSchedule {
   autoCalculate: boolean;
   effectiveDate: string | null;
   expiryDate: string | null;
-  travelPolicyName?: string | null; // resolved from travelPolicyId
   metadata: Record<string, unknown>;
   tiers: ExportRateScheduleTier[];
   items: ExportRateScheduleItem[];
-}
-
-interface ExportLabourCostEntry {
-  code: string;
-  name: string;
-  group: string;
-  costRates: Record<string, number>;
-  metadata: Record<string, unknown>;
-  sortOrder: number;
-}
-
-interface ExportLabourCostTable {
-  name: string;
-  description: string;
-  effectiveDate: string | null;
-  expiryDate: string | null;
-  metadata: Record<string, unknown>;
-  entries: ExportLabourCostEntry[];
-}
-
-interface ExportBurdenPeriod {
-  name: string;
-  group: string;
-  percentage: number;
-  startDate: string;
-  endDate: string;
-}
-
-interface ExportTravelPolicy {
-  name: string;
-  description: string;
-  perDiemRate: number;
-  perDiemEmbedMode: string;
-  hoursPerDay: number;
-  travelTimeHours: number;
-  travelTimeTrips: number;
-  kmToDestination: number;
-  mileageRate: number;
-  fuelSurchargePercent: number;
-  fuelSurchargeAppliesTo: string;
-  accommodationRate: number;
-  accommodationNights: number;
-  showAsSeparateLine: boolean;
-  breakoutLabel: string;
-  metadata: Record<string, unknown>;
 }
 
 interface ExportCustomerContact {
@@ -223,9 +158,6 @@ export interface ImportSummary {
   catalogs: number;
   catalogItems: number;
   rateSchedules: number;
-  labourCostTables: number;
-  burdenPeriods: number;
-  travelPolicies: number;
   customers: number;
   conditionLibrary: number;
 }
@@ -248,12 +180,9 @@ export type ImportMode = "add" | "overwrite";
 
 export type ImportSectionKey =
   | "conditionLibrary"
-  | "travelPolicies"
-  | "burdenPeriods"
   | "customers"
   | "catalogs"
   | "entityCategories"
-  | "labourCostTables"
   | "rateSchedules";
 
 export interface ImportOptions {
@@ -269,18 +198,12 @@ export async function exportAllDataManagement(): Promise<void> {
     entityCategories,
     catalogs,
     rateSchedulesList,
-    labourCostTables,
-    burdenPeriods,
-    travelPolicies,
     customers,
     conditionLibrary,
   ] = await Promise.all([
     getEntityCategories(),
     getCatalogs(),
     listRateSchedules(),
-    listLabourCostTables(),
-    listBurdenPeriods(),
-    listTravelPolicies(),
     getCustomers(),
     getConditionLibrary(),
   ]);
@@ -307,14 +230,13 @@ export async function exportAllDataManagement(): Promise<void> {
 
   // 3. Build lookup maps for cross-references
   const catalogIdToName = new Map(globalCatalogs.map((c) => [c.id, c.name]));
-  const travelPolicyIdToName = new Map(travelPolicies.map((t) => [t.id, t.name]));
 
   // 4. Transform and strip IDs
   const exportData: BidwrightExportData = {
     bidwright_export: {
       version: EXPORT_VERSION,
       exportedAt: new Date().toISOString(),
-      sections: ["entityCategories", "catalogs", "rateSchedules", "labourCostTables", "burdenPeriods", "travelPolicies", "customers", "conditionLibrary"],
+      sections: ["entityCategories", "catalogs", "rateSchedules", "customers", "conditionLibrary"],
     },
 
     entityCategories: entityCategories.map((c) => ({
@@ -372,7 +294,6 @@ export async function exportAllDataManagement(): Promise<void> {
         autoCalculate: s.autoCalculate ?? false,
         effectiveDate: s.effectiveDate ?? null,
         expiryDate: s.expiryDate ?? null,
-        travelPolicyName: s.travelPolicyId ? travelPolicyIdToName.get(s.travelPolicyId) ?? null : null,
         metadata: s.metadata || {},
         tiers: (s.tiers || []).map((t: RateScheduleTier) => ({
           name: t.name,
@@ -390,49 +311,6 @@ export async function exportAllDataManagement(): Promise<void> {
         })),
       };
     }),
-
-    labourCostTables: labourCostTables.map((t) => ({
-      name: t.name,
-      description: t.description || "",
-      effectiveDate: t.effectiveDate ?? null,
-      expiryDate: t.expiryDate ?? null,
-      metadata: t.metadata || {},
-      entries: (t.entries || []).map((e) => ({
-        code: e.code,
-        name: e.name,
-        group: e.group || "",
-        costRates: e.costRates,
-        metadata: e.metadata || {},
-        sortOrder: e.sortOrder,
-      })),
-    })),
-
-    burdenPeriods: burdenPeriods.map((b) => ({
-      name: b.name,
-      group: b.group,
-      percentage: b.percentage,
-      startDate: b.startDate,
-      endDate: b.endDate,
-    })),
-
-    travelPolicies: travelPolicies.map((t) => ({
-      name: t.name,
-      description: t.description || "",
-      perDiemRate: t.perDiemRate,
-      perDiemEmbedMode: t.perDiemEmbedMode,
-      hoursPerDay: t.hoursPerDay,
-      travelTimeHours: t.travelTimeHours,
-      travelTimeTrips: t.travelTimeTrips,
-      kmToDestination: t.kmToDestination,
-      mileageRate: t.mileageRate,
-      fuelSurchargePercent: t.fuelSurchargePercent,
-      fuelSurchargeAppliesTo: t.fuelSurchargeAppliesTo,
-      accommodationRate: t.accommodationRate,
-      accommodationNights: t.accommodationNights,
-      showAsSeparateLine: t.showAsSeparateLine,
-      breakoutLabel: t.breakoutLabel || "",
-      metadata: t.metadata || {},
-    })),
 
     customers: customerDetails.map((c: any) => ({
       name: c.name || "",
@@ -490,9 +368,6 @@ export async function parseExportFile(file: File): Promise<{ data: BidwrightExpo
     catalogs: data.catalogs?.length ?? 0,
     catalogItems: data.catalogs?.reduce((sum, c) => sum + (c.items?.length ?? 0), 0) ?? 0,
     rateSchedules: data.rateSchedules?.length ?? 0,
-    labourCostTables: data.labourCostTables?.length ?? 0,
-    burdenPeriods: data.burdenPeriods?.length ?? 0,
-    travelPolicies: data.travelPolicies?.length ?? 0,
     customers: data.customers?.length ?? 0,
     conditionLibrary: data.conditionLibrary?.length ?? 0,
   };
@@ -504,41 +379,32 @@ export async function parseExportFile(file: File): Promise<{ data: BidwrightExpo
 
 export const IMPORT_SECTION_LABELS: Record<ImportSectionKey, string> = {
   conditionLibrary: "Inclusions & Exclusions",
-  travelPolicies: "Travel Policies",
-  burdenPeriods: "Burden Periods",
   customers: "Customers",
   catalogs: "Catalogs",
   entityCategories: "Entity Categories",
-  labourCostTables: "Labour Cost Tables",
   rateSchedules: "Rate Schedules",
 };
 
 /** Section keys in dependency order (import must proceed in this order). */
 export const IMPORT_SECTION_ORDER: ImportSectionKey[] = [
   "conditionLibrary",
-  "travelPolicies",
-  "burdenPeriods",
   "customers",
   "catalogs",
   "entityCategories",
-  "labourCostTables",
   "rateSchedules",
 ];
 
 /** Maps summary key to the BidwrightExportData field name. */
 const SECTION_SUMMARY_KEY: Record<ImportSectionKey, keyof ImportSummary> = {
   conditionLibrary: "conditionLibrary",
-  travelPolicies: "travelPolicies",
-  burdenPeriods: "burdenPeriods",
   customers: "customers",
   catalogs: "catalogs",
   entityCategories: "entityCategories",
-  labourCostTables: "labourCostTables",
   rateSchedules: "rateSchedules",
 };
 
 function emptySummary(): ImportSummary {
-  return { entityCategories: 0, catalogs: 0, catalogItems: 0, rateSchedules: 0, labourCostTables: 0, burdenPeriods: 0, travelPolicies: 0, customers: 0, conditionLibrary: 0 };
+  return { entityCategories: 0, catalogs: 0, catalogItems: 0, rateSchedules: 0, customers: 0, conditionLibrary: 0 };
 }
 
 
@@ -556,20 +422,6 @@ async function deleteAllConditionLibrary(errors: string[], deleted: ImportSummar
   const existing = await getConditionLibrary();
   for (const e of existing) {
     try { await deleteConditionLibraryEntry(e.id); deleted.conditionLibrary++; } catch (err: any) { errors.push(`Delete condition "${e.value}": ${err.message}`); }
-  }
-}
-
-async function deleteAllTravelPolicies(errors: string[], deleted: ImportSummary) {
-  const existing = await listTravelPolicies();
-  for (const e of existing) {
-    try { await deleteTravelPolicy(e.id); deleted.travelPolicies++; } catch (err: any) { errors.push(`Delete travel policy "${e.name}": ${err.message}`); }
-  }
-}
-
-async function deleteAllBurdenPeriods(errors: string[], deleted: ImportSummary) {
-  const existing = await listBurdenPeriods();
-  for (const e of existing) {
-    try { await deleteBurdenPeriod(e.id); deleted.burdenPeriods++; } catch (err: any) { errors.push(`Delete burden period "${e.name}": ${err.message}`); }
   }
 }
 
@@ -595,13 +447,6 @@ async function deleteAllEntityCategories(errors: string[], deleted: ImportSummar
   }
 }
 
-async function deleteAllLabourCostTables(errors: string[], deleted: ImportSummary) {
-  const existing = await listLabourCostTables();
-  for (const e of existing) {
-    try { await deleteLabourCostTable(e.id); deleted.labourCostTables++; } catch (err: any) { errors.push(`Delete labour table "${e.name}": ${err.message}`); }
-  }
-}
-
 async function deleteAllRateSchedules(errors: string[], deleted: ImportSummary) {
   const existing = await listRateSchedules();
   const globals = existing.filter((s) => (s as any).scope === "global" || !(s as any).scope);
@@ -612,12 +457,9 @@ async function deleteAllRateSchedules(errors: string[], deleted: ImportSummary) 
 
 const DELETE_FNS: Record<ImportSectionKey, (errors: string[], deleted: ImportSummary) => Promise<void>> = {
   conditionLibrary: deleteAllConditionLibrary,
-  travelPolicies: deleteAllTravelPolicies,
-  burdenPeriods: deleteAllBurdenPeriods,
   customers: deleteAllCustomers,
   catalogs: deleteAllCatalogs,
   entityCategories: deleteAllEntityCategories,
-  labourCostTables: deleteAllLabourCostTables,
   rateSchedules: deleteAllRateSchedules,
 };
 
@@ -638,7 +480,6 @@ export async function importAllDataManagement(
   const activeSections = IMPORT_SECTION_ORDER.filter((key) => !enabled || enabled[key]);
   const totalSections = activeSections.length;
 
-  const travelPolicyNameToId = new Map<string, string>();
   const catalogNameToId = new Map<string, string>();
   let sectionsComplete = 0;
 
@@ -665,69 +506,7 @@ export async function importAllDataManagement(
     sectionsComplete++;
   }
 
-  // ── 2. Travel Policies ──
-  if (isEnabled("travelPolicies")) {
-    progress("Travel Policies");
-    if (mode === "overwrite") {
-      await deleteAllTravelPolicies(errors, deleted);
-      // Create fresh
-      for (const tp of data.travelPolicies ?? []) {
-        try {
-          const result = await createTravelPolicy(tp as any);
-          travelPolicyNameToId.set(tp.name, result.id);
-          created.travelPolicies++;
-        } catch (e: any) { errors.push(`Travel Policy "${tp.name}": ${e.message}`); }
-      }
-    } else {
-      // Add mode — match by name, update existing or create new
-      const existing = await listTravelPolicies();
-      const existingByName = new Map(existing.map((e) => [e.name, e]));
-      for (const tp of data.travelPolicies ?? []) {
-        try {
-          const match = existingByName.get(tp.name);
-          if (match) {
-            await updateTravelPolicy(match.id, tp as any);
-            travelPolicyNameToId.set(tp.name, match.id);
-            updated.travelPolicies++;
-          } else {
-            const result = await createTravelPolicy(tp as any);
-            travelPolicyNameToId.set(tp.name, result.id);
-            created.travelPolicies++;
-          }
-        } catch (e: any) { errors.push(`Travel Policy "${tp.name}": ${e.message}`); }
-      }
-    }
-    sectionsComplete++;
-  }
-
-  // ── 3. Burden Periods ──
-  if (isEnabled("burdenPeriods")) {
-    progress("Burden Periods");
-    if (mode === "overwrite") {
-      await deleteAllBurdenPeriods(errors, deleted);
-      for (const bp of data.burdenPeriods ?? []) {
-        try { await createBurdenPeriod(bp); created.burdenPeriods++; } catch (e: any) { errors.push(`Burden Period "${bp.name}": ${e.message}`); }
-      }
-    } else {
-      const existing = await listBurdenPeriods();
-      const existingByName = new Map(existing.map((e) => [e.name, e]));
-      for (const bp of data.burdenPeriods ?? []) {
-        try {
-          const match = existingByName.get(bp.name);
-          if (match) {
-            await updateBurdenPeriod(match.id, bp);
-            updated.burdenPeriods++;
-          } else {
-            await createBurdenPeriod(bp);
-            created.burdenPeriods++;
-          }
-        } catch (e: any) { errors.push(`Burden Period "${bp.name}": ${e.message}`); }
-      }
-    }
-    sectionsComplete++;
-  }
-
-  // ── 4. Customers (with contacts) ──
+  // ── 2. Customers (with contacts) ──
   if (isEnabled("customers")) {
     progress("Customers");
     if (mode === "overwrite") {
@@ -869,58 +648,7 @@ export async function importAllDataManagement(
     sectionsComplete++;
   }
 
-  // ── 7. Labour Cost Tables (with entries) ──
-  if (isEnabled("labourCostTables")) {
-    progress("Labour Cost Tables");
-    if (mode === "overwrite") {
-      await deleteAllLabourCostTables(errors, deleted);
-      for (const table of data.labourCostTables ?? []) {
-        try {
-          const { entries, ...tableData } = table;
-          const result = await createLabourCostTable(tableData as any);
-          created.labourCostTables++;
-          for (const entry of entries ?? []) {
-            try { await createLabourCostEntry(result.id, entry); } catch (e: any) { errors.push(`Labour Entry "${entry.name}" in "${table.name}": ${e.message}`); }
-          }
-        } catch (e: any) { errors.push(`Labour Cost Table "${table.name}": ${e.message}`); }
-      }
-    } else {
-      const existing = await listLabourCostTables();
-      const existingByName = new Map(existing.map((e) => [e.name, e]));
-      for (const table of data.labourCostTables ?? []) {
-        try {
-          const { entries, ...tableData } = table;
-          const match = existingByName.get(table.name);
-          if (match) {
-            await updateLabourCostTable(match.id, tableData as any);
-            updated.labourCostTables++;
-            // Match entries by code or name
-            const detail = await getLabourCostTable(match.id);
-            const existingEntries = new Map<string, any>(((detail as any).entries ?? []).map((e: any) => [e.code || e.name, e]));
-            for (const entry of entries ?? []) {
-              try {
-                const eMatch = existingEntries.get(entry.code || entry.name);
-                if (eMatch) {
-                  await updateLabourCostEntry(match.id, eMatch.id, entry);
-                } else {
-                  await createLabourCostEntry(match.id, entry);
-                }
-              } catch (e: any) { errors.push(`Labour Entry "${entry.name}" in "${table.name}": ${e.message}`); }
-            }
-          } else {
-            const result = await createLabourCostTable(tableData as any);
-            created.labourCostTables++;
-            for (const entry of entries ?? []) {
-              try { await createLabourCostEntry(result.id, entry); } catch (e: any) { errors.push(`Labour Entry "${entry.name}" in "${table.name}": ${e.message}`); }
-            }
-          }
-        } catch (e: any) { errors.push(`Labour Cost Table "${table.name}": ${e.message}`); }
-      }
-    }
-    sectionsComplete++;
-  }
-
-  // ── 8. Rate Schedules (resolve travelPolicyName, with tiers + items) ──
+  // ── 7. Rate Schedules (with tiers + items) ──
   if (isEnabled("rateSchedules")) {
     progress("Rate Schedules");
     if (mode === "overwrite") {
@@ -958,8 +686,7 @@ export async function importAllDataManagement(
 
     for (const rs of data.rateSchedules ?? []) {
       try {
-        const { tiers, items, travelPolicyName, ...rsData } = rs;
-        const travelPolicyId = travelPolicyName ? travelPolicyNameToId.get(travelPolicyName) ?? undefined : undefined;
+        const { tiers, items, ...rsData } = rs;
 
         const match = mode === "add" ? existingByName.get(rs.name) : null;
 
@@ -1041,9 +768,6 @@ export async function importAllDataManagement(
               }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
           }
-          if (travelPolicyId) {
-            try { await updateRateSchedule(match.id, { travelPolicyId } as any); } catch { /* non-critical */ }
-          }
         } else {
           // Create new rate schedule
           const result = await createRateSchedule({
@@ -1073,9 +797,6 @@ export async function importAllDataManagement(
                 await addRateScheduleItem(result.id, { catalogItemId: catId, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
               }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
-          }
-          if (travelPolicyId) {
-            try { await updateRateSchedule(result.id, { travelPolicyId } as any); } catch { /* non-critical */ }
           }
         }
       } catch (e: any) { errors.push(`Rate Schedule "${rs.name}": ${e.message}`); }

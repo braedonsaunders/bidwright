@@ -11,10 +11,11 @@ import type {
 } from "@/lib/api";
 import { listPluginExecutions } from "@/lib/api";
 import {
-  categoryAllowsEditingUnitSlot,
+  categoryAllowsEditingTierUnits,
   getCalculationTypeOption,
-  getCategoryUnitLabel,
+  getTierLabel,
 } from "@/lib/entity-category-calculation";
+import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
@@ -47,6 +48,11 @@ export function ItemDetailDrawer({
   const [showSources, setShowSources] = useState(!!item.sourceNotes);
   const [activeTab, setActiveTab] = useState("details");
   const [showPluginTab, setShowPluginTab] = useState(false);
+
+  // Reg/OT/DT slot hours derived by bucketing tierUnits via the matching schedule.
+  const initialBuckets = bucketHoursByMultiplier(
+    getWorksheetHourBreakdown(item, workspace.rateSchedules ?? []),
+  );
   const [form, setForm] = useState({
     entityName: item.entityName,
     vendor: item.vendor ?? "",
@@ -56,9 +62,9 @@ export function ItemDetailDrawer({
     cost: item.cost,
     markup: item.markup,
     price: item.price,
-    unit1: item.unit1,
-    unit2: item.unit2,
-    unit3: item.unit3,
+    unit1: initialBuckets.reg,
+    unit2: initialBuckets.ot,
+    unit3: initialBuckets.dt,
     phaseId: item.phaseId ?? "",
     masterFormatCode: typeof item.classification?.masterformat === "string" ? item.classification.masterformat : "",
     costCode: item.costCode ?? "",
@@ -66,6 +72,9 @@ export function ItemDetailDrawer({
   });
 
   useEffect(() => {
+    const buckets = bucketHoursByMultiplier(
+      getWorksheetHourBreakdown(item, workspace.rateSchedules ?? []),
+    );
     setForm({
       entityName: item.entityName,
       vendor: item.vendor ?? "",
@@ -75,9 +84,9 @@ export function ItemDetailDrawer({
       cost: item.cost,
       markup: item.markup,
       price: item.price,
-      unit1: item.unit1,
-      unit2: item.unit2,
-      unit3: item.unit3,
+      unit1: buckets.reg,
+      unit2: buckets.ot,
+      unit3: buckets.dt,
       phaseId: item.phaseId ?? "",
       masterFormatCode: typeof item.classification?.masterformat === "string" ? item.classification.masterformat : "",
       costCode: item.costCode ?? "",
@@ -85,7 +94,7 @@ export function ItemDetailDrawer({
     });
     setShowSources(!!item.sourceNotes);
     setActiveTab("details");
-  }, [item]);
+  }, [item, workspace.rateSchedules]);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +150,60 @@ export function ItemDetailDrawer({
     return next;
   }
 
+  // Find rate schedule for this row (by rateScheduleItemId or entity name).
+  const rowSchedule = (() => {
+    const schedules = workspace.rateSchedules ?? [];
+    if (item.rateScheduleItemId) {
+      const direct = schedules.find((schedule) =>
+        (schedule.items ?? []).some((s) => s.id === item.rateScheduleItemId),
+      );
+      if (direct) return direct;
+    }
+    const entityName = item.entityName?.trim();
+    if (entityName) {
+      return (
+        schedules.find((schedule) =>
+          (schedule.items ?? []).some(
+            (s) => s.name === entityName || s.code === entityName,
+          ),
+        ) ?? null
+      );
+    }
+    return null;
+  })();
+
+  function findTierIdForMultiplier(multiplier: number): string | null {
+    return rowSchedule?.tiers.find((t) => Number(t.multiplier) === multiplier)?.id ?? null;
+  }
+
+  const TIER_FALLBACK_KEY = { unit1: "__reg", unit2: "__ot", unit3: "__dt" } as const;
+
+  function buildNextTierUnits(
+    field: "unit1" | "unit2" | "unit3",
+    nextValue: number,
+  ): Record<string, number> {
+    const multiplier = field === "unit1" ? 1 : field === "unit2" ? 1.5 : 2;
+    const tierId = findTierIdForMultiplier(multiplier);
+    const next: Record<string, number> = { ...(item.tierUnits ?? {}) };
+    if (tierId) {
+      if (nextValue === 0) {
+        delete next[tierId];
+      } else {
+        next[tierId] = nextValue;
+      }
+      const fallback = TIER_FALLBACK_KEY[field];
+      if (next[fallback] !== undefined) delete next[fallback];
+      return next;
+    }
+    const fallback = TIER_FALLBACK_KEY[field];
+    if (nextValue === 0) {
+      delete next[fallback];
+    } else {
+      next[fallback] = nextValue;
+    }
+    return next;
+  }
+
   function handleFieldBlur(field: string, value: string | number) {
     let patch: Record<string, unknown> = {};
 
@@ -151,14 +214,15 @@ export function ItemDetailDrawer({
     } else if (
       field === "quantity" ||
       field === "cost" ||
-      field === "price" ||
-      field === "unit1" ||
-      field === "unit2" ||
-      field === "unit3"
+      field === "price"
     ) {
       const num = Number(value);
       if (!Number.isFinite(num)) return;
       patch = { [field]: num };
+    } else if (field === "unit1" || field === "unit2" || field === "unit3") {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return;
+      patch = { tierUnits: buildNextTierUnits(field, num) };
     } else if (field === "phaseId") {
       patch = { phaseId: value || null };
     } else if (field === "masterFormatCode") {
@@ -178,10 +242,21 @@ export function ItemDetailDrawer({
   const isEditable = (field: string) => {
     if (!catDef) return true;
     if (field === "unit1" || field === "unit2" || field === "unit3") {
-      return categoryAllowsEditingUnitSlot(catDef, field);
+      return categoryAllowsEditingTierUnits(catDef);
     }
-    return catDef.editableFields?.[field as keyof typeof catDef.editableFields] !== false;
+    if (field === "tierUnits") return categoryAllowsEditingTierUnits(catDef);
+    const editable = catDef.editableFields as Record<string, boolean | undefined>;
+    return editable?.[field] !== false;
   };
+
+  function getSlotLabel(slot: "unit1" | "unit2" | "unit3", fallback: string): string {
+    const multiplier = slot === "unit1" ? 1 : slot === "unit2" ? 1.5 : 2;
+    const tier = rowSchedule?.tiers.find((t) => Number(t.multiplier) === multiplier);
+    if (tier) {
+      return getTierLabel(catDef, tier.id, tier.name ?? fallback);
+    }
+    return fallback;
+  }
 
   function renderNumericField(
     field: keyof typeof form,
@@ -405,17 +480,17 @@ export function ItemDetailDrawer({
             <div className="grid grid-cols-3 gap-3">
               {renderNumericField(
                 "unit1",
-                getCategoryUnitLabel(catDef, "unit1", "Unit 1"),
+                getSlotLabel("unit1", "Reg"),
                 form.unit1,
               )}
               {renderNumericField(
                 "unit2",
-                getCategoryUnitLabel(catDef, "unit2", "Unit 2"),
+                getSlotLabel("unit2", "OT"),
                 form.unit2,
               )}
               {renderNumericField(
                 "unit3",
-                getCategoryUnitLabel(catDef, "unit3", "Unit 3"),
+                getSlotLabel("unit3", "DT"),
                 form.unit3,
               )}
             </div>

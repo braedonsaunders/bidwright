@@ -3,6 +3,7 @@
 import type { ProjectWorkspaceData, WorkspaceWorksheetItem } from "@/lib/api";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
 
 /* ─── Helpers ─── */
 
@@ -48,28 +49,28 @@ export function HoursTab({ workspace }: HoursTabProps) {
   // Group by phase then by entityName, summing hours
   const keyedRows = new Map<string, HoursRow>();
 
+  const rateSchedules = workspace.rateSchedules ?? [];
   for (const item of labourItems) {
     const phaseId = item.phaseId ?? null;
     const key = `${phaseId ?? "__none__"}::${item.entityName}`;
+    const buckets = bucketHoursByMultiplier(getWorksheetHourBreakdown(item, rateSchedules));
 
     const existing = keyedRows.get(key);
     if (existing) {
-      existing.regHours += item.unit1;
-      existing.overHours += item.unit2;
-      existing.doubleHours += item.unit3;
-      existing.totalHours +=
-        item.unit1 + item.unit2 + item.unit3;
+      existing.regHours += buckets.reg;
+      existing.overHours += buckets.ot;
+      existing.doubleHours += buckets.dt;
+      existing.totalHours += buckets.reg + buckets.ot + buckets.dt;
     } else {
       const phase = phaseId ? phaseMap.get(phaseId) : null;
       keyedRows.set(key, {
         phaseId,
         phaseName: phase ? `${phase.number} - ${phase.name}` : "",
         entityName: item.entityName,
-        regHours: item.unit1,
-        overHours: item.unit2,
-        doubleHours: item.unit3,
-        totalHours:
-          item.unit1 + item.unit2 + item.unit3,
+        regHours: buckets.reg,
+        overHours: buckets.ot,
+        doubleHours: buckets.dt,
+        totalHours: buckets.reg + buckets.ot + buckets.dt,
       });
     }
   }

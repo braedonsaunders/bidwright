@@ -88,15 +88,15 @@ import {
 import { downloadCsv } from "@/lib/csv";
 import { formatMoney, formatPercent } from "@/lib/format";
 import {
+  bucketHoursByMultiplier,
   getWorksheetHourBreakdown,
-  getWorksheetUnitSlotLabels,
-  mapLegacyUnitsToTierUnits,
 } from "@/lib/worksheet-hours";
 import {
-  categoryAllowsEditingUnitSlot,
-  getCategoryUnitLabel,
+  categoryAllowsEditingTierUnits,
   categoryUsesTieredUnits,
+  getTierLabel,
 } from "@/lib/entity-category-calculation";
+import type { RateSchedule } from "@/lib/api";
 import {
   Badge,
   Button,
@@ -486,6 +486,142 @@ function buildEstimatePhaseOptions(phases: EstimatePhase[]) {
   return options;
 }
 
+/* ─── Tier slot helpers (unit1/2/3 are UI-only column ids) ─── */
+
+const TIER_SLOT_MULTIPLIER: Record<"unit1" | "unit2" | "unit3", number> = {
+  unit1: 1,
+  unit2: 1.5,
+  unit3: 2,
+};
+
+const TIER_SLOT_FALLBACK_KEY: Record<"unit1" | "unit2" | "unit3", string> = {
+  unit1: "__reg",
+  unit2: "__ot",
+  unit3: "__dt",
+};
+
+const TIER_SLOT_FALLBACK_LABEL: Record<"unit1" | "unit2" | "unit3", string> = {
+  unit1: "Reg",
+  unit2: "OT",
+  unit3: "DT",
+};
+
+function findScheduleForRow(row: WorkspaceWorksheetItem, schedules: RateSchedule[]): RateSchedule | null {
+  if (row.rateScheduleItemId) {
+    const direct = schedules.find((schedule) =>
+      (schedule.items ?? []).some((item) => item.id === row.rateScheduleItemId),
+    );
+    if (direct) return direct;
+  }
+  const entityName = row.entityName?.trim();
+  if (entityName) {
+    const byName = schedules.find((schedule) =>
+      (schedule.items ?? []).some(
+        (item) => item.name === entityName || item.code === entityName,
+      ),
+    );
+    if (byName) return byName;
+  }
+  return null;
+}
+
+function findTierIdForSlot(
+  schedule: RateSchedule | null,
+  slot: "unit1" | "unit2" | "unit3",
+): string | null {
+  if (!schedule) return null;
+  const target = TIER_SLOT_MULTIPLIER[slot];
+  const tier = (schedule.tiers ?? []).find((t) => Number(t.multiplier) === target);
+  return tier?.id ?? null;
+}
+
+function readTierSlotHours(
+  row: { tierUnits?: Record<string, number> | undefined },
+  schedule: RateSchedule | null,
+  slot: "unit1" | "unit2" | "unit3",
+): number {
+  const tierUnits = row.tierUnits ?? {};
+  const tierId = findTierIdForSlot(schedule, slot);
+  if (tierId && tierUnits[tierId] !== undefined) {
+    const v = Number(tierUnits[tierId]);
+    return Number.isFinite(v) ? v : 0;
+  }
+  // Look for any tier in the schedule with the target multiplier even via prefix.
+  if (schedule) {
+    const target = TIER_SLOT_MULTIPLIER[slot];
+    for (const [key, raw] of Object.entries(tierUnits)) {
+      const matched = (schedule.tiers ?? []).find(
+        (t) => (t.id === key || t.id.startsWith(key)) && Number(t.multiplier) === target,
+      );
+      if (matched) {
+        const v = Number(raw);
+        return Number.isFinite(v) ? v : 0;
+      }
+    }
+  }
+  // Fallback to synthetic key written by the UI.
+  const fallback = Number(tierUnits[TIER_SLOT_FALLBACK_KEY[slot]]);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function writeTierSlotHours(
+  current: Record<string, number> | undefined,
+  schedule: RateSchedule | null,
+  slot: "unit1" | "unit2" | "unit3",
+  value: number,
+): Record<string, number> {
+  const next: Record<string, number> = { ...(current ?? {}) };
+  const tierId = findTierIdForSlot(schedule, slot);
+  const fallbackKey = TIER_SLOT_FALLBACK_KEY[slot];
+  if (tierId) {
+    if (value === 0) {
+      delete next[tierId];
+    } else {
+      next[tierId] = value;
+    }
+    if (next[fallbackKey] !== undefined) delete next[fallbackKey];
+    return next;
+  }
+  if (value === 0) {
+    delete next[fallbackKey];
+  } else {
+    next[fallbackKey] = value;
+  }
+  return next;
+}
+
+function getRowSlotHours(
+  row: WorkspaceWorksheetItem,
+  schedules: RateSchedule[],
+): { unit1: number; unit2: number; unit3: number } {
+  const breakdown = getWorksheetHourBreakdown(row, schedules);
+  const buckets = bucketHoursByMultiplier(breakdown);
+  // If the breakdown found nothing (no tier match), fall back to synthetic keys
+  // and any positive unmatched tierUnits values.
+  if (buckets.reg === 0 && buckets.ot === 0 && buckets.dt === 0) {
+    const tierUnits = row.tierUnits ?? {};
+    return {
+      unit1: Number(tierUnits["__reg"]) || 0,
+      unit2: Number(tierUnits["__ot"]) || 0,
+      unit3: Number(tierUnits["__dt"]) || 0,
+    };
+  }
+  return { unit1: buckets.reg, unit2: buckets.ot, unit3: buckets.dt };
+}
+
+function getTierSlotLabel(
+  slot: "unit1" | "unit2" | "unit3",
+  category: EntityCategory | undefined,
+  schedule: RateSchedule | null,
+): string {
+  const tierId = findTierIdForSlot(schedule, slot);
+  if (tierId) {
+    const tier = (schedule?.tiers ?? []).find((t) => t.id === tierId);
+    return getTierLabel(category, tierId, tier?.name ?? TIER_SLOT_FALLBACK_LABEL[slot]);
+  }
+  return TIER_SLOT_FALLBACK_LABEL[slot];
+}
+
 function isCellDisabledByCategory(
   category: EntityCategory | undefined,
   column: EditableColumn
@@ -495,16 +631,13 @@ function isCellDisabledByCategory(
     return false;
   }
   if (column === "unit1" || column === "unit2" || column === "unit3") {
-    return !categoryAllowsEditingUnitSlot(category, column);
+    return !categoryAllowsEditingTierUnits(category);
   }
   const fieldMap: Record<string, keyof EntityCategory["editableFields"]> = {
     quantity: "quantity",
     cost: "cost",
     markup: "markup",
     price: "price",
-    unit1: "unit1",
-    unit2: "unit2",
-    unit3: "unit3",
   };
   const field = fieldMap[column];
   if (!field) return false;
@@ -513,10 +646,10 @@ function isCellDisabledByCategory(
 
 function getLaborColumnLabel(
   column: "unit1" | "unit2" | "unit3",
-  category: EntityCategory | undefined
+  category: EntityCategory | undefined,
+  schedule: RateSchedule | null,
 ): string {
-  const fallback = column === "unit1" ? "Unit 1" : column === "unit2" ? "Unit 2" : "Unit 3";
-  return getCategoryUnitLabel(category, column, fallback);
+  return getTierSlotLabel(column, category, schedule);
 }
 
 /** Entity option item with optional pricing data from catalog */
@@ -1985,9 +2118,6 @@ export function EstimateGrid({
       cost: payload.cost,
       markup: payload.markup,
       price: payload.price,
-      unit1: payload.unit1,
-      unit2: payload.unit2,
-      unit3: payload.unit3,
       lineOrder: payload.lineOrder ?? fallbackOrder + 1,
       rateScheduleItemId: payload.rateScheduleItemId ?? null,
       itemId: payload.itemId ?? null,
@@ -2042,9 +2172,6 @@ export function EstimateGrid({
       cost: 0,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: 0,
-      unit1: 0,
-      unit2: 0,
-      unit3: 0,
       lineOrder: fallbackOrder + 1,
       rateScheduleItemId: null,
       itemId: null,
@@ -2413,7 +2540,7 @@ export function EstimateGrid({
 
     // Hide combined units column if no rows use labour or have unit fields
     const hasLabourOrUnit1 = activeCatDefs.some((c) =>
-      categoryUsesTieredUnits(c) || categoryAllowsEditingUnitSlot(c, "unit1")
+      categoryUsesTieredUnits(c) || categoryAllowsEditingTierUnits(c)
     );
     if (!hasLabourOrUnit1 && allItems.length > 0) {
       cols.delete("units");
@@ -2430,20 +2557,18 @@ export function EstimateGrid({
   }, [autoDefaultColumns]);
 
   const getRowHourBreakdown = useCallback(
-    (row: WorkspaceWorksheetItem) => getWorksheetHourBreakdown(row, workspace.rateSchedules),
+    (row: WorkspaceWorksheetItem) => getRowSlotHours(row, workspace.rateSchedules),
     [workspace.rateSchedules],
   );
 
   const getRowUnitSlotLabels = useCallback(
     (row: WorkspaceWorksheetItem, category: EntityCategory | undefined) => {
-      const categoryLabels = category
-        ? {
-            unit1: getCategoryUnitLabel(category, "unit1", "Unit 1"),
-            unit2: getCategoryUnitLabel(category, "unit2", "Unit 2"),
-            unit3: getCategoryUnitLabel(category, "unit3", "Unit 3"),
-          }
-        : undefined;
-      return getWorksheetUnitSlotLabels(row, workspace.rateSchedules, categoryLabels);
+      const schedule = findScheduleForRow(row, workspace.rateSchedules);
+      return {
+        unit1: getTierSlotLabel("unit1", category, schedule),
+        unit2: getTierSlotLabel("unit2", category, schedule),
+        unit3: getTierSlotLabel("unit3", category, schedule),
+      };
     },
     [workspace.rateSchedules],
   );
@@ -2483,14 +2608,20 @@ export function EstimateGrid({
   const lineItemHasFactorAdjustment = useCallback((item: WorkspaceWorksheetItem) => {
     const adjusted = adjustedLineItemsById.get(item.id);
     if (!adjusted) return false;
-    return (
+    if (
       Math.abs((adjusted.price ?? 0) - (item.price ?? 0)) >= 0.005 ||
-      Math.abs((adjusted.cost ?? 0) - (item.cost ?? 0)) >= 0.005 ||
-      Math.abs((adjusted.unit1 ?? 0) - (item.unit1 ?? 0)) >= 0.005 ||
-      Math.abs((adjusted.unit2 ?? 0) - (item.unit2 ?? 0)) >= 0.005 ||
-      Math.abs((adjusted.unit3 ?? 0) - (item.unit3 ?? 0)) >= 0.005
+      Math.abs((adjusted.cost ?? 0) - (item.cost ?? 0)) >= 0.005
+    ) {
+      return true;
+    }
+    const adjustedSlots = getRowSlotHours(adjusted, workspace.rateSchedules);
+    const itemSlots = getRowSlotHours(item, workspace.rateSchedules);
+    return (
+      Math.abs(adjustedSlots.unit1 - itemSlots.unit1) >= 0.005 ||
+      Math.abs(adjustedSlots.unit2 - itemSlots.unit2) >= 0.005 ||
+      Math.abs(adjustedSlots.unit3 - itemSlots.unit3) >= 0.005
     );
-  }, [adjustedLineItemsById]);
+  }, [adjustedLineItemsById, workspace.rateSchedules]);
 
   // Get visible rows
   const visibleRows = useMemo(() => {
@@ -2877,26 +3008,9 @@ export function EstimateGrid({
         return;
       }
       if (column === "unit1" || column === "unit2" || column === "unit3") {
-        const nextUnits = {
-          ...getRowHourBreakdown(row),
-          [column]: numVal,
-        };
-
+        const schedule = findScheduleForRow(row, workspace.rateSchedules);
         patch = {
-          [column]: numVal,
-          ...(row.rateScheduleItemId || Object.keys(row.tierUnits ?? {}).length > 0
-            ? {
-                tierUnits: mapLegacyUnitsToTierUnits(
-                  row,
-                  workspace.rateSchedules,
-                  {
-                    unit1: nextUnits.unit1,
-                    unit2: nextUnits.unit2,
-                    unit3: nextUnits.unit3,
-                  },
-                ),
-              }
-            : {}),
+          tierUnits: writeTierSlotHours(row.tierUnits, schedule, column, numVal),
         };
       } else {
         patch = { [column]: numVal };
@@ -3164,9 +3278,6 @@ export function EstimateGrid({
     if (catalogData?.cost !== undefined) patch.cost = catalogData.cost;
     if (catalogData?.price !== undefined) patch.price = catalogData.price;
     if (catalogData?.quantity !== undefined) patch.quantity = catalogData.quantity;
-    if (catalogData?.unit1 !== undefined) patch.unit1 = catalogData.unit1;
-    if (catalogData?.unit2 !== undefined) patch.unit2 = catalogData.unit2;
-    if (catalogData?.unit3 !== undefined) patch.unit3 = catalogData.unit3;
 	    if (catalogData?.description && !(preservingProductivityBasis && row?.description)) patch.description = catalogData.description;
     if (catalogData?.vendor !== undefined) patch.vendor = catalogData.vendor;
     if (catalogData?.sourceNotes !== undefined) patch.sourceNotes = catalogData.sourceNotes;
@@ -3206,9 +3317,14 @@ export function EstimateGrid({
 	        s.items.some((i) => i.id === rateScheduleItemId),
 	      );
 	      if (schedule) {
-	        const existingUnit1 = Number(patch.unit1 ?? row?.unit1 ?? 0);
-	        const existingUnit2 = Number(patch.unit2 ?? row?.unit2 ?? 0);
-	        const existingUnit3 = Number(patch.unit3 ?? row?.unit3 ?? 0);
+	        const incomingUnit1 = Number(catalogData?.unit1 ?? 0);
+	        const incomingUnit2 = Number(catalogData?.unit2 ?? 0);
+	        const incomingUnit3 = Number(catalogData?.unit3 ?? 0);
+	        // Existing per-row hours bucketed by tier multiplier (1.0/1.5/2.0).
+	        const existingSlots = row ? getRowSlotHours(row, workspace.rateSchedules ?? []) : { unit1: 0, unit2: 0, unit3: 0 };
+	        const existingUnit1 = incomingUnit1 || existingSlots.unit1;
+	        const existingUnit2 = incomingUnit2 || existingSlots.unit2;
+	        const existingUnit3 = incomingUnit3 || existingSlots.unit3;
 	        const hasProductivityHours = !!(catalogData?.laborUnitId ?? row?.laborUnitId) && (existingUnit1 > 0 || existingUnit2 > 0 || existingUnit3 > 0);
 	        const sortedTiers = [...schedule.tiers].sort((left, right) => left.multiplier - right.multiplier || left.sortOrder - right.sortOrder);
 	        const tierUnits: Record<string, number> = {};
@@ -3246,9 +3362,7 @@ export function EstimateGrid({
 
 	    if (categoryChanged && newCatDef) {
 	      patch.uom = preservingProductivityBasis ? row?.uom : catalogData?.uom ?? newCatDef.defaultUom;
-      if (isCellDisabledByCategory(newCatDef, "unit1")) patch.unit1 = 0;
-      if (isCellDisabledByCategory(newCatDef, "unit2")) patch.unit2 = 0;
-      if (isCellDisabledByCategory(newCatDef, "unit3")) patch.unit3 = 0;
+      if (!categoryAllowsEditingTierUnits(newCatDef)) patch.tierUnits = {};
       if (isCellDisabledByCategory(newCatDef, "cost")) patch.cost = catalogData?.cost ?? 0;
       if (isCellDisabledByCategory(newCatDef, "markup")) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
       if (isCellDisabledByCategory(newCatDef, "price")) patch.price = 0;
@@ -3273,9 +3387,6 @@ export function EstimateGrid({
         cost: Number(patch.cost ?? row.cost ?? 0),
         markup: Number(patch.markup ?? row.markup ?? workspace.currentRevision.defaultMarkup ?? 0.2),
         price: Number(patch.price ?? row.price ?? 0),
-        unit1: Number(patch.unit1 ?? row.unit1 ?? 0),
-        unit2: Number(patch.unit2 ?? row.unit2 ?? 0),
-        unit3: Number(patch.unit3 ?? row.unit3 ?? 0),
         lineOrder: row.lineOrder,
         rateScheduleItemId: patchValue("rateScheduleItemId", row.rateScheduleItemId ?? null) as string | null,
         itemId: patchValue("itemId", row.itemId ?? null) as string | null,
@@ -3386,6 +3497,24 @@ export function EstimateGrid({
     item: EntityOptionItem,
   ): WorksheetItemPatchInput {
     const uom = item.unit ?? targetCategory.defaultUom;
+    // Translate any productivity hours from the option (unit1/2/3) into tier units
+    // when we have a matching schedule.
+    let tierUnits: Record<string, number> | undefined;
+    if (item.rateScheduleItemId && (item.unit1 || item.unit2 || item.unit3)) {
+      const schedule = (workspace.rateSchedules ?? []).find((s) =>
+        (s.items ?? []).some((i) => i.id === item.rateScheduleItemId),
+      );
+      if (schedule) {
+        const next: Record<string, number> = {};
+        const reg = schedule.tiers.find((t) => Number(t.multiplier) === 1);
+        const ot = schedule.tiers.find((t) => Number(t.multiplier) === 1.5);
+        const dt = schedule.tiers.find((t) => Number(t.multiplier) === 2);
+        if (reg && item.unit1) next[reg.id] = Number(item.unit1) || 0;
+        if (ot && item.unit2) next[ot.id] = Number(item.unit2) || 0;
+        if (dt && item.unit3) next[dt.id] = Number(item.unit3) || 0;
+        tierUnits = next;
+      }
+    }
     return {
       categoryId: targetCategory.id,
       category: targetCategory.name,
@@ -3395,9 +3524,7 @@ export function EstimateGrid({
       cost: item.unitCost ?? undefined,
       price: item.unitPrice ?? undefined,
       quantity: item.quantity,
-      unit1: item.unit1,
-      unit2: item.unit2,
-      unit3: item.unit3,
+      tierUnits,
       description: item.description ?? item.label,
       vendor: item.vendor ?? null,
       sourceNotes: item.sourceNotes ?? "",
@@ -3699,9 +3826,6 @@ export function EstimateGrid({
       cost: row.cost,
       markup: row.markup,
       price: row.price,
-      unit1: row.unit1,
-      unit2: row.unit2,
-      unit3: row.unit3,
       lineOrder: row.lineOrder + 1,
       rateScheduleItemId: row.rateScheduleItemId ?? null,
       itemId: row.itemId ?? null,
@@ -3877,9 +4001,6 @@ export function EstimateGrid({
             cost: row.cost,
             markup: row.markup,
             price: row.price,
-            unit1: row.unit1,
-            unit2: row.unit2,
-            unit3: row.unit3,
             rateScheduleItemId: row.rateScheduleItemId ?? null,
             itemId: row.itemId ?? null,
             costResourceId: row.costResourceId ?? null,
@@ -3965,9 +4086,6 @@ export function EstimateGrid({
       cost: item.unitCost ?? 0,
       markup,
       price: item.unitPrice ?? 0,
-      unit1: item.unit1 ?? 0,
-      unit2: item.unit2 ?? 0,
-      unit3: item.unit3 ?? 0,
       lineOrder,
       rateScheduleItemId: item.rateScheduleItemId ?? null,
       itemId: item.itemId ?? null,
@@ -3985,15 +4103,22 @@ export function EstimateGrid({
         entry.items.some((scheduleItem) => scheduleItem.id === item.rateScheduleItemId),
       );
       if (schedule) {
-        payload.tierUnits = Object.fromEntries(schedule.tiers.map((tier) => [tier.id, 0]));
+        const seeded: Record<string, number> = Object.fromEntries(
+          schedule.tiers.map((tier) => [tier.id, 0]),
+        );
+        const reg = schedule.tiers.find((t) => Number(t.multiplier) === 1);
+        const ot = schedule.tiers.find((t) => Number(t.multiplier) === 1.5);
+        const dt = schedule.tiers.find((t) => Number(t.multiplier) === 2);
+        if (reg && item.unit1) seeded[reg.id] = Number(item.unit1) || 0;
+        if (ot && item.unit2) seeded[ot.id] = Number(item.unit2) || 0;
+        if (dt && item.unit3) seeded[dt.id] = Number(item.unit3) || 0;
+        payload.tierUnits = seeded;
       }
     }
 
     if (targetCategory) {
       payload.uom = item.unit ?? targetCategory.defaultUom;
-      if (isCellDisabledByCategory(targetCategory, "unit1")) payload.unit1 = 0;
-      if (isCellDisabledByCategory(targetCategory, "unit2")) payload.unit2 = 0;
-      if (isCellDisabledByCategory(targetCategory, "unit3")) payload.unit3 = 0;
+      if (!categoryAllowsEditingTierUnits(targetCategory)) payload.tierUnits = {};
       if (isCellDisabledByCategory(targetCategory, "cost")) payload.cost = item.unitCost ?? 0;
       if (isCellDisabledByCategory(targetCategory, "markup")) payload.markup = markup;
       if (isCellDisabledByCategory(targetCategory, "price")) payload.price = 0;
@@ -7490,9 +7615,6 @@ function GroupRows({
 	}) {
 	  const catDef = group.catDef;
 	  const isDraftGroup = group.category === "";
-	  const regLabel = catDef ? getCategoryUnitLabel(catDef, "unit1", "") : "";
-  const overLabel = catDef ? getCategoryUnitLabel(catDef, "unit2", "") : "";
-  const doubleLabel = catDef ? getCategoryUnitLabel(catDef, "unit3", "") : "";
 
   /* Set of item IDs that have takeoff links */
   const linkedItemIds = useMemo(() => {

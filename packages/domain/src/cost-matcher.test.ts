@@ -199,7 +199,6 @@ test("normalizeCostMatcherCandidates creates catalog, rate, dataset, and workspa
     projectId: "project-1",
     revisionId: "revision-1",
     sourceScheduleId: null,
-    travelPolicyId: null,
     effectiveDate: null,
     expiryDate: null,
     defaultMarkup: 0.2,
@@ -272,9 +271,6 @@ test("normalizeCostMatcherCandidates creates catalog, rate, dataset, and workspa
     cost: 2,
     markup: 0.2,
     price: 2.4,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
     lineOrder: 0,
   };
 

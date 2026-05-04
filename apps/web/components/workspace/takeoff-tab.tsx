@@ -379,9 +379,6 @@ const SPREADSHEET_IMPORT_TARGETS = [
   { value: "category", label: "Category" },
   { value: "entityType", label: "Type" },
   { value: "vendor", label: "Vendor" },
-  { value: "unit1", label: "Unit 1" },
-  { value: "unit2", label: "Unit 2" },
-  { value: "unit3", label: "Unit 3" },
   { value: "lineOrder", label: "Line order" },
 ] as const;
 
@@ -401,9 +398,6 @@ function inferSpreadsheetImportTarget(header: string): SpreadsheetImportTarget {
   if (/category|class|division/.test(normalized)) return "category";
   if (/type|resource/.test(normalized)) return "entityType";
   if (/vendor|supplier|manufacturer/.test(normalized)) return "vendor";
-  if (/unit 1|unit1/.test(normalized)) return "unit1";
-  if (/unit 2|unit2/.test(normalized)) return "unit2";
-  if (/unit 3|unit3/.test(normalized)) return "unit3";
   if (/order|line no|line number|sequence/.test(normalized)) return "lineOrder";
   return "skip";
 }
@@ -459,9 +453,6 @@ function buildModelSelectionLineItem(
     cost: 0,
     markup: options.markup,
     price: 0,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
     sourceNotes: [
       `From 3D model selection: ${options.fileName ?? "selected model"}`,
       `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
@@ -549,9 +540,7 @@ function normalizeModelLineItemDraft(
     cost: Number.isFinite(draft.cost) ? draft.cost : fallback.cost,
     markup: Number.isFinite(draft.markup) ? draft.markup : fallback.markup,
     price: Number.isFinite(draft.price) ? draft.price : fallback.price,
-    unit1: Number.isFinite(draft.unit1) ? draft.unit1 : fallback.unit1,
-    unit2: Number.isFinite(draft.unit2) ? draft.unit2 : fallback.unit2,
-    unit3: Number.isFinite(draft.unit3) ? draft.unit3 : fallback.unit3,
+    tierUnits: draft.tierUnits ?? fallback.tierUnits,
     sourceNotes: draft.sourceNotes || fallback.sourceNotes,
   };
 }
@@ -621,9 +610,6 @@ function buildModelElementLineItem(
     cost: 0,
     markup: options.markup,
     price: 0,
-    unit1: 0,
-    unit2: 0,
-    unit3: 0,
     sourceNotes: [
       `From 3D model element: ${options.fileName ?? "selected model"}`,
       `${primary.label}: ${formatModelSelectionQuantity(primary.quantity, primary.uom)}`,
@@ -2465,9 +2451,6 @@ export function TakeoffTab({
         cost: 0,
         markup: workspace.currentRevision.defaultMarkup ?? 0.2,
         price: 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
         sourceNotes: `From takeoff: ${ann.label || ann.type}`,
       });
 
@@ -2551,9 +2534,6 @@ export function TakeoffTab({
         cost: 0,
         markup: workspace.currentRevision.defaultMarkup ?? 0.2,
         price: 0,
-        unit1: 0,
-        unit2: 0,
-        unit3: 0,
         sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
         ...(suggestion.kind === "rateScheduleItem"
           ? { rateScheduleItemId: suggestion.id }

@@ -438,7 +438,7 @@ export function registerQuoteTools(server: McpServer) {
       if (entityCategories.length === 0) {
         instructions = `No entity categories configured for this organization. Use these standard categories when creating items:\n` +
           `- "Material" — physical materials, supplies, consumables\n` +
-          `- "Labour" — labour hours, crew costs (set unit1 for hours)\n` +
+          `- "Labour" — labour hours, crew costs (set tierUnits with the schedule's tier ids)\n` +
           `- "Equipment" — equipment rental, tools, machinery\n` +
           `- "Subcontractor" — subcontracted work (lump sum or per-unit)\n` +
           `All categories use freeform input — set cost and quantity directly. ` +
@@ -472,11 +472,10 @@ export function registerQuoteTools(server: McpServer) {
       const rateSchedCatNames = rateScheduleCats.map((c: any) => c.name);
       if (rateSchedCatNames.length > 0) {
         instructions += `\n\nQUANTITY × UNITS (CRITICAL for rate_schedule categories: ${rateSchedCatNames.join(", ")}): `;
-        instructions += `For these categories, quantity is a MULTIPLIER on the unit values. tierUnits/unit1/unit2/unit3 = units PER quantity. `;
-        instructions += `The calc engine computes: total = Σ(units × rate) × quantity. `;
-        instructions += `Check each category's unitLabels to understand what the unit fields represent (e.g. hours, days, duration). `;
-        instructions += `Do NOT confuse quantity with total units — quantity × units must make logical sense for the item. `;
-        instructions += `Example: if a category's unitLabels are {unit1: "Reg Hrs", unit2: "OT Hrs"} and you need 1 person for 80 regular hours → quantity=1, unit1=80. If you need 4 people for 200 regular hours each → quantity=4, unit1=200.`;
+        instructions += `For these categories, quantity is a MULTIPLIER on the tierUnits values. tierUnits is a JSON map keyed by RateScheduleTier id with hours per quantity. `;
+        instructions += `The calc engine computes: total = Σ(tierUnits[tierId] × tier rate) × quantity. `;
+        instructions += `Get tier ids from the rate schedule. Do NOT confuse quantity with total tier hours — quantity × tier hours must make logical sense for the item. `;
+        instructions += `Example: 1 person for 80 regular hours → quantity=1, tierUnits={"<reg-tier-id>": 80}. 4 people for 200 regular hours each → quantity=4, tierUnits={"<reg-tier-id>": 200}.`;
       }
 
       return {
@@ -627,9 +626,6 @@ export function registerQuoteTools(server: McpServer) {
       markup: z.number().default(0).describe("Markup percentage. For markup-eligible categories, apply the revision defaultMarkup from getItemConfig."),
       price: z.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
       tierUnits: z.record(z.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
-      unit1: z.number().default(0).describe("Unit 1 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
-      unit2: z.number().default(0).describe("Unit 2 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
-      unit3: z.number().default(0).describe("Unit 3 value per quantity (see category unitLabels for meaning). Fallback if tierUnits not set."),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from searchLineItemCandidates/recommendCostSource."),
@@ -724,8 +720,8 @@ export function registerQuoteTools(server: McpServer) {
 
           // Validate calculationType requirements
           const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
-          if ((calcType === "tiered_rate" || calcType === "duration_rate") && src === "rate_schedule" && !hasTierUnits && !rest.unit1 && !rest.unit2 && !rest.unit3) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so unit values are required. Set tierUnits or unit1 at minimum. Without units, this item will calculate to $0.` }], isError: true };
+          if ((calcType === "tiered_rate" || calcType === "duration_rate") && src === "rate_schedule" && !hasTierUnits) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so tierUnits are required. Without tierUnits, this item will calculate to $0.` }], isError: true };
           }
 
           // Auto-apply default markup for markup-eligible categories when not explicitly set
@@ -778,9 +774,6 @@ export function registerQuoteTools(server: McpServer) {
       cost: z.number().optional(),
       markup: z.number().optional(),
       price: z.number().optional(),
-      unit1: z.number().optional(),
-      unit2: z.number().optional(),
-      unit3: z.number().optional(),
       rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
       costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID. Pass null to clear."),
       effectiveCostId: z.string().nullable().optional().describe("Effective cost ID. Pass null to clear."),

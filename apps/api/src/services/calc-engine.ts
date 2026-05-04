@@ -8,8 +8,23 @@
  * Supports rate-schedule-driven pricing via dynamic tiers.
  */
 
-import type { EntityCategory, WorksheetItem } from "@bidwright/domain";
-import { normalizeCalculationType } from "@bidwright/domain";
+import type {
+  EntityCategory,
+  LineTotal,
+  MarkupRatio,
+  PerUnitCost,
+  WorksheetItem,
+} from "@bidwright/domain";
+import {
+  asLineTotal,
+  asPerUnitCost,
+  deriveMarkup as deriveMarkupRatio,
+  normalizeMarkup as normalizeMarkupRatio,
+  perUnitFromLine,
+  ZERO_MARKUP,
+  ZERO_PER_UNIT_COST,
+  normalizeCalculationType,
+} from "@bidwright/domain";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -28,95 +43,31 @@ export interface RateScheduleContext {
   }>;
 }
 
-export interface LabourCostContextEntry {
-  code: string;
-  name: string;
-  group: string;
-  costRates: Record<string, number>; // { regular: 35.01, overtime: 52.52, doubletime: 70.02 }
-}
-
-export interface BurdenPeriodEntry {
-  group: string;
-  percentage: number; // 0.46 = 46%
-  startDate: string;
-  endDate: string;
-}
-
-export interface LabourCostContext {
-  entries: LabourCostContextEntry[];
-  burdenPeriods: BurdenPeriodEntry[];
-  referenceDate?: string; // date for burden period matching
-}
-
-export interface TravelPolicyContext {
-  perDiemRate: number;
-  perDiemEmbedMode: "separate" | "embed_hourly" | "embed_cost_only";
-  hoursPerDay: number;
-  fuelSurchargePercent: number;
-  fuelSurchargeAppliesTo: "labour" | "all" | "none";
-}
-
 export interface CalcContext {
-  catalogItems?: Array<{ name: string; unitCost: number; unitPrice: number; metadata: Record<string, unknown> }>;
-  burdenPercent?: number; // labour cost as % of price, default 0.7
   rateSchedules?: RateScheduleContext[];
-  labourCost?: LabourCostContext;
-  travelPolicy?: TravelPolicyContext;
-}
-
-export interface CalcResult {
-  cost?: number;
-  price?: number;
-  markup?: number;
-}
-
-// ── Storage convention ────────────────────────────────────────────────────
-//
-// `WorksheetItem.cost`  — PER-UNIT cost.  The UI computes extCost = cost × qty.
-// `WorksheetItem.price` — LINE TOTAL sell price.  No further × qty in the UI.
-// `WorksheetItem.markup`— markup ratio. For "manual" / "unit_markup" /
-//                         "quantity_markup" categories this is user-driven and
-//                         drives price (price = qty × cost × (1 + markup)).
-//                         For engine-driven categories (tiered_rate,
-//                         duration_rate, formula) markup is DERIVED from the
-//                         actual price vs ext-cost so the UI's Markup column
-//                         is truthful, not stale user input.
-//
-// Every calc strategy in this file MUST obey the cost convention so the UI's
-// `extCost = cost × qty` math gives the real line cost.
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-
-function round(v: number): number {
-  return Math.round(v * 100) / 100;
-}
-
-/** Round a markup ratio to 4dp (0.01% precision). */
-function roundRatio(v: number): number {
-  return Math.round(v * 10000) / 10000;
-}
-
-/** price - extCost / extCost; safe-guards 0 / negative cost. */
-function deriveMarkup(totalPrice: number, totalCost: number): number {
-  if (totalCost <= 0) return 0;
-  return roundRatio((totalPrice - totalCost) / totalCost);
-}
-
-/** Convert a line-total cost back to per-unit so it matches the storage convention. */
-function toUnitCost(totalCost: number, quantity: number): number {
-  const qty = quantity || 1;
-  return round(totalCost / qty);
 }
 
 /**
- * Normalize markup values.
- * Users may enter 15 meaning 15%, or 0.15. Values > 1 are treated as
- * percentages and divided by 100.
+ * Engine results carry branded numeric types so a per-unit cost cannot be
+ * silently committed as a line-total price (or vice versa). All runtime
+ * values are still plain numbers — the brand only constrains assignment.
  */
-function normalizeMarkup(v: number): number {
-  if (v > 1) return v / 100;
-  return v;
+export interface CalcResult {
+  cost?: PerUnitCost;
+  price?: LineTotal;
+  markup?: MarkupRatio;
 }
+
+// ── Storage convention (now type-enforced via @bidwright/domain/money) ────
+//
+// `WorksheetItem.cost`  — stored as a plain number, but every value the
+//   engine writes is produced via `asPerUnitCost` so it represents per-unit.
+// `WorksheetItem.price` — stored as a plain number; engine writes are
+//   produced via `asLineTotal` (already extended × qty).
+// `WorksheetItem.markup` — markup ratio. For "manual"/"unit_markup"/
+//   "quantity_markup" the user drives markup → price = qty × cost × (1+m).
+//   For "tiered_rate"/"duration_rate"/"formula" markup is DERIVED from the
+//   real price vs ext-cost so the UI Markup column is truthful.
 
 // ── Rate Schedule Strategy ───────────────────────────────────────────────
 
@@ -139,39 +90,6 @@ function findRateScheduleItem(item: WorksheetItem, ctx: CalcContext) {
 }
 
 /**
- * Map canonical tier name ("regular", "overtime", "doubletime") to a schedule tier ID
- * by matching the tier's multiplier (1.0 → regular, 1.5 → overtime, 2.0 → doubletime).
- */
-function mapCanonicalTierToId(
-  canonicalName: string,
-  tiers: RateScheduleContext["tiers"],
-): string | null {
-  const multiplierMap: Record<string, number> = { regular: 1, overtime: 1.5, doubletime: 2 };
-  const targetMultiplier = multiplierMap[canonicalName];
-  if (targetMultiplier === undefined) return null;
-  const tier = tiers.find((t) => t.multiplier === targetMultiplier);
-  return tier?.id ?? null;
-}
-
-/**
- * Find the active burden period for a group at a given date.
- */
-function findActiveBurden(
-  group: string,
-  burdenPeriods: BurdenPeriodEntry[],
-  referenceDate?: string,
-): number {
-  const ref = referenceDate ?? new Date().toISOString().substring(0, 10);
-  // Match by group first, fallback to empty group (applies to all)
-  const candidates = burdenPeriods.filter(
-    (bp) => (bp.group === group || bp.group === "") && ref >= bp.startDate && ref <= bp.endDate,
-  );
-  // Prefer exact group match over wildcard
-  const exact = candidates.find((bp) => bp.group === group);
-  return exact?.percentage ?? candidates[0]?.percentage ?? 0;
-}
-
-/**
  * Resolve a tier ID that may be truncated (e.g., "rst-f6d2116a" instead of full UUID)
  * by prefix-matching against a map of valid keys.
  */
@@ -186,82 +104,12 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
   const match = findRateScheduleItem(item, ctx);
   if (!match) return null;
 
-  const { schedule, rsItem } = match;
-  let tierUnits = item.tierUnits ?? {};
+  const { rsItem } = match;
+  const tierUnits = item.tierUnits ?? {};
+  if (Object.keys(tierUnits).length === 0) return null;
 
-  // If no tier hours set, fall back to unit1/unit2/unit3 mapped to schedule tiers.
-  // The LLM populates the data; Bidwright calculates the pricing.
-  // unit1 → Regular (multiplier 1.0), unit2 → Overtime (1.5), unit3 → DoubleTime (2.0)
-  const hasTierHours = Object.keys(tierUnits).length > 0;
-  if (!hasTierHours) {
-    // UoM-tagged tier: if the line item's uom matches a tier's configured uom,
-    // bill `(unit1 || 1) × qty` against that tier's rate. Lets equipment
-    // schedules with DAY/WEEK/MONTH tiers price purely from the line's UoM
-    // without having to populate unit1/unit2/unit3 by convention.
-    const itemUom = (item.uom ?? "").trim().toUpperCase();
-    if (itemUom) {
-      const uomTier = schedule.tiers.find(
-        (t) => t.uom && t.uom.trim().toUpperCase() === itemUom,
-      );
-      if (uomTier) {
-        const units = (item.unit1 || 0) > 0 ? item.unit1 : 1;
-        tierUnits = { [uomTier.id]: units };
-      }
-    }
-
-    if (Object.keys(tierUnits).length === 0) {
-      const hasLegacyUnits = (item.unit1 || 0) > 0 || (item.unit2 || 0) > 0 || (item.unit3 || 0) > 0;
-      if (!hasLegacyUnits) return null;
-
-      // Map unit1/unit2/unit3 to the corresponding tier IDs by multiplier
-      const sortedTiers = [...schedule.tiers].sort((a, b) => a.multiplier - b.multiplier);
-      const regularTier = sortedTiers.find((t) => t.multiplier === 1 || t.multiplier === 1.0);
-      const overtimeTier = sortedTiers.find((t) => t.multiplier === 1.5);
-      const doubletimeTier = sortedTiers.find((t) => t.multiplier === 2 || t.multiplier === 2.0);
-
-      tierUnits = {};
-      if ((item.unit1 || 0) > 0 && regularTier) tierUnits[regularTier.id] = item.unit1;
-      if ((item.unit2 || 0) > 0 && overtimeTier) tierUnits[overtimeTier.id] = item.unit2;
-      if ((item.unit3 || 0) > 0 && doubletimeTier) tierUnits[doubletimeTier.id] = item.unit3;
-
-      // For equipment, unit3 may represent monthly duration — try matching by tier name patterns
-      if (Object.keys(tierUnits).length === 0) {
-        // Try matching tiers by name convention (Daily/Weekly/Monthly) for equipment
-        for (const tier of schedule.tiers) {
-          const lowerName = tier.name.toLowerCase();
-          if ((item.unit1 || 0) > 0 && (lowerName.includes("daily") || lowerName.includes("day"))) {
-            tierUnits[tier.id] = item.unit1;
-          } else if ((item.unit2 || 0) > 0 && (lowerName.includes("weekly") || lowerName.includes("week"))) {
-            tierUnits[tier.id] = item.unit2;
-          } else if ((item.unit3 || 0) > 0 && (lowerName.includes("monthly") || lowerName.includes("month"))) {
-            tierUnits[tier.id] = item.unit3;
-          }
-        }
-      }
-
-      if (Object.keys(tierUnits).length === 0) return null;
-    }
-  }
-
-  // Determine cost rates: prefer global LabourCostContext over per-item costRates
-  let effectiveCostRates = rsItem.costRates;
-  let costGroup = "";
-
-  if (ctx.labourCost?.entries.length) {
-    // Match by code or name
-    const costEntry = ctx.labourCost.entries.find(
-      (e) => e.code === rsItem.code || e.name === rsItem.name,
-    );
-    if (costEntry) {
-      // Map canonical rates to schedule tier IDs
-      effectiveCostRates = {};
-      for (const [canonicalName, rate] of Object.entries(costEntry.costRates)) {
-        const tierId = mapCanonicalTierToId(canonicalName, schedule.tiers);
-        if (tierId) effectiveCostRates[tierId] = Number(rate) || 0;
-      }
-      costGroup = costEntry.group;
-    }
-  }
+  // Cost rates come directly from the rate schedule item.
+  const effectiveCostRates = rsItem.costRates;
 
   // Collect valid tier IDs for prefix matching
   const validRateKeys = Object.keys(rsItem.rates);
@@ -273,7 +121,6 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
 
   for (const [rawTierId, hours] of Object.entries(tierUnits)) {
     const h = Number(hours) || 0;
-    // Resolve potentially truncated tier IDs
     const priceKey = resolveTierId(rawTierId, validRateKeys);
     const costKey = resolveTierId(rawTierId, validCostKeys);
     totalPrice += (rsItem.rates[priceKey] ?? 0) * h;
@@ -284,57 +131,22 @@ function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | n
   totalPrice *= item.quantity;
   totalCost *= item.quantity;
 
-  // Apply burden: prefer org-level burden periods over item-level burden field
-  if (ctx.labourCost?.burdenPeriods.length && costGroup) {
-    const burdenPct = findActiveBurden(
-      costGroup,
-      ctx.labourCost.burdenPeriods,
-      ctx.labourCost.referenceDate,
-    );
-    if (burdenPct > 0) {
-      totalCost += totalCost * burdenPct;
-    }
-  } else if (rsItem.burden > 0) {
-    // Fallback to per-item flat burden ($/hr)
+  // Burden: per-item flat $/hr, scaled by hours × qty.
+  if (rsItem.burden > 0) {
     totalCost += rsItem.burden * totalHours * item.quantity;
   }
 
-  // Per diem: add to cost
-  const hoursPerDay = ctx.travelPolicy?.hoursPerDay ?? 8;
+  // Per diem: per-item $/day, scaled by ceil(hours / 8) × qty.
   if (rsItem.perDiem > 0) {
-    totalCost += rsItem.perDiem * Math.ceil(totalHours / hoursPerDay) * item.quantity;
+    totalCost += rsItem.perDiem * Math.ceil(totalHours / 8) * item.quantity;
   }
 
-  // Travel policy: fuel surcharge on sell price
-  if (ctx.travelPolicy && ctx.travelPolicy.fuelSurchargePercent > 0) {
-    if (ctx.travelPolicy.fuelSurchargeAppliesTo === "labour" || ctx.travelPolicy.fuelSurchargeAppliesTo === "all") {
-      totalPrice *= 1 + ctx.travelPolicy.fuelSurchargePercent / 100;
-    }
-  }
-
-  // Travel policy: per diem embed modes
-  if (ctx.travelPolicy && ctx.travelPolicy.perDiemRate > 0) {
-    const days = Math.ceil(totalHours / hoursPerDay);
-    if (ctx.travelPolicy.perDiemEmbedMode === "embed_cost_only") {
-      totalCost += ctx.travelPolicy.perDiemRate * days * item.quantity;
-    } else if (ctx.travelPolicy.perDiemEmbedMode === "embed_hourly") {
-      const hourlyPerDiem = ctx.travelPolicy.perDiemRate / hoursPerDay;
-      totalPrice += hourlyPerDiem * totalHours * item.quantity;
-      totalCost += hourlyPerDiem * totalHours * item.quantity;
-    }
-    // "separate" mode: travel shows as its own line item, handled outside calc engine
-  }
-
-  // totalCost has been accumulated as the line total (× quantity, with burden,
-  // per-diem, fuel surcharge applied). `cost` is stored per-unit per the
-  // storage convention at the top of this file; markup is derived so the
-  // displayed Markup column reflects the actual margin instead of stale user
-  // input (Labour categories disable manual markup edits via
-  // editableFields.markup = false anyway).
+  const price = asLineTotal(totalPrice);
+  const extCost = asLineTotal(totalCost);
   return {
-    price: round(totalPrice),
-    cost: toUnitCost(totalCost, item.quantity),
-    markup: deriveMarkup(totalPrice, totalCost),
+    price,
+    cost: perUnitFromLine(extCost, item.quantity),
+    markup: deriveMarkupRatio(price, extCost),
   };
 }
 
@@ -348,102 +160,50 @@ function calcTieredRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
 }
 
 function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
-  // Try rate schedule first
+  // Duration pricing flows through rate schedules. The schedule defines tiers
+  // for the duration units (DAY/WEEK/MONTH) and the line item populates
+  // `tierUnits` keyed by tier id. No legacy fallback path.
   const rsResult = calcRateSchedule(item, ctx);
   if (rsResult) return rsResult;
-
-  // Duration is stored in unit1 (days)
-  const duration = item.unit1 || 1;
-  let dailyRate = item.cost;
-
-  // Try to find catalog item with weekly/monthly rates in metadata
-  const catItem = ctx.catalogItems?.find(
-    (c) => c.name === item.entityName || c.name === item.vendor,
-  );
-
-  if (catItem?.metadata) {
-    const monthlyRate = Number(catItem.metadata.monthlyRate) || 0;
-    const weeklyRate = Number(catItem.metadata.weeklyRate) || 0;
-    const dailyCatRate = catItem.unitCost || dailyRate;
-
-    // Smart rate rollup: pick cheapest aggregate.
-    // `monthlyTotal` / `weeklyTotal` here are PER-UNIT totals; price = total × quantity.
-    if (monthlyRate > 0 && duration >= 20) {
-      const months = Math.ceil(duration / 22); // ~22 working days/month
-      const monthlyTotal = monthlyRate * months;
-      const dailyTotal = dailyCatRate * duration;
-      if (monthlyTotal < dailyTotal) {
-        const totalPrice = monthlyTotal * item.quantity;
-        const totalCost = monthlyTotal * item.quantity;
-        return {
-          price: round(totalPrice),
-          cost: toUnitCost(totalCost, item.quantity),
-          markup: deriveMarkup(totalPrice, totalCost),
-        };
-      }
-    }
-
-    if (weeklyRate > 0 && duration >= 5) {
-      const weeks = Math.ceil(duration / 5);
-      const weeklyTotal = weeklyRate * weeks;
-      const dailyTotal = dailyCatRate * duration;
-      if (weeklyTotal < dailyTotal) {
-        const totalPrice = weeklyTotal * item.quantity;
-        const totalCost = weeklyTotal * item.quantity;
-        return {
-          price: round(totalPrice),
-          cost: toUnitCost(totalCost, item.quantity),
-          markup: deriveMarkup(totalPrice, totalCost),
-        };
-      }
-    }
-
-    dailyRate = dailyCatRate || dailyRate;
-  }
-
-  const perUnit = dailyRate * duration;
-  const totalPrice = perUnit * item.quantity;
-  const totalCost = perUnit * item.quantity;
-  return {
-    price: round(totalPrice),
-    cost: toUnitCost(totalCost, item.quantity),
-    markup: deriveMarkup(totalPrice, totalCost),
-  };
+  return {};
 }
 
 function calcQuantityMarkup(item: WorksheetItem): CalcResult {
-  const markup = normalizeMarkup(item.markup);
-  const cost = round(item.quantity * item.cost);
-  const price = round(cost * (1 + markup));
-  return { price, cost };
+  const markup = normalizeMarkupRatio(item.markup);
+  const extCost = asLineTotal(item.quantity * item.cost);
+  const price = asLineTotal(extCost * (1 + markup));
+  // Per the storage convention, `cost` stays per-unit. We re-emit it from the
+  // input rounded so callers committing to the DB store cents-precision.
+  return { cost: asPerUnitCost(item.cost), price, markup };
 }
 
 function calcUnitMarkup(item: WorksheetItem): CalcResult {
-  const markup = normalizeMarkup(item.markup);
-  const price = round(item.quantity * item.cost * (1 + markup));
-  return { price };
+  const markup = normalizeMarkupRatio(item.markup);
+  const price = asLineTotal(item.quantity * item.cost * (1 + markup));
+  return { price, markup };
 }
 
 function calcManual(item: WorksheetItem): CalcResult {
-  const markup = normalizeMarkup(item.markup);
-  const price = round(item.quantity * item.cost * (1 + markup));
-  return { price };
+  const markup = normalizeMarkupRatio(item.markup);
+  const price = asLineTotal(item.quantity * item.cost * (1 + markup));
+  return { price, markup };
 }
 
 function calcDirectTotal(_item: WorksheetItem): CalcResult {
-  // Price is entered directly by the user, no calculation needed
-  return { cost: 0, markup: 0 };
+  // Price is entered directly by the user, no calculation needed.
+  return { cost: ZERO_PER_UNIT_COST, markup: ZERO_MARKUP };
 }
 
 /**
  * Evaluate a custom formula expression.
  *
- * Available variables: qty, cost, markup, price, unit1, unit2, unit3 (aliases: regHrs, otHrs, dtHrs)
+ * Available variables: qty, cost, markup, price, totalHours (sum of all
+ * tierUnits hours).
  *
  * Example formulas:
- *   "qty * cost * (1 + markup)"        → standard markup
- *   "qty * cost * 1.15 + 500"          → fixed overhead
- *   "regHrs * 85 + otHrs * 127.50"     → custom rate calc
+ *   "qty * cost * (1 + markup)"   → standard markup
+ *   "qty * cost * 1.15 + 500"     → fixed overhead
+ *   "totalHours * 85"             → flat hourly rate
  *
  * Uses Function() constructor for sandboxed evaluation.
  * Only numeric operations are allowed.
@@ -452,17 +212,16 @@ function calcFormula(item: WorksheetItem, formula: string): CalcResult {
   if (!formula.trim()) return calcManual(item);
 
   try {
+    const totalHours = Object.values(item.tierUnits ?? {}).reduce(
+      (acc, h) => acc + (Number(h) || 0),
+      0,
+    );
     const vars = {
       qty: item.quantity,
       cost: item.cost,
-      markup: normalizeMarkup(item.markup),
+      markup: normalizeMarkupRatio(item.markup),
       price: item.price,
-      unit1: item.unit1,
-      unit2: item.unit2,
-      unit3: item.unit3,
-      regHrs: item.unit1,
-      otHrs: item.unit2,
-      dtHrs: item.unit3,
+      totalHours,
     };
 
     // Basic safety: only allow math operations, numbers, and variable names
@@ -475,7 +234,7 @@ function calcFormula(item: WorksheetItem, formula: string): CalcResult {
     const result = fn(...varValues);
 
     if (typeof result === "number" && isFinite(result)) {
-      return { price: round(result) };
+      return { price: asLineTotal(result) };
     }
   } catch {
     // Formula evaluation failed — fall back to manual

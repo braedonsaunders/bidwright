@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getExtendedWorksheetHourBreakdown, getWorksheetHourBreakdown, mapLegacyUnitsToTierUnits } from "./worksheet-hours";
+import { getExtendedWorksheetHourBreakdown, getWorksheetHourBreakdown } from "./worksheet-hours";
 
 const labourSchedules = [
   {
@@ -14,14 +14,11 @@ const labourSchedules = [
   },
 ];
 
-test("getWorksheetHourBreakdown maps tier units into legacy labour slots", () => {
+test("getWorksheetHourBreakdown returns one entry per populated tier", () => {
   const breakdown = getWorksheetHourBreakdown(
     {
       entityName: "Trade Labour",
       rateScheduleItemId: "rsi-labour",
-      unit1: 0,
-      unit2: 0,
-      unit3: 0,
       tierUnits: {
         "tier-reg": 200,
         "tier-ot": 36.5,
@@ -31,16 +28,42 @@ test("getWorksheetHourBreakdown maps tier units into legacy labour slots", () =>
     labourSchedules,
   );
 
-  assert.deepEqual(breakdown, {
-    unit1: 200,
-    unit2: 36.5,
-    unit3: 4,
-    total: 240.5,
-    source: "tier",
-  });
+  assert.equal(breakdown.total, 240.5);
+  assert.deepEqual(
+    breakdown.tiers.map((t) => ({ tierId: t.tierId, name: t.name, multiplier: t.multiplier, hours: t.hours })),
+    [
+      { tierId: "tier-reg", name: "Regular", multiplier: 1, hours: 200 },
+      { tierId: "tier-ot", name: "Overtime", multiplier: 1.5, hours: 36.5 },
+      { tierId: "tier-dt", name: "Double Time", multiplier: 2, hours: 4 },
+    ],
+  );
 });
 
-test("getExtendedWorksheetHourBreakdown multiplies derived hours by quantity", () => {
+test("getWorksheetHourBreakdown skips zero/negative tier entries", () => {
+  const breakdown = getWorksheetHourBreakdown(
+    {
+      entityName: "Trade Labour",
+      rateScheduleItemId: "rsi-labour",
+      tierUnits: {
+        "tier-reg": 100,
+        "tier-ot": 0,
+        "tier-dt": -2,
+      },
+    },
+    labourSchedules,
+  );
+  assert.equal(breakdown.tiers.length, 1);
+  assert.equal(breakdown.tiers[0]!.tierId, "tier-reg");
+  assert.equal(breakdown.total, 100);
+});
+
+test("getWorksheetHourBreakdown returns empty when tierUnits is empty", () => {
+  const breakdown = getWorksheetHourBreakdown({ tierUnits: {} }, labourSchedules);
+  assert.equal(breakdown.tiers.length, 0);
+  assert.equal(breakdown.total, 0);
+});
+
+test("getExtendedWorksheetHourBreakdown multiplies hours by quantity", () => {
   const breakdown = getExtendedWorksheetHourBreakdown(
     {
       entityName: "Trade Labour",
@@ -54,30 +77,31 @@ test("getExtendedWorksheetHourBreakdown multiplies derived hours by quantity", (
     3,
   );
 
-  assert.deepEqual(breakdown, {
-    unit1: 24,
-    unit2: 6,
-    unit3: 0,
-    total: 30,
-    source: "tier",
-  });
+  assert.equal(breakdown.total, 30);
+  assert.equal(breakdown.tiers[0]!.hours, 24);
+  assert.equal(breakdown.tiers[1]!.hours, 6);
 });
 
-test("mapLegacyUnitsToTierUnits rebuilds canonical tier payloads", () => {
-  const mapped = mapLegacyUnitsToTierUnits(
+test("getWorksheetHourBreakdown sorts tiers by sortOrder then multiplier", () => {
+  const schedules = [
+    {
+      tiers: [
+        { id: "tier-dt", name: "Double Time", multiplier: 2, sortOrder: 1 },
+        { id: "tier-reg", name: "Regular", multiplier: 1, sortOrder: 2 },
+      ],
+      items: [{ id: "rsi-labour", name: "Trade Labour", code: "LAB" }],
+    },
+  ];
+  const breakdown = getWorksheetHourBreakdown(
     {
       entityName: "Trade Labour",
       rateScheduleItemId: "rsi-labour",
-      unit1: 120,
-      unit2: 18,
-      unit3: 6,
+      tierUnits: { "tier-reg": 1, "tier-dt": 1 },
     },
-    labourSchedules,
+    schedules,
   );
-
-  assert.deepEqual(mapped, {
-    "tier-reg": 120,
-    "tier-ot": 18,
-    "tier-dt": 6,
-  });
+  assert.deepEqual(
+    breakdown.tiers.map((t) => t.tierId),
+    ["tier-dt", "tier-reg"],
+  );
 });
