@@ -2718,7 +2718,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     }
   }
 
-  async function handleStartIntake() {
+  async function handleStartIntake(): Promise<boolean> {
     setIntakeLoading(true);
     setLiveToolCalls([]);
     setThinkingBlocks([]);
@@ -2726,7 +2726,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     try {
       if (!ingestionReady) {
         setSessionError(null);
-        return;
+        return false;
       }
       // Check if there's already a running session (e.g. page refresh)
       if (cliRuntime) {
@@ -2744,7 +2744,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             } as any);
             connectToSseStream(projectId);
             setIntakeLoading(false);
-            return;
+            return true;
           }
         } catch {}
       }
@@ -2768,15 +2768,17 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         });
         // Connect SSE stream
         connectToSseStream(projectId);
+        return true;
       } else {
         throw new Error("Estimator runs now use the CLI runtime only. Configure and authenticate Claude Code or Codex in Agent Runtime settings before starting a run.");
       }
     } catch (err) {
       if (isExpectedIngestionStartError(err)) {
         setSessionError(null);
-        return;
+        return false;
       }
       setSessionError(err instanceof Error ? err.message : "Failed to start intake agent");
+      return false;
     } finally {
       setIntakeLoading(false);
     }
@@ -3217,9 +3219,8 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   // a "ready" lifecycle status. Starting earlier wedges the agent on a stale
   // CLAUDE.md/AGENTS.md/GEMINI.md manifest because the worker re-issues
   // SourceDocument IDs at the end of extraction.
-  const ingestionReady = !ingestionStatus
-    ? true
-    : READY_INGESTION_STATUSES.has(ingestionStatus);
+  const ingestionReady = ingestionStatus !== null
+    && READY_INGESTION_STATUSES.has(ingestionStatus);
 
   // Auto-start intake ONLY when redirected from upload AND no existing session
   // The restore useEffect (above) runs first and sets intakeSessionId if a session exists
@@ -3232,8 +3233,13 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       const timer = setTimeout(() => {
         if (!intakeAutoStarted.current && !intakeSessionId) {
           intakeAutoStarted.current = true;
-          handleStartIntake();
-          onIntakeStarted?.();
+          handleStartIntake().then((started) => {
+            if (started) {
+              onIntakeStarted?.();
+            } else {
+              intakeAutoStarted.current = false;
+            }
+          });
         }
       }, 1500);
       return () => clearTimeout(timer);
@@ -3439,7 +3445,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                 intakeStatus={intakeStatus}
                 ingestionSummary={ingestionSummary}
                 ingestionDocs={ingestionDocs}
-                handleStartIntake={handleStartIntake}
+                handleStartIntake={async () => {
+                  await handleStartIntake();
+                }}
               />
               <AgentDockControl mode={dockMode} onChange={handleDockModeChange} />
               {(isRunStarting || isIntakeRunning) && (

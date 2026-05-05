@@ -309,38 +309,11 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       const { projectId, documentId } = request.params as { projectId: string; documentId: string };
       const { pages } = (request.query ?? {}) as { pages?: string };
 
-      // Try source documents first
-      const docs = await request.store!.listDocuments(projectId);
-      const doc = docs.find((d: any) => d.id === documentId);
+      const readKnowledgeBook = async () => {
+        const book = await request.store!.getKnowledgeBook(documentId);
+        if (!book) return null;
 
-      if (doc) {
-        let content = doc.extractedText ?? "";
-
-        // If pages specified, try to extract page range
-        if (pages && content) {
-          const pageSegments = content.split(/\f|---\s*Page\s+\d+\s*---/i);
-          const [startStr, endStr] = pages.split("-");
-          const start = Math.max(1, parseInt(startStr, 10) || 1);
-          const end = endStr ? Math.min(pageSegments.length, parseInt(endStr, 10)) : start;
-          content = pageSegments.slice(start - 1, end).join("\n\n");
-        }
-
-        return {
-          id: doc.id,
-          fileName: doc.fileName,
-          fileType: doc.fileType,
-          documentType: doc.documentType,
-          pageCount: doc.pageCount,
-          content,
-          structuredData: doc.structuredData ?? null,
-        };
-      }
-
-      // Try knowledge books
-      const book = await request.store!.getKnowledgeBook(documentId);
-      if (book) {
         const chunks = await request.store!.listKnowledgeChunks(documentId);
-
         let filteredChunks = chunks;
         if (pages) {
           const [startStr, endStr] = pages.split("-");
@@ -367,10 +340,12 @@ export async function knowledgeRoutes(app: FastifyInstance) {
             tokenCount: c.tokenCount,
           })),
         };
-      }
+      };
 
-      const knowledgeDocument = await request.store!.getKnowledgeDocument(documentId);
-      if (knowledgeDocument) {
+      const readKnowledgeDocument = async () => {
+        const knowledgeDocument = await request.store!.getKnowledgeDocument(documentId);
+        if (!knowledgeDocument) return null;
+
         let pagesToRead = await request.store!.listKnowledgeDocumentPages(documentId);
         if (pages) {
           const [startStr, endStr] = pages.split("-");
@@ -406,7 +381,55 @@ export async function knowledgeRoutes(app: FastifyInstance) {
             tokenCount: chunk.tokenCount,
           })),
         };
+      };
+
+      // Book-scoped CLI sessions use the knowledge book id as their session key.
+      // In that mode `projectId` is not a real project, so avoid requiring a
+      // project before trying organization-level library documents.
+      if (documentId.startsWith("kb-") || !projectId.startsWith("project-")) {
+        const bookPayload = await readKnowledgeBook();
+        if (bookPayload) return bookPayload;
       }
+
+      if (documentId.startsWith("kdoc-") || !projectId.startsWith("project-")) {
+        const knowledgeDocumentPayload = await readKnowledgeDocument();
+        if (knowledgeDocumentPayload) return knowledgeDocumentPayload;
+      }
+
+      // Try source documents when there is a real project context.
+      const docs = projectId.startsWith("project-")
+        ? await request.store!.listDocuments(projectId)
+        : [];
+      const doc = docs.find((d: any) => d.id === documentId);
+
+      if (doc) {
+        let content = doc.extractedText ?? "";
+
+        // If pages specified, try to extract page range
+        if (pages && content) {
+          const pageSegments = content.split(/\f|---\s*Page\s+\d+\s*---/i);
+          const [startStr, endStr] = pages.split("-");
+          const start = Math.max(1, parseInt(startStr, 10) || 1);
+          const end = endStr ? Math.min(pageSegments.length, parseInt(endStr, 10)) : start;
+          content = pageSegments.slice(start - 1, end).join("\n\n");
+        }
+
+        return {
+          id: doc.id,
+          fileName: doc.fileName,
+          fileType: doc.fileType,
+          documentType: doc.documentType,
+          pageCount: doc.pageCount,
+          content,
+          structuredData: doc.structuredData ?? null,
+        };
+      }
+
+      const bookPayload = await readKnowledgeBook();
+      if (bookPayload) return bookPayload;
+
+      const knowledgeDocumentPayload = await readKnowledgeDocument();
+      if (knowledgeDocumentPayload) return knowledgeDocumentPayload;
 
       return reply.code(404).send({ message: "Document not found" });
     } catch (err) {
