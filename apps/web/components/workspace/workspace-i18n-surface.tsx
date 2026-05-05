@@ -627,5 +627,5 @@ export function WorkspaceI18nSurface({ children }: { children: ReactNode }) {
     return () => observer.disconnect();
   }, [locale]);
 
-  return <div data-workspace-i18n-root>{children}</div>;
+  return <div data-workspace-i18n-root className="flex h-full min-h-0 flex-1 flex-col">{children}</div>;
 }
