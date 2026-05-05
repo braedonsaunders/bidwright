@@ -631,8 +631,8 @@ function GeneralSubTab({
             </div>
           </div>
 
-          {/* Client */}
-          <div className="grid gap-4 md:grid-cols-2">
+          {/* Client / Contact / Department / Type */}
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(200px,1.35fr)_minmax(200px,1.35fr)_minmax(170px,1fr)_minmax(140px,0.8fr)]">
             <div>
               <Label>Client</Label>
               {quickAddOpen ? (
@@ -719,10 +719,6 @@ function GeneralSubTab({
               )}
               {!customerId && <p className="mt-1 text-[11px] text-fg/40">Select a client first</p>}
             </div>
-          </div>
-
-          {/* Department / Type */}
-          <div className="grid gap-4 md:grid-cols-2">
             <div>
               <Label>Department</Label>
               <Combobox

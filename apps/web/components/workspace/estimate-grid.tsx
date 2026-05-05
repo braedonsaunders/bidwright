@@ -132,7 +132,7 @@ export interface EstimateGridProps {
   highlightItemId?: string;
   activeWorksheetId?: WorksheetTabId;
   onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
-  onOpenPluginTools?: () => void;
+  onOpenPluginTools?: (target?: { pluginId?: string; pluginSlug?: string; toolId?: string }) => void;
   variant?: "default" | "snap";
   maxLineItems?: number;
   lockedWorksheetId?: string;
@@ -775,6 +775,8 @@ interface EntityOptionGroup {
   tone?: "accent" | "success" | "muted" | "warning";
   items: EntityOptionItem[];
 }
+
+type FlatEntityOption = { group: EntityOptionGroup; item: EntityOptionItem };
 
 type EntitySelectionCatalogData = {
   cost?: number;
@@ -1690,6 +1692,49 @@ function orderEntityGroupsForRow(
     ...laborGroups,
     ...actionGroups,
   ];
+}
+
+function laborTreeSortKey(group: EntityOptionGroup) {
+  const parts = group.treePath?.length
+    ? group.treePath
+    : [group.label ?? group.categoryName, group.categoryId];
+  return parts
+    .map(cleanHierarchyPart)
+    .map((part) => part.toLowerCase())
+    .join("\\u001f");
+}
+
+function sortLaborGroupsForTree(groups: EntityOptionGroup[]) {
+  return groups.slice().sort((left, right) => {
+    const keyDelta = laborTreeSortKey(left).localeCompare(laborTreeSortKey(right));
+    if (keyDelta !== 0) return keyDelta;
+    return left.categoryId.localeCompare(right.categoryId);
+  });
+}
+
+function flattenEntityGroupsForKeyboard(groups: EntityOptionGroup[]): FlatEntityOption[] {
+  const out: FlatEntityOption[] = [];
+  let laborBatch: EntityOptionGroup[] = [];
+
+  const flushLaborBatch = () => {
+    if (laborBatch.length === 0) return;
+    for (const group of sortLaborGroupsForTree(laborBatch)) {
+      for (const item of group.items) out.push({ group, item });
+    }
+    laborBatch = [];
+  };
+
+  for (const group of groups) {
+    if (group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1) {
+      laborBatch.push(group);
+      continue;
+    }
+    flushLaborBatch();
+    for (const item of group.items) out.push({ group, item });
+  }
+
+  flushLaborBatch();
+  return out;
 }
 
 function optionMeasureLabel(item: EntityOptionItem) {
@@ -2898,12 +2943,12 @@ export function EstimateGrid({
   // entity dropdown is open. Items in the "matching" group come first.
   const entityFlatItems = useMemo(() => {
     if (!entityDropdownRowId || !activeEntityRow) return [];
-    type FlatEntity = { group: EntityOptionGroup; item: EntityOptionItem };
-    const out: FlatEntity[] = [];
-    for (const group of orderEntityGroupsForRow(entityDisplayGroups, activeEntityRow.category, entitySearchTerm.trim().length > 0)) {
-      for (const item of group.items) out.push({ group, item });
-    }
-    return out;
+    const orderedGroups = orderEntityGroupsForRow(
+      entityDisplayGroups,
+      activeEntityRow.category,
+      entitySearchTerm.trim().length > 0,
+    );
+    return flattenEntityGroupsForKeyboard(orderedGroups);
   }, [activeEntityRow, entityDisplayGroups, entityDropdownRowId, entitySearchTerm]);
 
   // Reset highlight when dropdown opens or search changes
@@ -4052,7 +4097,11 @@ export function EstimateGrid({
     if (item.actionType === "plugin_tool") {
       closeEntityDropdown(rowId);
       if (onOpenPluginTools) {
-        onOpenPluginTools();
+        onOpenPluginTools({
+          pluginId: item.pluginId,
+          pluginSlug: item.pluginSlug,
+          toolId: item.toolId,
+        });
       } else {
         onError("Open Plugin Tools to run this action.");
       }
@@ -5094,12 +5143,41 @@ export function EstimateGrid({
 	              if (!flat) return;
 	              handleEntityAction(row.id, flat.group, flat.item);
 	            };
-	            const entityFlatIndexByKey = new Map(
-	              entityFlatItems.map((entry, index) => [
-	                `${entry.group.categoryId}\u001f${entityOptionKey(entry.item)}`,
-	                index,
-	              ]),
-	            );
+	            const entityFlatIndexByGroup = new Map<EntityOptionGroup, Map<EntityOptionItem, number>>();
+	            entityFlatItems.forEach((entry, index) => {
+	              const groupMap = entityFlatIndexByGroup.get(entry.group) ?? new Map<EntityOptionItem, number>();
+	              if (!groupMap.has(entry.item)) groupMap.set(entry.item, index);
+	              entityFlatIndexByGroup.set(entry.group, groupMap);
+	            });
+
+	            const renderedEntityIndexes = () => {
+	              const nodes = entityDropdownRef.current?.querySelectorAll<HTMLElement>("[data-entity-idx]") ?? [];
+	              const seen = new Set<number>();
+	              const indexes: number[] = [];
+	              nodes.forEach((node) => {
+	                const index = Number(node.dataset.entityIdx);
+	                if (!Number.isInteger(index) || index < 0 || index >= entityFlatItems.length || seen.has(index)) return;
+	                seen.add(index);
+	                indexes.push(index);
+	              });
+	              return indexes.length > 0 ? indexes : entityFlatItems.map((_, index) => index);
+	            };
+
+	            const moveEntityHighlight = (direction: 1 | -1) => {
+	              const indexes = renderedEntityIndexes();
+	              if (indexes.length === 0) return;
+	              setEntityHighlightIdx((current) => {
+	                const currentPos = indexes.indexOf(current);
+	                if (currentPos === -1) return direction > 0 ? indexes[0] : indexes[indexes.length - 1];
+	                return indexes[(currentPos + direction + indexes.length) % indexes.length];
+	              });
+	            };
+
+	            const currentRenderedEntityIndex = () => {
+	              const indexes = renderedEntityIndexes();
+	              if (indexes.length === 0) return 0;
+	              return indexes.includes(entityHighlightIdx) ? entityHighlightIdx : indexes[0];
+	            };
 
 	            const handleResultsScroll = (event: { currentTarget: HTMLDivElement }) => {
 	              const target = event.currentTarget;
@@ -5114,7 +5192,7 @@ export function EstimateGrid({
 		              options: { inLaborTree?: boolean; laborTreeDepth?: number } = {},
 		            ) =>
 		              filtered.map((item) => {
-		                const myIdx = entityFlatIndexByKey.get(`${group.categoryId}\u001f${entityOptionKey(item)}`) ?? 0;
+		                const myIdx = entityFlatIndexByGroup.get(group)?.get(item) ?? 0;
 		                const isHighlighted = myIdx === entityHighlightIdx;
 		                const itemCategory = inferCanonicalCategoryForOption(group, item) ?? getTargetCategoryForEntityGroup(group, item);
 		                const itemCategoryColor = itemCategory?.color ?? getCategoryHexColor(group.categoryName, entityCategories);
@@ -5163,7 +5241,7 @@ export function EstimateGrid({
 		                };
 		                return (
 		                  <button
-		                    key={`${group.categoryId}-${entityOptionKey(item)}`}
+		                    key={`${group.categoryId}-${entityOptionKey(item)}-${myIdx}`}
 		                    data-entity-idx={myIdx}
 		                    className={cn(
 		                      "group flex items-center gap-1.5 px-2 text-left transition-colors",
@@ -5589,11 +5667,12 @@ export function EstimateGrid({
 
 		              const flushLaborBatch = () => {
 		                if (laborBatch.length === 0) return;
-		                const first = laborBatch[0];
-		                const last = laborBatch[laborBatch.length - 1];
+		                const sortedLaborBatch = sortLaborGroupsForTree(laborBatch);
+		                const first = sortedLaborBatch[0];
+		                const last = sortedLaborBatch[sortedLaborBatch.length - 1];
 		                blocks.push(renderLaborTreeGroups(
-		                  laborBatch,
-		                  `${keyPrefix}-labor-${first.categoryId}-${last.categoryId}-${laborBatch.length}`,
+		                  sortedLaborBatch,
+		                  `${keyPrefix}-labor-${first.categoryId}-${last.categoryId}-${sortedLaborBatch.length}`,
 		                ));
 		                laborBatch = [];
 		              };
@@ -5720,31 +5799,32 @@ export function EstimateGrid({
 		                        if (next.trim()) setEntityBrowseMode(null);
 		                      }}
 		                      onKeyDown={(e) => {
-	                      const len = entityFlatItems.length;
+	                      const indexes = renderedEntityIndexes();
+	                      const len = indexes.length;
 	                      if (e.key === "Escape") {
 		                        e.preventDefault();
 			                        closeEntityDropdown(row.id);
                       } else if (e.key === "ArrowDown") {
                         e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx((i) => (i + 1) % len);
+                        moveEntityHighlight(1);
                       } else if (e.key === "ArrowUp") {
                         e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx((i) => (i - 1 + len) % len);
+                        moveEntityHighlight(-1);
                       } else if (e.key === "Home") {
                         e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx(0);
+                        if (len > 0) setEntityHighlightIdx(indexes[0]);
                       } else if (e.key === "End") {
                         e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx(len - 1);
+                        if (len > 0) setEntityHighlightIdx(indexes[indexes.length - 1]);
                       } else if (e.key === "Enter") {
                         e.preventDefault();
-                        if (len > 0) selectFlatItem(Math.min(entityHighlightIdx, len - 1));
+                        if (len > 0) selectFlatItem(currentRenderedEntityIndex());
                       } else if (e.key === "Tab") {
                         e.preventDefault();
                         const advancing = !e.shiftKey;
                         const targetRowId = row.id;
                         if (len > 0) {
-                          selectFlatItem(Math.min(entityHighlightIdx, len - 1));
+                          selectFlatItem(currentRenderedEntityIndex());
                         } else {
 	                          closeEntityDropdown(row.id);
 	                        }
@@ -5794,7 +5874,7 @@ export function EstimateGrid({
 	                </div>
 		                <div
 		                  className={cn(
-		                    "overflow-y-auto p-0",
+		                    "line-item-search-scrollbar overflow-y-auto p-0",
 		                    entityDropdownPos.placement === "above" &&
 		                      "absolute bottom-[calc(100%-1px)] left-[-1px] right-[-1px] rounded-t-xl border border-b-0 border-line/80 bg-panel/95 backdrop-blur-xl",
 		                  )}
@@ -7247,8 +7327,15 @@ export function EstimateGrid({
           }
           if (item.actionType === "plugin_tool" || item.actionType === "plugin_remote_search") {
             setShowAddItemsPicker(false);
-            if (onOpenPluginTools) onOpenPluginTools();
-            else onError("Open Plugin Tools to run this action.");
+            if (onOpenPluginTools) {
+              onOpenPluginTools({
+                pluginId: item.pluginId,
+                pluginSlug: item.pluginSlug,
+                toolId: item.toolId,
+              });
+            } else {
+              onError("Open Plugin Tools to run this action.");
+            }
           }
         };
 

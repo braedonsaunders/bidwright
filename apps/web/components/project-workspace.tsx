@@ -97,6 +97,7 @@ import {
   deleteEstimateFactor,
   fetchQuotePdfBlobUrl,
   importAssignedRateSchedules,
+  listRateBookAssignments,
   listModelTakeoffLinks,
   getEstimateFactorLibrary,
   updateWorksheetItem,
@@ -168,6 +169,7 @@ import type { ResourceSummaryRow } from "@/components/workspace/resource-summary
 
 type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "review" | "activity";
 type EstimateSubTab = "takeoff" | "worksheets" | "factors" | "phases";
+type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
 
 type ItemDraft = {
   mode: "create" | "edit";
@@ -1147,6 +1149,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [autoIntake, setAutoIntake] = useState(false);
   const [intakePersonaId, setIntakePersonaId] = useState<string | null>(null);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
+  const [pluginToolsTarget, setPluginToolsTarget] = useState<PluginToolsTarget | null>(null);
   const [revisionDiffOpen, setRevisionDiffOpen] = useState(false);
   const intakeInitRef = useRef(false);
   const workspaceSyncOriginRef = useRef(`workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
@@ -1157,6 +1160,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const urlPersona = searchParams.get("persona");
 
   const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
+
+  const openPluginTools = useCallback((target?: PluginToolsTarget) => {
+    setPluginToolsTarget(target ?? null);
+    setPluginToolsOpen(true);
+  }, []);
+
+  const closePluginTools = useCallback(() => {
+    setPluginToolsOpen(false);
+    setPluginToolsTarget(null);
+  }, []);
 
   const openAgentChat = useCallback((prefill?: string) => {
     setAgentPrefill(prefill ?? null);
@@ -1965,7 +1978,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => setPluginToolsOpen(true)}
+              onClick={() => openPluginTools()}
               aria-label="Open plugin tools"
             >
               <Puzzle className="h-3 w-3" />
@@ -2048,6 +2061,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             onError={setError}
             onRefresh={refreshWorkspace}
             onUpgrade={handleUpgradeSnap}
+            onOpenPluginTools={openPluginTools}
             isPending={isPending}
           />
         ) : (
@@ -2100,7 +2114,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 	                      highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
 	                      activeWorksheetId={selectedWsId}
 	                      onActiveWorksheetChange={setSelectedWsId}
-	                      onOpenPluginTools={() => setPluginToolsOpen(true)}
+	                      onOpenPluginTools={openPluginTools}
 	                    />
                   </motion.div>
                 )}
@@ -2124,7 +2138,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                       onOpenAgentChat={openAgentChat}
                       onOpenImportLineItems={() => setModal("importBOM")}
                       onOpenDocuments={() => handleTabChange("documents")}
-                      onOpenPluginTools={() => setPluginToolsOpen(true)}
+                      onOpenPluginTools={() => openPluginTools()}
                       onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
                       onWorkspaceMutated={refreshWorkspace}
                       workspaceSyncOriginId={workspaceSyncOriginRef.current}
@@ -2368,7 +2382,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         worksheetId={selectedWsId === "all" ? undefined : selectedWsId}
         rateSchedules={workspace.rateSchedules}
         open={pluginToolsOpen}
-        onClose={() => setPluginToolsOpen(false)}
+        initialSelection={pluginToolsTarget}
+        onClose={closePluginTools}
         onItemsCreated={() => {
           // Refresh workspace after plugin creates items
           startTransition(async () => {
@@ -2395,6 +2410,7 @@ function SnapQuoteSheet({
   onError,
   onRefresh,
   onUpgrade,
+  onOpenPluginTools,
   isPending,
 }: {
   workspace: ProjectWorkspaceData;
@@ -2404,6 +2420,7 @@ function SnapQuoteSheet({
   onError: (message: string) => void;
   onRefresh: () => void;
   onUpgrade: () => void;
+  onOpenPluginTools?: (target?: PluginToolsTarget) => void;
   isPending: boolean;
 }) {
   const [title, setTitle] = useState(workspace.project.name);
@@ -2490,9 +2507,17 @@ function SnapQuoteSheet({
     const alreadyNamed = selectedCustomer.name === workspace.quote.customerString && selectedCustomer.name === workspace.project.clientName;
     if (alreadyLinked && alreadyNamed) return;
 
-    setCustomerId(nextCustomerId);
     setSavingField("customerId");
     try {
+      const defaultRatebooks = await listRateBookAssignments({
+        customerId: selectedCustomer.id,
+        active: true,
+      });
+      if (defaultRatebooks.length === 0) {
+        onError(`Snap quotes need a default ratebook for ${selectedCustomer.name}. Add one on the client Ratebooks tab, then try again.`);
+        return;
+      }
+      setCustomerId(nextCustomerId);
       await updateQuote(workspace.project.id, {
         customerExistingNew: "Existing",
         customerId: selectedCustomer.id,
@@ -2618,6 +2643,7 @@ function SnapQuoteSheet({
               onApply={onApply}
               onError={onError}
               onRefresh={onRefresh}
+              onOpenPluginTools={onOpenPluginTools}
               variant="snap"
               maxLineItems={snapLineLimit}
               lockedWorksheetId={snapWorksheet?.id}

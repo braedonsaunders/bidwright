@@ -138,6 +138,39 @@ a {
   display: none;
 }
 
+.line-item-search-scrollbar {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.line-item-search-scrollbar:hover {
+  scrollbar-color: hsla(var(--fg), 0.18) transparent;
+}
+
+.line-item-search-scrollbar::-webkit-scrollbar {
+  width: 7px;
+}
+
+.line-item-search-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.line-item-search-scrollbar::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: transparent;
+  background-clip: padding-box;
+}
+
+.line-item-search-scrollbar:hover::-webkit-scrollbar-thumb {
+  background-color: hsla(var(--fg), 0.16);
+}
+
+.line-item-search-scrollbar:hover::-webkit-scrollbar-thumb:hover {
+  background-color: hsla(var(--fg), 0.26);
+}
+
 table {
   border-collapse: collapse;
 }
