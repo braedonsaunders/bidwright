@@ -178,7 +178,7 @@ export function AppShell({
   const ThemeIcon = themeOption.icon;
   const SidebarToggleIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
   const flushWorkspace = pathname.startsWith("/library");
-  const fittedWorkspace = pathname.startsWith("/clients") || pathname.startsWith("/performance");
+  const fittedWorkspace = pathname.startsWith("/clients") || pathname.startsWith("/performance") || pathname.startsWith("/projects");
 
   useEffect(() => {
     const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);

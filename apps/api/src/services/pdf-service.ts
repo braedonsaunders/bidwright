@@ -1059,9 +1059,6 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
   });
   const dueDate = formatDate(data.dateDue);
   const terms = data.orgTermsAndConditions.trim();
-  const inclusions = data.conditions.filter((condition) => condition.type.toLowerCase().includes("inclusion"));
-  const exclusions = data.conditions.filter((condition) => condition.type.toLowerCase().includes("exclusion"));
-  const hasNotes = !!data.notes.trim() || inclusions.length > 0 || exclusions.length > 0;
 
   const lineRows = data.lineItems.length > 0
     ? data.lineItems.map((item, index) => `
@@ -1077,15 +1074,6 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
       </tr>
     `).join("")
     : `<tr><td colspan="5" class="empty">No line items added.</td></tr>`;
-
-  const notesHtml = hasNotes ? `
-    <section class="notes">
-      <h2>Notes / Exclusions</h2>
-      ${data.notes.trim() ? `<div class="text-block">${renderText(data.notes)}</div>` : ""}
-      ${inclusions.length > 0 ? `<div class="condition-list"><strong>Inclusions</strong><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>` : ""}
-      ${exclusions.length > 0 ? `<div class="condition-list"><strong>Exclusions</strong><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>` : ""}
-    </section>
-  ` : "";
 
   const termsHtml = terms ? `
     <section class="terms-page">
@@ -1117,11 +1105,6 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .muted { margin-top: 2px; color: #666; font-size: 9.5px; }
   .empty { text-align: center; color: #777; padding: 18px; }
-  .notes { margin-top: 10px; padding: 9px 10px; border: 1px solid #dedede; background: #fafafa; }
-  .notes h2 { margin-top: 0; }
-  .condition-list { margin-top: 6px; }
-  ul { margin: 3px 0 0 15px; padding: 0; }
-  li { margin: 1px 0; }
   .snap-footer { margin-top: auto; display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 20px; align-items: end; padding-top: 14px; }
   .footer-note { color: #777; font-size: 9px; }
   .totals { border-top: 2px solid #151515; padding-top: 8px; }
@@ -1158,8 +1141,6 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
         <tbody>${lineRows}</tbody>
       </table>
     </section>
-
-    ${notesHtml}
 
     <footer class="snap-footer">
       <div class="footer-note">${escapeHtml(data.orgWebsite || data.orgName || "")}</div>

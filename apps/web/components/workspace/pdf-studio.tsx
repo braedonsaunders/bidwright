@@ -1098,14 +1098,14 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-interface PdfPagePreviewProps {
+export interface PdfPagePreviewProps {
   url: string;
   refreshKey: number;
   zoom: number;
   onLoadingChange: (loading: boolean) => void;
 }
 
-function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePreviewProps) {
+export function PdfPagePreview({ url, refreshKey, zoom, onLoadingChange }: PdfPagePreviewProps) {
   const [pageNumbers, setPageNumbers] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
