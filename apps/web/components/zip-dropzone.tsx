@@ -15,7 +15,6 @@ import {
   Mail,
   MapPin,
   Plus,
-  Sparkles,
   Target,
   UploadCloud,
   X,
@@ -210,6 +209,20 @@ function inferredExtensionFromMimeType(mimeType?: string) {
       return ".msg";
     case "application/pdf":
       return ".pdf";
+    case "application/msword":
+      return ".doc";
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return ".docx";
+    case "application/rtf":
+    case "text/rtf":
+      return ".rtf";
+    case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+      return ".pptx";
+    case "text/html":
+      return ".html";
+    case "multipart/related":
+    case "application/x-mimearchive":
+      return ".mhtml";
     case "application/zip":
     case "application/x-zip-compressed":
       return ".zip";
@@ -451,6 +464,59 @@ async function fetchDroppedRemoteFile(candidate: DroppedRemoteFileCandidate) {
 
 function describePayloadTypes(payloadTypes: Set<string>) {
   return Array.from(payloadTypes).sort().join(", ");
+}
+
+function IntakeGeometryField({ dragActive, filesLoaded }: { dragActive: boolean; filesLoaded: boolean }) {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      <motion.div
+        className="absolute inset-0 opacity-45 [background-image:linear-gradient(hsl(var(--fg)/0.045)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.04)_1px,transparent_1px),linear-gradient(hsl(var(--accent)/0.055)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--accent)/0.045)_1px,transparent_1px)] [background-size:24px_24px,24px_24px,120px_120px,120px_120px]"
+        animate={{ backgroundPosition: ["0px 0px, 0px 0px, 0px 0px, 0px 0px", "36px 24px, 36px 24px, 120px 0px, 120px 0px"] }}
+        transition={{ duration: 28, repeat: Infinity, ease: "linear" }}
+      />
+      <div className="absolute inset-x-8 top-1/2 h-px bg-[linear-gradient(90deg,transparent,hsl(var(--fg)/0.12),transparent)]" />
+      <div className="absolute inset-y-10 left-1/2 w-px bg-[linear-gradient(180deg,transparent,hsl(var(--fg)/0.1),transparent)]" />
+      <motion.div
+        className={cn(
+          "absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,transparent,hsl(var(--accent)/0.06),transparent)]",
+          filesLoaded && "bg-[linear-gradient(90deg,transparent,hsl(var(--success)/0.055),transparent)]"
+        )}
+        animate={{ x: dragActive ? ["-55%", "260%"] : ["-65%", "235%"], opacity: dragActive ? [0, 0.72, 0] : [0, 0.22, 0] }}
+        transition={{ duration: dragActive ? 1.25 : 8.4, repeat: Infinity, ease: "easeInOut" }}
+      />
+    </div>
+  );
+}
+
+function UploadPulseRings({ active }: { active: boolean }) {
+  return (
+    <>
+      {[0, 1, 2].map((index) => (
+        <motion.span
+          key={index}
+          className={cn(
+            "absolute inset-0 rounded-full border",
+            active ? "border-accent/40" : "border-fg/15"
+          )}
+          animate={{
+            scale: active ? [1, 1.86, 1.86] : [1, 1.58, 1.58],
+            opacity: active ? [0.34, 0.14, 0] : [0.18, 0.08, 0],
+          }}
+          transition={{
+            duration: active ? 1.35 : 3.6,
+            delay: index * (active ? 0.18 : 0.52),
+            repeat: Infinity,
+            ease: "easeOut",
+          }}
+        />
+      ))}
+      <motion.span
+        className="absolute inset-5 rounded-full border border-accent/18"
+        animate={{ scale: active ? [1, 1.08, 1] : [1, 1.04, 1], opacity: active ? [0.45, 0.8, 0.45] : [0.22, 0.38, 0.22] }}
+        transition={{ duration: active ? 1.2 : 2.8, repeat: Infinity, ease: "easeInOut" }}
+      />
+    </>
+  );
 }
 
 function readEntryFile(entry: FileSystemEntryLike) {
@@ -817,37 +883,26 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     <form className="flex min-h-0 w-full flex-1" onSubmit={handleSubmit}>
       <div className="grid min-h-0 w-full gap-4 lg:grid-cols-[minmax(0,1.06fr)_minmax(340px,0.82fr)]">
         <motion.div
-          className="relative flex min-h-[390px] flex-col overflow-hidden rounded-lg border border-line/70 bg-panel/90 shadow-sm backdrop-blur-xl lg:min-h-0"
-          animate={{
-            borderColor: dragActive
-              ? "hsl(var(--accent))"
+          className={cn(
+            "relative flex min-h-[390px] flex-col overflow-hidden rounded-lg border bg-panel/95 shadow-sm backdrop-blur-xl transition-colors lg:min-h-0",
+            dragActive
+              ? "border-accent shadow-[0_0_0_1px_hsl(var(--accent)/0.3)]"
               : files.length > 0
-                ? "hsl(152 50% 44% / 0.5)"
-                : "hsl(var(--fg) / 0.12)",
-            scale: dragActive ? 1.006 : 1,
-          }}
+                ? "border-success/50"
+                : "border-line/70"
+          )}
+          animate={{ scale: dragActive ? 1.006 : 1 }}
           transition={{ duration: 0.18, ease: "easeOut" }}
           onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
           onDragOver={(e) => { e.preventDefault(); setDragActive(true); e.dataTransfer.dropEffect = "copy"; }}
           onDragLeave={() => setDragActive(false)}
           onDrop={(e) => { void handleDrop(e); }}
         >
-          <motion.div
-            aria-hidden
-            className="absolute inset-0 opacity-45 [background-image:linear-gradient(hsl(var(--fg)/0.08)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.06)_1px,transparent_1px)] [background-size:30px_30px]"
-            animate={{ backgroundPosition: ["0px 0px", "60px 60px"] }}
-            transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
-          />
-          <motion.div
-            aria-hidden
-            className="absolute inset-x-0 top-[18%] h-px bg-[linear-gradient(90deg,transparent,hsl(var(--accent)),hsl(169_62%_44%),transparent)]"
-            animate={{ top: dragActive ? ["10%", "90%"] : ["18%", "78%", "18%"], opacity: dragActive ? [0.72, 0.35] : [0.24, 0.6, 0.24] }}
-            transition={{ duration: dragActive ? 0.9 : 6.5, repeat: Infinity, ease: "easeInOut" }}
-          />
+          <IntakeGeometryField dragActive={dragActive} filesLoaded={files.length > 0} />
           <div className="relative z-10 flex items-center justify-between border-b border-line/70 px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/15 text-accent">
-                  <Sparkles className="h-4 w-4" />
+                  <FileUp className="h-4 w-4" />
                 </span>
                 <div>
                   <div className="text-sm font-semibold text-fg">Intake package</div>
@@ -858,63 +913,6 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             </div>
 
           <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center p-5">
-              <motion.svg
-                aria-hidden
-                className="pointer-events-none absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] opacity-70"
-                viewBox="0 0 680 430"
-                preserveAspectRatio="none"
-              >
-                <defs>
-                  <linearGradient id="drop-pane-energy" x1="0" x2="1" y1="0" y2="1">
-                    <stop stopColor="hsl(var(--accent) / 0.02)" />
-                    <stop offset="0.52" stopColor="hsl(169 62% 45% / 0.28)" />
-                    <stop offset="1" stopColor="hsl(214 84% 56% / 0.04)" />
-                  </linearGradient>
-                  <linearGradient id="drop-pane-line" x1="0" x2="1" y1="0" y2="0">
-                    <stop stopColor="hsl(var(--accent) / 0)" />
-                    <stop offset="0.35" stopColor="hsl(var(--accent) / 0.52)" />
-                    <stop offset="0.7" stopColor="hsl(169 62% 45% / 0.42)" />
-                    <stop offset="1" stopColor="hsl(214 84% 56% / 0)" />
-                  </linearGradient>
-                </defs>
-                <path d="M36 314 C138 236 210 250 302 182 C402 108 490 122 640 52" fill="none" stroke="url(#drop-pane-line)" strokeWidth="1.4" strokeDasharray="10 18" />
-                <path d="M50 95 C176 126 220 72 324 118 C446 172 482 288 634 308" fill="none" stroke="url(#drop-pane-line)" strokeWidth="1.2" strokeDasharray="6 20" />
-                <path d="M86 350 L198 254 L332 298 L474 164 L612 202" fill="none" stroke="hsl(var(--fg) / 0.1)" strokeWidth="1" />
-                <motion.path
-                  d="M36 314 C138 236 210 250 302 182 C402 108 490 122 640 52"
-                  fill="none"
-                  stroke="url(#drop-pane-line)"
-                  strokeLinecap="round"
-                  strokeWidth="3"
-                  strokeDasharray="42 240"
-                  animate={{ strokeDashoffset: [0, -520] }}
-                  transition={{ duration: 4.8, repeat: Infinity, ease: "linear" }}
-                />
-                <motion.path
-                  d="M50 95 C176 126 220 72 324 118 C446 172 482 288 634 308"
-                  fill="none"
-                  stroke="url(#drop-pane-line)"
-                  strokeLinecap="round"
-                  strokeWidth="2.4"
-                  strokeDasharray="34 220"
-                  animate={{ strokeDashoffset: [0, -460] }}
-                  transition={{ duration: 5.7, repeat: Infinity, ease: "linear" }}
-                />
-                {[110, 218, 342, 468, 578].map((x, index) => (
-                  <motion.rect
-                    key={x}
-                    x={x}
-                    y={index % 2 === 0 ? 86 : 286}
-                    width="54"
-                    height="34"
-                    rx="8"
-                    fill="url(#drop-pane-energy)"
-                    stroke="hsl(var(--fg) / 0.1)"
-                    animate={{ y: [index % 2 === 0 ? 86 : 286, index % 2 === 0 ? 96 : 276, index % 2 === 0 ? 86 : 286] }}
-                    transition={{ duration: 4 + index * 0.35, repeat: Infinity, ease: "easeInOut" }}
-                  />
-                ))}
-              </motion.svg>
               <AnimatePresence mode="wait">
                 {files.length > 0 ? (
                   <motion.div
@@ -971,17 +969,18 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                   >
                     <motion.div
                       className={cn(
-                        "relative flex h-28 w-28 items-center justify-center rounded-lg border bg-bg/75 shadow-sm",
+                        "relative flex h-28 w-28 items-center justify-center overflow-visible rounded-full border bg-bg/80 shadow-sm",
                         dragActive ? "border-accent text-accent" : "border-line/80 text-fg/35",
                       )}
-                      animate={{ y: dragActive ? [0, -8, 0] : [0, -5, 0], scale: dragActive ? [1, 1.05, 1] : 1 }}
-                      transition={{ duration: dragActive ? 0.9 : 3.3, repeat: Infinity, ease: "easeInOut" }}
+                      animate={{ y: dragActive ? [0, -4, 0] : [0, -2, 0], scale: dragActive ? [1, 1.025, 1] : 1 }}
+                      transition={{ duration: dragActive ? 1.2 : 3.4, repeat: Infinity, ease: "easeInOut" }}
                     >
-                      <UploadCloud className="h-11 w-11" />
+                      <UploadPulseRings active={dragActive} />
+                      <UploadCloud className="relative z-10 h-11 w-11" />
                       <motion.span
-                        className="absolute inset-x-5 bottom-5 h-1 rounded-full bg-accent/35"
-                        animate={{ scaleX: dragActive ? [0.4, 1, 0.4] : [0.2, 0.75, 0.2], opacity: [0.25, 0.75, 0.25] }}
-                        transition={{ duration: 1.7, repeat: Infinity, ease: "easeInOut" }}
+                        className="absolute inset-x-8 bottom-7 h-px rounded-full bg-accent/45"
+                        animate={{ scaleX: dragActive ? [0.45, 1, 0.45] : [0.35, 0.78, 0.35], opacity: dragActive ? [0.28, 0.74, 0.28] : [0.16, 0.34, 0.16] }}
+                        transition={{ duration: dragActive ? 1.3 : 2.8, repeat: Infinity, ease: "easeInOut" }}
                       />
                     </motion.div>
                     <h2 className="mt-6 text-3xl font-semibold leading-tight text-fg">
@@ -1021,7 +1020,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             ref={fileInputRef}
             className="hidden"
             type="file"
-            accept=".zip,.pdf,.xlsx,.xls,.csv,.doc,.docx,.txt,.png,.jpg,.jpeg,.dwg,.dxf,.msg,.eml,application/zip,application/vnd.ms-outlook,message/rfc822"
+            accept=".zip,.pdf,.xlsx,.xls,.csv,.tsv,.doc,.docx,.rtf,.pptx,.html,.htm,.mhtml,.mht,.txt,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dwg,.dxf,.msg,.eml,application/zip,application/vnd.ms-outlook,message/rfc822"
             multiple
             onChange={(e) => handleFiles(e.target.files, { append: true })}
           />

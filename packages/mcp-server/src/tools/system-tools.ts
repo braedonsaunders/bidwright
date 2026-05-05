@@ -7,8 +7,6 @@ import { join } from "node:path";
 // Agent memory lives in the project directory (CWD of the CLI)
 const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
 
-// Timeout for waiting for user answer (5 minutes)
-const ASK_USER_TIMEOUT_MS = 5 * 60 * 1000;
 const ASK_USER_POLL_MS = 1500;
 
 function sleep(ms: number): Promise<void> {
@@ -52,9 +50,8 @@ export function registerSystemTools(server: McpServer) {
         });
 
         const questionId = created.questionId;
-        const deadline = Date.now() + ASK_USER_TIMEOUT_MS;
 
-        while (Date.now() < deadline) {
+        while (true) {
           await sleep(ASK_USER_POLL_MS);
           const status = await apiGet<{
             pending: boolean;
@@ -67,23 +64,6 @@ export function registerSystemTools(server: McpServer) {
             return { content: [{ type: "text" as const, text: `User answered: ${status.answer}` }] };
           }
         }
-
-        const finalStatus = await apiGet<{
-          pending: boolean;
-          answered?: boolean;
-          answer?: string;
-          questionId?: string | null;
-        }>(`/api/cli/${projectId}/pending-question?questionId=${encodeURIComponent(questionId)}`).catch(() => null);
-
-        if (finalStatus?.answered && typeof finalStatus.answer === "string") {
-          return { content: [{ type: "text" as const, text: `User answered: ${finalStatus.answer}` }] };
-        }
-
-        await apiPost(`/api/cli/${projectId}/question-timeout`, {
-          questionId,
-        }).catch(() => {});
-
-        return { content: [{ type: "text" as const, text: "User did not respond within 5 minutes. Proceed with your best judgment and note assumptions." }] };
       } catch (err: any) {
         return { content: [{ type: "text" as const, text: `Error: ${err?.message || "Failed to ask user"}` }] };
       }
@@ -166,7 +146,7 @@ export function registerSystemTools(server: McpServer) {
     async ({ phase, detail }) => {
       // POST to a progress endpoint that the API forwards as SSE
       try {
-        await apiPost("/agent/progress", { phase, detail });
+        await apiPost("/agent/progress", { projectId: process.env.BIDWRIGHT_PROJECT_ID || "", phase, detail });
       } catch {
         // Non-critical — don't fail if progress reporting fails
       }

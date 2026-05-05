@@ -109,7 +109,7 @@ export async function aiRewriteNotes(
   config?: AiServiceConfig
 ): Promise<string> {
   if (!config?.apiKey) {
-    return `[AI would organize these notes]\n\n${currentNotes}`;
+    return `[AI would organize customer-facing estimate notes]\n\n${currentNotes}`;
   }
 
   try {
@@ -122,11 +122,11 @@ export async function aiRewriteNotes(
     const response = await adapter.chat({
       model: config.model,
       systemPrompt:
-        "You are a construction estimating expert. Organize and improve the following notes for clarity.",
+        "You are a construction estimating expert. Organize and improve customer-facing estimate notes for clarity. Keep the wording suitable for a client quote and do not include private estimator reasoning or scratch work.",
       messages: [
         {
           role: "user",
-          content: `Project context: ${projectContext}\n\nCurrent notes:\n${currentNotes}\n\nPlease organize these notes into clear sections.`,
+          content: `Project context: ${projectContext}\n\nCurrent customer-facing estimate notes:\n${currentNotes}\n\nPlease organize these notes into clear client-safe sections.`,
         },
       ],
       maxTokens: 2048,

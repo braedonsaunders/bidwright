@@ -3,12 +3,12 @@ import { cn } from "@/lib/utils";
 type BrandAssetVariant = "auto" | "color" | "light";
 
 const MARK_SRC = "/bidwright-mark.png";
-const MARK_LIGHT_SRC = "/bidwright-mark-light.png";
+const MARK_INVERTED_SRC = "/bidwright-mark-inverted.png";
 const LOGO_SRC = "/bidwright-logo.png";
 const LOGO_LIGHT_SRC = "/bidwright-logo-light.png";
 
 function assetFor(kind: "mark" | "logo", variant: Exclude<BrandAssetVariant, "auto">) {
-  if (kind === "mark") return variant === "light" ? MARK_LIGHT_SRC : MARK_SRC;
+  if (kind === "mark") return variant === "light" ? MARK_INVERTED_SRC : MARK_SRC;
   return variant === "light" ? LOGO_LIGHT_SRC : LOGO_SRC;
 }
 
@@ -25,7 +25,7 @@ export function BidwrightMark({
     return (
       <span className={cn("relative inline-flex shrink-0 items-center justify-center", className)} aria-hidden="true">
         <img src={MARK_SRC} alt="" className={cn("h-full w-full object-contain dark:hidden", imageClassName)} />
-        <img src={MARK_LIGHT_SRC} alt="" className={cn("hidden h-full w-full object-contain dark:block", imageClassName)} />
+        <img src={MARK_INVERTED_SRC} alt="" className={cn("hidden h-full w-full object-contain dark:block", imageClassName)} />
       </span>
     );
   }

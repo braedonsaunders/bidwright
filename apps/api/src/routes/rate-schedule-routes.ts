@@ -2,6 +2,83 @@ import type { FastifyInstance } from "fastify";
 import { buildWorkspaceResponse } from "../server.js";
 
 export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
+  // ── Rate Book Assignments ──────────────────────────────────────────────
+
+  app.get("/api/rate-book-assignments", async (request, reply) => {
+    try {
+      const query = request.query as {
+        customerId?: string;
+        projectId?: string;
+        category?: string;
+        active?: string;
+      };
+      return await request.store!.listRateBookAssignments({
+        customerId: query.customerId,
+        projectId: query.projectId,
+        category: query.category,
+        active: query.active === undefined ? undefined : query.active !== "false",
+      });
+    } catch (e: any) {
+      reply.code(500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
+  app.post("/api/rate-book-assignments", async (request, reply) => {
+    try {
+      const created = await request.store!.createRateBookAssignment(request.body as any);
+      reply.code(201);
+      return created;
+    } catch (e: any) {
+      reply.code(e.message?.includes("not found") ? 404 : 500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
+  app.patch("/api/rate-book-assignments/:id", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      return await request.store!.updateRateBookAssignment(id, request.body as Record<string, unknown>);
+    } catch (e: any) {
+      reply.code(e.message?.includes("not found") ? 404 : 500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
+  app.delete("/api/rate-book-assignments/:id", async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      return await request.store!.deleteRateBookAssignment(id);
+    } catch (e: any) {
+      reply.code(e.message?.includes("not found") ? 404 : 500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
+  // ── Resources ─────────────────────────────────────────────────────────
+
+  app.get("/api/resources", async (request, reply) => {
+    try {
+      const query = request.query as {
+        q?: string;
+        resourceType?: string;
+        category?: string;
+        active?: string;
+        limit?: string;
+      };
+      return await request.store!.listResources({
+        q: query.q,
+        resourceType: query.resourceType,
+        category: query.category,
+        active: query.active === undefined ? true : query.active !== "false",
+        limit: query.limit ? Number(query.limit) : undefined,
+      });
+    } catch (e: any) {
+      reply.code(500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
   // ── Org-Level Master CRUD ──────────────────────────────────────────────
 
   app.get("/api/rate-schedules", async (request) => {
@@ -97,20 +174,23 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { id } = request.params as { id: string };
       const body = request.body as {
+        resourceId?: string | null;
         catalogItemId?: string;
         rates?: Record<string, number>; costRates?: Record<string, number>;
-        burden?: number; perDiem?: number; sortOrder?: number;
+        burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
       };
-      if (!body.catalogItemId) {
+      if (!body.resourceId && !body.catalogItemId) {
         reply.code(400);
-        return { error: "catalogItemId is required — items must be linked to a catalog item." };
+        return { error: "resourceId or catalogItemId is required." };
       }
       return await request.store!.createRateScheduleItem(id, {
+        resourceId: body.resourceId ?? null,
         catalogItemId: body.catalogItemId,
         rates: body.rates,
         costRates: body.costRates,
         burden: body.burden,
         perDiem: body.perDiem,
+        metadata: body.metadata,
         sortOrder: body.sortOrder,
       });
     } catch (e: any) {
@@ -174,6 +254,23 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
         return { error: "scheduleId is required" };
       }
       await request.store!.importRateScheduleToRevision(projectId, scheduleId);
+      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      if (!payload) {
+        reply.code(404);
+        return { error: "Project workspace not found" };
+      }
+      reply.code(201);
+      return payload;
+    } catch (e: any) {
+      reply.code(e.message?.includes("not found") ? 404 : 500);
+      return { error: e.message ?? "Internal error" };
+    }
+  });
+
+  app.post("/projects/:projectId/rate-schedules/import-assigned", async (request, reply) => {
+    try {
+      const { projectId } = request.params as { projectId: string };
+      await request.store!.importAssignedRateSchedulesToRevision(projectId);
       const payload = await buildWorkspaceResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);

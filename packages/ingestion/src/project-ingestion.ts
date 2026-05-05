@@ -1,4 +1,16 @@
-import type { ArchiveEntry, ChunkStore, DocumentClassifier, IngestionReport, PackageSourceKind, SourceDocument, SourceDocumentStructuredData, TextExtractor } from './types.js';
+import type {
+  ArchiveEntry,
+  AzureDocumentIntelligenceModel,
+  ChunkStore,
+  DocumentClassifier,
+  DocumentExtractionProvider,
+  IngestionReport,
+  PackageSourceKind,
+  SourceDocument,
+  SourceDocumentStructuredData,
+  TextExtractor,
+} from './types.js';
+import type { ParsedDocument } from './pdf-types.js';
 
 import { HeuristicDocumentClassifier } from './classification.js';
 import { chunkDocuments } from './chunking.js';
@@ -12,7 +24,32 @@ import { parseFile } from './file-handlers.js';
 const PDF_EXTENSIONS = new Set(['pdf']);
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'xml', 'yml', 'yaml', 'log', 'ini', 'toml', 'conf']);
 const EXCEL_EXTENSIONS = new Set(['xlsx', 'xls', 'csv', 'tsv']);
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tiff', 'bmp', 'svg']);
+const LOCAL_HANDLER_EXTENSIONS = new Set([
+  'xlsx', 'xls', 'csv', 'tsv',
+  'docx', 'doc', 'rtf',
+  'pptx',
+  'html', 'htm', 'mhtml', 'mht',
+]);
+const AZURE_DOCUMENT_EXTENSIONS = new Set([
+  'pdf',
+  'png', 'jpg', 'jpeg', 'tiff', 'tif', 'bmp',
+  'docx', 'xlsx', 'pptx',
+  'html', 'htm',
+]);
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'tiff', 'tif', 'bmp', 'svg']);
+
+type AzureExtractionConfig = {
+  endpoint?: string;
+  key?: string;
+  model?: AzureDocumentIntelligenceModel;
+};
+
+type ExtractionResult = {
+  text: string;
+  pageCount: number;
+  notes: string[];
+  structuredData?: SourceDocumentStructuredData;
+};
 
 function tryReadAsciiText(bytes: Uint8Array): string {
   const sample = Buffer.from(bytes).toString('utf8');
@@ -22,75 +59,122 @@ function tryReadAsciiText(bytes: Uint8Array): string {
   return sample;
 }
 
+function structuredDataFromParsedDocument(doc: ParsedDocument): SourceDocumentStructuredData | undefined {
+  const structuredData: SourceDocumentStructuredData = {};
+  if (doc.tables.length > 0) {
+    structuredData.tables = doc.tables.map((table) => ({
+      pageNumber: table.pageNumber,
+      headers: table.headers,
+      rows: table.rows,
+      rawMarkdown: table.rawMarkdown,
+    }));
+  }
+  if (doc.metadata.keyValuePairs && doc.metadata.keyValuePairs.length > 0) {
+    structuredData.keyValuePairs = doc.metadata.keyValuePairs;
+  }
+  if (doc.metadata.documentFields && doc.metadata.documentFields.length > 0) {
+    structuredData.documentFields = doc.metadata.documentFields;
+  }
+  if (doc.metadata.selectionMarks && doc.metadata.selectionMarks.length > 0) {
+    structuredData.selectionMarks = doc.metadata.selectionMarks;
+  }
+
+  const hasStructuredData = Boolean(
+    structuredData.tables ||
+    structuredData.keyValuePairs ||
+    structuredData.documentFields ||
+    structuredData.selectionMarks,
+  );
+  return hasStructuredData ? structuredData : undefined;
+}
+
+function extractionFromParsedDocument(doc: ParsedDocument, notes: string[]): ExtractionResult {
+  const text = doc.pages.map((p) => p.content).filter(Boolean).join('\n\n--- Page Break ---\n\n') || doc.content;
+  return {
+    text,
+    pageCount: doc.metadata.pageCount || doc.pages.length || 1,
+    notes,
+    structuredData: structuredDataFromParsedDocument(doc),
+  };
+}
+
+function parsedDocumentHasContent(doc: ParsedDocument): boolean {
+  return Boolean(
+    doc.content.trim() ||
+    doc.pages.some((page) => page.content.trim()) ||
+    doc.tables.length > 0 ||
+    doc.metadata.keyValuePairs?.length ||
+    doc.metadata.documentFields?.length ||
+    doc.metadata.selectionMarks?.length,
+  );
+}
+
 /**
  * Extract text from an archive entry using the best available method.
  * Uses the same capabilities as the knowledge service:
  * - PDFs: pdf-parse library
- * - Excel/CSV: xlsx library via file handlers
+ * - Office documents: DOCX + Excel/CSV via file handlers
  * - Images: metadata placeholder
  * - Text: direct read
  */
 async function extractTextFromEntry(
   entry: ArchiveEntry,
-  azureConfig?: { endpoint?: string; key?: string },
-): Promise<{ text: string; pageCount: number; notes: string[]; structuredData?: SourceDocumentStructuredData }> {
+  azureConfig?: AzureExtractionConfig,
+  extractionProvider: DocumentExtractionProvider = 'azure',
+): Promise<ExtractionResult> {
   const ext = entry.extension.toLowerCase();
   const notes: string[] = [];
+  const hasAzureConfig = Boolean(azureConfig?.endpoint && azureConfig?.key);
+  const canUseAzure = extractionProvider !== 'local' && AZURE_DOCUMENT_EXTENSIONS.has(ext);
 
-  // PDF: use hybrid provider (local + Azure DI fallback for scanned PDFs).
-  // Azure creds come from org Settings > Integrations via azureConfig.
-  if (PDF_EXTENSIONS.has(ext)) {
+  if (canUseAzure && hasAzureConfig) {
     try {
       const parser = createPdfParser({
-        provider: 'hybrid',
+        provider: 'azure',
         azureEndpoint: azureConfig?.endpoint,
         azureKey: azureConfig?.key,
+        azureModel: azureConfig?.model ?? 'prebuilt-layout',
       });
       const doc = await parser.parse(Buffer.from(entry.bytes), entry.name);
-      const text = doc.pages.map((p) => p.content).join('\n\n--- Page Break ---\n\n');
-      notes.push('pdf-parse');
-
-      // Preserve structured data from parsing (tables, KV pairs, selection marks)
-      const structuredData: SourceDocumentStructuredData = {};
-      if (doc.tables.length > 0) {
-        structuredData.tables = doc.tables.map((t) => ({
-          pageNumber: t.pageNumber,
-          headers: t.headers,
-          rows: t.rows,
-          rawMarkdown: t.rawMarkdown,
-        }));
+      const azureNotes = [...notes, 'azure-di'];
+      if (doc.warnings.length > 0) azureNotes.push(...doc.warnings.map((warning) => `azure-di-warning: ${warning}`));
+      if (parsedDocumentHasContent(doc)) {
+        return extractionFromParsedDocument(doc, azureNotes);
       }
-      if (doc.metadata.keyValuePairs && doc.metadata.keyValuePairs.length > 0) {
-        structuredData.keyValuePairs = doc.metadata.keyValuePairs;
-      }
-      if (doc.metadata.selectionMarks && doc.metadata.selectionMarks.length > 0) {
-        structuredData.selectionMarks = doc.metadata.selectionMarks;
-      }
-
-      const hasStructured = structuredData.tables || structuredData.keyValuePairs || structuredData.selectionMarks;
-      return {
-        text: text || doc.content,
-        pageCount: doc.metadata.pageCount || 1,
-        notes,
-        structuredData: hasStructured ? structuredData : undefined,
-      };
+      if (doc.warnings.length > 0) notes.push(...doc.warnings.map((warning) => `azure-di-warning: ${warning}`));
+      notes.push('azure-di-empty');
     } catch (err) {
-      notes.push(`pdf-parse-error: ${err instanceof Error ? err.message : String(err)}`);
+      notes.push(`azure-di-error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else if (canUseAzure && !hasAzureConfig) {
+    notes.push('azure-di-unconfigured');
+  }
+
+  // PDF local fallback: direct text extraction without cloud OCR.
+  if (PDF_EXTENSIONS.has(ext)) {
+    try {
+      const parser = createPdfParser({ provider: 'local' });
+      const doc = await parser.parse(Buffer.from(entry.bytes), entry.name);
+      const localNotes = [...notes, 'pdf-local'];
+      if (doc.warnings.length > 0) localNotes.push(...doc.warnings.map((warning) => `pdf-local-warning: ${warning}`));
+      return extractionFromParsedDocument(doc, localNotes);
+    } catch (err) {
+      notes.push(`pdf-local-error: ${err instanceof Error ? err.message : String(err)}`);
       return { text: '', pageCount: 1, notes };
     }
   }
 
-  // Excel/CSV: use file handlers
-  if (EXCEL_EXTENSIONS.has(ext)) {
+  // Office, web, presentation, and spreadsheet formats: structured local extraction.
+  if (LOCAL_HANDLER_EXTENSIONS.has(ext) || EXCEL_EXTENSIONS.has(ext)) {
     try {
       const result = await parseFile(Buffer.from(entry.bytes), entry.name, entry.mimeType ?? '');
       if (result) {
-        const text = result.pages.map((p) => p.content).join('\n\n');
-        notes.push('excel-handler');
-        return { text, pageCount: result.pages.length || 1, notes };
+        notes.push(`${ext}-local`);
+        if (result.warnings.length > 0) notes.push(...result.warnings.map((warning) => `${ext}-warning: ${warning}`));
+        return extractionFromParsedDocument(result, notes);
       }
     } catch (err) {
-      notes.push(`excel-error: ${err instanceof Error ? err.message : String(err)}`);
+      notes.push(`${ext}-error: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -129,7 +213,38 @@ export interface IngestionPipelineDependencies {
   chunkSize?: number;
   chunkOverlap?: number;
   /** Azure Document Intelligence credentials (resolved from org settings). */
-  azureConfig?: { endpoint?: string; key?: string };
+  azureConfig?: AzureExtractionConfig;
+  /** Preferred document extraction provider. Defaults to Azure-first with local fallback. */
+  documentExtractionProvider?: DocumentExtractionProvider;
+  /** Optional progress sink for UI-facing package ingestion telemetry. */
+  onProgress?: (event: IngestionProgressEvent) => void | Promise<void>;
+}
+
+export interface IngestionDocumentProgress {
+  id: string;
+  fileName: string;
+  sourcePath: string;
+  fileType: string;
+  size: number;
+  status: 'queued' | 'extracting' | 'classifying' | 'chunking' | 'complete' | 'failed';
+  stage: string;
+  progress: number;
+  documentType?: string;
+  pageCount?: number;
+  extractionProvider?: string | null;
+  error?: string;
+  updatedAt: string;
+}
+
+export interface IngestionProgressEvent {
+  stage: 'archive' | 'document' | 'chunking' | 'complete' | 'failed';
+  progress: number;
+  currentDocumentId?: string;
+  currentDocumentName?: string;
+  documents: IngestionDocumentProgress[];
+  totalBytes: number;
+  processedBytes: number;
+  message?: string;
 }
 
 export interface CustomerPackageInput {
@@ -152,60 +267,162 @@ export async function ingestCustomerPackage(
   const documents: ProjectDocumentText[] = [];
   const unknownFiles: string[] = [];
   let totalBytes = 0;
+  let processedBytes = 0;
+  const progressDocs: IngestionDocumentProgress[] = entries.map((entry, index) => ({
+    id: `entry-${index}-${entry.path}`,
+    fileName: entry.name,
+    sourcePath: entry.path,
+    fileType: entry.extension,
+    size: entry.size,
+    status: 'queued',
+    stage: 'Queued',
+    progress: 0,
+    updatedAt: new Date().toISOString(),
+  }));
 
-  for (const entry of entries) {
-    totalBytes += entry.size;
+  for (const entry of entries) totalBytes += entry.size;
+
+  const emitProgress = async (
+    stage: IngestionProgressEvent['stage'],
+    progress: number,
+    options: Partial<Omit<IngestionProgressEvent, 'stage' | 'progress' | 'documents' | 'totalBytes' | 'processedBytes'>> = {},
+  ) => {
+    if (!dependencies.onProgress) return;
+    await dependencies.onProgress({
+      stage,
+      progress,
+      documents: progressDocs.map((doc) => ({ ...doc })),
+      totalBytes,
+      processedBytes,
+      ...options,
+    });
+  };
+
+  await emitProgress('archive', 0.05, { message: `Discovered ${entries.length} files in ${input.packageName}` });
+
+  for (const [index, entry] of entries.entries()) {
+    const progressDoc = progressDocs[index];
+    const baseProgress = entries.length === 0 ? 0.1 : 0.1 + (index / entries.length) * 0.72;
+    const nextProgress = entries.length === 0 ? 0.82 : 0.1 + ((index + 1) / entries.length) * 0.72;
+
+    progressDoc.status = 'extracting';
+    progressDoc.stage = 'Extracting text';
+    progressDoc.progress = 0.18;
+    progressDoc.updatedAt = new Date().toISOString();
+    await emitProgress('document', baseProgress, {
+      currentDocumentId: progressDoc.id,
+      currentDocumentName: progressDoc.fileName,
+      message: `Extracting ${progressDoc.fileName}`,
+    });
 
     let extractedText = '';
     let pageCount = 1;
     let structuredData: SourceDocumentStructuredData | undefined;
     const extractionNotes: string[] = [];
 
-    // First try custom extractors (if provided)
-    const textExtractor = dependencies.extractors?.find((extractor) => extractor.canHandle(entry));
-    if (textExtractor) {
-      const result = await textExtractor.extract(entry);
-      if (result) {
-        extractedText = result.text;
-        extractionNotes.push(`custom-extractor:${result.confidence.toFixed(2)}`);
+    try {
+      // First try custom extractors (if provided)
+      const textExtractor = dependencies.extractors?.find((extractor) => extractor.canHandle(entry));
+      if (textExtractor) {
+        const result = await textExtractor.extract(entry);
+        if (result) {
+          extractedText = result.text;
+          extractionNotes.push(`custom-extractor:${result.confidence.toFixed(2)}`);
+        }
       }
+
+      // Fall back to unified extraction
+      if (!extractedText) {
+        const extracted = await extractTextFromEntry(
+          entry,
+          dependencies.azureConfig,
+          dependencies.documentExtractionProvider ?? 'azure',
+        );
+        extractedText = extracted.text;
+        pageCount = extracted.pageCount;
+        structuredData = extracted.structuredData;
+        extractionNotes.push(...extracted.notes);
+      }
+
+      progressDoc.status = 'classifying';
+      progressDoc.stage = 'Classifying document';
+      progressDoc.progress = 0.72;
+      progressDoc.pageCount = pageCount;
+      progressDoc.extractionProvider = extractionNotes.some((note) => note === 'azure-di' || note.startsWith('azure-di-warning'))
+        ? 'azure_di'
+        : extractionNotes.some((note) => note.includes('image-placeholder'))
+          ? 'vision_required'
+          : 'local';
+      progressDoc.updatedAt = new Date().toISOString();
+      await emitProgress('document', Math.min(nextProgress - 0.02, baseProgress + 0.12), {
+        currentDocumentId: progressDoc.id,
+        currentDocumentName: progressDoc.fileName,
+        message: `Classifying ${progressDoc.fileName}`,
+      });
+
+      const trimmedText = normalizeWhitespace(extractedText);
+      const kind = classifier.classify(entry, trimmedText);
+
+      if (kind === 'unknown') {
+        unknownFiles.push(entry.path);
+      }
+
+      const title = entry.name.replace(/\.[^.]+$/, '');
+      const docId = createId('doc');
+      documents.push({
+        id: docId,
+        sourcePath: entry.path,
+        title,
+        kind,
+        sourceKind: input.sourceKind ?? 'project',
+        text: trimmedText || `[${title}] no text extracted — may require OCR or vision processing`,
+        metadata: {
+          extension: entry.extension,
+          size: entry.size,
+          mimeType: entry.mimeType ?? '',
+          pageCount,
+        },
+        citations: [],
+        structuredData,
+        extractionNotes,
+      });
+
+      processedBytes += entry.size;
+      progressDoc.id = docId;
+      progressDoc.status = 'complete';
+      progressDoc.stage = 'Ready';
+      progressDoc.progress = 1;
+      progressDoc.documentType = kind;
+      progressDoc.pageCount = pageCount;
+      progressDoc.updatedAt = new Date().toISOString();
+      await emitProgress('document', nextProgress, {
+        currentDocumentId: progressDoc.id,
+        currentDocumentName: progressDoc.fileName,
+        message: `Finished ${progressDoc.fileName}`,
+      });
+    } catch (err) {
+      progressDoc.status = 'failed';
+      progressDoc.stage = 'Failed';
+      progressDoc.progress = 1;
+      progressDoc.error = err instanceof Error ? err.message : String(err);
+      progressDoc.updatedAt = new Date().toISOString();
+      await emitProgress('failed', nextProgress, {
+        currentDocumentId: progressDoc.id,
+        currentDocumentName: progressDoc.fileName,
+        message: `Failed ${progressDoc.fileName}: ${progressDoc.error}`,
+      });
+      throw err;
     }
-
-    // Fall back to unified extraction
-    if (!extractedText) {
-      const extracted = await extractTextFromEntry(entry, dependencies.azureConfig);
-      extractedText = extracted.text;
-      pageCount = extracted.pageCount;
-      structuredData = extracted.structuredData;
-      extractionNotes.push(...extracted.notes);
-    }
-
-    const trimmedText = normalizeWhitespace(extractedText);
-    const kind = classifier.classify(entry, trimmedText);
-
-    if (kind === 'unknown') {
-      unknownFiles.push(entry.path);
-    }
-
-    const title = entry.name.replace(/\.[^.]+$/, '');
-    documents.push({
-      id: createId('doc'),
-      sourcePath: entry.path,
-      title,
-      kind,
-      sourceKind: input.sourceKind ?? 'project',
-      text: trimmedText || `[${title}] no text extracted — may require OCR or vision processing`,
-      metadata: {
-        extension: entry.extension,
-        size: entry.size,
-        mimeType: entry.mimeType ?? '',
-        pageCount,
-      },
-      citations: [],
-      structuredData,
-      extractionNotes,
-    });
   }
+
+  for (const doc of progressDocs) {
+    if (doc.status !== 'complete') continue;
+    doc.status = 'chunking';
+    doc.stage = 'Indexing text';
+    doc.progress = 0.95;
+    doc.updatedAt = new Date().toISOString();
+  }
+  await emitProgress('chunking', 0.9, { message: 'Chunking documents for search' });
 
   const chunks = chunkDocuments(documents, {
     chunkSize: dependencies.chunkSize,
@@ -215,6 +432,16 @@ export async function ingestCustomerPackage(
   if (dependencies.chunkStore) {
     await dependencies.chunkStore.upsert(chunks);
   }
+
+  for (const doc of progressDocs) {
+    if (doc.status === 'chunking') {
+      doc.status = 'complete';
+      doc.stage = 'Ready';
+      doc.progress = 1;
+      doc.updatedAt = new Date().toISOString();
+    }
+  }
+  await emitProgress('complete', 0.98, { message: `Prepared ${documents.length} documents for estimating` });
 
   return {
     packageId: input.packageId ?? createId('pkg'),

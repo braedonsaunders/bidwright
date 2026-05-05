@@ -8,9 +8,11 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
 import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
+import { getAgentToolDisplayName } from "@bidwright/domain";
 import { getSessionCookieToken } from "../services/session-cookie.js";
 
 /** Extract session token from Authorization header, cookie, or query param */
@@ -25,6 +27,19 @@ function extractAuthToken(request: FastifyRequest): string {
   if (cookieToken) return cookieToken;
   // 3. Query param fallback (for SSE streams etc.)
   return (request.query as any)?.token || "";
+}
+
+function enrichCliToolEvent(evt: any) {
+  if (evt?.type !== "tool_call" && evt?.type !== "tool") return evt;
+  const toolId = evt?.data?.toolId;
+  if (typeof toolId !== "string" || !toolId) return evt;
+  return {
+    ...evt,
+    data: {
+      ...(evt.data ?? {}),
+      toolDisplayName: getAgentToolDisplayName(toolId),
+    },
+  };
 }
 
 function buildSyntheticCompletionEvents(summary: any, updatedAt: Date | string | null | undefined) {
@@ -341,7 +356,38 @@ type PendingQuestionState = {
   runId?: string | null;
 };
 
+function normalizeCliEventText(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim() : "";
+}
+
+function semanticCliEventKey(event: PersistedCliEvent): string | null {
+  const type = event.type || "";
+  const data = event.data || {};
+
+  if ((type === "tool_call" || type === "tool" || type === "tool_result") && data.toolUseId) {
+    return `${type}:${String(data.toolUseId)}`;
+  }
+
+  if (type === "askUser") {
+    const questionId = data.questionId || data.id;
+    if (questionId) return `askUser:${String(questionId)}`;
+    const question = normalizeCliEventText(data.question);
+    return question ? `askUser:${question}` : null;
+  }
+
+  if (type === "userAnswer") {
+    const questionId = data.questionId || data.id;
+    const answer = normalizeCliEventText(data.answer ?? data.text ?? data.content ?? data.message);
+    if (questionId) return `userAnswer:${String(questionId)}:${answer}`;
+    return answer ? `userAnswer:${answer}` : null;
+  }
+
+  return null;
+}
+
 function cliEventFingerprint(event: PersistedCliEvent): string {
+  const semanticKey = semanticCliEventKey(event);
+  if (semanticKey) return semanticKey;
   return JSON.stringify({
     type: event.type || "",
     timestamp: event.timestamp || "",
@@ -857,7 +903,8 @@ function attachCliRunPersistence(
   };
 
   session.events.on("event", (evt: any) => {
-    eventBuffer.push({ ...evt, timestamp: evt?.timestamp || new Date().toISOString() });
+    const enriched = enrichCliToolEvent(evt);
+    eventBuffer.push({ ...enriched, timestamp: enriched?.timestamp || new Date().toISOString() });
     scheduleFlush();
   });
 
@@ -1041,6 +1088,12 @@ export function registerCliRoutes(app: FastifyInstance) {
     const linkedKnowledgePageNames = documentSnapshots.length > 0
       ? await writeKnowledgeDocumentSnapshots(projectDir, documentSnapshots)
       : [];
+    const librarySnapshot = await writeAgentLibrarySnapshot({
+      projectDir,
+      projectId,
+      organizationId: request.user?.organizationId,
+      store,
+    });
 
     // Fetch settings early so we can pass integrations into CLAUDE.md params
     const settingsEarly = await store.getSettings();
@@ -1063,6 +1116,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       documents,
       knowledgeBookFiles: linkedBookNames,
       knowledgeDocumentFiles: linkedKnowledgePageNames,
+      librarySnapshot,
       estimateDefaults,
       maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
       persona: persona ? await (async () => {
@@ -1152,14 +1206,19 @@ export function registerCliRoutes(app: FastifyInstance) {
       ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${effectiveScope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
       : "";
 
-    const initialPrompt = prompt || `Read ${instructionFile} now.${scopeDirective} Then execute the staged estimate workflow in order:
+    const startupDirective = `Read ${instructionFile} now. Then read library-snapshots/README.md and library-snapshots/library-index.md before pricing anything.${scopeDirective}`;
+    const userPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : "";
+    const initialPrompt = userPrompt
+      ? `${startupDirective}\n\nThen follow this user request:\n${userPrompt}`
+      : `${startupDirective} Then execute the staged estimate workflow in order:
 
 1. Read the documents and save the structured scope graph with saveEstimateScopeGraph.
-2. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
-3. Define the commercial/package structure with saveEstimatePackagePlan.
-4. ${benchmarkingEnabled ? "Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours." : "Skip recomputeEstimateBenchmarks because organization benchmarking is disabled, and record the top-down sanity checks you used in saveEstimateAdjustments."}
-5. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items.
-6. Build the quote summary breakout with applySummaryPreset using the most appropriate preset for the actual worksheet/phase structure, then perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
+2. Search library-snapshots plus MCP knowledge/dataset/cost/labour tools for relevant books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books.
+3. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
+4. Define the commercial/package structure with saveEstimatePackagePlan.
+5. ${benchmarkingEnabled ? "Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours." : "Skip recomputeEstimateBenchmarks because organization benchmarking is disabled, and record the top-down sanity checks you used in saveEstimateAdjustments."}
+6. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items.
+7. Build the quote summary breakout with applySummaryPreset using the most appropriate preset for the actual worksheet/phase structure, then perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
 
 CRITICAL: Do not jump from document facts straight into line-item hours. The estimate is only valid after the scope graph, execution plan, package plan, ${benchmarkingEnabled ? "benchmark pass, " : ""}adjustment pass, and reconcile pass are all saved.`;
 
@@ -1198,6 +1257,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     }
 
     // Set SSE headers manually and hijack the response so Fastify doesn't close it
+    reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
@@ -1212,8 +1272,9 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     // Forward events from CLI process to SSE
     const onEvent = (evt: any) => {
       try {
-        const payload = JSON.stringify(evt.data);
-        reply.raw.write(`event: ${evt.type}\ndata: ${payload}\n\n`);
+        const enriched = enrichCliToolEvent(evt);
+        const payload = JSON.stringify(enriched.data);
+        reply.raw.write(`event: ${enriched.type}\ndata: ${payload}\n\n`);
       } catch {}
     };
 
@@ -1224,17 +1285,19 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       try { reply.raw.write(`: ping\n\n`); } catch {}
     }, 15_000);
 
-    // Cleanup on client disconnect
-    reply.raw.on("close", () => {
-      session.events.off("event", onEvent);
-      clearInterval(pingTimer);
-    });
-
     // When session ends, close SSE
-    session.events.once("done", () => {
+    const onDone = () => {
       session.events.off("event", onEvent);
       clearInterval(pingTimer);
       try { reply.raw.end(); } catch {}
+    };
+    session.events.once("done", onDone);
+
+    // Cleanup on client disconnect
+    reply.raw.on("close", () => {
+      session.events.off("event", onEvent);
+      session.events.off("done", onDone);
+      clearInterval(pingTimer);
     });
 
     // IMPORTANT: Don't return anything — keep the connection open
@@ -1578,9 +1641,12 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     }
 
     // Determine current status: live session takes priority
+    const persistedStatus = latestRun?.status === "running" && !session
+      ? "stopped"
+      : latestRun?.status;
     const currentStatus = session?.status === "running"
       ? "running"
-      : (derivedStatus || latestRun?.status || "none");
+      : (derivedStatus || persistedStatus || "none");
 
     return {
       status: currentStatus,
@@ -1731,11 +1797,29 @@ Merge tables that span multiple pages. Skip non-data pages.
 
   // ── Progress Webhook (called by MCP server) ─────────────────
   app.post("/agent/progress", async (request) => {
-    const { phase, detail } = (request.body || {}) as { phase: string; detail: string };
-    // This is called by the MCP server's reportProgress tool
-    // The event will be picked up by the CLI's stdout parser
-    // For now, just acknowledge
-    return { ok: true };
+    const { phase, detail, projectId } = (request.body || {}) as { phase: string; detail: string; projectId?: string };
+    const trimmedProjectId = typeof projectId === "string" ? projectId.trim() : "";
+    const trimmedPhase = typeof phase === "string" && phase.trim() ? phase.trim() : "Working";
+    const trimmedDetail = typeof detail === "string" && detail.trim() ? detail.trim() : "Agent progress update";
+    const progressEvent: PersistedCliEvent = {
+      type: "progress",
+      data: {
+        phase: trimmedPhase,
+        detail: trimmedDetail,
+        source: "reportProgress",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    if (trimmedProjectId) {
+      const session = getSession(trimmedProjectId);
+      if (session) {
+        session.events.emit("event", progressEvent);
+      }
+      await appendCliEventsToLatestRun(trimmedProjectId, [progressEvent]).catch(() => null);
+    }
+
+    return { ok: true, forwarded: Boolean(trimmedProjectId) };
   });
 
   // ── askUser question/answer flow ───────────────────────────
@@ -1926,48 +2010,17 @@ Merge tables that span multiple pages. Skip non-data pages.
   });
 
   app.post("/api/cli/:projectId/question-timeout", async (request) => {
+    // Backward-compatible no-op for older clients. askUser now blocks until an
+    // explicit answer, matching the CLI behavior where an agent can wait for
+    // days without inventing defaults or continuing past the user.
     const { projectId } = request.params as { projectId: string };
     const { questionId } = (request.body || {}) as { questionId?: string };
     const pending = pendingQuestions.get(projectId);
-    const latestEvents = await getLatestCliRunEvents(projectId, {
-      questionId,
-      runId: pending?.runId ?? null,
-    });
-    const resolvedQuestionId = typeof questionId === "string" && questionId
-      ? questionId
-      : pending?.id || "";
-
-    if (!resolvedQuestionId) {
-      return { ok: true, cleared: false };
-    }
-
-    if (findCliQuestionAnswer(latestEvents, resolvedQuestionId) !== null) {
-      if (pendingQuestions.get(projectId)?.id === resolvedQuestionId) {
-        pendingQuestions.delete(projectId);
-      }
-      return { ok: true, cleared: false, alreadyAnswered: true };
-    }
-
-    if (pendingQuestions.get(projectId)?.id === resolvedQuestionId) {
-      pendingQuestions.delete(projectId);
-    }
-
-    const timeoutEvent: PersistedCliEvent = {
-      type: "askUserTimeout",
-      data: {
-        questionId: resolvedQuestionId,
-      },
-      timestamp: new Date().toISOString(),
+    return {
+      ok: true,
+      cleared: false,
+      waiting: true,
+      questionId: questionId || pending?.id || null,
     };
-    const session = getSession(projectId);
-    if (session) {
-      session.events.emit("event", timeoutEvent);
-    }
-    await appendCliEventsToLatestRun(projectId, [timeoutEvent], {
-      questionId: resolvedQuestionId,
-      runId: pending?.runId ?? null,
-    }).catch(() => null);
-
-    return { ok: true, cleared: true };
   });
 }

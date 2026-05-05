@@ -33,6 +33,35 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function mimeTypeForFilename(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'pdf':
+      return 'application/pdf';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
+    case 'bmp':
+      return 'image/bmp';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'pptx':
+      return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    case 'html':
+    case 'htm':
+      return 'text/html';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
 /**
  * Parse markdown text into pages, sections, and tables.
  *
@@ -509,7 +538,7 @@ async function visionParsePdf(
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a PDF using Azure Document Intelligence (formerly Form Recognizer).
+ * Parse a document using Azure Document Intelligence (formerly Form Recognizer).
  *
  * Uses the REST API directly to avoid heavy SDK dependencies.
  * Supports prebuilt-layout (default), prebuilt-document, prebuilt-invoice, and prebuilt-read.
@@ -528,6 +557,7 @@ async function azureParsePdf(
   }
 
   const model = config.azureModel ?? 'prebuilt-layout';
+  const mimeType = mimeTypeForFilename(filename);
   const warnings: string[] = [];
 
   // 1. Submit document for analysis
@@ -537,7 +567,7 @@ async function azureParsePdf(
     method: 'POST',
     headers: {
       'Ocp-Apim-Subscription-Key': apiKey,
-      'Content-Type': 'application/pdf',
+      'Content-Type': mimeType,
     },
     body: new Uint8Array(input),
   });
@@ -593,7 +623,7 @@ async function azureParsePdf(
   }
 
   // 3. Map Azure result to ParsedDocument
-  return mapAzureResult(analyzeResult, filename, input.byteLength, warnings);
+  return mapAzureResult(analyzeResult, filename, input.byteLength, mimeType, warnings);
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +795,7 @@ function mapAzureResult(
   result: AzureAnalyzeResult,
   filename: string,
   fileSize: number,
+  mimeType: string,
   warnings: string[],
 ): ParsedDocument {
   const azurePages = result.pages ?? [];
@@ -863,7 +894,7 @@ function mapAzureResult(
     metadata: {
       pageCount: azurePages.length || pages.length,
       fileSize,
-      mimeType: 'application/pdf',
+      mimeType,
       hasImages: false,
       hasOcr: true,
       keyValuePairs: keyValuePairs.length > 0 ? keyValuePairs : undefined,
@@ -1047,7 +1078,7 @@ export function createPdfParser(config: PdfParserConfig): PdfParser {
           metadata: {
             pageCount: 0,
             fileSize: buffer.byteLength,
-            mimeType: 'application/pdf',
+            mimeType: mimeTypeForFilename(filename),
             hasImages: false,
             hasOcr: false,
           },

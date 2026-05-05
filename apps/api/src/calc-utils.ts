@@ -8,20 +8,42 @@ export function roundMoney(value: number): number {
 
 export function calculateLineItem(
   item: WorksheetItem,
-  _revision: QuoteRevision,
+  revision: QuoteRevision,
   calculationType: CalculationType,
   rateSchedules?: Array<{
+    id?: string;
+    name?: string;
+    category?: string;
+    defaultMarkup?: number;
+    metadata?: Record<string, unknown>;
     tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
-    items: Array<{ id: string; name: string; code: string; rates: Record<string, number>; costRates: Record<string, number>; burden: number; perDiem: number }>;
+    items: Array<{
+      id: string;
+      scheduleId?: string;
+      catalogItemId?: string | null;
+      resourceId?: string | null;
+      name: string;
+      code: string;
+      unit?: string;
+      rates: Record<string, number>;
+      costRates: Record<string, number>;
+      burden: number;
+      perDiem: number;
+      metadata?: Record<string, unknown>;
+    }>;
   }>,
 ): Partial<WorksheetItem> {
   const ctx: CalcContext = {
     rateSchedules: rateSchedules?.map((s) => ({
-      id: "",
-      category: "labour",
+      id: s.id ?? "",
+      name: s.name,
+      category: s.category ?? "",
+      defaultMarkup: s.defaultMarkup,
+      metadata: s.metadata,
       tiers: s.tiers ?? [],
       items: s.items,
     })) as RateScheduleContext[],
+    revisionId: revision.id,
   };
 
   const category = { calculationType } as any;
@@ -31,6 +53,7 @@ export function calculateLineItem(
   if (result.cost !== undefined) patch.cost = result.cost;
   if (result.price !== undefined) patch.price = result.price;
   if (result.markup !== undefined) patch.markup = result.markup;
+  if (result.rateResolution !== undefined) patch.rateResolution = result.rateResolution;
   return patch;
 }
 

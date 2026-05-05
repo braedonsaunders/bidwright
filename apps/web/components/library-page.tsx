@@ -94,28 +94,16 @@ const surfaceOptions = [
     description: "A launch surface for library work and live coverage.",
   },
   {
-    id: "cost",
-    label: "Cost Intelligence",
-    icon: Database,
-    description: "Dynamic cost database for resources, observations, vendor products, and cost basis rows.",
-  },
-  {
     id: "resources",
     label: "Resources",
     icon: Boxes,
-    description: "Catalogued labour, material, equipment, subcontractor, consumable, and allowance resources.",
+    description: "Catalogued material, service, equipment, subcontractor, consumable, and allowance resources.",
   },
   {
-    id: "labor_units",
-    label: "Labor Units",
-    icon: Gauge,
-    description: "Production standards for hours per installed unit, linked to labor resources and rate books.",
-  },
-  {
-    id: "playbooks",
-    label: "Estimators",
-    icon: BookOpen,
-    description: "Estimator behavior, methodology, source bindings, and commercial policy.",
+    id: "rates",
+    label: "Ratebooks",
+    icon: FileSpreadsheet,
+    description: "Customer/resource cost and sell overrides, tiers, travel, allowances, and pricing rules.",
   },
   {
     id: "assemblies",
@@ -124,10 +112,22 @@ const surfaceOptions = [
     description: "Parameterized estimating recipes that expand into priced resource lines.",
   },
   {
-    id: "rates",
-    label: "Rate Books",
-    icon: FileSpreadsheet,
-    description: "Reusable labour, equipment, burden, tiered rates, and schedule pricing logic.",
+    id: "labor_units",
+    label: "Labor Units",
+    icon: Gauge,
+    description: "Production standards for hours per installed unit, linked to resource rows and Ratebooks.",
+  },
+  {
+    id: "cost",
+    label: "Cost Intelligence",
+    icon: Database,
+    description: "Vendor bill line evidence, observations, products, and current cost basis rows.",
+  },
+  {
+    id: "playbooks",
+    label: "Estimators",
+    icon: BookOpen,
+    description: "Estimator behavior, methodology, source bindings, and commercial policy.",
   },
   {
     id: "knowledge",
@@ -151,11 +151,6 @@ function totalRateItems(schedules: RateSchedule[]) {
 
 function totalAssemblyComponents(assemblies: AssemblySummaryRecord[]) {
   return assemblies.reduce((sum, assembly) => sum + assembly.componentCount, 0);
-}
-
-function formatPercent(value: number) {
-  if (!Number.isFinite(value)) return "0%";
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function compactCount(value: number) {
@@ -257,106 +252,209 @@ function SurfaceButton({
   );
 }
 
-type LibraryTone = "accent" | "success" | "warning" | "neutral" | "info";
+type LibraryTone = "resources" | "rates" | "assemblies" | "labor" | "cost" | "playbooks" | "books" | "datasets";
 
 const launchToneClasses: Record<
   LibraryTone,
-  { accent: string; icon: string; progress: string; hover: string; rail: string; wash: string }
+  { accent: string; icon: string; hover: string; rail: string; wash: string }
 > = {
-  accent: {
-    accent: "text-accent",
-    icon: "border-accent/25 bg-accent/10 text-accent",
-    progress: "bg-accent",
-    hover: "hover:border-accent/45",
-    rail: "bg-accent",
-    wash: "bg-accent/5",
+  resources: {
+    accent: "text-indigo-500",
+    icon: "border-indigo-500/25 bg-indigo-500/10 text-indigo-500",
+    hover: "hover:border-indigo-500/45",
+    rail: "bg-indigo-500",
+    wash: "bg-indigo-500/5",
   },
-  success: {
-    accent: "text-success",
-    icon: "border-success/25 bg-success/10 text-success",
-    progress: "bg-success",
-    hover: "hover:border-success/45",
-    rail: "bg-success",
-    wash: "bg-success/5",
+  rates: {
+    accent: "text-sky-500",
+    icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
+    hover: "hover:border-sky-500/45",
+    rail: "bg-sky-500",
+    wash: "bg-sky-500/5",
   },
-  warning: {
-    accent: "text-warning",
-    icon: "border-warning/25 bg-warning/10 text-warning",
-    progress: "bg-warning",
-    hover: "hover:border-warning/45",
-    rail: "bg-warning",
-    wash: "bg-warning/5",
+  assemblies: {
+    accent: "text-amber-500",
+    icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
+    hover: "hover:border-amber-500/45",
+    rail: "bg-amber-500",
+    wash: "bg-amber-500/5",
   },
-  info: {
-    accent: "text-[#0b7a75]",
-    icon: "border-[#0b7a75]/25 bg-[#0b7a75]/10 text-[#0b7a75]",
-    progress: "bg-[#0b7a75]",
-    hover: "hover:border-[#0b7a75]/45",
-    rail: "bg-[#0b7a75]",
-    wash: "bg-[#0b7a75]/5",
+  labor: {
+    accent: "text-teal-600",
+    icon: "border-teal-600/25 bg-teal-600/10 text-teal-600",
+    hover: "hover:border-teal-600/45",
+    rail: "bg-teal-600",
+    wash: "bg-teal-600/5",
   },
-  neutral: {
-    accent: "text-fg/60",
-    icon: "border-line bg-panel2/75 text-fg/60",
-    progress: "bg-fg/45",
-    hover: "hover:border-fg/25",
-    rail: "bg-fg/45",
-    wash: "bg-panel2/45",
+  cost: {
+    accent: "text-emerald-600",
+    icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
+    hover: "hover:border-emerald-600/45",
+    rail: "bg-emerald-600",
+    wash: "bg-emerald-600/5",
+  },
+  playbooks: {
+    accent: "text-violet-500",
+    icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
+    hover: "hover:border-violet-500/45",
+    rail: "bg-violet-500",
+    wash: "bg-violet-500/5",
+  },
+  books: {
+    accent: "text-rose-500",
+    icon: "border-rose-500/25 bg-rose-500/10 text-rose-500",
+    hover: "hover:border-rose-500/45",
+    rail: "bg-rose-500",
+    wash: "bg-rose-500/5",
+  },
+  datasets: {
+    accent: "text-lime-600",
+    icon: "border-lime-600/25 bg-lime-600/10 text-lime-600",
+    hover: "hover:border-lime-600/45",
+    rail: "bg-lime-600",
+    wash: "bg-lime-600/5",
   },
 };
 
-function progressBadge(value: number) {
-  if (value >= 0.72) return { label: "Strong", tone: "success" as const };
-  if (value >= 0.35) return { label: "Growing", tone: "info" as const };
-  return { label: "Needs data", tone: "warning" as const };
+const compositionPalettes: Record<LibraryTone, string[]> = {
+  resources: ["bg-indigo-500", "bg-cyan-500", "bg-blue-600", "bg-slate-500", "bg-violet-500"],
+  rates: ["bg-sky-500", "bg-blue-600", "bg-cyan-500", "bg-slate-500", "bg-indigo-500"],
+  assemblies: ["bg-amber-500", "bg-orange-600", "bg-yellow-500", "bg-stone-500", "bg-red-500"],
+  labor: ["bg-teal-600", "bg-emerald-500", "bg-cyan-600", "bg-lime-600", "bg-slate-500"],
+  cost: ["bg-emerald-600", "bg-green-500", "bg-teal-500", "bg-lime-600", "bg-slate-500"],
+  playbooks: ["bg-violet-500", "bg-purple-600", "bg-fuchsia-500", "bg-indigo-500", "bg-slate-500"],
+  books: ["bg-rose-500", "bg-pink-500", "bg-red-500", "bg-orange-500", "bg-slate-500"],
+  datasets: ["bg-lime-600", "bg-green-500", "bg-emerald-500", "bg-cyan-600", "bg-slate-500"],
+};
+
+type CompositionSegment = {
+  label: string;
+  value: number;
+  color: string;
+  muted?: boolean;
+};
+
+type CompositionBreakdown = {
+  label: string;
+  segments: CompositionSegment[];
+};
+
+function normalizedLabel(value: string | null | undefined, fallback = "Unassigned") {
+  return value?.trim() || fallback;
 }
 
-function ProgressMeter({ value, tone }: { value: number; tone: LibraryTone }) {
-  const clamped = Math.max(0, Math.min(1, value));
+function groupedComposition<T>(
+  rows: T[],
+  labelFor: (row: T) => string | null | undefined,
+  valueFor: (row: T) => number = () => 1,
+  maxSegments = 4,
+  palette = compositionPalettes.resources,
+): CompositionSegment[] {
+  const groups = new Map<string, number>();
+  for (const row of rows) {
+    const value = valueFor(row);
+    if (!Number.isFinite(value) || value <= 0) continue;
+    const label = normalizedLabel(labelFor(row));
+    groups.set(label, (groups.get(label) ?? 0) + value);
+  }
+  return groupedEntriesToSegments([...groups.entries()].map(([label, value]) => ({ label, value })), maxSegments, palette);
+}
+
+function groupedEntriesToSegments(
+  entries: Array<{ label: string; value: number }>,
+  maxSegments = 4,
+  palette = compositionPalettes.resources,
+): CompositionSegment[] {
+  const positive = entries
+    .map((entry) => ({ label: normalizedLabel(entry.label), value: Number(entry.value) || 0 }))
+    .filter((entry) => entry.value > 0)
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
+
+  if (positive.length === 0) {
+    return [{ label: "No data", value: 1, color: "bg-panel2", muted: true }];
+  }
+
+  const visible = positive.slice(0, maxSegments);
+  const hidden = positive.slice(maxSegments).reduce((sum, entry) => sum + entry.value, 0);
+  const merged = hidden > 0 ? [...visible, { label: "Other", value: hidden }] : visible;
+  return merged.map((entry, index) => ({
+    ...entry,
+    color: palette[index % palette.length],
+  }));
+}
+
+function segmentPercent(segment: CompositionSegment, total: number) {
+  if (segment.muted || total <= 0) return 0;
+  return Math.round((segment.value / total) * 100);
+}
+
+function compositionTotal(segments: CompositionSegment[]) {
+  return segments.reduce((sum, segment) => sum + (segment.muted ? 0 : segment.value), 0);
+}
+
+function CompositionMeter({ breakdown }: { breakdown: CompositionBreakdown }) {
+  const total = compositionTotal(breakdown.segments);
   return (
-    <div className="h-1.5 overflow-hidden rounded-full bg-panel2">
-      <div className={cn("h-full rounded-full", launchToneClasses[tone].progress)} style={{ width: `${clamped * 100}%` }} />
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px]">
+        <span className="truncate font-medium text-fg/45">{breakdown.label}</span>
+        <span className="shrink-0 tabular-nums text-fg/35">{compactCount(total)}</span>
+      </div>
+      <div className="flex h-4 rounded-full bg-panel2">
+        {breakdown.segments.map((segment) => {
+          const width = segment.muted ? 100 : total > 0 ? (segment.value / total) * 100 : 0;
+          const label = segment.muted ? segment.label : `${segment.label} · ${segmentPercent(segment, total)}%`;
+          return (
+            <div
+              key={segment.label}
+              className={cn("group/segment relative h-full first:rounded-l-full last:rounded-r-full", segment.color)}
+              style={{ width: `${width}%` }}
+              aria-label={segment.muted ? segment.label : `${segment.label}: ${compactCount(segment.value)} (${segmentPercent(segment, total)}%)`}
+            >
+              <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 max-w-[160px] -translate-x-1/2 rounded border border-line bg-panel px-2 py-1 text-[10px] font-medium text-fg opacity-0 shadow-lg transition-opacity group-hover/segment:opacity-100">
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 function SurfaceLaunchCard({
   body,
-  detail,
+  breakdown,
   icon: Icon,
   metric,
   metricLabel,
   onClick,
-  progress,
-  stats,
   title,
   tone,
 }: {
   body: string;
-  detail: string;
+  breakdown: CompositionBreakdown;
   icon: typeof Gauge;
   metric: string;
   metricLabel: string;
   onClick: () => void;
-  progress: number;
-  stats: Array<{ label: string; value: string }>;
   title: string;
   tone: LibraryTone;
 }) {
   const classes = launchToneClasses[tone];
-  const status = progressBadge(progress);
+  const groups = breakdown.segments.filter((segment) => !segment.muted).length;
 
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "group relative flex min-h-[236px] min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
+        "group/card relative z-0 flex h-full min-h-0 min-w-0 flex-col overflow-visible rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
         classes.hover,
       )}
     >
-      <div className={cn("pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-200 group-hover:opacity-100", classes.wash)} />
-      <div className={cn("absolute inset-x-0 top-0 h-1", classes.rail)} />
+      <div className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", classes.wash)} />
+      <div className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", classes.rail)} />
 
       <div className="relative flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
@@ -366,37 +464,25 @@ function SurfaceLaunchCard({
           <div className="min-w-0 pt-0.5">
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-fg">{title}</div>
-              <Badge tone={status.tone} className="mt-1 shrink-0 whitespace-nowrap">{status.label}</Badge>
+              <Badge tone={groups > 0 ? "default" : "warning"} className="mt-1 shrink-0 whitespace-nowrap">
+                {groups > 0 ? `${groups} group${groups === 1 ? "" : "s"}` : "No data"}
+              </Badge>
             </div>
             <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{body}</div>
           </div>
         </div>
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover:translate-x-0.5 group-hover:text-fg/60" />
+        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
       </div>
 
       <div className="relative mt-3">
         <div className={cn("text-[10px] font-semibold uppercase tracking-wider", classes.accent)}>{metricLabel}</div>
         <div className="mt-1 flex min-w-0 items-end justify-between gap-3">
           <span className="truncate text-3xl font-semibold leading-none tracking-normal tabular-nums text-fg">{metric}</span>
-          <div className="mb-1 hidden shrink-0 items-center gap-1.5 text-[11px] text-fg/40 sm:flex">
-            <span className={cn("h-2 w-2 rounded-sm", classes.rail)} />
-            <span className="truncate">{formatPercent(progress)}</span>
-          </div>
         </div>
       </div>
 
       <div className="relative mt-3">
-        <ProgressMeter value={progress} tone={tone} />
-        <div className="mt-2 truncate text-[11px] text-fg/40">{detail}</div>
-      </div>
-
-      <div className="relative mt-auto grid grid-cols-3 divide-x divide-line/60 border-y border-line/60">
-        {stats.map((stat) => (
-          <div key={stat.label} className="min-w-0 px-1.5 py-1.5">
-            <div className="truncate text-[10px] font-medium uppercase tracking-wider text-fg/35">{stat.label}</div>
-            <div className="mt-0.5 truncate text-xs font-semibold tabular-nums text-fg/75">{stat.value}</div>
-          </div>
-        ))}
+        <CompositionMeter breakdown={breakdown} />
       </div>
     </button>
   );
@@ -440,138 +526,176 @@ function LibraryOverview({
     0,
   );
   const assemblyComponentCount = totalAssemblyComponents(assemblies);
-  const vendorCount = costSummary.vendors || uniqueCount(observations.map((observation) => observation.vendorName));
-  const resourceCount = costSummary.resources || resources.length;
-  const observationCount = costSummary.observations || observations.length;
   const effectiveCostCount = costSummary.effectiveCosts || effectiveCosts.length;
-  const pricedResourceRatio = resourceCount > 0 ? effectiveCostCount / resourceCount : effectiveCostCount > 0 ? 1 : 0;
-  const assemblyCompleteness = assemblies.length > 0
-    ? assemblies.filter((assembly) => assembly.componentCount > 0).length / assemblies.length
-    : 0;
-  const catalogDensity = catalogs.length > 0 ? Math.min(1, itemCount / Math.max(1, catalogs.length * 25)) : 0;
-  const evidenceDepth = resourceCount > 0 ? Math.min(1, observationCount / Math.max(1, resourceCount * 2)) : 0;
-  const knowledgeDepth = Math.min(1, (knowledgeBooks.length + knowledgeDocuments.length + datasets.length) / 15);
-  const rateBookDepth = rateSchedules.length > 0 ? Math.min(1, rateItemCount / Math.max(1, rateSchedules.length * 12)) : 0;
-  const laborUnitDepth = laborUnitLibraries.length > 0 ? Math.min(1, laborUnitCount / Math.max(1, laborUnitLibraries.length * 80)) : 0;
-  const parametricAssemblyCount = assemblies.filter((assembly) => assembly.parameterCount > 0).length;
-  const autoRateCount = rateSchedules.filter((schedule) => schedule.autoCalculate).length;
   const knowledgeReferenceCount = knowledgeBooks.length + knowledgeDocuments.length;
-  const knowledgeRowCount = datasets.reduce((sum, dataset) => sum + dataset.rowCount, 0);
-  const emptyCatalogCount = catalogs.filter((catalog) => (catalog.itemCount ?? catalog.items?.length ?? 0) === 0).length;
-  const emptyAssemblyCount = assemblies.filter((assembly) => assembly.componentCount === 0).length;
+  const rateBreakdownUsesRows = rateItemCount > 0;
+  const assemblyBreakdownUsesComponents = assemblyComponentCount > 0;
+  const costBreakdownUsesCostRows = effectiveCosts.length > 0;
+  const playbookBreakdownUsesBindings = playbookBindingCount > 0;
+
+  const resourceBreakdown: CompositionBreakdown = {
+    label: "Rows by resource catalog type",
+    segments: groupedComposition(
+      catalogs,
+      (catalog) => catalog.kind || catalog.source || "Catalog",
+      (catalog) => catalog.itemCount ?? catalog.items?.length ?? 0,
+      4,
+      compositionPalettes.resources,
+    ),
+  };
+  const rateBreakdown: CompositionBreakdown = {
+    label: rateBreakdownUsesRows ? "Rows by ratebook category" : "Books by ratebook category",
+    segments: groupedComposition(
+      rateSchedules,
+      (schedule) => schedule.category || "Uncategorized",
+      (schedule) => rateBreakdownUsesRows ? schedule.items?.length ?? 0 : 1,
+      4,
+      compositionPalettes.rates,
+    ),
+  };
+  const assemblyBreakdown: CompositionBreakdown = {
+    label: assemblyBreakdownUsesComponents ? "Components by assembly category" : "Assemblies by category",
+    segments: groupedComposition(
+      assemblies,
+      (assembly) => assembly.category || "General",
+      (assembly) => assemblyBreakdownUsesComponents ? assembly.componentCount : 1,
+      4,
+      compositionPalettes.assemblies,
+    ),
+  };
+  const laborUnitBreakdown: CompositionBreakdown = {
+    label: "Rows by labor-unit catalog",
+    segments: groupedComposition(
+      laborUnitLibraries,
+      (library) => library.name || library.provider || "Catalog",
+      (library) => library.unitCount ?? 0,
+      4,
+      compositionPalettes.labor,
+    ),
+  };
+  const costBreakdown: CompositionBreakdown = {
+    label: costBreakdownUsesCostRows ? "Cost basis by resource type" : "Resources by type",
+    segments: costBreakdownUsesCostRows
+      ? groupedComposition(
+        effectiveCosts,
+        (cost) => cost.resource?.resourceType || cost.resource?.category || cost.method || "Unclassified",
+        () => 1,
+        4,
+        compositionPalettes.cost,
+      )
+      : groupedComposition(resources, (resource) => resource.resourceType || resource.category || "Unclassified", () => 1, 4, compositionPalettes.cost),
+  };
+  const playbookBreakdown: CompositionBreakdown = {
+    label: playbookBreakdownUsesBindings ? "Source bindings by type" : "Estimators by status",
+    segments: playbookBreakdownUsesBindings
+      ? groupedEntriesToSegments([
+        { label: "Books", value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeBookIds?.length ?? 0), 0) },
+        { label: "Notes", value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeDocumentIds?.length ?? 0), 0) },
+        { label: "Dataset tags", value: playbooks.reduce((sum, playbook) => sum + (playbook.datasetTags?.length ?? 0), 0) },
+      ], 4, compositionPalettes.playbooks)
+      : groupedEntriesToSegments([
+        { label: "Active", value: activePlaybookCount },
+        { label: "Paused", value: Math.max(0, playbooks.length - activePlaybookCount) },
+      ], 4, compositionPalettes.playbooks),
+  };
+  const booksAndNotesBreakdown: CompositionBreakdown = {
+    label: "References by source type",
+    segments: groupedEntriesToSegments([
+      { label: "Books", value: knowledgeBooks.length },
+      { label: "Notes", value: knowledgeDocuments.length },
+    ], 4, compositionPalettes.books),
+  };
+  const datasetBreakdown: CompositionBreakdown = {
+    label: "Rows by dataset category",
+    segments: groupedComposition(
+      datasets,
+      (dataset) => dataset.category.replace(/_/g, " "),
+      (dataset) => dataset.rowCount,
+      4,
+      compositionPalettes.datasets,
+    ),
+  };
 
   const launchCards = [
     {
-      surface: "cost" as LibrarySurface,
-      title: "Cost Intelligence",
-      body: "Observed vendor prices, current cost basis rows, and the evidence trail behind them.",
-      metric: compactCount(effectiveCostCount),
-      metricLabel: "Cost basis rows",
-      detail: `${compactCount(observationCount)} observations from ${vendorCount || 0} vendors`,
-      icon: Database,
-      tone: "success" as LibraryTone,
-      progress: average([pricedResourceRatio, evidenceDepth]),
-      stats: [
-        { label: "Resources", value: compactCount(resourceCount) },
-        { label: "Obs.", value: compactCount(observationCount) },
-        { label: "Vendors", value: compactCount(vendorCount) },
-      ],
-    },
-    {
       surface: "resources" as LibrarySurface,
       title: "Resources",
-      body: "Catalogs subdivide estimating resources into the buckets used by worksheets, rate books, and assemblies.",
+      body: "Base estimating resources used by worksheets, Ratebooks, and assemblies.",
+      breakdown: resourceBreakdown,
       metric: compactCount(itemCount),
       metricLabel: "Catalog items",
-      detail: `${catalogs.length} catalogs with ${compactCount(itemCount)} catalog rows`,
       icon: Boxes,
-      tone: "accent" as LibraryTone,
-      progress: catalogDensity,
-      stats: [
-        { label: "Catalogs", value: compactCount(catalogs.length) },
-        { label: "Rows", value: compactCount(itemCount) },
-        { label: "Filled", value: compactCount(Math.max(0, catalogs.length - emptyCatalogCount)) },
-      ],
+      tone: "resources" as LibraryTone,
+    },
+    {
+      surface: "rates" as LibrarySurface,
+      title: "Ratebooks",
+      body: "Customer/resource cost and sell overrides with tiering, travel, allowances, and pricing rules.",
+      breakdown: rateBreakdown,
+      metric: compactCount(rateItemCount),
+      metricLabel: "Resource rows",
+      icon: FileSpreadsheet,
+      tone: "rates" as LibraryTone,
+    },
+    {
+      surface: "assemblies" as LibrarySurface,
+      title: "Assemblies",
+      body: "Reusable estimating recipes for resources, equipment, nested scopes, and parametric takeoff.",
+      breakdown: assemblyBreakdown,
+      metric: compactCount(assemblies.length),
+      metricLabel: "Assemblies",
+      icon: Layers,
+      tone: "assemblies" as LibraryTone,
     },
     {
       surface: "labor_units" as LibrarySurface,
       title: "Labor Units",
-      body: "First-party production standards that turn installed quantities into labor hours, then price those hours through rate books.",
+      body: "First-party production standards that turn installed quantities into hours, then price those hours through Ratebooks.",
+      breakdown: laborUnitBreakdown,
       metric: compactCount(laborUnitCount),
       metricLabel: "Production rows",
-      detail: `${laborUnitLibraries.length} catalogs across ${uniqueCount(laborUnitLibraries.map((library) => library.provider))} providers`,
       icon: Gauge,
-      tone: "info" as LibraryTone,
-      progress: laborUnitDepth,
-      stats: [
-        { label: "Catalogs", value: compactCount(laborUnitLibraries.length) },
-        { label: "Providers", value: compactCount(uniqueCount(laborUnitLibraries.map((library) => library.provider))) },
-        { label: "1st Party", value: compactCount(laborUnitLibraries.filter((library) => !library.organizationId).length) },
-      ],
+      tone: "labor" as LibraryTone,
+    },
+    {
+      surface: "cost" as LibrarySurface,
+      title: "Cost Intelligence",
+      body: "Vendor bill line evidence, observed prices, current cost basis rows, and the trail behind them.",
+      breakdown: costBreakdown,
+      metric: compactCount(effectiveCostCount),
+      metricLabel: "Cost basis rows",
+      icon: Database,
+      tone: "cost" as LibraryTone,
     },
     {
       surface: "playbooks" as LibrarySurface,
       title: "Estimators",
       body: "Reusable estimating behavior with methodology, source priority, commercial policy, and review guidance.",
+      breakdown: playbookBreakdown,
       metric: compactCount(activePlaybookCount),
       metricLabel: "Active estimators",
-      detail: `${compactCount(playbookBindingCount)} source bindings across ${playbooks.length} estimators`,
       icon: BookOpen,
-      tone: "info" as LibraryTone,
-      progress: playbooks.length > 0 ? Math.min(1, playbookBindingCount / Math.max(1, playbooks.length * 3)) : 0,
-      stats: [
-        { label: "Total", value: compactCount(playbooks.length) },
-        { label: "Active", value: compactCount(activePlaybookCount) },
-        { label: "Bindings", value: compactCount(playbookBindingCount) },
-      ],
-    },
-    {
-      surface: "assemblies" as LibrarySurface,
-      title: "Assemblies",
-      body: "Reusable estimating recipes for crews, materials, equipment, and nested scopes.",
-      metric: compactCount(assemblies.length),
-      metricLabel: "Assemblies",
-      detail: `${compactCount(assemblyComponentCount)} components across ${assemblies.length} assemblies`,
-      icon: Layers,
-      tone: "warning" as LibraryTone,
-      progress: assemblyCompleteness,
-      stats: [
-        { label: "Comps", value: compactCount(assemblyComponentCount) },
-        { label: "Params", value: compactCount(parametricAssemblyCount) },
-        { label: "Empty", value: compactCount(emptyAssemblyCount) },
-      ],
-    },
-    {
-      surface: "rates" as LibrarySurface,
-      title: "Rate Books",
-      body: "Reusable labour, equipment, burden, tiered rates, and schedule pricing logic.",
-      metric: compactCount(rateItemCount),
-      metricLabel: "Rate items",
-      detail: `${rateSchedules.length} books with ${autoRateCount} auto-calc schedules`,
-      icon: FileSpreadsheet,
-      tone: "neutral" as LibraryTone,
-      progress: rateBookDepth,
-      stats: [
-        { label: "Books", value: compactCount(rateSchedules.length) },
-        { label: "Items", value: compactCount(rateItemCount) },
-        { label: "Auto", value: compactCount(autoRateCount) },
-      ],
+      tone: "playbooks" as LibraryTone,
     },
     {
       surface: "knowledge" as LibrarySurface,
-      title: "Knowledge",
-      body: "Books, datasets, tables, extracted evidence, and agent reference material.",
-      metric: compactCount(knowledgeReferenceCount + datasets.length),
+      title: "Books & Notes",
+      body: "Reference books, estimator notes, extracted evidence, and agent retrieval material.",
+      breakdown: booksAndNotesBreakdown,
+      metric: compactCount(knowledgeReferenceCount),
       metricLabel: "References",
-      detail: `${compactCount(knowledgeRowCount)} dataset rows across ${datasets.length} datasets`,
       icon: BookOpen,
-      tone: "accent" as LibraryTone,
-      progress: knowledgeDepth,
-      stats: [
-        { label: "Docs", value: compactCount(knowledgeReferenceCount) },
-        { label: "Data", value: compactCount(datasets.length) },
-        { label: "Rows", value: compactCount(knowledgeRowCount) },
-      ],
+      tone: "books" as LibraryTone,
+    },
+    {
+      surface: "knowledge" as LibrarySurface,
+      title: "Datasets",
+      body: "Structured tables and imported rows used by agents, estimators, and pricing workflows.",
+      breakdown: datasetBreakdown,
+      metric: compactCount(datasets.length),
+      metricLabel: "Datasets",
+      icon: Table2,
+      tone: "datasets" as LibraryTone,
     },
   ];
 
@@ -586,18 +710,16 @@ function LibraryOverview({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="grid h-full min-h-0 auto-rows-[minmax(236px,auto)] gap-3 overflow-y-auto overflow-x-hidden pb-4 pr-1 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid h-full min-h-0 auto-rows-[252px] gap-3 overflow-y-auto overflow-x-hidden pb-4 pr-1 md:grid-cols-2 lg:grid-cols-4">
           {launchCards.map((card) => (
             <SurfaceLaunchCard
-              key={card.surface}
+              key={`${card.surface}-${card.title}`}
               body={card.body}
-              detail={card.detail}
+              breakdown={card.breakdown}
               icon={card.icon}
               metric={card.metric}
               metricLabel={card.metricLabel}
               onClick={() => onSurfaceChange(card.surface)}
-              progress={card.progress}
-              stats={card.stats}
               title={card.title}
               tone={card.tone}
             />
@@ -1957,7 +2079,7 @@ export function LibraryPage({
 
           {activeSurface === "rates" && (
             <WorkspaceSurface className="p-3">
-              <RateScheduleManager embedded schedules={rateScheduleRows} setSchedules={setRateScheduleRows} loading={false} catalogs={catalogRows} />
+              <RateScheduleManager embedded schedules={rateScheduleRows} setSchedules={setRateScheduleRows} loading={false} />
             </WorkspaceSurface>
           )}
 

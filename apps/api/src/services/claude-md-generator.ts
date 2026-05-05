@@ -9,6 +9,22 @@ import { writeFile, mkdir, symlink, copyFile, readdir, stat } from "node:fs/prom
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 
+export interface LibrarySnapshotFile {
+  path: string;
+  label: string;
+  description?: string;
+  count?: number;
+  truncated?: boolean;
+}
+
+export interface LibrarySnapshotInfo {
+  rootDir: string;
+  generatedAt: string;
+  files: LibrarySnapshotFile[];
+  counts: Record<string, number>;
+  warnings: string[];
+}
+
 export interface ClaudeMdParams {
   projectDir: string;
   projectName: string;
@@ -43,6 +59,7 @@ export interface ClaudeMdParams {
     commercialGuidance: Record<string, unknown>;
     reviewFocusAreas: string[];
   } | null;
+  librarySnapshot?: LibrarySnapshotInfo | null;
   maxConcurrentSubAgents?: number;
 }
 
@@ -185,6 +202,40 @@ ${followThrough}
 - skip the drawing CV pass on plans, P&IDs, layouts, risers, reflected ceiling plans, or symbol-driven schedules`;
 }
 
+function buildLibrarySnapshotSection(snapshot: LibrarySnapshotInfo | null | undefined): string {
+  const rootDir = snapshot?.rootDir || "library-snapshots";
+  const fileRows = snapshot?.files?.length
+    ? snapshot.files
+        .map((file) => {
+          const count = typeof file.count === "number" ? ` (${file.count.toLocaleString()} records${file.truncated ? ", truncated" : ""})` : "";
+          const description = file.description ? ` - ${file.description}` : "";
+          return `- \`${file.path}\` - ${file.label}${count}${description}`;
+        })
+        .join("\n")
+    : `- \`${rootDir}/README.md\`\n- \`${rootDir}/library-index.md\``;
+  const warnings = snapshot?.warnings?.length
+    ? `\n\nSnapshot warnings:\n${snapshot.warnings.map((warning) => `- ${warning}`).join("\n")}`
+    : "";
+
+  return `## Library Snapshots (Start Here)
+
+Bidwright materializes searchable text snapshots in \`${rootDir}/\` so CLI agents can quickly discover large organization/project libraries without loading entire books or tables into the prompt. These files are a discovery index; the MCP tools remain the authoritative way to read full documents and create linked estimate rows.
+
+Before pricing, reviewing, or delegating worksheet work:
+1. Read \`${rootDir}/README.md\` and \`${rootDir}/library-index.md\`.
+2. Search \`${rootDir}/\` with the scope keywords, trade terms, material names, sizes, vendors, codes, and production activities from the bid documents.
+3. Use the matching IDs from these files with the MCP tools:
+   - Books/manuals: \`listKnowledgeBooks\`, \`queryKnowledge\`, \`queryGlobalLibrary\`, then \`readDocumentText\` for the relevant page ranges.
+   - Datasets: \`listDatasets\` and \`queryDatasets\`; read JSONL row files only to discover likely dataset IDs/columns/search terms.
+   - Cost intelligence, catalogs, rate books, labour units, assemblies, and takeoff hints: \`recommendEstimateBasis\`, then \`createWorksheetItemFromCandidate\` or preserve the returned IDs/evidence in \`createWorksheetItem\`.
+   - Labour productivity: \`recommendLaborBasis\` or \`listLaborUnits\` after searching \`${rootDir}/labor-units/units.jsonl\`.
+   - Assemblies: \`previewAssembly\` after finding a matching assembly ID.
+4. Every priced row must cite the source actually used in \`sourceNotes\`, including book/page/table, dataset row, cost basis ID, laborUnitId, assemblyId, rateScheduleItemId, or effectiveCostId where applicable.
+
+Available snapshot files:
+${fileRows}${warnings}`;
+}
+
 async function prepareInstructionWorkspace(params: ClaudeMdParams): Promise<void> {
   const { projectDir } = params;
   await mkdir(join(projectDir, "documents"), { recursive: true });
@@ -285,6 +336,7 @@ function buildClaudeMdContent(params: ClaudeMdParams): string {
     : scopeSection;
 
   const personaSection = params.persona ? buildEstimatingPlaybookSection(params.persona) : "";
+  const librarySnapshotSection = buildLibrarySnapshotSection(params.librarySnapshot);
 
   const benchmarkToolLine = benchmarkingEnabled
     ? `- **recomputeEstimateBenchmarks** â€” Compare this revision to prior human quotes and surface distribution outliers`
@@ -356,9 +408,9 @@ ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 - These are FULL books (100-300+ pages). Read the TABLE OF CONTENTS first (usually pages 1-5) to find relevant chapters.
 - Then read the specific chapters/tables you need for THIS project's scope.
 - **This is your PRIMARY source for man-hour data, production rates, and correction factors.** Reading these books directly gives you full context that chunk-based search cannot.
-- The MCP search tools (\`searchBooks\`, \`queryKnowledge\`) still work for quick lookups, but for deep research, read the actual handbook text through \`readDocumentText\`.
+- The MCP search tools (\`queryKnowledge\`, \`queryGlobalLibrary\`) still work for quick lookups, but for deep research, read the actual handbook text through \`readDocumentText\`.
 - When citing in sourceNotes, reference the book name, chapter, table number, and page.`
-  : `No knowledge books are available in the project directory. Use the MCP tools (searchBooks, queryKnowledge, queryDataset) to search the knowledge base.`}
+  : `No knowledge books are available in the project directory. Use the MCP tools (queryKnowledge, queryGlobalLibrary, queryDatasets) to search the knowledge base.`}
 
 ## Knowledge Pages (Manual Notes)
 
@@ -369,6 +421,8 @@ ${params.knowledgeDocumentFiles.map(f => `- \`knowledge-pages/${f}\``).join("\n"
 
 Use \`queryKnowledge\` for targeted search. Use \`listKnowledgeDocuments\` and \`readDocumentText\` when you need the full authored markdown page library, including pasted tables and estimator notes.`
   : `No manual knowledge pages are available as files yet. Still use \`queryKnowledge\` because manually-authored pages may be available through MCP.`}
+
+${librarySnapshotSection}
 
 ## MCP Tools (Bidwright)
 
@@ -384,6 +438,8 @@ ${benchmarkToolLine}
 - **saveEstimateReconcile** â€” Save the mandatory final self-review and outlier check
 - **finalizeEstimateStrategy** â€” Mark the staged estimate workflow complete after reconcile
 - **getItemConfig** â€” CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
+- **recommendEstimateBasis** â€” Best first stop for a priced scope row: exact cost source when available, similar cost-intelligence/vendor/product context, labor units, and takeoff annotation hints in one response.
+- **recommendLaborBasis** â€” Search labor-productivity units plus labor/rate cost sources before creating labour rows.
 - **searchLineItemCandidates** â€” Search the unified line-item index: catalogs, imported rates, cost-intelligence effective costs/resources, labor units, assemblies, and provider actions. Use this before creating priced rows.
 - **recommendCostSource** â€” Pick the best structured cost source for a scope phrase and return a ready-to-use worksheet item patch with provenance.
 - **createWorksheetItemFromCandidate** â€” Create a worksheet row directly from a search/recommendation candidate while preserving costResourceId/effectiveCostId/laborUnitId/sourceEvidence/resourceComposition.
@@ -392,15 +448,14 @@ ${benchmarkToolLine}
 - **getWorkspace** â€” Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
 - **createWorksheet** â€” Create a worksheet (cost section) in the quote
 - **createWorksheetItem** â€” Add a line item to a worksheet. Set phaseId to assign to a phase.
-- **updateQuote** â€” Update quote metadata (description, notes, scope summary)
+- **updateQuote** â€” Update quote metadata (description, customer-facing estimate notes, scope summary)
 - **listRateSchedules** â€” List available org-level rate schedules. Returns schedule names and IDs. Use to find the right schedule to import.
 - **importRateSchedule** â€” Import an org rate schedule into the current quote revision
 - **queryKnowledge** â€” Search the knowledge base for man-hour data, pricing references, standards
 - **queryGlobalLibrary** â€” Search global knowledge books (estimating manuals, productivity data)
 - **listKnowledgeBooks** â€” List available knowledge books and their IDs
 - **readDocumentText** â€” Read extracted text for project documents and knowledge books by ID
-- **searchBooks** â€” Search knowledge books by keyword
-- **queryDataset / searchDataset / listDatasets** â€” Search structured datasets (rate tables, historical data)
+- **queryDatasets / listDatasets** â€” Search structured datasets (rate tables, historical data)
 - **searchCatalogs** â€” Search equipment/material catalogs for items with pricing
 - **askUser** â€” **MANDATORY** Ask the user a clarifying question and WAIT for their response. Blocks execution until they answer. Use this in Steps 1 and 2 of the Estimation Protocol. Do NOT skip this tool. Do NOT output questions as plain text instead.
 - **readMemory / writeMemory** â€” Persistent project memory (persists across sessions)
@@ -424,6 +479,8 @@ These tools are for automated drawing takeoff and symbol counting on constructio
 - **renderDrawingPage** â€” Render a drawing page as an image for visual symbol inspection (NOT for reading spec text â€” use \`readDocumentText\` instead)
 - **zoomDrawingRegion** â€” Zoom into a small region for tiny text or symbol details
 - **listDrawingPages** â€” List all PDF drawings with page counts
+- **listTakeoffAnnotations** â€” List saved PDF/DWG takeoff annotations that can support row quantities
+- **linkTakeoffAnnotationToWorksheetItem** â€” Link a saved takeoff annotation to a worksheet item so the row quantity stays tied to the Takeoff tab
 
 **Drawing CV workflow (MANDATORY when drawings drive quantities):**
 1. \`listDrawingPages\` â†’ find the document
@@ -431,6 +488,7 @@ These tools are for automated drawing takeoff and symbol counting on constructio
 3. Interpret the clusters: "Cluster 0 is valve tags (46 found), Cluster 1 is instrument bubbles (3 found)" etc.
 4. Report the relevant count directly from the scan results
 5. If you need to adjust threshold or search cross-document, call \`countSymbols\` with the cluster's \`representativeBox\`
+6. When a saved annotation is the quantity basis, call \`linkTakeoffAnnotationToWorksheetItem\` and cite the annotation/link in \`sourceEvidence\` and \`sourceNotes\`
 
 **Do NOT:**
 - Zoom around the page trying to visually count symbols â€” the scan does this automatically
@@ -476,7 +534,7 @@ ${benchmarkGateNarrative}
    - \`description\`: A PROFESSIONAL estimator-quality scope of work (see below)
    - \`customerId\`: If you can identify the client from the available customers, set the customer ID
    - \`clientName\`: The client/owner name from the documents
-   - \`notes\`: Key exclusions and assumptions
+   - \`notes\`: Customer-facing estimate notes suitable for the quote/PDF
 
    **MANDATORY GATE: You MUST call updateQuote with projectName, description, and clientName BEFORE calling createWorksheet or createWorksheetItem. The user is watching the page live and sees an empty quote until you do this. Creating worksheets without first setting the project name, scope description, and client is NOT ALLOWED.**
 
@@ -489,7 +547,8 @@ ${benchmarkGateNarrative}
 
    ### IMPORTANT: Where Inclusions, Exclusions, and Assumptions Go
    - **Inclusions and Exclusions** â†’ Use the \`createCondition\` MCP tool with type "inclusion" or "exclusion". These have their OWN dedicated section in the quote UI. Do NOT put them in the description.
-   - **Assumptions and Key Notes** â†’ Put these in the \`notes\` field of \`updateQuote\`. These are internal notes visible to estimators, NOT in the client-facing description.
+   - **Customer-facing Estimate Notes** â†’ Put client-safe clarifications, assumptions, and key notes in the \`notes\` field of \`updateQuote\`. These can appear in client-facing quote output.
+   - **Internal Notes / Scratch Work** â†’ Put estimator-only reasoning, TODOs, uncertainty, working notes, and private context in \`scratchpad\` via \`updateRevision\`, not in \`notes\`.
    - **The description field** is for SCOPE OF WORK ONLY â€” what is being estimated. No exclusions, no assumptions, no vendor responsibilities.
 3. **Call getItemConfig** â€” learn the org's categories and available labour/equipment rates
 4. **MANDATORY KNOWLEDGE GATE â€” DO NOT SKIP THIS STEP.**
@@ -502,7 +561,7 @@ ${benchmarkGateNarrative}
    - Example: \`readDocumentText(bookId, pages: "1-5")\` then \`readDocumentText(bookId, pages: "42-55")\` for the specific data tables
 
    **b. \`listDatasets\`** â€” review all available structured datasets
-   **c. \`queryDataset\`** â€” query at least 2 relevant datasets for production rates
+   **c. \`queryDatasets\`** â€” query at least 2 relevant datasets for production rates
    **d. \`WebSearch\`** â€” search for any code/spec referenced in the documents (ASME B31.3, SSPC-SP6, etc.)
 
    **Write the key findings to memory.** If you skip this step, your hours will be guesses, not data-backed estimates. Reading prior memory files does NOT count â€” you must read fresh from knowledge books/datasets every time.
@@ -522,7 +581,7 @@ ${benchmarkGateNarrative}
 6. **Create phases** â€” create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs â€” you need these to assign line items to phases via phaseId.
 7. **Create worksheets** â€” one per major system/trade/division (skip if worksheets already exist from prior session)
 9. **Populate items** â€” read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours â€” do NOT guess.
-   - Before each priced line, call \`recommendCostSource\` or \`searchLineItemCandidates\`; use \`createWorksheetItemFromCandidate\` or copy the candidate's structured IDs/evidence into \`createWorksheetItem\`.
+   - Before each priced line, call \`recommendEstimateBasis\` (or \`recommendCostSource\` / \`searchLineItemCandidates\` when narrowing pricing); use \`createWorksheetItemFromCandidate\` or copy the candidate's structured IDs/evidence into \`createWorksheetItem\`.
 10. **Build schedule** â€” if the spec mentions dates, milestones, or schedule requirements, create schedule tasks with \`createScheduleTask\`. Link tasks to phases. Set start/end dates and durations.
 11. **Add conditions via createCondition** â€” Add each exclusion, inclusion, and clarification as a SEPARATE condition using the \`createCondition\` tool. Do NOT put these in the quote description.
    - type="exclusion" for things NOT included (e.g. "Heat tracing", "Electrical work", "Civil/foundations")
@@ -530,18 +589,28 @@ ${benchmarkGateNarrative}
    - type="clarification" for assumptions and notes (e.g. "Site access assumed available 6am-6pm weekdays")
 12. **Save progress to memory** â€” so you can resume later
 
+## Source Basis Habit
+
+Every estimate row should have a source basis, but it does not need to become a rigid gate. The source can be a takeoff annotation, model/DWG quantity, exact vendor/product/cost-intelligence match, similar cost-intelligence context, labor productivity unit, catalog/rate item, assembly, document reference, web source, or a clearly stated assumption.
+
+- Start each priced scope row with \`recommendEstimateBasis\` so exact matches, similar context, labor units, and takeoff hints show up together.
+- Use exact structured matches for priced rows when they fit. Use similar vendor/product/cost-intelligence matches as context and label them as similar/context in \`sourceNotes\`, not as exact product evidence.
+- For labour, call \`recommendLaborBasis\` so the row has both a productivity basis (laborUnitId/hours per unit) and a pricing basis (rateScheduleItemId or justified rate).
+- When drawings/models drive quantity, use the vision/model/takeoff tools and keep the annotation/model basis in \`sourceEvidence\` and \`sourceNotes\`.
+- If no structured source exists, still write a descriptive source basis in \`sourceNotes\` explaining the assumption, document, web source, or estimator judgement.
+
 ## Canonical Cost Source Workflow
 
 Before creating any priced worksheet row, use Bidwright's internal cost intelligence first:
 
-1. Call \`searchLineItemCandidates\` or \`recommendCostSource\` with the scope phrase and preferred category.
+1. Call \`recommendEstimateBasis\` with the scope phrase and preferred category. Use \`searchLineItemCandidates\` or \`recommendCostSource\` when you need to narrow pricing candidates.
 2. If a structured candidate exists, preserve its identifiers when creating the row:
    - \`rateScheduleItemId\` for imported rates
    - \`itemId\` for catalog items
    - \`costResourceId\` and \`effectiveCostId\` for cost-intelligence resources/effective costs
    - \`laborUnitId\` for labour productivity units
    - \`sourceEvidence\` and \`resourceComposition\` from the candidate
-3. For labour productivity, call \`listLaborUnits\` when the row needs hours/unit or a productivity basis.
+3. For labour productivity, call \`recommendLaborBasis\` or \`listLaborUnits\` when the row needs hours/unit or a productivity basis.
 4. For assembly-backed scope, call \`previewAssembly\` before hand-building child rows.
 5. Use WebSearch/WebFetch alongside the internal candidate for high-value, volatile, regional, unfamiliar, or vendor-specific items. Record the web evidence in \`sourceNotes\` even when the row is linked to internal cost intelligence.
 6. Only create a freeform priced row when the unified search returns no usable candidate, or when current web/vendor evidence is materially better than stale internal data. In that case, put the internal search terms, web source, and reason in \`sourceNotes\`.
@@ -666,13 +735,13 @@ When spawning sub-agents to populate worksheets, you MUST follow these rules:
    - Worksheet ID, phase ID, rate schedule item IDs, tier IDs
    - Scope description for that worksheet (what systems, equipment, pipe sizes, counts)
    - Spec section references to read
-   - Instructions to read specific knowledge book pages with \`readDocumentText\` (e.g. "readDocumentText bookId=... pages=42-55") and call \`queryDataset\` for production rates BEFORE creating items
+   - Instructions to read specific knowledge book pages with \`readDocumentText\` (e.g. "readDocumentText bookId=... pages=42-55") and call \`queryDatasets\` for production rates BEFORE creating items
    - The correction factors identified in the main agent's research (material, elevation, congestion, etc.)
    - Instruction to populate sourceNotes with the actual knowledge reference used
 
 4. **DO NOT do this:** "tierUnits: {Regular: 64}" with hours already decided. Instead: "Estimate hours for erecting 1 Safe Rack rail platform. Search knowledge for structural steel erection rates. Apply congestion factor 1.10."
 
-5. **Sub-agents have access to ALL tools** including \`readDocumentText\`, \`queryDataset\`, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
+5. **Sub-agents have access to ALL tools** including \`readDocumentText\`, \`queryDatasets\`, and WebSearch. They MUST use them to derive hours from data, not from the parent agent's guesses.
 6. **Tell sub-agents which knowledge book pages to read.** Example: "Use \`readDocumentText\` on bookId=... with pages=42-55 for carbon steel welding rates by NPS." Give them the specific pages you found during YOUR research so they don't have to re-discover them.
 - Save progress to memory frequently so you can resume if stopped
 
@@ -799,14 +868,14 @@ Use \`allowMultiple: true\` for checklist-style questions such as subcontracted 
 
 ### Step 3: Knowledge Deep-Read
 For EVERY type of work you're estimating:
-1. Call searchBooks for relevant productivity data (man-hour tables, production rates)
+1. Search \`library-snapshots/\` and call \`queryKnowledge\` / \`queryGlobalLibrary\` for relevant productivity data (man-hour tables, production rates)
 2. When you find a relevant table, READ THE SURROUNDING CONTEXT:
    - The paragraphs BEFORE the table explain what the rate INCLUDES and EXCLUDES
    - The paragraphs AFTER often list CORRECTION FACTORS (elevation, congestion, material)
    - The introduction/methodology chapters explain ASSUMPTIONS the rates are based on
 3. Search at least 2 sources per activity type and cross-reference
 4. For ANY specification, code, or standard referenced in the project documents:
-   - searchBooks for it in knowledge base
+   - Search \`library-snapshots/\` and call \`queryKnowledge\` for it in the knowledge base
    - Use WebSearch to find its labour/installation implications
    - Document what you learned about requirements
 
@@ -995,6 +1064,7 @@ export async function generateReviewInstructionFiles(
 
 function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
   const maxSubAgents = params.maxConcurrentSubAgents ?? 2;
+  const librarySnapshotSection = buildLibrarySnapshotSection(params.librarySnapshot);
 
   const docManifest = params.documents.length > 0
     ? params.documents.map((d, i) =>
@@ -1044,7 +1114,7 @@ ${params.knowledgeBookFiles && params.knowledgeBookFiles.length > 0
 ${params.knowledgeBookFiles.map(f => `- \`knowledge/${f}\``).join("\n")}
 
 Use \`listKnowledgeBooks\` to get the relevant IDs, then \`readDocumentText\` to read the TABLE OF CONTENTS first and the specific productivity rate tables needed for benchmarking.`
-  : `No knowledge books available. Use MCP tools (searchBooks, queryKnowledge, queryDataset) for benchmarking.`}
+  : `No knowledge books available. Use MCP tools (queryKnowledge, queryGlobalLibrary, queryDatasets) for benchmarking.`}
 
 ## Knowledge Pages (Manual Notes)
 
@@ -1055,6 +1125,8 @@ ${params.knowledgeDocumentFiles.map(f => `- \`knowledge-pages/${f}\``).join("\n"
 
 Use \`queryKnowledge\` for targeted search. Use \`listKnowledgeDocuments\` and \`readDocumentText\` when you need the full authored markdown page library, including pasted tables and estimator notes.`
   : `No manual knowledge pages are available yet. Still use \`queryKnowledge\` because manually-authored pages may be available through MCP.`}
+
+${librarySnapshotSection}
 
 ## MCP Tools
 
@@ -1069,9 +1141,8 @@ You have access to Bidwright tools via MCP. For this review, use:
 - **searchItems** â€” Search line items by query/category
 - **queryKnowledge** â€” Search knowledge base for productivity rates and standards
 - **queryGlobalLibrary** â€” Search global knowledge books
-- **searchBooks** â€” Search knowledge books by keyword
 - **listKnowledgeDocuments / readDocumentText** â€” Read manually-authored knowledge pages and pasted markdown tables
-- **queryDataset / searchDataset / listDatasets** â€” Search structured datasets for benchmarks
+- **queryDatasets / listDatasets** â€” Search structured datasets for benchmarks
 - **getDocumentStructured** â€” Get structured document data
 - **readSpreadsheet** â€” Read Excel/CSV files
 - **readMemory** â€” Read project memory from prior sessions
@@ -1083,6 +1154,7 @@ You have access to Bidwright tools via MCP. For this review, use:
 - **countSymbolsAllPages** - Count repeated symbols across all pages of a drawing set
 - **findSymbolCandidates** - Discover symbol-like candidates when you need help identifying a cluster
 - **renderDrawingPage / zoomDrawingRegion** - Use for visual confirmation only, not as the primary counting workflow
+- **listTakeoffAnnotations / linkTakeoffAnnotationToWorksheetItem** - Check and link saved takeoff evidence back to worksheet rows
 
 ### REVIEW OUTPUT Tools (the ONLY tools you write with):
 - **saveReviewCoverage** â€” Save scope coverage checklist (call ONCE with all items)

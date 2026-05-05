@@ -8,14 +8,16 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  DollarSign,
   Edit3,
   Plus,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { RateSchedule, CatalogSummary, EntityCategory } from "@/lib/api";
+import type { RateSchedule, EntityCategory, ResourceCatalogRecord } from "@/lib/api";
 import {
   createRateSchedule,
   deleteRateSchedule,
@@ -28,10 +30,9 @@ import {
   updateRateScheduleItem,
   deleteRateScheduleItem,
   autoCalculateRateSchedule,
-  getCatalogs,
   getEntityCategories,
   getSettings,
-  listCatalogItems,
+  listResources,
 } from "@/lib/api";
 import { CURRENCIES } from "@/components/settings-page-config";
 import {
@@ -44,7 +45,6 @@ import {
   Input,
   Select,
 } from "@/components/ui";
-import { CatalogItemPicker, type CatalogPickerItem } from "@/components/shared/catalog-item-picker";
 import { useUomOptions } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */
@@ -176,6 +176,141 @@ function normalizeCurrency(value: string | null | undefined, fallback = "USD") {
 
 type Tier = RateSchedule["tiers"][number];
 type Item = RateSchedule["items"][number];
+type DrawerTab = "pricing" | "components";
+type ComponentTarget = "cost" | "price" | "both";
+type ComponentBasis =
+  | "per_line"
+  | "per_quantity"
+  | "per_tier_unit"
+  | "per_day"
+  | "percent_of_base_cost"
+  | "percent_of_base_price";
+
+interface RatebookComponentRule {
+  id: string;
+  code: string;
+  label: string;
+  kind: string;
+  target: ComponentTarget;
+  basis: ComponentBasis;
+  amount: number;
+  appliesToTierId: string | null;
+  appliesToTierName: string | null;
+  categoryNames: string[];
+  entityTypes: string[];
+}
+
+interface RatebookComponentTemplate {
+  code: string;
+  label: string;
+  kind: string;
+  target: ComponentTarget;
+  basis: ComponentBasis;
+  amount: number;
+  description: string;
+}
+
+const componentKindOptions = [
+  { value: "travel", label: "Travel" },
+  { value: "per_diem", label: "Per Diem" },
+  { value: "mileage", label: "Mileage" },
+  { value: "accommodation", label: "Accommodation" },
+  { value: "allowance", label: "Allowance" },
+  { value: "burden", label: "Burden" },
+  { value: "markup", label: "Markup" },
+  { value: "discount", label: "Discount" },
+  { value: "other", label: "Other" },
+];
+
+const componentTargetOptions = [
+  { value: "cost", label: "Cost side" },
+  { value: "price", label: "Sell side" },
+  { value: "both", label: "Both" },
+];
+
+const componentBasisOptions = [
+  { value: "per_line", label: "Per line" },
+  { value: "per_quantity", label: "Per quantity" },
+  { value: "per_tier_unit", label: "Per tier unit" },
+  { value: "per_day", label: "Per day" },
+  { value: "percent_of_base_cost", label: "% base cost" },
+  { value: "percent_of_base_price", label: "% base sell" },
+];
+
+const componentTemplates: RatebookComponentTemplate[] = [
+  {
+    code: "travel_flat",
+    label: "Travel allowance",
+    kind: "travel",
+    target: "cost",
+    basis: "per_line",
+    amount: 150,
+    description: "Fixed mobilization or trip charge on each matching resource line.",
+  },
+  {
+    code: "mileage",
+    label: "Mileage recovery",
+    kind: "mileage",
+    target: "cost",
+    basis: "per_quantity",
+    amount: 0.75,
+    description: "Variable travel cost driven by the line quantity.",
+  },
+  {
+    code: "per_diem",
+    label: "Per diem",
+    kind: "per_diem",
+    target: "cost",
+    basis: "per_day",
+    amount: 95,
+    description: "Daily field allowance calculated from tier units.",
+  },
+  {
+    code: "lodging",
+    label: "Lodging",
+    kind: "accommodation",
+    target: "cost",
+    basis: "per_day",
+    amount: 175,
+    description: "Hotel or accommodation cost per calculated field day.",
+  },
+  {
+    code: "labor_burden",
+    label: "Labor burden",
+    kind: "burden",
+    target: "cost",
+    basis: "percent_of_base_cost",
+    amount: 0.18,
+    description: "Payroll burden, benefits, insurance, or overhead against direct cost.",
+  },
+  {
+    code: "sell_markup",
+    label: "Sell markup",
+    kind: "markup",
+    target: "price",
+    basis: "percent_of_base_cost",
+    amount: 0.15,
+    description: "Customer-facing add-on over the resource direct cost.",
+  },
+  {
+    code: "discount",
+    label: "Customer discount",
+    kind: "discount",
+    target: "price",
+    basis: "percent_of_base_price",
+    amount: -0.05,
+    description: "Sell-side concession against the base sell total.",
+  },
+  {
+    code: "allowance",
+    label: "General allowance",
+    kind: "allowance",
+    target: "both",
+    basis: "per_line",
+    amount: 50,
+    description: "One-off allowance carried on both cost and sell sides.",
+  },
+];
 
 interface RateScheduleHeaderForm {
   name: string;
@@ -221,19 +356,146 @@ function mergeHeaderMetadata(existing: Record<string, unknown> | null | undefine
   return next;
 }
 
+function metadataArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+    : [];
+}
+
+function normalizeComponentTarget(value: unknown): ComponentTarget {
+  return value === "price" || value === "both" ? value : "cost";
+}
+
+function normalizeComponentBasis(value: unknown): ComponentBasis {
+  const raw = typeof value === "string" ? value : "";
+  return componentBasisOptions.some((option) => option.value === raw) ? (raw as ComponentBasis) : "per_line";
+}
+
+function componentOptionLabel(options: Array<{ value: string; label: string }>, value: string) {
+  return options.find((option) => option.value === value)?.label ?? value.replace(/_/g, " ");
+}
+
+function isPercentComponentBasis(basis: ComponentBasis) {
+  return basis === "percent_of_base_cost" || basis === "percent_of_base_price";
+}
+
+function componentAmountInputValue(component: Pick<RatebookComponentRule, "amount" | "basis">) {
+  return isPercentComponentBasis(component.basis)
+    ? Number((component.amount * 100).toFixed(4))
+    : component.amount;
+}
+
+function componentAmountFromInput(value: string, basis: ComponentBasis) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return 0;
+  return isPercentComponentBasis(basis) ? amount / 100 : amount;
+}
+
+function formatComponentAmount(component: Pick<RatebookComponentRule, "amount" | "basis">) {
+  if (isPercentComponentBasis(component.basis)) {
+    return `${(component.amount * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
+  }
+  return component.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function componentCodeFromLabel(label: string) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function stringArrayFromMetadata(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && !!entry.trim()).map((entry) => entry.trim())
+    : [];
+}
+
+function listInputValue(values: string[]) {
+  return values.join(", ");
+}
+
+function listInputValues(value: string) {
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function ratebookComponentsFromMetadata(metadata: Record<string, unknown> | null | undefined): RatebookComponentRule[] {
+  const rawRules = [
+    ...metadataArray(metadata?.costComponents),
+    ...metadataArray(metadata?.rateComponents),
+    ...metadataArray(metadata?.pricingComponents),
+  ];
+  return rawRules.map((rule, index) => {
+    const kind = typeof rule.kind === "string" ? rule.kind : "other";
+    const code = typeof rule.code === "string" && rule.code.trim() ? rule.code.trim() : kind;
+    return {
+      id: typeof rule.id === "string" && rule.id.trim() ? rule.id : `component-${index + 1}`,
+      code,
+      label: typeof rule.label === "string" && rule.label.trim() ? rule.label.trim() : code,
+      kind,
+      target: normalizeComponentTarget(rule.target),
+      basis: normalizeComponentBasis(rule.basis),
+      amount: Number(rule.amount ?? rule.rate ?? rule.percentage) || 0,
+      appliesToTierId: typeof rule.appliesToTierId === "string" && rule.appliesToTierId.trim() ? rule.appliesToTierId.trim() : null,
+      appliesToTierName: typeof rule.appliesToTierName === "string" && rule.appliesToTierName.trim() ? rule.appliesToTierName.trim() : null,
+      categoryNames: stringArrayFromMetadata(rule.categoryNames),
+      entityTypes: stringArrayFromMetadata(rule.entityTypes),
+    };
+  });
+}
+
+function metadataWithRatebookComponents(
+  metadata: Record<string, unknown> | null | undefined,
+  components: RatebookComponentRule[],
+) {
+  const next: Record<string, unknown> = { ...(metadata ?? {}) };
+  const serialize = (component: RatebookComponentRule) => ({
+    id: component.id,
+    code: component.code,
+    label: component.label,
+    kind: component.kind,
+    target: component.target,
+    basis: component.basis,
+    amount: component.amount,
+    ...(component.appliesToTierId ? { appliesToTierId: component.appliesToTierId } : {}),
+    ...(component.appliesToTierName ? { appliesToTierName: component.appliesToTierName } : {}),
+    ...(component.categoryNames.length > 0 ? { categoryNames: component.categoryNames } : {}),
+    ...(component.entityTypes.length > 0 ? { entityTypes: component.entityTypes } : {}),
+  });
+  const costComponents = components.filter((component) => component.target === "cost").map(serialize);
+  const pricingComponents = components.filter((component) => component.target !== "cost").map(serialize);
+  if (costComponents.length > 0) next.costComponents = costComponents;
+  else delete next.costComponents;
+  if (pricingComponents.length > 0) next.pricingComponents = pricingComponents;
+  else delete next.pricingComponents;
+  delete next.rateComponents;
+  return next;
+}
+
+function emptyComponentDraft(): RatebookComponentRule {
+  return {
+    id: "",
+    code: "",
+    label: "",
+    kind: "travel",
+    target: "cost",
+    basis: "per_line",
+    amount: 0,
+    appliesToTierId: null,
+    appliesToTierName: null,
+    categoryNames: [],
+    entityTypes: [],
+  };
+}
+
 /* ─── Component ─── */
 
 export function RateScheduleManager({
   schedules: initialSchedules,
   setSchedules: setParentSchedules,
   loading,
-  catalogs = [],
   embedded = false,
 }: {
   schedules: RateSchedule[];
   setSchedules: (s: RateSchedule[]) => void;
   loading: boolean;
-  catalogs?: CatalogSummary[];
   embedded?: boolean;
 }) {
   const [schedules, setSchedulesLocal] = useState<RateSchedule[]>(initialSchedules);
@@ -256,28 +518,25 @@ export function RateScheduleManager({
     }
   }, [initialSchedules]);
 
-  // Load catalogs with items if not provided
-  const [loadedCatalogs, setLoadedCatalogs] = useState<CatalogSummary[]>([]);
+  const [resources, setResources] = useState<ResourceCatalogRecord[]>([]);
   useEffect(() => {
-    const baseCats = catalogs.length > 0 ? Promise.resolve(catalogs) : getCatalogs();
-    baseCats.then(async (cats) => {
-      const withItems = await Promise.all(
-        cats.map(async (cat) => {
-          try {
-            const items = await listCatalogItems(cat.id);
-            return { ...cat, items };
-          } catch {
-            return cat;
-          }
-        })
-      );
-      setLoadedCatalogs(withItems);
-    }).catch(() => {});
-  }, [catalogs]);
+    let cancelled = false;
+    listResources({ limit: 750 })
+      .then((rows) => {
+        if (!cancelled) setResources(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setResources([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<RateSchedule | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>("pricing");
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [page, setPage] = useState(0);
@@ -320,7 +579,7 @@ export function RateScheduleManager({
   }, []);
 
   // Inline editing
-  const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string; side: "cost" | "sell" } | null>(null);
   const [editValue, setEditValue] = useState("");
 
   // New tier/item forms
@@ -331,7 +590,15 @@ export function RateScheduleManager({
   const [editingTierId, setEditingTierId] = useState<string | null>(null);
   const [editTierForm, setEditTierForm] = useState<{ name: string; multiplier: string; uom: string }>({ name: "", multiplier: "1.0", uom: "__none__" });
   const [showAddItem, setShowAddItem] = useState(false);
-  const [newItemForm, setNewItemForm] = useState({ name: "", code: "", unit: "HR", catalogItemId: null as string | null });
+  const [resourceQuery, setResourceQuery] = useState("");
+  const [componentDraft, setComponentDraft] = useState<RatebookComponentRule>(emptyComponentDraft);
+  const [newItemForm, setNewItemForm] = useState({
+    name: "",
+    code: "",
+    unit: "EA",
+    resourceId: null as string | null,
+    catalogItemId: null as string | null,
+  });
   const tierUomOptions = useUomOptions({ compact: true, blankValue: "__none__", blankLabel: "Any UoM" });
 
   // Edit schedule header
@@ -422,6 +689,7 @@ export function RateScheduleManager({
     setShowAddItem(false);
     setEditingHeader(false);
     setIsCreating(false);
+    setDrawerTab("pricing");
     try {
       const full = await getRateSchedule(id);
       setDetail(full);
@@ -450,6 +718,7 @@ export function RateScheduleManager({
     setDetail(null);
     setIsCreating(true);
     setEditingHeader(true);
+    setDrawerTab("pricing");
     setHeaderForm({
       name: "",
       description: "",
@@ -540,6 +809,78 @@ export function RateScheduleManager({
     }
   }, [categoryOptions, detail, headerDateRangeIsValid, headerForm, organizationCurrency, setSchedules]);
 
+  const ratebookComponents = useMemo(
+    () => ratebookComponentsFromMetadata(detail?.metadata),
+    [detail?.metadata],
+  );
+
+  const handleAddComponent = useCallback(async () => {
+    if (!detail) return;
+    const label = componentDraft.label.trim();
+    const code = componentDraft.code.trim() || componentCodeFromLabel(label);
+    if (!label || !code) return;
+    const nextComponent: RatebookComponentRule = {
+      ...componentDraft,
+      id: componentDraft.id || `component-${Date.now()}`,
+      code,
+      label,
+      amount: Number(componentDraft.amount) || 0,
+    };
+    const nextComponents = componentDraft.id
+      ? ratebookComponents.map((component) => (component.id === componentDraft.id ? nextComponent : component))
+      : [...ratebookComponents, nextComponent];
+    try {
+      const updated = await updateRateSchedule(detail.id, {
+        metadata: metadataWithRatebookComponents(detail.metadata, nextComponents),
+      });
+      applyScheduleUpdate(updated);
+      setComponentDraft(emptyComponentDraft());
+    } catch (err) {
+      console.error("Failed to add ratebook component:", err);
+    }
+  }, [applyScheduleUpdate, componentDraft, detail, ratebookComponents]);
+
+  const handleUseComponentTemplate = useCallback((template: RatebookComponentTemplate) => {
+    setComponentDraft({
+      id: "",
+      code: template.code,
+      label: template.label,
+      kind: template.kind,
+      target: template.target,
+      basis: template.basis,
+      amount: template.amount,
+      appliesToTierId: null,
+      appliesToTierName: null,
+      categoryNames: [],
+      entityTypes: [],
+    });
+    setDrawerTab("components");
+  }, []);
+
+  const handleEditComponent = useCallback((component: RatebookComponentRule) => {
+    setComponentDraft({
+      ...component,
+      categoryNames: [...component.categoryNames],
+      entityTypes: [...component.entityTypes],
+    });
+    setDrawerTab("components");
+  }, []);
+
+  const handleDeleteComponent = useCallback(async (componentId: string) => {
+    if (!detail) return;
+    try {
+      const updated = await updateRateSchedule(detail.id, {
+        metadata: metadataWithRatebookComponents(
+          detail.metadata,
+          ratebookComponents.filter((component) => component.id !== componentId),
+        ),
+      });
+      applyScheduleUpdate(updated);
+    } catch (err) {
+      console.error("Failed to delete ratebook component:", err);
+    }
+  }, [applyScheduleUpdate, detail, ratebookComponents]);
+
   /* ─── Tier CRUD ─── */
 
   const handleAddTier = useCallback(async () => {
@@ -609,28 +950,51 @@ export function RateScheduleManager({
 
   /* ─── Item CRUD ─── */
 
+  const filteredResources = useMemo(() => {
+    const query = resourceQuery.trim().toLowerCase();
+    if (!query) return resources;
+    return resources.filter((resource) =>
+      [
+        resource.name,
+        resource.code,
+        resource.category,
+        resource.resourceType,
+        resource.manufacturer,
+        resource.manufacturerPartNumber,
+      ].some((value) => value.toLowerCase().includes(query)),
+    );
+  }, [resourceQuery, resources]);
+
   const handleAddItem = useCallback(async () => {
-    if (!detail || !newItemForm.catalogItemId) return;
+    if (!detail || (!newItemForm.resourceId && !newItemForm.catalogItemId)) return;
     try {
       const updated = await addRateScheduleItem(detail.id, {
+        resourceId: newItemForm.resourceId,
         catalogItemId: newItemForm.catalogItemId,
       });
       applyScheduleUpdate(updated);
-      setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null });
+      setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null });
+      setResourceQuery("");
       setShowAddItem(false);
     } catch (err) {
       console.error("Failed to add item:", err);
     }
   }, [detail, newItemForm, applyScheduleUpdate]);
 
-  const handlePickerSelect = useCallback((item: CatalogPickerItem) => {
+  const handleResourceSelect = useCallback((resourceId: string) => {
+    const resource = resources.find((candidate) => candidate.id === resourceId);
+    if (!resource) {
+      setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null });
+      return;
+    }
     setNewItemForm({
-      name: item.name,
-      code: item.code,
-      unit: item.unit || "HR",
-      catalogItemId: item.id,
+      name: resource.name,
+      code: resource.code,
+      unit: resource.defaultUom || "EA",
+      resourceId: resource.id,
+      catalogItemId: resource.catalogItemId,
     });
-  }, []);
+  }, [resources]);
 
   const handleDeleteItem = useCallback(
     async (itemId: string) => {
@@ -645,18 +1009,20 @@ export function RateScheduleManager({
     [detail, applyScheduleUpdate]
   );
 
-  const startRateEdit = (item: Item, tierId: string) => {
-    setEditingCell({ itemId: item.id, tierId });
-    setEditValue(String(item.rates?.[tierId] ?? 0));
+  const startRateEdit = (item: Item, tierId: string, side: "cost" | "sell") => {
+    setEditingCell({ itemId: item.id, tierId, side });
+    setEditValue(String(side === "cost" ? item.costRates?.[tierId] ?? 0 : item.rates?.[tierId] ?? 0));
   };
 
   const saveRateEdit = useCallback(
     async (item: Item) => {
       if (!detail || !editingCell) return;
       const val = parseFloat(editValue) || 0;
-      const newRates = { ...item.rates, [editingCell.tierId]: val };
+      const patch = editingCell.side === "cost"
+        ? { costRates: { ...item.costRates, [editingCell.tierId]: val } }
+        : { rates: { ...item.rates, [editingCell.tierId]: val } };
       try {
-        const updated = await updateRateScheduleItem(detail.id, item.id, { rates: newRates });
+        const updated = await updateRateScheduleItem(detail.id, item.id, patch);
         applyScheduleUpdate(updated);
         setEditingCell(null);
       } catch (err) {
@@ -689,14 +1055,14 @@ export function RateScheduleManager({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle>Rate Schedules</CardTitle>
+              <CardTitle>Ratebooks</CardTitle>
               <p className="text-xs text-fg/40 mt-0.5">
-                                               Manage your organization's master rate library. Import these into projects.
+                                               Manage resource cost and sell overrides. Import these into projects.
               </p>
             </div>
             <Button variant="accent" size="xs" onClick={startCreate}>
               <Plus className="h-3.5 w-3.5" />
-              New Schedule
+              New Ratebook
             </Button>
           </CardHeader>
         </Card>
@@ -709,7 +1075,7 @@ export function RateScheduleManager({
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
             <Input
               className="h-8 pl-8 text-xs"
-              placeholder="Search rate books by name or description..."
+              placeholder="Search Ratebooks by name or description..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -734,7 +1100,7 @@ export function RateScheduleManager({
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <span className="text-[10px] text-fg/35">
-              {formatCount(filtered.length)} rate book{filtered.length === 1 ? "" : "s"}
+              {formatCount(filtered.length)} ratebook{filtered.length === 1 ? "" : "s"}
             </span>
             <Button type="button" variant="accent" size="sm" onClick={startCreate}>
               <Plus className="h-3.5 w-3.5" />
@@ -757,7 +1123,7 @@ export function RateScheduleManager({
             </colgroup>
             <thead className="sticky top-0 z-10 bg-panel">
               <tr className="border-b border-line">
-                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Rate Book</th>
+                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Ratebook</th>
                 <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Category</th>
                 <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Scope</th>
                 <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Effective</th>
@@ -771,7 +1137,7 @@ export function RateScheduleManager({
               {loading && (
                 <tr>
                   <td colSpan={8} className="px-5 py-12 text-center text-sm text-fg/40">
-                    Loading rate books...
+                    Loading Ratebooks...
                   </td>
                 </tr>
               )}
@@ -779,7 +1145,7 @@ export function RateScheduleManager({
               {!loading && filtered.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-5 py-12 text-center text-sm text-fg/40">
-                    No rate books match this view.
+                    No Ratebooks match this view.
                   </td>
                 </tr>
               )}
@@ -850,7 +1216,7 @@ export function RateScheduleManager({
                             handleDelete(schedule.id);
                           }}
                           className="rounded p-1 text-fg/30 opacity-0 transition-all hover:bg-danger/10 hover:text-danger group-hover:opacity-100 focus:opacity-100"
-                          title="Delete rate book"
+                          title="Delete Ratebook"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -865,7 +1231,7 @@ export function RateScheduleManager({
 
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/20 px-3 py-2 text-xs text-fg/45">
           <span className="tabular-nums">
-            {filtered.length === 0 ? 0 : page * pageSize + 1}-{Math.min((page + 1) * pageSize, filtered.length)} of {formatCount(filtered.length)} rate books
+            {filtered.length === 0 ? 0 : page * pageSize + 1}-{Math.min((page + 1) * pageSize, filtered.length)} of {formatCount(filtered.length)} Ratebooks
           </span>
           <div className="flex items-center gap-2">
             <span>Page {page + 1} of {totalPages}</span>
@@ -899,18 +1265,18 @@ export function RateScheduleManager({
         {(isCreating || (selectedId && detail)) && (
           <motion.div
             key="rate-schedule-drawer"
-            initial={{ x: 560 }}
+            initial={{ x: "100%" }}
             animate={{ x: 0 }}
-            exit={{ x: 560 }}
+            exit={{ x: "100%" }}
             transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed inset-y-0 right-0 z-40 w-[560px] bg-panel border-l border-line shadow-2xl flex flex-col"
+            className="fixed inset-y-0 right-0 z-40 flex w-[min(1120px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
           >
             {/* Drawer header */}
             <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-line bg-panel2/40">
               {editingHeader ? (
                 <div className="flex-1 space-y-3">
                   {isCreating && (
-                    <p className="text-[11px] font-semibold text-fg/55 uppercase tracking-wider">New Rate Schedule</p>
+                    <p className="text-[11px] font-semibold text-fg/55 uppercase tracking-wider">New Ratebook</p>
                   )}
                   <div>
                     <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</label>
@@ -924,7 +1290,7 @@ export function RateScheduleManager({
                           isCreating ? handleCreate() : handleUpdateHeader();
                         }
                       }}
-                      placeholder="e.g. Mechanical Labour Rates"
+                      placeholder="e.g. Customer Resource Rates"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -1067,6 +1433,39 @@ export function RateScheduleManager({
               )}
             </div>
 
+            {!isCreating && detail && !editingHeader && (
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-5 py-2">
+                <div className="flex items-center gap-1 rounded-lg bg-bg/45 p-1">
+                  {[
+                    { id: "pricing" as DrawerTab, label: "Resource Pricing", icon: DollarSign },
+                    { id: "components" as DrawerTab, label: "Components", icon: SlidersHorizontal },
+                  ].map((tab) => {
+                    const Icon = tab.icon;
+                    const active = drawerTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setDrawerTab(tab.id)}
+                        className={cn(
+                          "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+                          active ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg",
+                        )}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="hidden items-center gap-2 text-[10px] text-fg/40 md:flex">
+                  <span>{formatCount(detail.items.length)} resource rows</span>
+                  <span>{formatCount(detail.tiers.length)} tiers</span>
+                  <span>{formatCount(ratebookComponents.length)} components</span>
+                </div>
+              </div>
+            )}
+
             {/* Drawer body */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
               {isCreating ? (
@@ -1075,6 +1474,288 @@ export function RateScheduleManager({
                 </div>
               ) : loadingDetail || !detail ? (
                 <div className="flex items-center justify-center py-12 text-xs text-fg/30">Loading...</div>
+              ) : drawerTab === "components" ? (
+                <div className="space-y-5">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Cost Rules</div>
+                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
+                        {formatCount(ratebookComponents.filter((component) => component.target === "cost" || component.target === "both").length)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Sell Rules</div>
+                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
+                        {formatCount(ratebookComponents.filter((component) => component.target === "price" || component.target === "both").length)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Currency</div>
+                      <div className="mt-1 text-lg font-semibold uppercase text-fg">
+                        {normalizeCurrency(metadataText(detail.metadata, "currency"), organizationCurrency)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Templates</h3>
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      {componentTemplates.map((template) => (
+                        <button
+                          key={template.code}
+                          type="button"
+                          onClick={() => handleUseComponentTemplate(template)}
+                          className="rounded-lg border border-line bg-bg/25 p-3 text-left transition-colors hover:border-accent/40 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-xs font-semibold text-fg">{template.label}</span>
+                            <Badge tone={template.target === "cost" ? "warning" : template.target === "price" ? "success" : "info"} className="shrink-0 text-[10px]">
+                              {template.target === "price" ? "Sell" : template.target === "both" ? "Both" : "Cost"}
+                            </Badge>
+                          </div>
+                          <div className="mt-1 text-[11px] text-fg/45">{template.description}</div>
+                          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-fg/35">
+                            <span>{componentOptionLabel(componentBasisOptions, template.basis)}</span>
+                            <span className="font-mono tabular-nums">{formatComponentAmount(template)}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-line bg-bg/20 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Rule Editor</div>
+                      </div>
+                      {componentDraft.id ? (
+                        <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                          <X className="h-3 w-3" />
+                          Clear
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Label</label>
+                          <Input
+                            className="mt-1 h-8 text-xs"
+                            value={componentDraft.label}
+                            onChange={(event) => {
+                              const label = event.target.value;
+                              setComponentDraft((current) => ({
+                                ...current,
+                                label,
+                                code: !current.code || current.code === componentCodeFromLabel(current.label)
+                                  ? componentCodeFromLabel(label)
+                                  : current.code,
+                              }));
+                            }}
+                            placeholder="Travel zone A"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Code</label>
+                          <Input
+                            className="mt-1 h-8 font-mono text-xs"
+                            value={componentDraft.code}
+                            onChange={(event) => setComponentDraft((current) => ({ ...current, code: event.target.value }))}
+                            placeholder="travel_zone_a"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Kind</label>
+                          <Select
+                            className="mt-1"
+                            size="xs"
+                            value={componentDraft.kind}
+                            onValueChange={(kind) => setComponentDraft((current) => ({ ...current, kind }))}
+                            options={componentKindOptions}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Side</label>
+                          <Select
+                            className="mt-1"
+                            size="xs"
+                            value={componentDraft.target}
+                            onValueChange={(target) => setComponentDraft((current) => ({ ...current, target: target as ComponentTarget }))}
+                            options={componentTargetOptions}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Basis</label>
+                          <Select
+                            className="mt-1"
+                            size="xs"
+                            value={componentDraft.basis}
+                            onValueChange={(basis) => {
+                              const nextBasis = basis as ComponentBasis;
+                              setComponentDraft((current) => {
+                                const wasPercent = isPercentComponentBasis(current.basis);
+                                const isPercent = isPercentComponentBasis(nextBasis);
+                                const amount = wasPercent === isPercent
+                                  ? current.amount
+                                  : isPercent
+                                    ? current.amount / 100
+                                    : current.amount * 100;
+                                return { ...current, basis: nextBasis, amount };
+                              });
+                            }}
+                            options={componentBasisOptions}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">
+                            Amount{isPercentComponentBasis(componentDraft.basis) ? " %" : ""}
+                          </label>
+                          <Input
+                            className="mt-1 h-8 text-right text-xs"
+                            type="number"
+                            step="0.01"
+                            value={componentAmountInputValue(componentDraft)}
+                            onChange={(event) => setComponentDraft((current) => ({
+                              ...current,
+                              amount: componentAmountFromInput(event.target.value, current.basis),
+                            }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Tier Scope</label>
+                          <Select
+                            className="mt-1"
+                            size="xs"
+                            value={componentDraft.appliesToTierId ?? "__all__"}
+                            onValueChange={(tierId) => {
+                              const tier = detail.tiers.find((candidate) => candidate.id === tierId);
+                              setComponentDraft((current) => ({
+                                ...current,
+                                appliesToTierId: tierId === "__all__" ? null : tierId,
+                                appliesToTierName: tierId === "__all__" ? null : tier?.name ?? null,
+                              }));
+                            }}
+                            options={[
+                              { value: "__all__", label: "All tiers" },
+                              ...detail.tiers
+                                .slice()
+                                .sort((left, right) => left.sortOrder - right.sortOrder)
+                                .map((tier) => ({ value: tier.id, label: tier.name })),
+                            ]}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Category Filters</label>
+                          <Input
+                            className="mt-1 h-8 text-xs"
+                            value={listInputValue(componentDraft.categoryNames)}
+                            onChange={(event) => setComponentDraft((current) => ({ ...current, categoryNames: listInputValues(event.target.value) }))}
+                            placeholder="Optional, comma separated"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-medium uppercase text-fg/40">Entity Type Filters</label>
+                          <Input
+                            className="mt-1 h-8 text-xs"
+                            value={listInputValue(componentDraft.entityTypes)}
+                            onChange={(event) => setComponentDraft((current) => ({ ...current, entityTypes: listInputValues(event.target.value) }))}
+                            placeholder="Optional, comma separated"
+                          />
+                        </div>
+                        <div className="flex items-end justify-end gap-2 pt-1">
+                          <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                            Reset
+                          </Button>
+                          <Button size="xs" onClick={handleAddComponent} disabled={!componentDraft.label.trim()}>
+                            <Plus className="h-3 w-3" />
+                            {componentDraft.id ? "Save Rule" : "Add Rule"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Active Rules</h3>
+                      <Badge tone="info" className="text-[10px]">{formatCount(ratebookComponents.length)} active</Badge>
+                    </div>
+                    {ratebookComponents.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-line px-4 py-10 text-center text-sm text-fg/35">
+                        No Ratebook component rules yet.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-line">
+                        <table className="w-full min-w-[900px] text-xs">
+                          <thead className="bg-bg/45">
+                            <tr className="border-b border-line">
+                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Rule</th>
+                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Side</th>
+                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Basis</th>
+                              <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-fg/40">Amount</th>
+                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Applies</th>
+                              <th className="w-16" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ratebookComponents.map((component) => {
+                              const tier = component.appliesToTierId
+                                ? detail.tiers.find((candidate) => candidate.id === component.appliesToTierId)
+                                : null;
+                              const applies = [
+                                tier?.name ?? component.appliesToTierName ?? "All tiers",
+                                component.categoryNames.length > 0 ? `Categories: ${component.categoryNames.join(", ")}` : "",
+                                component.entityTypes.length > 0 ? `Types: ${component.entityTypes.join(", ")}` : "",
+                              ].filter(Boolean).join(" · ");
+                              return (
+                                <tr key={component.id} className="border-b border-line/60 last:border-b-0">
+                                  <td className="px-3 py-2">
+                                    <div className="font-medium text-fg">{component.label}</div>
+                                    <div className="font-mono text-[10px] text-fg/35">{component.code} · {componentOptionLabel(componentKindOptions, component.kind)}</div>
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <Badge tone={component.target === "cost" ? "warning" : component.target === "price" ? "success" : "info"} className="text-[10px]">
+                                      {component.target === "price" ? "Sell" : component.target === "both" ? "Both" : "Cost"}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-3 py-2 text-fg/55">{componentOptionLabel(componentBasisOptions, component.basis)}</td>
+                                  <td className="px-3 py-2 text-right font-mono tabular-nums text-fg/75">{formatComponentAmount(component)}</td>
+                                  <td className="px-3 py-2 text-fg/50">{applies}</td>
+                                  <td className="px-2 py-2 text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleEditComponent(component)}
+                                        className="rounded p-1 text-fg/35 transition-colors hover:bg-accent/10 hover:text-accent"
+                                        title="Edit rule"
+                                      >
+                                        <Edit3 className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteComponent(component.id)}
+                                        className="rounded p-1 text-fg/30 transition-colors hover:bg-danger/10 hover:text-danger"
+                                        title="Delete rule"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
               ) : (
                 <>
                   {/* Tiers */}
@@ -1113,7 +1794,7 @@ export function RateScheduleManager({
                       </div>
                     )}
                     {detail.tiers.length === 0 ? (
-                      <p className="text-xs text-fg/30 py-2">No tiers. Add Regular, Overtime, Double Time, etc.</p>
+                      <p className="text-xs text-fg/30 py-2">No tiers. Add tiers such as Each, Day, Week, Regular, or Overtime.</p>
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (
@@ -1171,12 +1852,26 @@ export function RateScheduleManager({
                             {detail.tiers
                               .sort((a, b) => a.sortOrder - b.sortOrder)
                               .map((tier) => (
-                                <th key={tier.id} className="text-right py-2 px-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-18" colSpan={1}>
+                                <th key={tier.id} className="text-right py-2 px-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-32" colSpan={2}>
                                   {tier.name}
                                 </th>
                               ))}
                               <th className="w-8" />
                             </tr>
+                            {detail.tiers.length > 0 ? (
+                              <tr className="border-b border-line/60">
+                                <th />
+                                <th />
+                                <th />
+                                {detail.tiers
+                                  .sort((a, b) => a.sortOrder - b.sortOrder)
+                                  .flatMap((tier) => [
+                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Cost</th>,
+                                    <th key={`${tier.id}:sell`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Sell</th>,
+                                  ])}
+                                <th />
+                              </tr>
+                            ) : null}
                           </thead>
                           <tbody>
                             {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
@@ -1186,10 +1881,10 @@ export function RateScheduleManager({
                                 <td className="py-1.5 pr-1 text-fg/50 text-[11px]">{item.unit}</td>
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
-                                  .map((tier) => (
-                                    <td key={tier.id} className="py-1 px-0.5">
+                                  .flatMap((tier) => [
+                                    <td key={`${tier.id}:cost`} className="py-1 px-0.5">
                                       <div className="flex flex-col items-end">
-                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
+                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id && editingCell.side === "cost" ? (
                                           <input
                                             type="number"
                                             step="0.01"
@@ -1205,15 +1900,41 @@ export function RateScheduleManager({
                                           />
                                         ) : (
                                           <button
-                                            onClick={() => startRateEdit(item, tier.id)}
+                                            onClick={() => startRateEdit(item, tier.id, "cost")}
+                                            className="text-right text-[11px] text-fg/80 hover:text-accent px-0.5 py-0.5 rounded hover:bg-accent/5 transition-colors w-16"
+                                          >
+                                            {fmt(item.costRates?.[tier.id])}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>,
+                                    <td key={`${tier.id}:sell`} className="py-1 px-0.5">
+                                      <div className="flex flex-col items-end">
+                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id && editingCell.side === "sell" ? (
+                                          <input
+                                            type="number"
+                                            step="0.01"
+                                            className="w-16 text-right px-1 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50"
+                                            value={editValue}
+                                            onChange={(e) => setEditValue(e.target.value)}
+                                            onBlur={() => saveRateEdit(item)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter") saveRateEdit(item);
+                                              if (e.key === "Escape") setEditingCell(null);
+                                            }}
+                                            autoFocus
+                                          />
+                                        ) : (
+                                          <button
+                                            onClick={() => startRateEdit(item, tier.id, "sell")}
                                             className="text-right text-[11px] text-fg/80 hover:text-accent px-0.5 py-0.5 rounded hover:bg-accent/5 transition-colors w-16"
                                           >
                                             {fmt(item.rates?.[tier.id])}
                                           </button>
                                         )}
                                       </div>
-                                    </td>
-                                  ))}
+                                    </td>,
+                                  ])}
                                 <td className="py-2 text-right">
                                   <button
                                     onClick={() => handleDeleteItem(item.id)}
@@ -1233,28 +1954,38 @@ export function RateScheduleManager({
                         <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
                           <div className="flex items-end gap-2 mt-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
                             <div className="flex-1 min-w-0">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Catalog item</label>
-                              <div className="mt-1">
-                                {loadedCatalogs.length > 0 ? (
-                                  <CatalogItemPicker
-                                    catalogs={loadedCatalogs}
-                                    value={newItemForm.catalogItemId}
-                                    onSelect={handlePickerSelect}
-                                    placeholder="Search catalog items..."
-                                  />
-                                ) : (
-                                  <p className="text-[11px] text-fg/40">No catalog items loaded — add items to a catalog first.</p>
-                                )}
+                              <label className="text-[10px] font-medium text-fg/40 uppercase">Resource</label>
+                              <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)]">
+                                <Input
+                                  value={resourceQuery}
+                                  onChange={(event) => setResourceQuery(event.target.value)}
+                                  placeholder="Search resources..."
+                                  className="h-8"
+                                />
+                                <Select
+                                  value={newItemForm.resourceId ?? ""}
+                                  onValueChange={handleResourceSelect}
+                                  options={filteredResources.slice(0, 100).map((resource) => ({
+                                    value: resource.id,
+                                    label: [resource.code, resource.name].filter(Boolean).join(" · ") || resource.id,
+                                  }))}
+                                  placeholder="Select resource"
+                                  size="xs"
+                                  disabled={resources.length === 0}
+                                />
                               </div>
-                              {newItemForm.catalogItemId && (
+                              {resources.length === 0 ? (
+                                <p className="mt-1 text-[11px] text-fg/40">No resources found.</p>
+                              ) : null}
+                              {newItemForm.resourceId && (
                                 <p className="mt-1 text-[10px] text-fg/40">
                                   {newItemForm.code && <span className="font-mono mr-1">{newItemForm.code}</span>}
                                   {newItemForm.name} · {newItemForm.unit}
                                 </p>
                               )}
                             </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
-                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setNewItemForm({ name: "", code: "", unit: "HR", catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.resourceId && !newItemForm.catalogItemId}>Add</Button>
+                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setResourceQuery(""); setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
                           </div>
                         </motion.div>
                       )}

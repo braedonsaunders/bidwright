@@ -45,6 +45,8 @@ export interface AppSettingsRecord {
     llmModel: string;
     azureDiEndpoint?: string;
     azureDiKey?: string;
+    documentExtractionProvider?: "azure" | "local" | "auto";
+    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

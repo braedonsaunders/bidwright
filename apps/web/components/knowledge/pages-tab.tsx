@@ -103,10 +103,10 @@ function matchesFolderView(
 
 function nextUntitledTitle(documents: KnowledgeDocumentRecord[]) {
   const taken = new Set(documents.map((document) => document.title.toLowerCase()));
-  if (!taken.has("untitled page")) return "Untitled Page";
+  if (!taken.has("untitled note")) return "Untitled Note";
   let index = 2;
-  while (taken.has(`untitled page ${index}`)) index += 1;
-  return `Untitled Page ${index}`;
+  while (taken.has(`untitled note ${index}`)) index += 1;
+  return `Untitled Note ${index}`;
 }
 
 export function PagesTab({
@@ -194,7 +194,7 @@ export function PagesTab({
   const defaultCabinetId = view.kind === "cabinet" ? view.cabinetId : null;
   const activeFolderLabel =
     view.kind === "all"
-      ? "All Pages"
+      ? "All Notes"
       : view.kind === "unassigned"
         ? "Unassigned"
         : cabinetPathLabel(view.cabinetId, cabinetsById) ?? "Folder";
@@ -227,7 +227,7 @@ export function PagesTab({
   const handleDeleteCabinet = async (cabinetId: string) => {
     const cabinet = cabinetsById.get(cabinetId);
     if (!cabinet) return;
-    if (!confirm(`Delete folder "${cabinet.name}"? Pages inside will become unassigned.`)) return;
+    if (!confirm(`Delete folder "${cabinet.name}"? Notes inside will become unassigned.`)) return;
     try {
       await deleteKnowledgeLibraryCabinet(cabinetId);
       await onCabinetsRefresh();
@@ -258,7 +258,7 @@ export function PagesTab({
       await onRefresh();
       setSelectedDocumentId(document.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create page");
+      setError(err instanceof Error ? err.message : "Failed to create note");
     } finally {
       setCreating(false);
     }
@@ -275,7 +275,7 @@ export function PagesTab({
       setMovingDocument(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to move page");
+      setError(err instanceof Error ? err.message : "Failed to move note");
     } finally {
       setSavingMove(false);
     }
@@ -289,7 +289,7 @@ export function PagesTab({
       await reindexKnowledgeDocument(selectedDocument.id);
       await onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to index page");
+      setError(err instanceof Error ? err.message : "Failed to index note");
     } finally {
       setReindexing(false);
     }
@@ -305,7 +305,7 @@ export function PagesTab({
       setDocumentToDelete(null);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete page");
+      setError(err instanceof Error ? err.message : "Failed to delete note");
     } finally {
       setDeletingDocumentId(null);
     }
@@ -316,8 +316,8 @@ export function PagesTab({
       <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
         <CabinetDirectorySidebar
           cabinets={documentCabinets}
-          emptyLabel="Create folders and subfolders for manual pages."
-          itemLabelPlural="Pages"
+          emptyLabel="Create folders and subfolders for notes."
+          itemLabelPlural="Notes"
           onCreateCabinet={handleCreateCabinet}
           onDeleteCabinet={handleDeleteCabinet}
           onRenameCabinet={handleRenameCabinet}
@@ -330,7 +330,9 @@ export function PagesTab({
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="truncate text-sm font-semibold text-fg">{activeFolderLabel}</h2>
-                <p className="mt-0.5 text-xs text-fg/40">{filteredDocuments.length} pages</p>
+                <p className="mt-0.5 text-xs text-fg/40">
+                  {filteredDocuments.length} {filteredDocuments.length === 1 ? "note" : "notes"}
+                </p>
               </div>
               <div className="flex min-w-[260px] flex-1 items-center justify-end gap-2">
                 {selectedDocument ? (
@@ -347,14 +349,14 @@ export function PagesTab({
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
                     <Input
                       className="h-8 pl-8 text-xs"
-                      placeholder="Search pages..."
+                      placeholder="Search notes..."
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
                     />
                   </div>
                     <Button size="sm" onClick={handleCreateDocument} disabled={creating}>
                       {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                      New Page
+                      New Note
                     </Button>
                   </>
                 )}
@@ -406,8 +408,8 @@ export function PagesTab({
         onClose={() => {
           if (!deletingDocumentId) setDocumentToDelete(null);
         }}
-        title="Delete Page"
-        message={`Delete "${documentToDelete?.title ?? "this page"}"? This removes its content and indexed chunks.`}
+        title="Delete Note"
+        message={`Delete "${documentToDelete?.title ?? "this note"}"? This removes its content and indexed chunks.`}
         confirmLabel="Delete"
         confirmVariant="danger"
         isPending={deletingDocumentId !== null}
@@ -460,7 +462,7 @@ function PageDocumentList({
     return (
       <EmptyState className="h-full">
         <FolderPlus className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-        <p className="text-sm text-fg/50">No pages in this folder.</p>
+        <p className="text-sm text-fg/50">No notes in this folder.</p>
       </EmptyState>
     );
   }
@@ -484,7 +486,7 @@ function PageDocumentList({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-fg">{document.title}</p>
                   <p className="mt-1 line-clamp-2 text-xs text-fg/45">
-                    {document.description || "Manual knowledge page"}
+                    {document.description || "Manual knowledge note"}
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -625,7 +627,7 @@ function KnowledgeDocumentDetail({
     const nextDescription = overrides?.description ?? descriptionDraft;
     const nextCategory = overrides?.category ?? categoryDraft;
     const nextTagsDraft = overrides?.tags ?? tagsDraft;
-    const title = nextTitleDraft.trim() || "Untitled Page";
+    const title = nextTitleDraft.trim() || "Untitled Note";
     setSaveState("saving");
     try {
       await updateKnowledgeDocument(document.id, {
@@ -661,7 +663,7 @@ function KnowledgeDocumentDetail({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
-          <Button size="xs" variant="ghost" title="Back to pages" onClick={onBack} className="h-7 w-7 px-0">
+          <Button size="xs" variant="ghost" title="Back to notes" onClick={onBack} className="h-7 w-7 px-0">
             <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
           <Input
@@ -708,7 +710,7 @@ function KnowledgeDocumentDetail({
         {loadingPage ? (
           <div className="flex h-full items-center justify-center text-xs text-fg/40">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Opening page
+            Opening note
           </div>
         ) : page ? (
           <>
@@ -743,7 +745,7 @@ function KnowledgeDocumentDetail({
         ) : (
           <EmptyState>
             <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-            <p className="text-sm text-fg/50">This page could not be opened.</p>
+            <p className="text-sm text-fg/50">This note could not be opened.</p>
           </EmptyState>
         )}
       </div>

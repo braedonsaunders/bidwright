@@ -86,6 +86,7 @@ import type {
   QuoteRevision,
   ReportSection,
   RevisionTotals,
+  ResourceCatalogItem,
   ScheduleBaseline,
   ScheduleBaselineTask,
   ScheduleCalendar,
@@ -98,7 +99,13 @@ import type {
   User,
   WorksheetItem,
 } from "@bidwright/domain";
-import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
+import type {
+  AzureDocumentIntelligenceModel,
+  DocumentChunk,
+  DocumentExtractionProvider,
+  IngestionReport,
+  PackageSourceKind,
+} from "@bidwright/ingestion";
 import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma } from "@bidwright/db";
@@ -176,11 +183,13 @@ import {
   mapPluginExecution,
   mapProject,
   mapQuote,
+  mapRateBookAssignment,
   mapRateSchedule,
   mapRateScheduleItem,
   mapRateScheduleTier,
   mapRateScheduleWithChildren,
   mapReportSection,
+  mapResourceCatalogItem,
   mapRevision,
   mapScheduleBaseline,
   mapScheduleBaselineTask,
@@ -201,6 +210,10 @@ import {
   mapWorkspaceState,
 } from "./store/mappers.js";
 import type { IngestionJobRecord, StoredPackageRecord, WorkspaceStateRecord } from "./store/types.js";
+
+function badRequestError(message: string): Error & { statusCode: number } {
+  return Object.assign(new Error(message), { statusCode: 400 });
+}
 
 const NON_REVERTIBLE_ACTIVITY_TYPES = new Set([
   "quote_sent", "ai_phases_accepted", "ai_equipment_accepted",
@@ -444,11 +457,11 @@ interface PersistedCostSnapshot {
 function buildSnapshotForItem(item: WorksheetItem): PersistedCostSnapshot {
   const snapshotAt = new Date().toISOString();
   const originalUnitCost = Number(item.cost) || 0;
-  if (item.effectiveCostId) {
-    return { source: "effective_cost", sourceId: item.effectiveCostId, snapshotAt, originalUnitCost };
-  }
   if (item.rateScheduleItemId) {
     return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost };
+  }
+  if (item.effectiveCostId) {
+    return { source: "effective_cost", sourceId: item.effectiveCostId, snapshotAt, originalUnitCost };
   }
   if (item.itemId) {
     return { source: "catalog", sourceId: item.itemId, snapshotAt, originalUnitCost };
@@ -1431,6 +1444,62 @@ function toPrismaJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
 }
 
+function toRateScheduleCalcContext(schedules: Array<{
+  id?: string;
+  name?: string;
+  category?: string;
+  defaultMarkup?: number;
+  metadata?: unknown;
+  tiers?: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
+  items?: Array<{
+    id: string;
+    scheduleId?: string;
+    catalogItemId?: string | null;
+    resourceId?: string | null;
+    name: string;
+    code: string;
+    unit?: string;
+    rates?: unknown;
+    costRates?: unknown;
+    burden?: number;
+    perDiem?: number;
+    metadata?: unknown;
+  }>;
+}>) {
+  return schedules.map((schedule) => ({
+    id: schedule.id ?? "",
+    name: schedule.name ?? "",
+    category: schedule.category ?? "",
+    defaultMarkup: Number(schedule.defaultMarkup) || 0,
+    metadata: (schedule.metadata && typeof schedule.metadata === "object" && !Array.isArray(schedule.metadata)
+      ? schedule.metadata
+      : {}) as Record<string, unknown>,
+    tiers: (schedule.tiers ?? []).map((tier) => ({
+      id: tier.id,
+      name: tier.name,
+      multiplier: tier.multiplier,
+      sortOrder: tier.sortOrder,
+      uom: tier.uom ?? null,
+    })),
+    items: (schedule.items ?? []).map((item) => ({
+      id: item.id,
+      scheduleId: item.scheduleId ?? schedule.id ?? "",
+      catalogItemId: item.catalogItemId ?? null,
+      resourceId: item.resourceId ?? null,
+      name: item.name,
+      code: item.code,
+      unit: item.unit ?? "HR",
+      rates: (item.rates as Record<string, number>) ?? {},
+      costRates: (item.costRates as Record<string, number>) ?? {},
+      burden: item.burden ?? 0,
+      perDiem: item.perDiem ?? 0,
+      metadata: (item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+        ? item.metadata
+        : {}) as Record<string, unknown>,
+    })),
+  }));
+}
+
 async function sha256File(filePath: string) {
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
@@ -1535,7 +1604,7 @@ export class PrismaApiStore {
       where: {
         id: revisionId,
         quote: { projectId, project: { organizationId: this.organizationId } },
-      },
+      } as any,
     });
     if (!revision) {
       throw new Error(`Revision ${revisionId} not found for project ${projectId}`);
@@ -2443,7 +2512,7 @@ export class PrismaApiStore {
           { organizationId: this.organizationId },
           { organizationId: null },
         ],
-      },
+      } as any,
     });
     if (!library) {
       throw new Error(`Labor unit catalog ${libraryId} not found`);
@@ -2461,7 +2530,7 @@ export class PrismaApiStore {
             { organizationId: null },
           ],
         },
-      },
+      } as any,
       include: { library: true },
     });
     if (!unit) {
@@ -2476,6 +2545,16 @@ export class PrismaApiStore {
     });
     if (!resource) {
       throw new Error(`Cost resource ${resourceId} not found`);
+    }
+    return resource;
+  }
+
+  private async requireRateBookResource(resourceId: string) {
+    const resource = await (this.db as any).resourceCatalogItem.findFirst({
+      where: { id: resourceId, organizationId: this.organizationId },
+    });
+    if (!resource) {
+      throw new Error(`Resource ${resourceId} not found`);
     }
     return resource;
   }
@@ -2552,7 +2631,7 @@ export class PrismaApiStore {
         where: { id: patch.customerId, organizationId: this.organizationId },
         select: { id: true },
       });
-      if (!customer) throw new Error(`Customer ${patch.customerId} not found`);
+      if (!customer) throw badRequestError(`Customer ${patch.customerId} not found`);
     }
 
     if (patch.customerContactId) {
@@ -2560,9 +2639,9 @@ export class PrismaApiStore {
         where: { id: patch.customerContactId, customer: { organizationId: this.organizationId } },
         include: { customer: { select: { id: true } } },
       });
-      if (!contact) throw new Error(`Customer contact ${patch.customerContactId} not found`);
+      if (!contact) throw badRequestError(`Customer contact ${patch.customerContactId} not found`);
       if (patch.customerId && contact.customer.id !== patch.customerId) {
-        throw new Error(`Customer contact ${patch.customerContactId} does not belong to customer ${patch.customerId}`);
+        throw badRequestError(`Customer contact ${patch.customerContactId} does not belong to customer ${patch.customerId}`);
       }
     }
 
@@ -2571,7 +2650,7 @@ export class PrismaApiStore {
         where: { id: patch.departmentId, organizationId: this.organizationId },
         select: { id: true },
       });
-      if (!department) throw new Error(`Department ${patch.departmentId} not found`);
+      if (!department) throw badRequestError(`Department ${patch.departmentId} not found`);
     }
 
     if (patch.userId) {
@@ -2579,7 +2658,7 @@ export class PrismaApiStore {
         where: { id: patch.userId, organizationId: this.organizationId, active: true },
         select: { id: true },
       });
-      if (!user) throw new Error(`User ${patch.userId} not found`);
+      if (!user) throw badRequestError(`User ${patch.userId} not found`);
     }
   }
 
@@ -2997,7 +3076,7 @@ export class PrismaApiStore {
           breakoutPackage: totals.breakout as any,
           calculatedCategoryTotals: totals.categoryTotals as any,
           pricingLadder: totals.pricingLadder as any,
-        },
+        } as any,
       });
 
       await this.db.quote.update({
@@ -3085,7 +3164,7 @@ export class PrismaApiStore {
               resourceId: assignment.resourceId,
               units: assignment.units ?? 1,
               role: assignment.role ?? "",
-            },
+            } as any,
           ])
       ).values()
     );
@@ -6181,10 +6260,7 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
-      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
-      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
     const itemSource = catDef?.itemSource ?? "freeform";
@@ -6252,13 +6328,14 @@ export class PrismaApiStore {
         itemId: item.itemId ?? null,
         tierUnits: item.tierUnits ?? {},
         costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
+        rateResolution: toPrismaJson(item.rateResolution ?? {}),
         sourceNotes: item.sourceNotes ?? "",
         costResourceId: item.costResourceId ?? null,
         effectiveCostId: item.effectiveCostId ?? null,
         laborUnitId: item.laborUnitId ?? null,
         resourceComposition: toPrismaJson(item.resourceComposition ?? {}),
         sourceEvidence: toPrismaJson(item.sourceEvidence ?? {}),
-      },
+      } as any,
     });
 
     const mappedCreated = mapWorksheetItem(created);
@@ -6558,10 +6635,7 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
-      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
-      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
     const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
@@ -6696,13 +6770,14 @@ export class PrismaApiStore {
         itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},
         costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
+        rateResolution: toPrismaJson(domainItem.rateResolution ?? {}),
         sourceNotes: domainItem.sourceNotes ?? "",
         costResourceId: domainItem.costResourceId ?? null,
         effectiveCostId: domainItem.effectiveCostId ?? null,
         laborUnitId: domainItem.laborUnitId ?? null,
         resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
         sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
-      },
+      } as any,
     });
 
     const patchKeys = Object.keys(normalizedPatch);
@@ -6779,10 +6854,7 @@ export class PrismaApiStore {
       include: { tiers: true, items: true },
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = revisionScheduleRows.map((s) => ({
-      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
-      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
     const calcType = (item.entityCategory?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
@@ -6798,7 +6870,8 @@ export class PrismaApiStore {
         price: domainItem.price,
         effectiveCostId: domainItem.effectiveCostId ?? null,
         costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
-      },
+        rateResolution: toPrismaJson(domainItem.rateResolution ?? {}),
+      } as any,
     });
     const mappedUpdated = mapWorksheetItem(updated);
 
@@ -6863,10 +6936,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: { tiers: true, items: true },
     });
-    const rateScheduleCtx = revisionSchedules.map((s) => ({
-      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
-      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
     const mappedRev = mapRevision(revision);
     const importEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
@@ -6937,13 +7007,14 @@ export class PrismaApiStore {
           price: item.price,
           lineOrder: item.lineOrder,
           tierUnits: item.tierUnits ?? {},
+          rateResolution: toPrismaJson(item.rateResolution ?? {}),
           sourceNotes: item.sourceNotes ?? "",
           costResourceId: item.costResourceId ?? null,
           effectiveCostId: item.effectiveCostId ?? null,
           laborUnitId: item.laborUnitId ?? null,
           resourceComposition: toPrismaJson(item.resourceComposition ?? {}),
           sourceEvidence: toPrismaJson(item.sourceEvidence ?? {}),
-        },
+        } as any,
       });
 
       created.push(item);
@@ -7053,7 +7124,7 @@ export class PrismaApiStore {
     const orgDefaults = (orgSettings?.defaults as any) ?? {};
     const defaultMarkup = typeof orgDefaults.defaultMarkup === "number" ? orgDefaults.defaultMarkup / 100 : 0.2;
 
-    return await this.db.$transaction(async (tx) => {
+    const created = await this.db.$transaction(async (tx) => {
       const customerSelection = await this.resolveCustomerSelection(tx, {
         customerId: input.customerId,
         fallbackClientName: input.clientName,
@@ -7157,6 +7228,8 @@ export class PrismaApiStore {
         workspaceState: wsRecord,
       };
     });
+    await this.importAssignedRateSchedulesToRevision(projectId);
+    return created;
   }
 
   // ── Package Registration ───────────────────────────────────────────────
@@ -7200,6 +7273,7 @@ export class PrismaApiStore {
         });
       }
     });
+    await this.importAssignedRateSchedulesToRevision(projectId);
   }
 
   async registerUploadedPackage(input: RegisterPackageInput & UploadArtifact) {
@@ -7320,16 +7394,51 @@ export class PrismaApiStore {
       // Resolve Azure DI credentials from org settings for scanned PDF support
       const orgSettings = await this.getSettings();
       const integrations = orgSettings.integrations ?? {} as any;
+      const documentExtractionProviderRaw = integrations.documentExtractionProvider;
+      const documentExtractionProvider = typeof documentExtractionProviderRaw === "string" && ["azure", "local", "auto"].includes(documentExtractionProviderRaw)
+        ? documentExtractionProviderRaw as DocumentExtractionProvider
+        : "azure";
+      const azureModelRaw = integrations.azureDiModel;
+      const azureModel = typeof azureModelRaw === "string" && ["prebuilt-layout", "prebuilt-read", "prebuilt-document", "prebuilt-invoice"].includes(azureModelRaw)
+        ? azureModelRaw as AzureDocumentIntelligenceModel
+        : "prebuilt-layout";
       const azureConfig = (integrations.azureDiEndpoint || integrations.azureDiKey)
-        ? { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey }
+        ? { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey, model: azureModel }
         : undefined;
+
+      let latestDocumentProgress: any[] = [];
+      const persistIngestionProgress = async (event: any) => {
+        latestDocumentProgress = Array.isArray(event.documents) ? event.documents : latestDocumentProgress;
+        const progressPercent = Math.max(1, Math.min(99, Math.round((Number(event.progress) || 0) * 100)));
+        await this.db.ingestionJob.update({
+          where: { id: ingestionJobId },
+          data: {
+            progress: progressPercent,
+            output: {
+              packageId,
+              packageName: pkg.packageName,
+              stage: event.stage,
+              message: event.message ?? null,
+              currentDocumentId: event.currentDocumentId ?? null,
+              currentDocumentName: event.currentDocumentName ?? null,
+              documentProgress: latestDocumentProgress,
+              totalBytes: event.totalBytes ?? null,
+              processedBytes: event.processedBytes ?? null,
+              updatedAt: new Date().toISOString(),
+            } as any,
+            updatedAt: new Date(),
+          },
+        }).catch((err: unknown) => {
+          console.warn("[ingestion-progress] Failed to persist progress:", err instanceof Error ? err.message : err);
+        });
+      };
 
       const report = await ingestCustomerPackage({
         packageId,
         packageName: pkg.packageName,
         sourceKind: pkg.sourceKind as PackageSourceKind,
         zipInput: zipPath,
-      }, { azureConfig });
+      }, { azureConfig, documentExtractionProvider, onProgress: persistIngestionProgress });
 
       const binaryPathMap = await this.saveArtifactsForPackage(packageId, report, checksum, zipPath);
 
@@ -7377,7 +7486,7 @@ export class PrismaApiStore {
               structuredData: doc.structuredData ? JSON.parse(JSON.stringify(doc.structuredData).replace(/\0/g, "")) : undefined,
               createdAt: timestamp,
               updatedAt: timestamp,
-            },
+            } as any,
           });
         }
 
@@ -7395,7 +7504,7 @@ export class PrismaApiStore {
             ingestedAt: timestamp,
             updatedAt: timestamp,
             error: null,
-          },
+          } as any,
         });
 
         // Update job
@@ -7403,7 +7512,7 @@ export class PrismaApiStore {
           where: { id: ingestionJobId },
           data: {
             status: "complete",
-            progress: 1,
+            progress: 100,
             output: {
               packageId,
               reportPath: relativePackageReportPath(packageId),
@@ -7411,6 +7520,23 @@ export class PrismaApiStore {
               unknownFiles: report.unknownFiles,
               documentCount: sourceDocuments.length,
               chunkCount: report.chunks.length,
+              documentProgress: latestDocumentProgress.length > 0
+                ? latestDocumentProgress.map((entry) => {
+                  const created = sourceDocuments.find((doc) =>
+                    doc.id === entry.id ||
+                    doc.fileName === normalizeStoredSourcePath(entry.sourcePath, entry.fileName)
+                  );
+                  return created ? {
+                    ...entry,
+                    id: created.id,
+                    documentType: created.documentType,
+                    pageCount: created.pageCount,
+                    status: "complete",
+                    stage: "Ready",
+                    progress: 1,
+                  } : entry;
+                })
+                : undefined,
             } as any,
             error: null,
             updatedAt: timestamp,
@@ -7556,14 +7682,14 @@ export class PrismaApiStore {
           ingestionStatus: "review",
           summary: `${pkg.packageName} uploaded, but ingestion failed: ${message}`,
           updatedAt: failTime,
-        },
+        } as any,
       }).catch(() => {});
 
       await this.db.ingestionJob.update({
         where: { id: ingestionJobId },
         data: {
           status: "failed",
-          progress: 1,
+          progress: 100,
           error: message,
           updatedAt: failTime,
           completedAt: failTime,
@@ -8996,6 +9122,38 @@ export class PrismaApiStore {
     return this.listSummaryRows(projectId);
   }
 
+  // ── Resource Catalogue ─────────────────────────────────────────────────
+
+  async listResources(filters: {
+    q?: string;
+    resourceType?: string;
+    category?: string;
+    active?: boolean;
+    limit?: number;
+  } = {}): Promise<ResourceCatalogItem[]> {
+    const where: any = { organizationId: this.organizationId };
+    const q = filters.q?.trim();
+    if (filters.resourceType) where.resourceType = filters.resourceType;
+    if (filters.category) where.category = filters.category;
+    if (filters.active !== undefined) where.active = filters.active;
+    if (q) {
+      where.OR = [
+        { name: { contains: q, mode: "insensitive" } },
+        { code: { contains: q, mode: "insensitive" } },
+        { category: { contains: q, mode: "insensitive" } },
+        { resourceType: { contains: q, mode: "insensitive" } },
+        { manufacturer: { contains: q, mode: "insensitive" } },
+        { manufacturerPartNumber: { contains: q, mode: "insensitive" } },
+      ];
+    }
+    const rows = await (this.db as any).resourceCatalogItem.findMany({
+      where,
+      orderBy: [{ name: "asc" }, { code: "asc" }],
+      take: Math.max(1, Math.min(filters.limit ?? 250, 1000)),
+    });
+    return rows.map(mapResourceCatalogItem);
+  }
+
   // ── Rate Schedule CRUD ─────────────────────────────────────────────────
 
   async listRateSchedules(scope?: string): Promise<RateScheduleWithChildren[]> {
@@ -9038,6 +9196,36 @@ export class PrismaApiStore {
     return entityCategory.entityType?.trim() || entityCategory.name.trim();
   }
 
+  private metadataTouchesRateBookCostSide(metadata: unknown): boolean {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+    const record = metadata as Record<string, unknown>;
+    for (const key of ["costComponents", "rateComponents", "pricingComponents"]) {
+      const components = record[key];
+      if (!Array.isArray(components)) continue;
+      for (const component of components) {
+        if (!component || typeof component !== "object" || Array.isArray(component)) continue;
+        const target = String((component as Record<string, unknown>).target ?? "cost").trim().toLowerCase();
+        if (target !== "price") return true;
+      }
+    }
+    return false;
+  }
+
+  private assertRevisionRateBookItemPatchIsSellSideOnly(
+    schedule: { scope: string },
+    patch: { costRates?: unknown; burden?: unknown; perDiem?: unknown; metadata?: unknown },
+  ) {
+    if (schedule.scope !== "revision") return;
+    if (
+      patch.costRates !== undefined ||
+      patch.burden !== undefined ||
+      patch.perDiem !== undefined ||
+      this.metadataTouchesRateBookCostSide(patch.metadata)
+    ) {
+      throw badRequestError("Imported quote Ratebooks can only modify sell rates. Cost rates and cost-side components remain locked to the imported cost basis.");
+    }
+  }
+
   async createRateSchedule(input: {
     name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
     effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
@@ -9076,7 +9264,12 @@ export class PrismaApiStore {
     if (patch.autoCalculate !== undefined) data.autoCalculate = patch.autoCalculate;
     if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
     if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate;
-    if (patch.metadata !== undefined) data.metadata = patch.metadata;
+    if (patch.metadata !== undefined) {
+      if (existing.scope === "revision" && this.metadataTouchesRateBookCostSide(patch.metadata)) {
+        throw badRequestError("Imported quote Ratebooks can only modify sell-side metadata. Cost-side components remain locked to the imported cost basis.");
+      }
+      data.metadata = patch.metadata;
+    }
     const updated = await this.db.rateSchedule.update({
       where: { id }, data,
       include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
@@ -9138,25 +9331,46 @@ export class PrismaApiStore {
   }
 
   async createRateScheduleItem(scheduleId: string, input: {
-    catalogItemId: string;
+    resourceId?: string | null;
+    catalogItemId?: string | null;
     rates?: Record<string, number>; costRates?: Record<string, number>;
     burden?: number; perDiem?: number; metadata?: Record<string, unknown>; sortOrder?: number;
   }): Promise<RateScheduleWithChildren> {
-    if (!input.catalogItemId) {
-      throw new Error("catalogItemId is required — rate schedule items must be linked to a catalog item.");
+    if (!input.resourceId && !input.catalogItemId) {
+      throw new Error("resourceId or catalogItemId is required for Ratebook items.");
     }
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
-    const catalogItem = await this.requireCatalogItem(input.catalogItemId);
+    const resource = input.resourceId ? await this.requireRateBookResource(input.resourceId) : null;
+    const catalogItemId = input.catalogItemId ?? resource?.catalogItemId ?? null;
+    const catalogItem = catalogItemId ? await this.requireCatalogItem(catalogItemId) : null;
+    if (resource && input.catalogItemId && resource.catalogItemId && resource.catalogItemId !== input.catalogItemId) {
+      throw new Error(`Resource ${resource.id} is linked to catalog item ${resource.catalogItemId}, not ${input.catalogItemId}.`);
+    }
+    const tiers = await this.db.rateScheduleTier.findMany({ where: { scheduleId }, orderBy: { sortOrder: "asc" } });
+    const resourceMetadata = (resource?.metadata && typeof resource.metadata === "object" && !Array.isArray(resource.metadata)
+      ? resource.metadata
+      : {}) as Record<string, unknown>;
+    const baseCost = Number(resourceMetadata.unitCost ?? resourceMetadata.cost ?? catalogItem?.unitCost ?? 0) || 0;
+    const basePrice = Number(resourceMetadata.unitPrice ?? resourceMetadata.price ?? catalogItem?.unitPrice ?? 0) || 0;
+    const seedByTier = (base: number) => {
+      if (base <= 0) return {};
+      const targetTiers = tiers.length > 0 ? tiers : [{ id: "__unit", multiplier: 1 }];
+      return Object.fromEntries(
+        targetTiers.map((tier) => [tier.id, Math.round(base * Number(tier.multiplier ?? 1) * 100) / 100]),
+      );
+    };
     const maxOrder = await this.db.rateScheduleItem.aggregate({ where: { scheduleId }, _max: { sortOrder: true } });
-    await this.db.rateScheduleItem.create({
+    await (this.db as any).rateScheduleItem.create({
       data: {
         id: createId("rsi"), scheduleId,
-        catalogItemId: catalogItem.id,
-        code: catalogItem.code,
-        name: catalogItem.name,
-        unit: catalogItem.unit || "HR",
-        rates: (input.rates ?? {}) as any, costRates: (input.costRates ?? {}) as any,
+        catalogItemId: catalogItem?.id ?? null,
+        resourceId: resource?.id ?? null,
+        code: resource?.code || catalogItem?.code || "",
+        name: resource?.name || catalogItem?.name || "",
+        unit: resource?.defaultUom || catalogItem?.unit || "EA",
+        rates: (input.rates ?? seedByTier(basePrice)) as any,
+        costRates: (input.costRates ?? seedByTier(baseCost)) as any,
         burden: input.burden ?? 0, perDiem: input.perDiem ?? 0,
         metadata: (input.metadata ?? {}) as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
@@ -9176,6 +9390,7 @@ export class PrismaApiStore {
     if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
+    this.assertRevisionRateBookItemPatchIsSellSideOnly(schedule, patch);
     const data: any = {};
     if (patch.rates !== undefined) data.rates = patch.rates;
     if (patch.costRates !== undefined) data.costRates = patch.costRates;
@@ -9252,9 +9467,10 @@ export class PrismaApiStore {
         for (const [oldTierId, val] of Object.entries((item.costRates as Record<string, number>) ?? {})) {
           remappedCostRates[tierIdMap.get(oldTierId) ?? oldTierId] = val;
         }
-        await tx.rateScheduleItem.create({
+        await (tx as any).rateScheduleItem.create({
           data: {
-            id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId,
+            id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
+            resourceId: (item as any).resourceId ?? null,
             code: item.code, name: item.name, unit: item.unit,
             rates: remappedRates, costRates: remappedCostRates,
             burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
@@ -9282,6 +9498,131 @@ export class PrismaApiStore {
     return schedules.map(mapRateScheduleWithChildren);
   }
 
+  async listRateBookAssignments(filters: {
+    customerId?: string | null;
+    projectId?: string | null;
+    category?: string | null;
+    active?: boolean;
+  } = {}) {
+    const where: any = { organizationId: this.organizationId };
+    if (filters.customerId !== undefined) where.customerId = filters.customerId;
+    if (filters.projectId !== undefined) where.projectId = filters.projectId;
+    if (filters.category) where.category = filters.category;
+    if (filters.active !== undefined) where.active = filters.active;
+    const rows = await (this.db as any).rateBookAssignment.findMany({
+      where,
+      orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
+    });
+    return rows.map(mapRateBookAssignment);
+  }
+
+  async createRateBookAssignment(input: {
+    rateScheduleId: string;
+    customerId?: string | null;
+    projectId?: string | null;
+    category?: string | null;
+    priority?: number;
+    active?: boolean;
+    effectiveDate?: string | null;
+    expiryDate?: string | null;
+    metadata?: Record<string, unknown>;
+  }) {
+    const schedule = await this.db.rateSchedule.findFirst({
+      where: { id: input.rateScheduleId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!schedule) throw new Error(`Rate schedule ${input.rateScheduleId} not found`);
+    if (input.customerId) {
+      const customer = await this.db.customer.findFirst({
+        where: { id: input.customerId, organizationId: this.organizationId },
+        select: { id: true },
+      });
+      if (!customer) throw new Error(`Customer ${input.customerId} not found`);
+    }
+    if (input.projectId) {
+      await this.requireProject(input.projectId);
+    }
+    const created = await (this.db as any).rateBookAssignment.create({
+      data: {
+        id: createId("rba"),
+        organizationId: this.organizationId,
+        rateScheduleId: input.rateScheduleId,
+        customerId: input.customerId ?? null,
+        projectId: input.projectId ?? null,
+        category: input.category ?? "",
+        priority: input.priority ?? 0,
+        active: input.active ?? true,
+        effectiveDate: input.effectiveDate ?? null,
+        expiryDate: input.expiryDate ?? null,
+        metadata: input.metadata ?? {},
+      },
+    });
+    return mapRateBookAssignment(created);
+  }
+
+  async updateRateBookAssignment(id: string, patch: Record<string, unknown>) {
+    const existing = await (this.db as any).rateBookAssignment.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Rate book assignment ${id} not found`);
+    const data: any = {};
+    if (patch.rateScheduleId !== undefined) {
+      const scheduleId = String(patch.rateScheduleId || "");
+      const schedule = await this.db.rateSchedule.findFirst({
+        where: { id: scheduleId, organizationId: this.organizationId },
+        select: { id: true },
+      });
+      if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
+      data.rateScheduleId = scheduleId;
+    }
+    if (patch.customerId !== undefined) data.customerId = patch.customerId || null;
+    if (patch.projectId !== undefined) data.projectId = patch.projectId || null;
+    if (patch.category !== undefined) data.category = String(patch.category ?? "");
+    if (patch.priority !== undefined) data.priority = Number(patch.priority) || 0;
+    if (patch.active !== undefined) data.active = Boolean(patch.active);
+    if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate || null;
+    if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate || null;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
+    const updated = await (this.db as any).rateBookAssignment.update({ where: { id }, data });
+    return mapRateBookAssignment(updated);
+  }
+
+  async deleteRateBookAssignment(id: string) {
+    const existing = await (this.db as any).rateBookAssignment.findFirst({
+      where: { id, organizationId: this.organizationId },
+    });
+    if (!existing) throw new Error(`Rate book assignment ${id} not found`);
+    await (this.db as any).rateBookAssignment.delete({ where: { id } });
+    return { deleted: true };
+  }
+
+  async importAssignedRateSchedulesToRevision(projectId: string): Promise<RateScheduleWithChildren[]> {
+    await this.requireProject(projectId);
+    const { quote } = await this.findCurrentRevision(projectId);
+    const customerId = quote?.customerId ?? null;
+    const rows = await (this.db as any).rateBookAssignment.findMany({
+      where: {
+        organizationId: this.organizationId,
+        active: true,
+        OR: [
+          { projectId },
+          ...(customerId ? [{ customerId }] : []),
+          { projectId: null, customerId: null },
+        ],
+      },
+      orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
+    });
+    const imported: RateScheduleWithChildren[] = [];
+    const seen = new Set<string>();
+    for (const assignment of rows) {
+      if (seen.has(assignment.rateScheduleId)) continue;
+      seen.add(assignment.rateScheduleId);
+      const importedSchedule = await this.importRateScheduleToRevision(projectId, assignment.rateScheduleId);
+      imported.push(importedSchedule);
+    }
+    return imported;
+  }
+
   async autoCalculateRateSchedule(id: string): Promise<RateScheduleWithChildren> {
     const schedule = await this.db.rateSchedule.findFirst({
       where: { id, organizationId: this.organizationId },
@@ -9304,7 +9645,7 @@ export class PrismaApiStore {
       }
       await this.db.rateScheduleItem.update({
         where: { id: item.id },
-        data: { rates: newRates, costRates: newCostRates },
+        data: schedule.scope === "revision" ? { rates: newRates } : { rates: newRates, costRates: newCostRates },
       });
     }
 
@@ -9434,13 +9775,14 @@ export class PrismaApiStore {
               rateScheduleItemId: oldItem.rateScheduleItemId ?? null,
               itemId: oldItem.itemId ?? null,
               tierUnits: oldItem.tierUnits ?? {},
+              rateResolution: toPrismaJson((oldItem as any).rateResolution ?? {}),
               sourceNotes: oldItem.sourceNotes ?? "",
               costResourceId: (oldItem as any).costResourceId ?? null,
               effectiveCostId: (oldItem as any).effectiveCostId ?? null,
               laborUnitId: (oldItem as any).laborUnitId ?? null,
               resourceComposition: toPrismaJson((oldItem as any).resourceComposition ?? {}),
               sourceEvidence: toPrismaJson((oldItem as any).sourceEvidence ?? {}),
-            },
+            } as any,
           });
         }
       }
@@ -9578,9 +9920,10 @@ export class PrismaApiStore {
             const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
             remappedCostRates[newTierId] = val;
           }
-          await tx.rateScheduleItem.create({
+          await (tx as any).rateScheduleItem.create({
             data: {
-              id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId,
+              id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
+              resourceId: (item as any).resourceId ?? null,
               code: item.code, name: item.name, unit: item.unit,
               rates: remappedRates, costRates: remappedCostRates,
               burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
@@ -9825,13 +10168,14 @@ export class PrismaApiStore {
               rateScheduleItemId: it.rateScheduleItemId ?? null,
               itemId: it.itemId ?? null,
               tierUnits: it.tierUnits ?? {},
+              rateResolution: toPrismaJson((it as any).rateResolution ?? {}),
               sourceNotes: it.sourceNotes ?? "",
               costResourceId: (it as any).costResourceId ?? null,
               effectiveCostId: (it as any).effectiveCostId ?? null,
               laborUnitId: (it as any).laborUnitId ?? null,
               resourceComposition: toPrismaJson((it as any).resourceComposition ?? {}),
               sourceEvidence: toPrismaJson((it as any).sourceEvidence ?? {}),
-            },
+            } as any,
           });
         }
       }
@@ -12497,10 +12841,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: { tiers: true, items: true },
     });
-    const rateScheduleCtx = revisionSchedules.map((s) => ({
-      tiers: (s.tiers ?? []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
-      items: (s.items ?? []).map((i) => ({ id: i.id, name: i.name, code: i.code, rates: (i.rates as Record<string, number>) ?? {}, costRates: (i.costRates as Record<string, number>) ?? {}, burden: i.burden, perDiem: i.perDiem })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
 
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
 
@@ -12746,23 +13087,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: { tiers: true, items: true },
     });
-    const rateScheduleCtx = revisionSchedules.map((schedule) => ({
-      tiers: (schedule.tiers ?? []).map((tier: any) => ({
-        id: tier.id,
-        name: tier.name,
-        multiplier: tier.multiplier,
-        sortOrder: tier.sortOrder,
-      })),
-      items: (schedule.items ?? []).map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        code: item.code,
-        rates: (item.rates as Record<string, number>) ?? {},
-        costRates: (item.costRates as Record<string, number>) ?? {},
-        burden: item.burden,
-        perDiem: item.perDiem,
-      })),
-    }));
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
     const entityCategories = await this.db.entityCategory.findMany({
       where: { organizationId: this.organizationId },
     });
@@ -12869,13 +13194,14 @@ export class PrismaApiStore {
             rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
             itemId: domainItem.itemId ?? null,
             tierUnits: domainItem.tierUnits ?? {},
+            rateResolution: toPrismaJson(domainItem.rateResolution ?? {}),
             sourceNotes: domainItem.sourceNotes ?? "",
             costResourceId: domainItem.costResourceId ?? null,
             effectiveCostId: domainItem.effectiveCostId ?? null,
             laborUnitId: domainItem.laborUnitId ?? null,
             resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
             sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
-          },
+          } as any,
         });
 
         await this.pushActivity(projectId, revision.id, "item_updated", {
@@ -12912,13 +13238,14 @@ export class PrismaApiStore {
           rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
           itemId: domainItem.itemId ?? null,
           tierUnits: domainItem.tierUnits ?? {},
+          rateResolution: toPrismaJson(domainItem.rateResolution ?? {}),
           sourceNotes: domainItem.sourceNotes ?? "",
           costResourceId: domainItem.costResourceId ?? null,
           effectiveCostId: domainItem.effectiveCostId ?? null,
           laborUnitId: domainItem.laborUnitId ?? null,
           resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
           sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
-        },
+        } as any,
       });
 
       await this.pushActivity(projectId, revision.id, "item_created", {

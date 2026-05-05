@@ -775,7 +775,7 @@ function ScratchpadTab({
           <RichTextEditor
             value={value}
             onChange={(html) => setValue(html)}
-            placeholder="Estimator notes and scratch work..."
+            placeholder="Internal estimator notes and scratch work..."
             className="flex-1 flex flex-col"
             minHeight="100%"
           />

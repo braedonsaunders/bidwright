@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
 import { getAdapter, isRegisteredRuntime, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateReviewInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { resolveProjectDir, apiDataRoot } from "../paths.js";
 import { prisma } from "@bidwright/db";
 import { getSessionCookieToken } from "../services/session-cookie.js";
@@ -382,6 +383,12 @@ export function registerReviewRoutes(app: FastifyInstance) {
     const linkedKnowledgePageNames = documentSnapshots.length > 0
       ? await writeKnowledgeDocumentSnapshots(projectDir, documentSnapshots)
       : [];
+    const librarySnapshot = await writeAgentLibrarySnapshot({
+      projectDir,
+      projectId,
+      organizationId: request.user?.organizationId,
+      store,
+    });
 
     const settingsEarly = await store.getSettings();
     const integrationsEarly = (settingsEarly as any)?.integrations || {};
@@ -398,6 +405,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
       documents,
       knowledgeBookFiles: linkedBookNames,
       knowledgeDocumentFiles: linkedKnowledgePageNames,
+      librarySnapshot,
       maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
     });
 
@@ -444,11 +452,11 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
     // Spawn CLI
     const instructionFile = adapter.primaryInstructionFile;
-    const initialPrompt = `Read ${instructionFile} now. Execute the FULL review workflow:
+    const initialPrompt = `Read ${instructionFile} now. Then read library-snapshots/README.md and library-snapshots/library-index.md so the review checks all available books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. Execute the FULL review workflow:
 
 1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
 2. Read EVERY project document (specs, RFQs, BOMs, drawings) using Read tool on documents/ folder
-3. Read knowledge books in knowledge/ folder — read table of contents, then relevant rate/productivity chapters
+3. Search library-snapshots and MCP tools for relevant rate/productivity/cost sources, then read knowledge book table of contents and relevant chapters
 4. Cross-reference: for each spec section/requirement, check if a corresponding line item exists in the estimate
 5. Call saveReviewCoverage with the scope coverage checklist
 6. Identify gaps (unpriced scope), risks (unclear items, wrong assumptions), severity-rate each finding

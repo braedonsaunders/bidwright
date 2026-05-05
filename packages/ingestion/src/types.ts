@@ -10,6 +10,14 @@ export type DocumentKind =
 
 export type PackageSourceKind = 'project' | 'library';
 
+export type DocumentExtractionProvider = 'azure' | 'local' | 'auto';
+
+export type AzureDocumentIntelligenceModel =
+  | 'prebuilt-layout'
+  | 'prebuilt-document'
+  | 'prebuilt-invoice'
+  | 'prebuilt-read';
+
 export interface ArchiveEntry {
   path: string;
   name: string;
@@ -40,6 +48,14 @@ export interface SourceDocumentStructuredData {
     rawMarkdown: string;
   }>;
   keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
+  documentFields?: Array<{
+    documentType: string;
+    fieldName: string;
+    value: string;
+    confidence: number;
+    pageNumber?: number;
+    currencyCode?: string;
+  }>;
   selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
 }
 

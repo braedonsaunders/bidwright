@@ -19,10 +19,26 @@ function inferMimeType(extension: string): string | undefined {
       return 'application/pdf';
     case 'docx':
       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'doc':
+      return 'application/msword';
     case 'xlsx':
       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xls':
+      return 'application/vnd.ms-excel';
+    case 'pptx':
+      return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
     case 'csv':
       return 'text/csv';
+    case 'tsv':
+      return 'text/tab-separated-values';
+    case 'rtf':
+      return 'application/rtf';
+    case 'html':
+    case 'htm':
+      return 'text/html';
+    case 'mhtml':
+    case 'mht':
+      return 'multipart/related';
     case 'txt':
     case 'md':
       return 'text/plain';
@@ -33,6 +49,11 @@ function inferMimeType(extension: string): string | undefined {
     case 'jpg':
     case 'jpeg':
       return 'image/jpeg';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
+    case 'bmp':
+      return 'image/bmp';
     default:
       return undefined;
   }

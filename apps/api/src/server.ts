@@ -1539,7 +1539,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     zip.forEach((relativePath, entry) => {
       if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
         const ext = path.extname(relativePath).toLowerCase();
-        if ([".pdf", ".xlsx", ".xls", ".csv", ".docx", ".doc", ".png", ".jpg", ".jpeg", ".dwg", ".dxf", ".txt"].includes(ext)) {
+        if ([".pdf", ".xlsx", ".xls", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".txt"].includes(ext)) {
           entries.push(relativePath);
         }
       }
@@ -1957,7 +1957,7 @@ export function buildServer() {
   // ── Ingestion Status (for polling from AI drawer) ────────────────
   // Returns the project-level ingestion status plus a per-document
   // breakdown. The UI uses this to:
-  //   - Disable the "Start AI Estimating" button while ingestion runs
+  //   - Hold the estimator launch surface while ingestion runs
   //   - Show which extraction provider produced each doc's content
   //     (Azure DI signals: structuredData carries tables / keyValuePairs /
   //     selectionMarks; pure local parsing leaves only extractedText)
@@ -1979,8 +1979,20 @@ export function buildServer() {
       };
     }
 
+    const latestJob = await prisma.ingestionJob.findFirst({
+      where: { projectId, kind: "package_ingest" },
+      orderBy: { createdAt: "desc" },
+    }).catch(() => null);
+    const latestJobOutput = latestJob?.output && typeof latestJob.output === "object"
+      ? latestJob.output as Record<string, any>
+      : {};
+    const inProgressDocuments = Array.isArray(latestJobOutput.documentProgress)
+      ? latestJobOutput.documentProgress
+      : [];
+
     const documents = await request.store!.listDocuments(projectId);
-    const enriched = documents.map((d: any) => {
+    const finalizedById = new Map(documents.map((document: any) => [document.id, document]));
+    const enrichedFinalized = documents.map((d: any) => {
       const hasText = !!(d.extractedText && String(d.extractedText).length > 50);
       const structured = d.structuredData ?? null;
       const structuredObj =
@@ -2017,25 +2029,64 @@ export function buildServer() {
         hasText,
         extractionProvider,
         extractionState,
+        status: extractionState === "extracted" ? "complete" : "pending",
+        stage: extractionState === "extracted" ? "Ready" : "Pending",
+        progress: extractionState === "extracted" ? 1 : 0,
       };
     });
 
+    const progressDocs = inProgressDocuments
+      .filter((doc: any) => !doc?.id || !finalizedById.has(doc.id))
+      .map((doc: any, index: number) => ({
+        id: String(doc.id || `progress-${index}`),
+        fileName: String(doc.fileName || doc.sourcePath || `Document ${index + 1}`),
+        fileType: String(doc.fileType || path.extname(String(doc.fileName || "")).replace(/^\./, "") || "file"),
+        documentType: String(doc.documentType || "pending"),
+        pageCount: Number(doc.pageCount) || 0,
+        hasText: doc.status === "complete",
+        extractionProvider: doc.extractionProvider ?? null,
+        extractionState: doc.status === "complete" ? "extracted" : doc.status === "failed" ? "failed" : "pending",
+        status: doc.status || "queued",
+        stage: doc.stage || "Queued",
+        progress: typeof doc.progress === "number" ? doc.progress : 0,
+        size: Number(doc.size) || 0,
+        sourcePath: doc.sourcePath || null,
+        error: doc.error || null,
+        updatedAt: doc.updatedAt || latestJob?.updatedAt?.toISOString?.() || null,
+      }));
+
+    const enriched = project.ingestionStatus === "processing" || project.ingestionStatus === "queued"
+      ? [...progressDocs, ...enrichedFinalized]
+      : enrichedFinalized;
+
     let extracted = 0;
     let pending = 0;
+    let failed = 0;
     for (const doc of enriched) {
-      if (doc.extractionState === "extracted") extracted += 1;
+      if (doc.extractionState === "failed" || doc.status === "failed") failed += 1;
+      else if (doc.extractionState === "extracted" || doc.status === "complete") extracted += 1;
       else pending += 1;
     }
 
     return {
       status: (project as any).ingestionStatus ?? "unknown",
+      job: latestJob ? {
+        id: latestJob.id,
+        status: latestJob.status,
+        progress: latestJob.progress,
+        stage: latestJobOutput.stage ?? null,
+        message: latestJobOutput.message ?? null,
+        currentDocumentId: latestJobOutput.currentDocumentId ?? null,
+        currentDocumentName: latestJobOutput.currentDocumentName ?? null,
+        updatedAt: latestJob.updatedAt?.toISOString?.() ?? null,
+      } : null,
       documentCount: enriched.length,
       documents: enriched,
       summary: {
         total: enriched.length,
         extracted,
         pending,
-        failed: 0,
+        failed,
       },
     };
   });
@@ -4273,6 +4324,12 @@ export function buildServer() {
     xls: "application/vnd.ms-excel",
     doc: "application/msword",
     docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    rtf: "application/rtf",
+    html: "text/html",
+    htm: "text/html",
+    mhtml: "multipart/related",
+    mht: "multipart/related",
     zip: "application/zip",
   };
 
@@ -5488,9 +5545,18 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const MIME: Record<string, string> = {
       pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
       gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", tiff: "image/tiff",
-      txt: "text/plain", csv: "text/csv", json: "application/json",
+      tif: "image/tiff", bmp: "image/bmp",
+      txt: "text/plain", csv: "text/csv", tsv: "text/tab-separated-values", json: "application/json",
       xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      xls: "application/vnd.ms-excel",
+      doc: "application/msword",
       docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      rtf: "application/rtf",
+      html: "text/html",
+      htm: "text/html",
+      mhtml: "multipart/related",
+      mht: "multipart/related",
     };
     const contentType = MIME[ext] || "application/octet-stream";
     const inline = (request.query as { inline?: string })?.inline === "1";

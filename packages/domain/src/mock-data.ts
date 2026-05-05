@@ -1087,7 +1087,7 @@ export const mockStore: BidwrightStore = {
       icon: "FileText",
       category: "general",
       description: "AI-powered content generation for quote documents — lead letters, scope descriptions, exclusions, and notes.",
-      llmDescription: "Generate professional content for quote document fields. Can write lead letters, scope of work descriptions, terms and conditions, exclusions, and revision notes. Uses project context and source documents to produce accurate, tailored content.",
+      llmDescription: "Generate professional content for quote document fields. Can write lead letters, scope of work descriptions, terms and conditions, exclusions, and customer-facing revision notes. Uses project context and source documents to produce accurate, tailored content.",
       version: "1.0.0",
       author: "Bidwright",
       enabled: true,
@@ -1142,7 +1142,7 @@ export const mockStore: BidwrightStore = {
           llmDescription: "Analyze source documents and existing estimate to generate a detailed scope of work description. Outputs markdown text for revision fields.",
           parameters: [
             { name: "detail", type: "string", description: "Detail level: brief, standard, detailed", required: false, enum: ["brief", "standard", "detailed"], default: "standard" },
-            { name: "targetField", type: "string", description: "Where to write: scratchpad, notes, description", required: false, default: "scratchpad" },
+            { name: "targetField", type: "string", description: "Where to write: scratchpad (internal), notes (customer-facing), description", required: false, default: "scratchpad" },
           ],
           outputType: "text_content",
           tags: ["content", "scope"],
@@ -1168,8 +1168,8 @@ export const mockStore: BidwrightStore = {
                   {
                     id: "targetField", type: "select", label: "Output To", defaultValue: "scratchpad", width: "half", order: 1,
                     options: [
-                      { value: "scratchpad", label: "Scratchpad" },
-                      { value: "notes", label: "Revision Notes" },
+                      { value: "scratchpad", label: "Scratchpad (internal)" },
+                      { value: "notes", label: "Revision Notes (customer-facing)" },
                       { value: "description", label: "Revision Description" },
                     ],
                   },

@@ -36,11 +36,13 @@ import type {
   Project,
   Quote,
   QuoteRevision,
+  RateBookAssignment,
   RateSchedule,
   RateScheduleItem,
   RateScheduleTier,
   RateScheduleWithChildren,
   ReportSection,
+  ResourceCatalogItem,
   ScheduleBaseline,
   ScheduleBaselineTask,
   ScheduleCalendar,
@@ -96,6 +98,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     llmModel: "claude-sonnet-4-20250514",
     azureDiEndpoint: "",
     azureDiKey: "",
+    documentExtractionProvider: "azure",
+    azureDiModel: "prebuilt-layout",
     agentRuntime: undefined,
     agentModel: undefined,
     agentReasoningEffort: "extra_high",
@@ -282,6 +286,65 @@ function normalizeCostSnapshot(raw: unknown): WorksheetItem["costSnapshot"] {
   };
 }
 
+function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.source !== "rate_book" && r.source !== "manual") return null;
+  const components = Array.isArray(r.components) ? r.components : [];
+  return {
+    source: r.source,
+    engineVersion: Number(r.engineVersion) || 1,
+    resolvedAt: typeof r.resolvedAt === "string" ? r.resolvedAt : new Date().toISOString(),
+    projectId: typeof r.projectId === "string" ? r.projectId : null,
+    revisionId: typeof r.revisionId === "string" ? r.revisionId : null,
+    customerId: typeof r.customerId === "string" ? r.customerId : null,
+    customerName: typeof r.customerName === "string" ? r.customerName : null,
+    categoryId: typeof r.categoryId === "string" ? r.categoryId : null,
+    categoryName: typeof r.categoryName === "string" ? r.categoryName : null,
+    entityType: typeof r.entityType === "string" ? r.entityType : null,
+    rateBookId: typeof r.rateBookId === "string" ? r.rateBookId : null,
+    rateBookName: typeof r.rateBookName === "string" ? r.rateBookName : null,
+    rateBookItemId: typeof r.rateBookItemId === "string" ? r.rateBookItemId : null,
+    rateBookItemName: typeof r.rateBookItemName === "string" ? r.rateBookItemName : null,
+    resourceId: typeof r.resourceId === "string" ? r.resourceId : null,
+    catalogItemId: typeof r.catalogItemId === "string" ? r.catalogItemId : null,
+    currency: typeof r.currency === "string" ? r.currency : undefined,
+    region: typeof r.region === "string" ? r.region : undefined,
+    quantity: Number(r.quantity) || 0,
+    uom: typeof r.uom === "string" ? r.uom : "",
+    tierUnits: (r.tierUnits && typeof r.tierUnits === "object" && !Array.isArray(r.tierUnits)
+      ? r.tierUnits
+      : {}) as Record<string, number>,
+    components: components
+      .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      .map((entry, index) => ({
+        id: typeof entry.id === "string" ? entry.id : `component-${index + 1}`,
+        code: typeof entry.code === "string" ? entry.code : "",
+        label: typeof entry.label === "string" ? entry.label : "Rate component",
+        kind: typeof entry.kind === "string" ? entry.kind : "other",
+        source: entry.source === "manual" || entry.source === "catalog" || entry.source === "system" ? entry.source : "rate_book",
+        target: entry.target === "price" || entry.target === "both" ? entry.target : "cost",
+        basis: typeof entry.basis === "string" ? entry.basis : "",
+        quantity: Number(entry.quantity) || 0,
+        rate: Number(entry.rate) || 0,
+        amount: Number(entry.amount) || 0,
+        rateBookId: typeof entry.rateBookId === "string" ? entry.rateBookId : null,
+        rateBookItemId: typeof entry.rateBookItemId === "string" ? entry.rateBookItemId : null,
+        tierId: typeof entry.tierId === "string" ? entry.tierId : null,
+        metadata: (entry.metadata && typeof entry.metadata === "object" && !Array.isArray(entry.metadata)
+          ? entry.metadata
+          : {}) as Record<string, unknown>,
+      })),
+    baseCost: Number(r.baseCost) || 0,
+    basePrice: Number(r.basePrice) || 0,
+    totalCost: Number(r.totalCost) || 0,
+    unitCost: Number(r.unitCost) || 0,
+    totalPrice: Number(r.totalPrice) || 0,
+    markup: Number(r.markup) || 0,
+    warnings: Array.isArray(r.warnings) ? r.warnings.filter((value): value is string => typeof value === "string") : [],
+  };
+}
+
 export function mapWorksheetItem(i: any): WorksheetItem {
   const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
@@ -306,6 +369,7 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     itemId: i.itemId ?? null,
     tierUnits: (i.tierUnits as Record<string, number>) ?? {},
     costSnapshot: normalizeCostSnapshot(i.costSnapshot),
+    rateResolution: normalizeRateResolution(i.rateResolution),
     sourceNotes: decodeHtmlEntities(i.sourceNotes ?? ""),
     costResourceId: i.costResourceId ?? null,
     effectiveCostId: i.effectiveCostId ?? null,
@@ -529,13 +593,36 @@ export function mapRateScheduleTier(t: any): RateScheduleTier {
 
 export function mapRateScheduleItem(i: any): RateScheduleItem {
   return {
-    id: i.id, scheduleId: i.scheduleId, catalogItemId: i.catalogItemId ?? null,
+    id: i.id, scheduleId: i.scheduleId, catalogItemId: i.catalogItemId ?? null, resourceId: i.resourceId ?? null,
     code: i.code, name: i.name, unit: i.unit,
     rates: (i.rates as Record<string, number>) ?? {},
     costRates: (i.costRates as Record<string, number>) ?? {},
     burden: i.burden, perDiem: i.perDiem,
     metadata: (i.metadata as Record<string, unknown>) ?? {},
     sortOrder: i.sortOrder,
+  };
+}
+
+export function mapResourceCatalogItem(row: any): ResourceCatalogItem {
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    catalogItemId: row.catalogItemId ?? null,
+    resourceType: row.resourceType,
+    category: row.category,
+    code: row.code,
+    name: row.name,
+    normalizedName: row.normalizedName,
+    description: row.description,
+    manufacturer: row.manufacturer,
+    manufacturerPartNumber: row.manufacturerPartNumber,
+    defaultUom: row.defaultUom,
+    aliases: row.aliases ?? [],
+    tags: row.tags ?? [],
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    active: row.active,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -557,6 +644,24 @@ export function mapRateScheduleWithChildren(s: any): RateScheduleWithChildren {
     ...mapRateSchedule(s),
     tiers: (s.tiers ?? []).map(mapRateScheduleTier),
     items: (s.items ?? []).map(mapRateScheduleItem),
+  };
+}
+
+export function mapRateBookAssignment(row: any): RateBookAssignment {
+  return {
+    id: row.id,
+    organizationId: row.organizationId,
+    rateScheduleId: row.rateScheduleId,
+    customerId: row.customerId ?? null,
+    projectId: row.projectId ?? null,
+    category: row.category ?? "",
+    priority: row.priority ?? 0,
+    active: row.active ?? true,
+    effectiveDate: row.effectiveDate ?? null,
+    expiryDate: row.expiryDate ?? null,
+    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    createdAt: toISO(row.createdAt),
+    updatedAt: toISO(row.updatedAt),
   };
 }
 
