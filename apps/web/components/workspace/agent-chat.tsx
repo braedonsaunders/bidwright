@@ -2682,7 +2682,12 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     try {
       // CLI runtime: send message (spawns new session if previous completed)
       if (cliRuntime) {
-        const result = await sendCliMessage(projectId, content.trim());
+        const result = await sendCliMessage(projectId, content.trim(), {
+          runtime: cliRuntime,
+          model: cliAgentModel,
+          personaId: selectedPersonaId,
+          scope: intakeScope.trim() || undefined,
+        });
         if (result.sessionId) {
           // A new session was started
           setIntakeSessionId(result.sessionId);

@@ -4738,11 +4738,21 @@ export async function resumeCliSession(projectId: string, prompt?: string) {
   });
 }
 
-export async function sendCliMessage(projectId: string, message: string) {
+export async function sendCliMessage(
+  projectId: string,
+  message: string,
+  options: { runtime?: string | null; model?: string | null; personaId?: string | null; scope?: string | null } = {}
+) {
   return apiRequest<{ sent?: boolean; sessionId?: string; status?: string; message?: string }>(`/api/cli/${projectId}/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      message,
+      runtime: options.runtime || undefined,
+      model: options.model || undefined,
+      personaId: options.personaId || undefined,
+      scope: options.scope || undefined,
+    }),
   });
 }
 

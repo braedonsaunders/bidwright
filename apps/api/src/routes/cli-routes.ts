@@ -635,6 +635,18 @@ function normalizeCliReasoningEffort(value: unknown): "auto" | "low" | "medium" 
   return "extra_high";
 }
 
+const READY_INGESTION_STATUSES = new Set(["ready", "review", "quoted", "estimating"]);
+
+function ingestionStartBlock(project: { ingestionStatus?: unknown }) {
+  const ingestionStatus = (project.ingestionStatus ?? "unknown") as string;
+  if (READY_INGESTION_STATUSES.has(ingestionStatus)) return null;
+  return {
+    error: "Document extraction is still in progress. Wait for the project's documents to finish processing before starting an AI run.",
+    ingestionStatus,
+    retryable: ingestionStatus === "queued" || ingestionStatus === "processing",
+  };
+}
+
 function mapClaudeEffort(effort: ReturnType<typeof normalizeCliReasoningEffort>): "low" | "medium" | "high" | "xhigh" | "max" | null {
   switch (effort) {
     case "low":
@@ -864,6 +876,140 @@ async function bindEstimateStrategyRun(projectId: string, revisionId: string | n
   }).catch(() => {});
 }
 
+async function resolveEstimatorPersonaForPrompt(store: any, personaId: string | undefined) {
+  if (!personaId) return null;
+  const persona = await store.getEstimatorPersona(personaId);
+  if (!persona) return null;
+
+  const bookIds: string[] = Array.isArray(persona.knowledgeBookIds)
+    ? persona.knowledgeBookIds
+    : JSON.parse(persona.knowledgeBookIds as string || "[]");
+  const knowledgeDocumentIds: string[] = Array.isArray((persona as any).knowledgeDocumentIds)
+    ? (persona as any).knowledgeDocumentIds
+    : JSON.parse((persona as any).knowledgeDocumentIds as string || "[]");
+  const datasetTags: string[] = Array.isArray(persona.datasetTags)
+    ? persona.datasetTags
+    : JSON.parse(persona.datasetTags as string || "[]");
+
+  let bookNames: string[] = [];
+  let knowledgeDocumentNames: string[] = [];
+  if (bookIds.length > 0) {
+    const books = await Promise.all(bookIds.map((id) => store.getKnowledgeBook(id).catch(() => null)));
+    bookNames = books.flatMap((book: any) => book?.name ? [book.name] : []);
+  }
+  if (knowledgeDocumentIds.length > 0) {
+    const documents = await Promise.all(knowledgeDocumentIds.map((id) => store.getKnowledgeDocument(id).catch(() => null)));
+    knowledgeDocumentNames = documents.flatMap((document: any) => document?.title ? [document.title] : []);
+  }
+
+  return {
+    name: persona.name,
+    trade: persona.trade,
+    systemPrompt: persona.systemPrompt,
+    knowledgeBookNames: bookNames,
+    knowledgeDocumentNames,
+    datasetTags,
+    packageBuckets: Array.isArray((persona as any).packageBuckets) ? (persona as any).packageBuckets : [],
+    defaultAssumptions: ((persona as any).defaultAssumptions as Record<string, unknown>) ?? {},
+    productivityGuidance: ((persona as any).productivityGuidance as Record<string, unknown>) ?? {},
+    commercialGuidance: ((persona as any).commercialGuidance as Record<string, unknown>) ?? {},
+    reviewFocusAreas: Array.isArray((persona as any).reviewFocusAreas) ? (persona as any).reviewFocusAreas : [],
+  };
+}
+
+async function prepareCliAgentWorkspace(input: {
+  request: FastifyRequest;
+  workspace: any;
+  projectId: string;
+  runtime: AgentRuntime;
+  scope?: string;
+  personaId?: string;
+}) {
+  const { request, workspace, projectId, runtime } = input;
+  const store = request.store!;
+  const project = workspace.project || {} as any;
+  const quote = workspace.quote || {} as any;
+  const effectiveScope = typeof input.scope === "string" && input.scope.trim()
+    ? input.scope.trim()
+    : typeof project.scope === "string" && project.scope.trim()
+      ? project.scope.trim()
+      : "";
+  const documents = (workspace.sourceDocuments || []).map((d: any) => ({
+    id: d.id,
+    fileName: d.fileName,
+    fileType: d.fileType,
+    documentType: d.documentType,
+    pageCount: d.pageCount || 0,
+    storagePath: d.storagePath || "",
+  }));
+
+  const projectDir = resolveProjectDir(projectId);
+  const knowledgeBooks = await store.listKnowledgeBooks() || [];
+  const globalBooks = knowledgeBooks.filter((b: any) => b.scope === "global" && b.storagePath);
+  const linkedBookNames = globalBooks.length > 0
+    ? await symlinkKnowledgeBooks(
+        projectDir,
+        apiDataRoot,
+        globalBooks.map((b: any) => ({ bookId: b.id, fileName: b.sourceFileName || b.name, storagePath: b.storagePath })),
+      )
+    : [];
+
+  const knowledgeDocuments = await store.listKnowledgeDocuments(projectId) || [];
+  const documentSnapshots = [];
+  for (const document of knowledgeDocuments as any[]) {
+    const pages = await store.listKnowledgeDocumentPages(document.id).catch(() => []);
+    if (pages.length > 0) {
+      documentSnapshots.push({
+        id: document.id,
+        title: document.title,
+        description: document.description,
+        category: document.category,
+        tags: document.tags ?? [],
+        pages,
+      });
+    }
+  }
+  const linkedKnowledgePageNames = documentSnapshots.length > 0
+    ? await writeKnowledgeDocumentSnapshots(projectDir, documentSnapshots)
+    : [];
+  const librarySnapshot = await writeAgentLibrarySnapshot({
+    projectDir,
+    projectId,
+    organizationId: request.user?.organizationId,
+    store,
+  });
+
+  const settings = await store.getSettings();
+  const integrations = (settings as any)?.integrations || {};
+  const estimateDefaults = (settings as any)?.defaults || {};
+  const persona = await resolveEstimatorPersonaForPrompt(store, input.personaId);
+
+  await generateInstructionFiles(runtime, {
+    projectDir,
+    projectName: project.name || "Untitled Project",
+    clientName: project.clientName || "",
+    location: project.location || "",
+    scope: effectiveScope,
+    quoteNumber: quote.quoteNumber || "",
+    dataRoot: apiDataRoot,
+    documents,
+    knowledgeBookFiles: linkedBookNames,
+    knowledgeDocumentFiles: linkedKnowledgePageNames,
+    librarySnapshot,
+    estimateDefaults,
+    maxConcurrentSubAgents: integrations.maxConcurrentSubAgents ?? 2,
+    persona,
+  });
+
+  return {
+    projectDir,
+    effectiveScope,
+    documents,
+    settings,
+    integrations,
+  };
+}
+
 function attachCliRunPersistence(
   runId: string,
   session: { events: { on: (event: string, handler: (payload: any) => void) => void } },
@@ -1026,15 +1172,8 @@ export function registerCliRoutes(app: FastifyInstance) {
     // produces stale doc IDs that the agent can't resolve, which sends it
     // down expensive shell-OCR fallback paths. Refuse to start until the
     // project's ingestion status reaches a ready state.
-    const ingestionStatus = (project.ingestionStatus ?? "unknown") as string;
-    const READY_STATUSES = new Set(["ready", "review", "quoted", "estimating"]);
-    if (!READY_STATUSES.has(ingestionStatus)) {
-      return reply.code(409).send({
-        error: "Document extraction is still in progress. Wait for the project's documents to finish processing before starting an AI run.",
-        ingestionStatus,
-        retryable: ingestionStatus === "queued" || ingestionStatus === "processing",
-      });
-    }
+    const ingestionBlock = ingestionStartBlock(project);
+    if (ingestionBlock) return reply.code(409).send(ingestionBlock);
 
     const effectiveScope = typeof scope === "string" && scope.trim()
       ? scope.trim()
@@ -1401,7 +1540,13 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
   // or returns error if a session is already running.
   app.post("/api/cli/:projectId/message", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { message } = (request.body || {}) as { message: string };
+    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope } = (request.body || {}) as {
+      message: string;
+      runtime?: AgentRuntime;
+      model?: string;
+      personaId?: string;
+      scope?: string;
+    };
 
     if (!message) return reply.code(400).send({ error: "Message required" });
 
@@ -1416,6 +1561,9 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
+    const project = workspace.project || {} as any;
+    const ingestionBlock = ingestionStartBlock(project);
+    if (ingestionBlock) return reply.code(409).send(ingestionBlock);
 
     const settings = await store.getSettings();
     const integrations = (settings as any)?.integrations || {};
@@ -1425,13 +1573,30 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       select: { id: true, model: true, input: true },
     });
     const latestRuntime = (latestRun?.input as any)?.runtime;
-    const runtime: AgentRuntime = isCliRuntime(latestRuntime)
+    const runtime: AgentRuntime = isCliRuntime(requestedRuntime)
+      ? requestedRuntime
+      : isCliRuntime(latestRuntime)
       ? latestRuntime
       : isCliRuntime(integrations.agentRuntime)
         ? integrations.agentRuntime
         : "claude-code";
-    const model = normalizeCliModel(runtime, latestRun?.model ?? integrations.agentModel);
+    const model = normalizeCliModel(runtime, requestedModel ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
+    const prepared = await prepareCliAgentWorkspace({
+      request,
+      workspace,
+      projectId,
+      runtime,
+      scope,
+      personaId,
+    });
+    const adapter = getAdapter(runtime);
+    const questionPrompt = `Read ${adapter.primaryInstructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md if the question needs project documents, estimating references, datasets, cost intelligence, labour units, assemblies, catalogs, or rate books. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads.
+
+This is a user chat question, not a full intake run. Answer the question against the current quote/workspace/documents. Call getWorkspace and getEstimateStrategy before making claims about the quote. Use readDocumentText/readSpreadsheet/getDocumentStructured only for the specific documents or page ranges needed. Do not execute the full staged estimate workflow, create worksheets/items, or finalize strategy unless the user explicitly asks you to do that.
+
+User question:
+${message}`;
 
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
     // Persist the user's prompt as a "message" event so the chat panel's
@@ -1454,8 +1619,12 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       input: {
         runtime,
         prompt: message,
+        sessionPrompt: questionPrompt,
         followUp: true,
         previousAiRunId: latestRun?.id ?? null,
+        scope: prepared.effectiveScope,
+        documentCount: prepared.documents.length,
+        personaId: personaId || null,
       } as any,
       output: { events: [userMessageEvent] } as any,
     });
@@ -1465,15 +1634,15 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       const session = await spawnSession({
         projectId,
         projectDir,
-        prompt: message,
+        prompt: questionPrompt,
         runtime,
         model,
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
-        customCliPath: resolveCliPathOverride(runtime, integrations),
-        ...buildSpawnApiKeys(integrations),
+        customCliPath: resolveCliPathOverride(runtime, prepared.integrations),
+        ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
       });
 
