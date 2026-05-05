@@ -1748,13 +1748,24 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
 
 Extract structured data tables from \`book/${pdfFile}\` (${book.pageCount} pages).
 
-For each table, call \`createDataset\` with:
-- Descriptive name
-- Rich tags array for search (material type, operation, pipe sizes, units, section name)
-- Columns as [{name, type}] — use snake_case names, type "number" for numeric values
-- Rows as arrays of values matching column order — use actual numbers not strings
-- sourceBookId: "${bookId}"
-- sourcePages: array of page numbers
+Knowledge book id: "${bookId}"
+
+Read the book with MCP first:
+- Use \`readDocumentText\` with \`documentId: "${bookId}"\` and page ranges like \`pages: "1-20"\`.
+- Use \`getBookPage\` only when the OCR text is ambiguous and you need the original page context.
+
+Known sections:
+${sectionsInfo || "  - No section index available. Read by page range."}
+
+For each real table you find, call \`createDataset\` with this exact shape:
+- \`name\`: descriptive dataset name
+- \`description\`: source section, notes, conditions, units
+- \`category\`: one of labour_units, equipment_rates, material_prices, productivity, burden_rates, custom
+- \`tags\`: rich search tags such as material type, operation, pipe sizes, units, section name
+- \`columns\`: objects like \`{ "key": "pipe_size", "label": "Pipe Size", "type": "text" }\`; use snake_case keys and \`type: "number"\` for numeric values
+- \`rows\`: array of row objects keyed by those column keys; use actual numbers for numeric values
+- \`sourceBookId\`: "${bookId}"
+- \`sourcePages\`: a string page range like "85-87, 100"
 
 Read the PDF in batches of 20 pages (it has ${book.pageCount} total). Scan every page.
 Merge tables that span multiple pages. Skip non-data pages.
@@ -1776,7 +1787,7 @@ Merge tables that span multiple pages. Skip non-data pages.
     const sessionResult = await spawnSession({
       projectId: bookId,
       projectDir: workDir,
-      prompt: `Read ${adapter.primaryInstructionFile} then extract all data tables from the PDF in book/. Call createDataset for each table.`,
+      prompt: `Read ${adapter.primaryInstructionFile}. Use readDocumentText with documentId "${bookId}" to extract all data tables from this knowledge book. Call createDataset for each table using row objects keyed by column key.`,
       runtime,
       model: normalizedModel,
       authToken: token,

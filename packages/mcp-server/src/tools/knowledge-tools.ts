@@ -44,6 +44,50 @@ function textMatches(value: unknown, q?: string | null) {
   return String(value ?? "").toLowerCase().includes(query);
 }
 
+function getProjectIdForLibraryQuery() {
+  const projectId = getProjectId().trim();
+  return projectId.startsWith("project-") ? projectId : null;
+}
+
+function columnKeyFromLabel(value: unknown, index: number) {
+  const key = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return key || `column_${index + 1}`;
+}
+
+function uniqueColumnKey(baseKey: string, usedKeys: Set<string>) {
+  let key = baseKey;
+  let suffix = 2;
+  while (usedKeys.has(key)) {
+    key = `${baseKey}_${suffix}`;
+    suffix += 1;
+  }
+  usedKeys.add(key);
+  return key;
+}
+
+function normalizeColumnType(value: unknown) {
+  const type = String(value ?? "text").trim().toLowerCase();
+  if (type === "string") return "text";
+  if (["text", "number", "currency", "percentage", "date", "boolean", "select"].includes(type)) return type;
+  return "text";
+}
+
+function normalizeSourcePages(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => String(entry ?? "").trim())
+      .filter(Boolean)
+      .join(", ");
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string") return value.trim();
+  return "";
+}
+
 export function registerKnowledgeTools(server: McpServer) {
 
   // ── queryKnowledge ────────────────────────────────────────
@@ -185,25 +229,55 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       name: z.string().describe("Descriptive dataset name"),
       description: z.string().describe("What this dataset contains, source section, any conditions/notes"),
-      category: z.enum(["estimating", "labour", "equipment", "materials", "safety", "standards", "custom"]).default("estimating"),
-      tags: z.array(z.string()).describe("Rich search tags: material type, operation, units, etc."),
+      category: z.string().default("custom").describe("Dataset category, e.g. labour_units, equipment_rates, material_prices, productivity, burden_rates, or custom"),
+      tags: z.array(z.string()).default([]).describe("Rich search tags: material type, operation, units, etc."),
       sourceBookId: z.string().optional().describe("Knowledge book ID this was extracted from"),
-      sourcePages: z.string().optional().describe("Page range(s) e.g. '85-87, 100'"),
+      sourcePages: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional().describe("Page range(s) e.g. '85-87, 100'. Arrays are accepted and normalized."),
       columns: z.array(z.object({
-        key: z.string().describe("Column key (snake_case)"),
-        label: z.string().describe("Human-readable column name"),
-        type: z.enum(["string", "number", "date", "boolean"]).default("string"),
+        key: z.string().optional().describe("Column key (snake_case). If omitted it is generated from label/name."),
+        label: z.string().optional().describe("Human-readable column name"),
+        name: z.string().optional().describe("Human-readable column name; accepted as an alias for label"),
+        type: z.enum(["text", "string", "number", "currency", "percentage", "date", "boolean", "select"]).default("text"),
       })).describe("Column definitions"),
-      rows: z.array(z.record(z.string(), z.any())).describe("Array of row objects with column keys as keys"),
+      rows: z.array(z.union([
+        z.record(z.string(), z.any()),
+        z.array(z.any()),
+      ])).describe("Rows as objects keyed by column key. Arrays are accepted and mapped to columns by order."),
     },
     async ({ name, description, category, tags, sourceBookId, sourcePages, columns, rows }) => {
-      // Normalize columns: domain model uses 'name', agent sends 'label'
-      const normalizedColumns = columns.map((col: any) => ({
-        key: col.key,
-        name: col.label || col.name || col.key,
-        type: col.type === "string" ? "text" : col.type === "number" ? "number" : col.type || "text",
-        required: false,
-      }));
+      const usedKeys = new Set<string>();
+      const columnAliases: string[][] = [];
+      const normalizedColumns = columns.map((col: any, index: number) => {
+        const label = String(col.label || col.name || col.key || `Column ${index + 1}`).trim();
+        const key = uniqueColumnKey(columnKeyFromLabel(col.key || label, index), usedKeys);
+        columnAliases[index] = [key, col.key, col.label, col.name, label]
+          .map((alias) => String(alias ?? "").trim())
+          .filter((alias, aliasIndex, aliases) => alias && aliases.indexOf(alias) === aliasIndex);
+        return {
+          key,
+          name: label,
+          type: normalizeColumnType(col.type),
+          required: false,
+        };
+      });
+
+      const normalizedRows = rows.map((row: any) => {
+        if (Array.isArray(row)) {
+          return Object.fromEntries(
+            normalizedColumns.map((column, index) => [column.key, row[index] ?? null]),
+          );
+        }
+        if (row && typeof row === "object") {
+          return Object.fromEntries(
+            normalizedColumns.map((column, index) => {
+              const aliases = columnAliases[index] ?? [column.key];
+              const matchedAlias = aliases.find((alias) => Object.prototype.hasOwnProperty.call(row, alias));
+              return [column.key, matchedAlias ? row[matchedAlias] : null];
+            }),
+          );
+        }
+        return {};
+      });
 
       // Create the dataset
       const dataset = await apiPost(`/datasets`, {
@@ -215,13 +289,13 @@ export function registerKnowledgeTools(server: McpServer) {
         source: "book-extraction",
         sourceDescription: sourceBookId ? `Extracted from knowledge book ${sourceBookId}` : "AI extraction",
         sourceBookId,
-        sourcePages: sourcePages || "",
+        sourcePages: normalizeSourcePages(sourcePages),
         tags,
       });
 
       // Insert rows in batch
-      if (rows.length > 0) {
-        await apiPost(`/datasets/${dataset.id}/rows/batch`, { rows });
+      if (normalizedRows.length > 0) {
+        await apiPost(`/datasets/${dataset.id}/rows/batch`, { rows: normalizedRows });
       }
 
       return {
@@ -231,8 +305,8 @@ export function registerKnowledgeTools(server: McpServer) {
             success: true,
             datasetId: dataset.id,
             name,
-            rowCount: rows.length,
-            columnCount: columns.length,
+            rowCount: normalizedRows.length,
+            columnCount: normalizedColumns.length,
             tags,
           }, null, 2),
         }],
@@ -297,7 +371,9 @@ export function registerKnowledgeTools(server: McpServer) {
       offset: z.number().int().min(0).default(0),
     },
     async (input) => {
-      const params = new URLSearchParams({ projectId: getProjectId() });
+      const params = new URLSearchParams();
+      const projectId = getProjectIdForLibraryQuery();
+      if (projectId) params.set("projectId", projectId);
       const data = await apiGet(`/knowledge/books?${params}`);
       const books = (Array.isArray(data) ? data : [])
         .filter((book: any) => !input.category || String(book.category ?? "").toLowerCase() === input.category!.trim().toLowerCase())
@@ -332,7 +408,9 @@ export function registerKnowledgeTools(server: McpServer) {
       offset: z.number().int().min(0).default(0),
     },
     async (input) => {
-      const params = new URLSearchParams({ projectId: getProjectId() });
+      const params = new URLSearchParams();
+      const projectId = getProjectIdForLibraryQuery();
+      if (projectId) params.set("projectId", projectId);
       const data = await apiGet(`/knowledge/documents?${params}`);
       const documents = (Array.isArray(data) ? data : [])
         .filter((document: any) => !input.category || String(document.category ?? "").toLowerCase() === input.category!.trim().toLowerCase())
@@ -406,7 +484,7 @@ export function registerKnowledgeTools(server: McpServer) {
 
   server.tool(
     "getDocumentStructured",
-    "Get the Azure Document Intelligence structured extraction for a project document — tables (as markdown), key-value pairs, section headings, page-by-page text. Use this when you need parsed table data or form fields from a PDF.",
+    "Get the Azure Document Intelligence structured extraction for a project source document: tables (as markdown), key-value pairs, section headings, and page-by-page text. For knowledge books, use readDocumentText and getBookPage instead.",
     {
       documentId: z.string().describe("SourceDocument ID"),
       maxTables: z.number().int().positive().max(20).default(5),
