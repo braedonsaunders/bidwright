@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ClipboardList,
   Copy,
+  Download,
   Clock,
   FileText,
   GitCompare,
@@ -18,9 +19,11 @@ import {
   History,
   Layers3,
   Library,
+  Loader2,
   MessageSquareText,
   Percent,
   Plus,
+  Printer,
   RotateCcw,
   Save,
   Settings2,
@@ -96,6 +99,7 @@ import {
   deleteModelTakeoffLink,
   deleteEstimateFactor,
   fetchQuotePdfBlobUrl,
+  getQuotePdfPreviewUrl,
   importAssignedRateSchedules,
   listRateBookAssignments,
   listModelTakeoffLinks,
@@ -134,7 +138,7 @@ import {
   type AIPhaseResult,
   type AIEquipmentResult,
 } from "@/components/workspace/modals";
-import { PdfStudio } from "@/components/workspace/pdf-studio";
+import { PdfPagePreview, PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import { RevisionDiffModal } from "@/components/workspace/revision-diff-modal";
 import { WorkspaceI18nSurface } from "@/components/workspace/workspace-i18n-surface";
@@ -1140,7 +1144,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, []);
   const modelLineCategory = useMemo(() => pickModelLineCategory(entityCategories), [entityCategories]);
   const [modal, setModal] = useState<ModalState>(null);
-  const [snapPdfDownloading, setSnapPdfDownloading] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
@@ -1757,24 +1760,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // ─── Action handlers ───
 
-  async function handleSnapPdfDownload() {
-    if (snapPdfDownloading) return;
-    setSnapPdfDownloading(true);
-    setError(null);
-    try {
-      const blobUrl = await fetchQuotePdfBlobUrl(workspace.project.id, "snap");
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${workspace.quote.quoteNumber || "snap-quote"}.pdf`;
-      a.click();
-      URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "PDF download failed.");
-    } finally {
-      setSnapPdfDownloading(false);
-    }
-  }
-
   function handleAction(action: string) {
     setShowActions(false);
     switch (action) {
@@ -1789,10 +1774,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       case "aiNotes": setModal("aiNotes"); setAiResult(null); break;
       case "aiPhases": setModal("aiPhases"); setAiPhaseResult(null); break;
       case "aiEquipment": setModal("aiEquipment"); setAiEquipResult(null); break;
-      case "pdf":
-        if (isSnap) void handleSnapPdfDownload();
-        else setModal("pdf");
-        break;
+      case "pdf": setModal("pdf"); break;
       case "compare": setModal("compare"); break;
     }
   }
@@ -1924,7 +1906,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   return (
     <WorkspaceI18nSurface>
-    <div className="flex flex-col flex-1 min-h-0 gap-4">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-4">
       {/* ─── Header ─── */}
       <div className="flex items-center gap-4 shrink-0">
         <div className="min-w-0 flex-1">
@@ -2000,7 +1982,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-line bg-panel shadow-lg py-1 text-xs">
                   <MenuSection label="PDF">
                     <MenuItem onClick={() => handleAction("pdf")}>
-                      {isSnap && snapPdfDownloading ? "Generating PDF..." : "Generate PDF"}
+                      Generate PDF
                     </MenuItem>
                   </MenuSection>
                   <MenuSection label="Actions">
@@ -2051,7 +2033,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       {error && <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       {/* ─── Tab Content ─── */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex h-full min-h-0 flex-1 flex-col">
         {isSnap ? (
           <SnapQuoteSheet
             workspace={workspace}
@@ -2343,7 +2325,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         }} />
 
 
-      <PdfStudio projectId={workspace.project.id} open={modal === "pdf"} onClose={closeModal} />
+      {isSnap ? (
+        <SnapPdfPreviewModal
+          projectId={workspace.project.id}
+          quoteNumber={workspace.quote.quoteNumber}
+          open={modal === "pdf"}
+          onClose={closeModal}
+        />
+      ) : (
+        <PdfStudio projectId={workspace.project.id} open={modal === "pdf"} onClose={closeModal} />
+      )}
 
       <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 
@@ -2399,6 +2390,153 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       </AnimatePresence>
     </div>
     </WorkspaceI18nSurface>
+  );
+}
+
+function SnapPdfPreviewModal({
+  projectId,
+  quoteNumber,
+  open,
+  onClose,
+}: {
+  projectId: string;
+  quoteNumber?: string | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [previewKey, setPreviewKey] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState(true);
+  const [downloading, setDownloading] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const previewUrl = useMemo(() => getQuotePdfPreviewUrl(projectId, "snap"), [projectId]);
+  const fileName = `${quoteNumber || "snap-quote"}.pdf`;
+
+  useEffect(() => {
+    if (!open) return;
+    setPreviewLoading(true);
+    setActionError(null);
+    setPreviewKey((current) => current + 1);
+  }, [open, projectId]);
+
+  const downloadPdf = useCallback(async () => {
+    if (downloading) return;
+    setDownloading(true);
+    setActionError(null);
+    try {
+      const blobUrl = await fetchQuotePdfBlobUrl(projectId, "snap");
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = fileName;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "PDF download failed.");
+    } finally {
+      setDownloading(false);
+    }
+  }, [downloading, fileName, projectId]);
+
+  const printPdf = useCallback(async () => {
+    if (printing) return;
+    setPrinting(true);
+    setActionError(null);
+    try {
+      const blobUrl = await fetchQuotePdfBlobUrl(projectId, "snap");
+      const frame = document.createElement("iframe");
+      frame.src = blobUrl;
+      frame.title = "Snap quote print preview";
+      frame.style.position = "fixed";
+      frame.style.right = "0";
+      frame.style.bottom = "0";
+      frame.style.width = "1px";
+      frame.style.height = "1px";
+      frame.style.border = "0";
+      frame.style.opacity = "0";
+      frame.style.pointerEvents = "none";
+
+      const cleanup = () => {
+        frame.remove();
+        URL.revokeObjectURL(blobUrl);
+      };
+
+      frame.onload = () => {
+        try {
+          frame.contentWindow?.focus();
+          frame.contentWindow?.print();
+        } finally {
+          setPrinting(false);
+          window.setTimeout(cleanup, 60000);
+        }
+      };
+      frame.onerror = () => {
+        setPrinting(false);
+        cleanup();
+        setActionError("PDF print failed.");
+      };
+
+      document.body.appendChild(frame);
+    } catch (error) {
+      setPrinting(false);
+      setActionError(error instanceof Error ? error.message : "PDF print failed.");
+    }
+  }, [printing, projectId]);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
+          className="fixed inset-0 z-50 flex bg-black/60 backdrop-blur-sm"
+        >
+          <motion.div
+            initial={{ y: 20, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 20, opacity: 0 }}
+            transition={{ type: "spring", damping: 30, stiffness: 300, delay: 0.04 }}
+            className="m-3 flex flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
+              <div className="flex items-center gap-2">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/10">
+                  <FileText className="h-3.5 w-3.5 text-accent" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold">Snap PDF</div>
+                  <div className="text-[10px] text-fg/35">Preview</div>
+                </div>
+                {previewLoading && <Loader2 className="ml-2 h-3.5 w-3.5 animate-spin text-fg/35" />}
+              </div>
+              <div className="flex items-center gap-2">
+                {actionError && <span className="max-w-xs truncate text-[11px] text-danger">{actionError}</span>}
+                <Button size="sm" variant="secondary" onClick={printPdf} disabled={printing || downloading}>
+                  {printing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Printer className="h-3 w-3" />}
+                  Print
+                </Button>
+                <Button size="sm" variant="accent" onClick={downloadPdf} disabled={downloading || printing}>
+                  {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                  Download
+                </Button>
+                <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close PDF preview">
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto bg-panel2/30 p-6">
+              <PdfPagePreview
+                url={previewUrl}
+                refreshKey={previewKey}
+                zoom={100}
+                onLoadingChange={setPreviewLoading}
+              />
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 
@@ -2561,7 +2699,7 @@ function SnapQuoteSheet({
   const saving = savingField !== null;
 
   return (
-    <div className="min-h-0 flex-1 overflow-hidden">
+    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
       <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
           <div className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-3">
             <div className="flex min-w-0 flex-1 items-center gap-3">

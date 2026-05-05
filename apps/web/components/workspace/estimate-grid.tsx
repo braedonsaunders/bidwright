@@ -6152,7 +6152,7 @@ export function EstimateGrid({
   // ─── Render ───
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-2 pb-1">
       {renderEntityDropdownPortal()}
       {/* ─── Worksheet Navigation ─── */}
       {!isSnapMode && (
@@ -6508,7 +6508,7 @@ export function EstimateGrid({
       )}
 
       {/* ─── Grid ─── */}
-      <div className={cn("flex-1 min-h-0 relative", worksheetViewMode === "organizer" && "flex gap-2")}>
+      <div className={cn("relative flex-1 min-h-0 overflow-hidden", worksheetViewMode === "organizer" && "flex gap-2")}>
         {worksheetViewMode === "organizer" && (
           <WorksheetOrganizerPanel
             workspace={workspace}
@@ -6528,7 +6528,7 @@ export function EstimateGrid({
         <div
           ref={gridWidthRef}
           className={cn(
-            "min-h-0",
+            "h-full min-h-0",
             worksheetViewMode === "organizer" ? "relative flex-1" : "absolute inset-0",
           )}
         >
@@ -6539,7 +6539,7 @@ export function EstimateGrid({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -tabSlideDir * 16 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute inset-0 flex flex-col"
+            className="absolute inset-0 flex min-h-0 flex-col"
           >
           {visibleRows.length === 0 ? (
             <EmptyState>
