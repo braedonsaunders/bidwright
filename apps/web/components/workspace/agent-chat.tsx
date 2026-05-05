@@ -3767,18 +3767,24 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           </div>
 
           <AnimatePresence>
-            {hasUnseenMessages && (
+            {isUserScrolledUp && !showIngestionGate && (
               <motion.button
-                key="new-messages"
-                initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                key="scroll-to-latest"
+                initial={{ opacity: 0, y: 8, scale: 0.92 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                exit={{ opacity: 0, y: 8, scale: 0.92 }}
                 transition={{ duration: 0.14 }}
                 onClick={scrollToBottom}
-                className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/25 bg-panel px-3 py-1.5 text-[10px] font-medium text-accent shadow-xl shadow-black/10 transition-colors hover:bg-accent/10"
+                className={cn(
+                  "absolute bottom-3 left-1/2 z-20 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border bg-panel shadow-xl shadow-black/10 transition-colors",
+                  hasUnseenMessages
+                    ? "border-accent/40 text-accent hover:bg-accent/10"
+                    : "border-line text-fg/45 hover:border-fg/20 hover:bg-panel2 hover:text-fg/70",
+                )}
+                aria-label={hasUnseenMessages ? "Jump to new messages" : "Jump to latest message"}
+                title={hasUnseenMessages ? "Jump to new messages" : "Jump to latest message"}
               >
-                <ArrowDown className="h-3 w-3" />
-                New messages
+                <ArrowDown className="h-4 w-4" />
               </motion.button>
             )}
           </AnimatePresence>
