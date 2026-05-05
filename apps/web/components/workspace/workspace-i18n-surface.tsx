@@ -21,6 +21,34 @@ const ENTRIES: Array<[string, ...string[]]> = [
   ["Phases", "Fases", "Phases", "Phasen", "Fases", "阶段", "フェーズ", "단계", "चरण", "المراحل"],
   ["Snap", "Rápida", "Rapide", "Kurzangebot", "Rápido", "快速", "スナップ", "스냅", "स्नैप", "سريع"],
   ["Open", "Abierto", "Ouvert", "Offen", "Aberto", "打开", "未完了", "열림", "खुला", "مفتوح"],
+  ["All", "Todo", "Tout", "Alle", "Tudo", "全部", "すべて", "전체", "सभी", "الكل"],
+  ["This", "Este", "Ce", "Diese", "Este", "此", "この", "이", "यह", "هذا"],
+  ["Page", "Página", "Page", "Seite", "Página", "页面", "ページ", "페이지", "पृष्ठ", "الصفحة"],
+  ["Pages", "Páginas", "Pages", "Seiten", "Páginas", "页面", "ページ", "페이지", "पृष्ठ", "الصفحات"],
+  ["Document", "Documento", "Document", "Dokument", "Documento", "文档", "ドキュメント", "문서", "दस्तावेज़", "المستند"],
+  ["Results", "Resultados", "Résultats", "Ergebnisse", "Resultados", "结果", "結果", "결과", "परिणाम", "النتائج"],
+  ["Choose", "Elegir", "Choisir", "Auswählen", "Escolher", "选择", "選択", "선택", "चुनें", "اختر"],
+  ["Intake", "Ingreso", "Intake", "Erfassung", "Entrada", "录入", "取り込み", "접수", "इंटेक", "الإدخال"],
+  ["Mark", "Marca", "Marque", "Markierung", "Marca", "标记", "マーク", "마크", "चिह्न", "علامة"],
+  ["Marks", "Marcas", "Marques", "Markierungen", "Marcas", "标记", "マーク", "마크", "चिह्न", "العلامات"],
+  ["Link", "Vincular", "Lier", "Verknüpfen", "Vincular", "链接", "リンク", "연결", "लिंक", "ربط"],
+  ["a", "un", "un", "ein", "um", "一个", "1つの", "하나의", "एक", "واحد"],
+  ["an", "un", "un", "ein", "um", "一个", "1つの", "하나의", "एक", "واحد"],
+  ["the", "el", "le", "der", "o", "该", "その", "해당", "वह", "الـ"],
+  ["to", "a", "à", "zu", "para", "到", "へ", "에", "को", "إلى"],
+  ["from", "desde", "depuis", "von", "de", "来自", "から", "에서", "से", "من"],
+  ["by", "por", "par", "nach", "por", "按", "別", "기준", "द्वारा", "حسب"],
+  ["as", "como", "comme", "als", "como", "作为", "として", "로", "के रूप में", "كـ"],
+  ["or", "o", "ou", "oder", "ou", "或", "または", "또는", "या", "أو"],
+  ["and", "y", "et", "und", "e", "和", "と", "및", "और", "و"],
+  ["with", "con", "avec", "mit", "com", "带", "あり", "포함", "के साथ", "مع"],
+  ["before", "antes de", "avant", "vor", "antes de", "之前", "前", "전", "से पहले", "قبل"],
+  ["after", "después de", "après", "nach", "depois de", "之后", "後", "후", "के बाद", "بعد"],
+  ["for", "para", "pour", "für", "para", "用于", "用", "용", "के लिए", "لـ"],
+  ["in", "en", "dans", "in", "em", "在", "内", "에서", "में", "في"],
+  ["on", "en", "sur", "auf", "em", "在", "上", "에", "पर", "على"],
+  ["of", "de", "de", "von", "de", "的", "の", "의", "का", "من"],
+  ["at", "a", "à", "bei", "em", "在", "で", "에서", "पर", "عند"],
   ["Pending", "Pendiente", "En attente", "Ausstehend", "Pendente", "待定", "保留中", "대기 중", "लंबित", "قيد الانتظار"],
   ["Awarded", "Adjudicado", "Attribué", "Vergeben", "Concedido", "已中标", "受注", "수주", "प्राप्त", "مُرسى"],
   ["Did Not Get", "No ganado", "Non retenu", "Nicht erhalten", "Não ganho", "未中标", "失注", "실패", "नहीं मिला", "لم يتم الفوز"],
@@ -369,7 +397,341 @@ const ENTRIES: Array<[string, ...string[]]> = [
   ["End of indexed results", "Fin de resultados indexados", "Fin des résultats indexés", "Ende der indexierten Ergebnisse", "Fim dos resultados indexados", "索引结果已到底", "インデックス結果の終わり", "색인 결과 끝", "अनुक्रमित परिणाम समाप्त", "نهاية النتائج المفهرسة"],
   ["Add Selected", "Agregar seleccionados", "Ajouter la sélection", "Ausgewählte hinzufügen", "Adicionar selecionados", "添加所选项", "選択項目を追加", "선택 항목 추가", "चयनित जोड़ें", "إضافة المحدد"],
   ["Search worksheets...", "Buscar hojas...", "Rechercher des feuilles...", "Arbeitsblätter suchen...", "Buscar planilhas...", "搜索工作表...", "ワークシートを検索...", "워크시트 검색...", "वर्कशीट खोजें...", "البحث في أوراق العمل..."],
-  ["Search line-capable factors", "Buscar factores aplicables a líneas", "Rechercher des facteurs applicables aux lignes", "Zeilenfähige Faktoren suchen", "Buscar fatores aplicáveis a linhas", "搜索可用于行的系数", "行対応係数を検索", "라인 적용 가능 계수 검색", "लाइन-सक्षम कारक खोजें", "البحث عن عوامل مناسبة للبنود"]
+  ["Search line-capable factors", "Buscar factores aplicables a líneas", "Rechercher des facteurs applicables aux lignes", "Zeilenfähige Faktoren suchen", "Buscar fatores aplicáveis a linhas", "搜索可用于行的系数", "行対応係数を検索", "라인 적용 가능 계수 검색", "लाइन-सक्षम कारक खोजें", "البحث عن عوامل مناسبة للبنود"],
+  ["Takeoff Marks", "Marcas de medición", "Marques de métré", "Aufmaßmarkierungen", "Marcas de levantamento", "算量标记", "拾い出しマーク", "물량 산출 마크", "टेकऑफ चिह्न", "علامات الحصر"],
+  ["Link to Line Item", "Vincular a partida", "Lier à une ligne", "Mit Position verknüpfen", "Vincular ao item", "链接到明细项", "明細行にリンク", "라인 항목에 연결", "लाइन आइटम से लिंक", "ربط بالبند"],
+  ["Add Line Items", "Agregar partidas", "Ajouter des lignes", "Positionen hinzufügen", "Adicionar itens", "添加明细项", "明細行を追加", "라인 항목 추가", "लाइन आइटम जोड़ें", "إضافة بنود"],
+  ["3D Takeoff Model", "Modelo de medición 3D", "Modèle de métré 3D", "3D-Aufmaßmodell", "Modelo de levantamento 3D", "3D 算量模型", "3D拾い出しモデル", "3D 물량 산출 모델", "3D टेकऑफ मॉडल", "نموذج حصر ثلاثي الأبعاد"],
+  ["All drawings", "Todos los planos", "Tous les dessins", "Alle Zeichnungen", "Todos os desenhos", "所有图纸", "すべての図面", "모든 도면", "सभी ड्रॉइंग", "كل الرسومات"],
+  ["All PDFs", "Todos los PDF", "Tous les PDF", "Alle PDFs", "Todos os PDFs", "所有 PDF", "すべてのPDF", "모든 PDF", "सभी PDF", "كل ملفات PDF"],
+  ["All Pages", "Todas las páginas", "Toutes les pages", "Alle Seiten", "Todas as páginas", "所有页面", "すべてのページ", "모든 페이지", "सभी पृष्ठ", "كل الصفحات"],
+  ["Choose intake source", "Elegir origen de ingreso", "Choisir la source d’intake", "Erfassungsquelle auswählen", "Escolher fonte de entrada", "选择录入来源", "取り込みソースを選択", "접수 소스 선택", "इंटेक स्रोत चुनें", "اختر مصدر الإدخال"],
+  ["Open Current Source", "Abrir origen actual", "Ouvrir la source actuelle", "Aktuelle Quelle öffnen", "Abrir origem atual", "打开当前来源", "現在のソースを開く", "현재 소스 열기", "वर्तमान स्रोत खोलें", "فتح المصدر الحالي"],
+  ["Open Documents", "Abrir documentos", "Ouvrir les documents", "Dokumente öffnen", "Abrir documentos", "打开文档", "ドキュメントを開く", "문서 열기", "दस्तावेज़ खोलें", "فتح المستندات"],
+  ["Open Tool Library", "Abrir biblioteca de herramientas", "Ouvrir la bibliothèque d’outils", "Werkzeugbibliothek öffnen", "Abrir biblioteca de ferramentas", "打开工具库", "ツールライブラリを開く", "도구 라이브러리 열기", "टूल लाइब्रेरी खोलें", "فتح مكتبة الأدوات"],
+  ["Open in Chat", "Abrir en chat", "Ouvrir dans le clavardage", "Im Chat öffnen", "Abrir no chat", "在聊天中打开", "チャットで開く", "채팅에서 열기", "चैट में खोलें", "فتح في الدردشة"],
+  ["Open in new window", "Abrir en ventana nueva", "Ouvrir dans une nouvelle fenêtre", "In neuem Fenster öffnen", "Abrir em nova janela", "在新窗口打开", "新しいウィンドウで開く", "새 창에서 열기", "नई विंडो में खोलें", "فتح في نافذة جديدة"],
+  ["Line Sell Subtotal", "Subtotal de venta de líneas", "Sous-total de vente des lignes", "Zeilen-Verkaufszwischensumme", "Subtotal de venda das linhas", "明细销售小计", "行売価小計", "라인 판매 소계", "लाइन विक्रय उप-योग", "المجموع الفرعي لبيع البنود"],
+  ["Search resources, vendors, phases", "Buscar recursos, proveedores, fases", "Rechercher ressources, fournisseurs, phases", "Ressourcen, Anbieter, Phasen suchen", "Buscar recursos, fornecedores, fases", "搜索资源、供应商、阶段", "リソース、ベンダー、フェーズを検索", "리소스, 공급업체, 단계 검색", "संसाधन, विक्रेता, चरण खोजें", "البحث في الموارد والمورّدين والمراحل"],
+  ["3D Model", "Modelo 3D", "Modèle 3D", "3D-Modell", "Modelo 3D", "3D 模型", "3Dモデル", "3D 모델", "3D मॉडल", "نموذج ثلاثي الأبعاد"],
+  ["3D surface area", "Área de superficie 3D", "Surface 3D", "3D-Oberfläche", "Área de superfície 3D", "3D 表面积", "3D表面積", "3D 표면적", "3D सतह क्षेत्र", "مساحة سطح ثلاثية الأبعاد"],
+  ["3D volume", "Volumen 3D", "Volume 3D", "3D-Volumen", "Volume 3D", "3D 体积", "3D体積", "3D 부피", "3D आयतन", "حجم ثلاثي الأبعاد"],
+  ["3D selected elements", "Elementos 3D seleccionados", "Éléments 3D sélectionnés", "Ausgewählte 3D-Elemente", "Elementos 3D selecionados", "选定 3D 元素", "選択した3D要素", "선택한 3D 요소", "चयनित 3D तत्व", "العناصر ثلاثية الأبعاد المحددة"],
+  ["3D model object", "Objeto de modelo 3D", "Objet de modèle 3D", "3D-Modellobjekt", "Objeto do modelo 3D", "3D 模型对象", "3Dモデルオブジェクト", "3D 모델 객체", "3D मॉडल ऑब्जेक्ट", "كائن نموذج ثلاثي الأبعاد"],
+  ["Applied Factors", "Factores aplicados", "Facteurs appliqués", "Angewendete Faktoren", "Fatores aplicados", "已应用系数", "適用済み係数", "적용된 계수", "लागू कारक", "العوامل المطبقة"],
+  ["Global Factors", "Factores globales", "Facteurs globaux", "Globale Faktoren", "Fatores globais", "全局系数", "グローバル係数", "전역 계수", "वैश्विक कारक", "العوامل العامة"],
+  ["Before Factors", "Antes de factores", "Avant facteurs", "Vor Faktoren", "Antes dos fatores", "系数前", "係数前", "계수 전", "कारकों से पहले", "قبل العوامل"],
+  ["Hour Impact", "Impacto en horas", "Impact sur les heures", "Stundenauswirkung", "Impacto em horas", "工时影响", "時間への影響", "시간 영향", "घंटों पर प्रभाव", "أثر الساعات"],
+  ["Sell Impact", "Impacto en venta", "Impact sur la vente", "Verkaufsauswirkung", "Impacto de venda", "销售影响", "売価への影響", "판매 영향", "विक्रय प्रभाव", "أثر البيع"],
+  ["Factor Library", "Biblioteca de factores", "Bibliothèque de facteurs", "Faktorbibliothek", "Biblioteca de fatores", "系数库", "係数ライブラリ", "계수 라이브러리", "कारक लाइब्रेरी", "مكتبة العوامل"],
+  ["Cost Basis", "Base de costo", "Base de coût", "Kostenbasis", "Base de custo", "成本依据", "原価基準", "비용 기준", "लागत आधार", "أساس التكلفة"],
+  ["Cost Intelligence", "Inteligencia de costos", "Info coûts", "Kosteninformationen", "Inteligência de custos", "成本情报", "コスト情報", "비용 정보", "लागत इंटेलिजेंस", "معلومات التكلفة"],
+  ["Line Subtotal Only", "Solo subtotal de líneas", "Sous-total des lignes seulement", "Nur Zeilensumme", "Somente subtotal das linhas", "仅明细小计", "行小計のみ", "라인 소계만", "केवल लाइन उप-योग", "المجموع الفرعي للبنود فقط"],
+  ["Entire Quote", "Cotización completa", "Devis complet", "Gesamtes Angebot", "Cotação inteira", "整个报价", "見積全体", "전체 견적", "पूरा कोटेशन", "العرض بالكامل"],
+  ["Custom Pivot", "Tabla dinámica personalizada", "Tableau croisé personnalisé", "Benutzerdefinierter Pivot", "Pivot personalizado", "自定义透视", "カスタムピボット", "사용자 지정 피벗", "कस्टम पिवट", "جدول محوري مخصص"],
+  ["Construction Codes", "Códigos de construcción", "Codes de construction", "Baucodes", "Códigos de construção", "施工代码", "建設コード", "시공 코드", "निर्माण कोड", "أكواد البناء"],
+  ["Fixed Allowance", "Asignación fija", "Provision fixe", "Feste Zulage", "Verba fixa", "固定暂列金额", "固定許容額", "고정 허용액", "निश्चित भत्ता", "مخصص ثابت"],
+  ["Alternate Add", "Adición alternativa", "Ajout de variante", "Alternative Ergänzung", "Adicional alternativo", "备选增加", "代替追加", "대안 추가", "वैकल्पिक जोड़", "إضافة بديلة"],
+  ["New Optional Standalone", "Nuevo opcional independiente", "Nouvelle option autonome", "Neue eigenständige Option", "Novo opcional independente", "新增独立可选项", "新規任意単独項目", "새 선택 독립 항목", "नया वैकल्पिक स्वतंत्र", "اختياري مستقل جديد"],
+  ["New Standalone Line Item", "Nueva partida independiente", "Nouvelle ligne autonome", "Neue eigenständige Position", "Novo item independente", "新增独立明细项", "新規単独明細行", "새 독립 라인 항목", "नया स्वतंत्र लाइन आइटम", "بند مستقل جديد"],
+  ["Line Thickness", "Grosor de línea", "Épaisseur de ligne", "Linienstärke", "Espessura da linha", "线宽", "線の太さ", "선 두께", "लाइन मोटाई", "سماكة الخط"],
+  ["Drop Distance", "Distancia de caída", "Distance de chute", "Abfalldistanz", "Distância de queda", "落差距离", "落差距離", "낙차 거리", "ड्रॉप दूरी", "مسافة الهبوط"],
+  ["Wall Height", "Altura de muro", "Hauteur du mur", "Wandhöhe", "Altura da parede", "墙高", "壁の高さ", "벽 높이", "दीवार ऊँचाई", "ارتفاع الجدار"],
+  ["Count Interval", "Intervalo de conteo", "Intervalle de comptage", "Zählintervall", "Intervalo de contagem", "计数间距", "カウント間隔", "계수 간격", "गिनती अंतराल", "فاصل العد"],
+  ["Measurement Field", "Campo de medición", "Champ de mesure", "Messfeld", "Campo de medição", "测量字段", "測定フィールド", "측정 필드", "माप फ़ील्ड", "حقل القياس"],
+  ["Waste / Safety Factor %", "Desperdicio / factor de seguridad %", "Facteur déchets / sécurité %", "Verschnitt-/Sicherheitsfaktor %", "Fator de perda / segurança %", "损耗 / 安全系数 %", "廃棄 / 安全係数 %", "폐기 / 안전 계수 %", "अपशिष्ट / सुरक्षा कारक %", "عامل الهدر / السلامة %"],
+  ["Loading more...", "Cargando más...", "Chargement de plus...", "Mehr wird geladen...", "Carregando mais...", "正在加载更多...", "さらに読み込み中...", "더 불러오는 중...", "और लोड हो रहा है...", "جارٍ تحميل المزيد..."],
+  ["Generating...", "Generando...", "Génération...", "Wird erzeugt...", "Gerando...", "正在生成...", "生成中...", "생성 중...", "बन रहा है...", "جارٍ الإنشاء..."],
+  ["Analyzing region...", "Analizando región...", "Analyse de la zone...", "Bereich wird analysiert...", "Analisando região...", "正在分析区域...", "領域を分析中...", "영역 분석 중...", "क्षेत्र का विश्लेषण हो रहा है...", "جارٍ تحليل المنطقة..."],
+  ["Counting symbols in the region…", "Contando símbolos en la región…", "Comptage des symboles dans la zone…", "Symbole im Bereich werden gezählt…", "Contando símbolos na região…", "正在计数区域中的符号…", "領域内の記号をカウント中…", "영역의 기호 계산 중…", "क्षेत्र में प्रतीक गिने जा रहे हैं…", "جارٍ عد الرموز في المنطقة…"],
+  ["Asking AI for matching line items…", "Consultando IA para partidas coincidentes…", "Demande à l’IA de lignes correspondantes…", "KI sucht passende Positionen…", "Consultando IA por itens correspondentes…", "正在让 AI 查找匹配明细项…", "AIに一致する明細行を問い合わせ中…", "AI가 일치하는 라인 항목을 찾는 중…", "मिलते लाइन आइटम के लिए AI से पूछ रहे हैं…", "جارٍ سؤال الذكاء الاصطناعي عن البنود المطابقة…"],
+  ["AI suggestions", "Sugerencias de IA", "Suggestions IA", "KI-Vorschläge", "Sugestões de IA", "AI 建议", "AI提案", "AI 제안", "AI सुझाव", "اقتراحات الذكاء الاصطناعي"],
+  ["No takeoff marks yet", "Aún no hay marcas de medición", "Aucune marque de métré pour l’instant", "Noch keine Aufmaßmarkierungen", "Ainda não há marcas de levantamento", "还没有算量标记", "拾い出しマークはまだありません", "아직 물량 산출 마크가 없습니다", "अभी कोई टेकऑफ चिह्न नहीं", "لا توجد علامات حصر بعد"],
+  ["Create line item", "Crear partida", "Créer une ligne", "Position erstellen", "Criar item", "创建明细项", "明細行を作成", "라인 항목 생성", "लाइन आइटम बनाएँ", "إنشاء بند"],
+  ["Linked Line Items", "Partidas vinculadas", "Lignes liées", "Verknüpfte Positionen", "Itens vinculados", "已链接明细项", "リンク済み明細行", "연결된 라인 항목", "लिंक किए लाइन आइटम", "البنود المرتبطة"],
+  ["Delete linked line item", "Eliminar partida vinculada", "Supprimer la ligne liée", "Verknüpfte Position löschen", "Excluir item vinculado", "删除已链接明细项", "リンク済み明細を削除", "연결된 라인 항목 삭제", "लिंक किया लाइन आइटम हटाएँ", "حذف البند المرتبط"],
+  ["Create Object Rows", "Crear filas de objetos", "Créer des lignes d’objets", "Objektzeilen erstellen", "Criar linhas de objeto", "创建对象行", "オブジェクト行を作成", "객체 행 생성", "ऑब्जेक्ट पंक्तियाँ बनाएँ", "إنشاء صفوف كائنات"],
+  ["Model Objects", "Objetos del modelo", "Objets du modèle", "Modellobjekte", "Objetos do modelo", "模型对象", "モデルオブジェクト", "모델 객체", "मॉडल ऑब्जेक्ट", "كائنات النموذج"],
+  ["Import Spreadsheet/CSV", "Importar hoja de cálculo/CSV", "Importer feuille de calcul/CSV", "Tabellenkalkulation/CSV importieren", "Importar planilha/CSV", "导入电子表格/CSV", "スプレッドシート/CSVをインポート", "스프레드시트/CSV 가져오기", "स्प्रेडशीट/CSV आयात करें", "استيراد جدول بيانات/CSV"],
+  ["Import Rows", "Importar filas", "Importer les lignes", "Zeilen importieren", "Importar linhas", "导入行", "行をインポート", "행 가져오기", "पंक्तियाँ आयात करें", "استيراد الصفوف"],
+  ["Import Target", "Destino de importación", "Cible d’importation", "Importziel", "Destino da importação", "导入目标", "インポート対象", "가져오기 대상", "आयात लक्ष्य", "هدف الاستيراد"],
+  ["Extract From Document", "Extraer desde documento", "Extraire du document", "Aus Dokument extrahieren", "Extrair do documento", "从文档提取", "ドキュメントから抽出", "문서에서 추출", "दस्तावेज़ से निकालें", "استخراج من المستند"],
+  ["Use Drawing or Model", "Usar plano o modelo", "Utiliser dessin ou modèle", "Zeichnung oder Modell verwenden", "Usar desenho ou modelo", "使用图纸或模型", "図面またはモデルを使用", "도면 또는 모델 사용", "ड्रॉइंग या मॉडल उपयोग करें", "استخدم رسمًا أو نموذجًا"],
+  ["Use Trade Tool", "Usar herramienta de oficio", "Utiliser l’outil métier", "Gewerkzeug verwenden", "Usar ferramenta de disciplina", "使用专业工具", "工種ツールを使用", "공종 도구 사용", "ट्रेड टूल उपयोग करें", "استخدم أداة التخصص"],
+  ["Drawing and model sources", "Orígenes de plano y modelo", "Sources dessin et modèle", "Zeichnungs- und Modellquellen", "Fontes de desenho e modelo", "图纸和模型来源", "図面とモデルのソース", "도면 및 모델 소스", "ड्रॉइंग और मॉडल स्रोत", "مصادر الرسم والنموذج"],
+  ["Document extraction", "Extracción de documentos", "Extraction de document", "Dokumentextraktion", "Extração de documento", "文档提取", "ドキュメント抽出", "문서 추출", "दस्तावेज़ निष्कर्षण", "استخراج المستند"],
+  ["Clear all takeoff marks", "Borrar todas las marcas de medición", "Effacer toutes les marques de métré", "Alle Aufmaßmarkierungen löschen", "Limpar todas as marcas de levantamento", "清除所有算量标记", "すべての拾い出しマークをクリア", "모든 물량 산출 마크 지우기", "सभी टेकऑफ चिह्न साफ़ करें", "مسح كل علامات الحصر"],
+  ["Fit to width", "Ajustar al ancho", "Ajuster à la largeur", "An Breite anpassen", "Ajustar à largura", "适合宽度", "幅に合わせる", "너비에 맞춤", "चौड़ाई में फिट करें", "ملاءمة للعرض"],
+  ["Fit to page", "Ajustar a página", "Ajuster à la page", "An Seite anpassen", "Ajustar à página", "适合页面", "ページに合わせる", "페이지에 맞춤", "पृष्ठ में फिट करें", "ملاءمة للصفحة"],
+  ["Set scale", "Definir escala", "Définir l’échelle", "Maßstab setzen", "Definir escala", "设置比例", "スケールを設定", "축척 설정", "स्केल सेट करें", "تعيين المقياس"],
+  ["Set drawing scale", "Definir escala del plano", "Définir l’échelle du dessin", "Zeichnungsmaßstab setzen", "Definir escala do desenho", "设置图纸比例", "図面スケールを設定", "도면 축척 설정", "ड्रॉइंग स्केल सेट करें", "تعيين مقياس الرسم"],
+  ["Verify drawing scale", "Verificar escala del plano", "Vérifier l’échelle du dessin", "Zeichnungsmaßstab prüfen", "Verificar escala do desenho", "验证图纸比例", "図面スケールを確認", "도면 축척 확인", "ड्रॉइंग स्केल सत्यापित करें", "التحقق من مقياس الرسم"],
+  ["Recalibrate drawing scale", "Recalibrar escala del plano", "Recalibrer l’échelle du dessin", "Zeichnungsmaßstab neu kalibrieren", "Recalibrar escala do desenho", "重新校准图纸比例", "図面スケールを再校正", "도면 축척 재보정", "ड्रॉइंग स्केल पुनः कैलिब्रेट करें", "إعادة معايرة مقياس الرسم"],
+  ["Draw a line of known length to verify the calibration", "Dibuja una línea de longitud conocida para verificar la calibración", "Dessinez une ligne de longueur connue pour vérifier le calibrage", "Eine Linie bekannter Länge zeichnen, um die Kalibrierung zu prüfen", "Desenhe uma linha de comprimento conhecido para verificar a calibração", "绘制已知长度的线以验证校准", "既知の長さの線を描いて校正を確認", "알려진 길이의 선을 그려 보정을 확인하세요", "कैलिब्रेशन सत्यापित करने के लिए ज्ञात लंबाई की रेखा खींचें", "ارسم خطًا بطول معروف للتحقق من المعايرة"],
+  ["Add Custom Section", "Agregar sección personalizada", "Ajouter une section personnalisée", "Benutzerdefinierten Abschnitt hinzufügen", "Adicionar seção personalizada", "添加自定义章节", "カスタムセクションを追加", "사용자 지정 섹션 추가", "कस्टम अनुभाग जोड़ें", "إضافة قسم مخصص"],
+  ["Add sub-section", "Agregar subsección", "Ajouter une sous-section", "Unterabschnitt hinzufügen", "Adicionar subseção", "添加子章节", "サブセクションを追加", "하위 섹션 추가", "उप-अनुभाग जोड़ें", "إضافة قسم فرعي"],
+  ["Add one", "Agregar una", "En ajouter une", "Eine hinzufügen", "Adicionar um", "添加一个", "1件追加", "하나 추가", "एक जोड़ें", "إضافة واحد"],
+  ["Click to replace", "Haz clic para reemplazar", "Cliquer pour remplacer", "Klicken zum Ersetzen", "Clique para substituir", "点击替换", "クリックして置換", "클릭하여 교체", "बदलने के लिए क्लिक करें", "انقر للاستبدال"],
+  ["Click to upload image", "Haz clic para subir imagen", "Cliquer pour téléverser l’image", "Klicken, um Bild hochzuladen", "Clique para enviar imagem", "点击上传图像", "クリックして画像をアップロード", "클릭하여 이미지 업로드", "छवि अपलोड करने के लिए क्लिक करें", "انقر لرفع صورة"],
+  ["Enter lead letter content...", "Ingresa contenido de la carta inicial...", "Saisir le contenu de la lettre...", "Anschreibentext eingeben...", "Insira o conteúdo da carta...", "输入引导信内容...", "リードレター内容を入力...", "리드 레터 내용 입력...", "लीड पत्र सामग्री दर्ज करें...", "أدخل محتوى الخطاب التمهيدي..."],
+  ["AI - Rewrite Description", "IA - reescribir descripción", "IA - réécrire la description", "KI - Beschreibung umschreiben", "IA - reescrever descrição", "AI - 重写描述", "AI - 説明を書き換え", "AI - 설명 다시 작성", "AI - विवरण फिर लिखें", "الذكاء الاصطناعي - إعادة كتابة الوصف"],
+  ["AI - Rewrite Notes", "IA - reescribir notas", "IA - réécrire les notes", "KI - Notizen umschreiben", "IA - reescrever notas", "AI - 重写备注", "AI - メモを書き換え", "AI - 메모 다시 작성", "AI - नोट्स फिर लिखें", "الذكاء الاصطناعي - إعادة كتابة الملاحظات"],
+  ["AI didn't find any countable items in this region.", "La IA no encontró elementos contables en esta región.", "L’IA n’a trouvé aucun élément comptable dans cette zone.", "Die KI hat in diesem Bereich keine zählbaren Positionen gefunden.", "A IA não encontrou itens contáveis nesta região.", "AI 在此区域未找到可计数项目。", "AIはこの領域でカウント可能な項目を見つけませんでした。", "AI가 이 영역에서 셀 수 있는 항목을 찾지 못했습니다.", "AI को इस क्षेत्र में गिनने योग्य आइटम नहीं मिले।", "لم يجد الذكاء الاصطناعي عناصر قابلة للعد في هذه المنطقة."],
+  ["AI returned an unrecognized response. Try a tighter region or check the API key.", "La IA devolvió una respuesta no reconocida. Prueba una región más ajustada o revisa la clave API.", "L’IA a renvoyé une réponse non reconnue. Essayez une zone plus serrée ou vérifiez la clé API.", "Die KI gab eine unbekannte Antwort zurück. Einen engeren Bereich versuchen oder API-Schlüssel prüfen.", "A IA retornou uma resposta não reconhecida. Tente uma região menor ou verifique a chave API.", "AI 返回了无法识别的响应。请尝试更紧的区域或检查 API 密钥。", "AIが認識できない応答を返しました。より狭い領域を試すかAPIキーを確認してください。", "AI가 인식할 수 없는 응답을 반환했습니다. 더 좁은 영역을 시도하거나 API 키를 확인하세요.", "AI ने अपरिचित प्रतिक्रिया दी। छोटा क्षेत्र आज़माएँ या API key जाँचें।", "أعاد الذكاء الاصطناعي استجابة غير معروفة. جرّب منطقة أضيق أو تحقق من مفتاح API."],
+  ["Choose a configured worksheet category before applying this result.", "Elige una categoría de hoja configurada antes de aplicar este resultado.", "Choisissez une catégorie de feuille configurée avant d’appliquer ce résultat.", "Vor dem Anwenden dieses Ergebnisses eine konfigurierte Arbeitsblattkategorie wählen.", "Escolha uma categoria de planilha configurada antes de aplicar este resultado.", "应用此结果前请选择已配置的工作表类别。", "この結果を適用する前に設定済みワークシートカテゴリを選択してください。", "이 결과를 적용하기 전에 구성된 워크시트 범주를 선택하세요.", "यह परिणाम लागू करने से पहले कॉन्फ़िगर वर्कशीट श्रेणी चुनें।", "اختر فئة ورقة عمل مكوّنة قبل تطبيق هذه النتيجة."],
+  ["Create a worksheet before sending model quantities.", "Crea una hoja antes de enviar cantidades del modelo.", "Créez une feuille avant d’envoyer les quantités du modèle.", "Vor dem Senden von Modellmengen ein Arbeitsblatt erstellen.", "Crie uma planilha antes de enviar quantidades do modelo.", "发送模型数量前请先创建工作表。", "モデル数量を送信する前にワークシートを作成してください。", "모델 수량을 보내기 전에 워크시트를 만드세요.", "मॉडल मात्राएँ भेजने से पहले वर्कशीट बनाएँ।", "أنشئ ورقة عمل قبل إرسال كميات النموذج."],
+  ["Create a worksheet first", "Crea una hoja primero", "Créez d’abord une feuille", "Zuerst ein Arbeitsblatt erstellen", "Crie uma planilha primeiro", "请先创建工作表", "先にワークシートを作成", "먼저 워크시트를 만드세요", "पहले वर्कशीट बनाएँ", "أنشئ ورقة عمل أولًا"],
+  ["Create failed.", "No se pudo crear.", "Échec de la création.", "Erstellen fehlgeschlagen.", "Falha ao criar.", "创建失败。", "作成に失敗しました。", "생성 실패.", "बनाना विफल।", "فشل الإنشاء."],
+  ["Could not crop the selected region.", "No se pudo recortar la región seleccionada.", "Impossible de rogner la zone sélectionnée.", "Ausgewählter Bereich konnte nicht zugeschnitten werden.", "Não foi possível cortar a região selecionada.", "无法裁剪所选区域。", "選択領域を切り抜けませんでした。", "선택한 영역을 자를 수 없습니다.", "चयनित क्षेत्र crop नहीं हो सका।", "تعذر قص المنطقة المحددة."],
+  ["Failed to save the cropped image for AI analysis.", "No se pudo guardar la imagen recortada para análisis de IA.", "Échec de l’enregistrement de l’image rognée pour l’analyse IA.", "Zugeschnittenes Bild konnte nicht für die KI-Analyse gespeichert werden.", "Falha ao salvar a imagem cortada para análise de IA.", "无法保存用于 AI 分析的裁剪图像。", "AI分析用の切り抜き画像を保存できませんでした。", "AI 분석용으로 자른 이미지를 저장하지 못했습니다.", "AI विश्लेषण के लिए cropped image सहेजना विफल।", "فشل حفظ الصورة المقصوصة لتحليل الذكاء الاصطناعي."],
+  ["Delete this section?", "¿Eliminar esta sección?", "Supprimer cette section?", "Diesen Abschnitt löschen?", "Excluir esta seção?", "删除此章节？", "このセクションを削除しますか？", "이 섹션을 삭제할까요?", "यह अनुभाग हटाएँ?", "حذف هذا القسم؟"],
+  ["Delete folder", "Eliminar carpeta", "Supprimer le dossier", "Ordner löschen", "Excluir pasta", "删除文件夹", "フォルダーを削除", "폴더 삭제", "फ़ोल्डर हटाएँ", "حذف المجلد"],
+  ["Double Time", "Doble tiempo", "Temps double", "Doppelte Zeit", "Hora dobrada", "双倍工时", "倍時間", "더블 타임", "डबल टाइम", "وقت مضاعف"],
+  ["Export Table as CSV", "Exportar tabla como CSV", "Exporter le tableau en CSV", "Tabelle als CSV exportieren", "Exportar tabela como CSV", "将表格导出为 CSV", "表をCSVでエクスポート", "표를 CSV로 내보내기", "तालिका CSV के रूप में निर्यात करें", "تصدير الجدول كـ CSV"],
+  ["Expected length (what should this be?)", "Longitud esperada (¿cuál debería ser?)", "Longueur attendue (quelle devrait-elle être?)", "Erwartete Länge (was sollte sie sein?)", "Comprimento esperado (qual deveria ser?)", "预期长度（应为多少？）", "期待長さ（本来はいくつですか？）", "예상 길이(얼마여야 하나요?)", "अपेक्षित लंबाई (यह कितनी होनी चाहिए?)", "الطول المتوقع (كم يجب أن يكون؟)"],
+  ["Enter known dimension", "Ingresa dimensión conocida", "Saisir la dimension connue", "Bekannte Abmessung eingeben", "Inserir dimensão conhecida", "输入已知尺寸", "既知寸法を入力", "알려진 치수 입력", "ज्ञात आयाम दर्ज करें", "أدخل البعد المعروف"],
+  ["File name cannot be empty.", "El nombre de archivo no puede estar vacío.", "Le nom du fichier ne peut pas être vide.", "Dateiname darf nicht leer sein.", "O nome do arquivo não pode ficar vazio.", "文件名不能为空。", "ファイル名は空にできません。", "파일 이름은 비워둘 수 없습니다.", "फ़ाइल नाम खाली नहीं हो सकता।", "لا يمكن أن يكون اسم الملف فارغًا."],
+  ["No content available for preview", "No hay contenido disponible para vista previa", "Aucun contenu disponible pour l’aperçu", "Kein Inhalt für Vorschau verfügbar", "Nenhum conteúdo disponível para prévia", "没有可预览内容", "プレビュー可能なコンテンツはありません", "미리볼 콘텐츠가 없습니다", "पूर्वावलोकन के लिए कोई सामग्री उपलब्ध नहीं", "لا يوجد محتوى متاح للمعاينة"],
+  ["No extracted content available", "No hay contenido extraído disponible", "Aucun contenu extrait disponible", "Kein extrahierter Inhalt verfügbar", "Nenhum conteúdo extraído disponível", "没有可用的提取内容", "抽出済みコンテンツはありません", "추출된 콘텐츠가 없습니다", "कोई निकाली गई सामग्री उपलब्ध नहीं", "لا يوجد محتوى مستخرج متاح"],
+  ["No files yet. Upload files or drag and drop.", "Aún no hay archivos. Sube archivos o arrastra y suelta.", "Aucun fichier pour l’instant. Téléversez ou glissez-déposez des fichiers.", "Noch keine Dateien. Dateien hochladen oder per Drag-and-drop ablegen.", "Ainda não há arquivos. Envie arquivos ou arraste e solte.", "还没有文件。请上传文件或拖放。", "ファイルはまだありません。アップロードまたはドラッグ＆ドロップしてください。", "아직 파일이 없습니다. 파일을 업로드하거나 끌어다 놓으세요.", "अभी कोई फ़ाइल नहीं। फ़ाइलें अपलोड करें या drag and drop करें।", "لا توجد ملفات بعد. ارفع الملفات أو اسحبها وأفلتها."],
+  ["No line items found.", "No se encontraron partidas.", "Aucune ligne trouvée.", "Keine Positionen gefunden.", "Nenhum item encontrado.", "未找到明细项。", "明細行が見つかりません。", "라인 항목이 없습니다.", "कोई लाइन आइटम नहीं मिला।", "لم يتم العثور على بنود."],
+  ["No matches yet.", "Aún no hay coincidencias.", "Aucune correspondance pour l’instant.", "Noch keine Treffer.", "Ainda não há correspondências.", "还没有匹配项。", "一致はまだありません。", "아직 일치 항목이 없습니다.", "अभी कोई मिलान नहीं।", "لا توجد مطابقات بعد."],
+  ["No spreadsheet selected", "No hay hoja de cálculo seleccionada", "Aucune feuille de calcul sélectionnée", "Keine Tabellenkalkulation ausgewählt", "Nenhuma planilha selecionada", "未选择电子表格", "スプレッドシートが選択されていません", "선택된 스프레드시트 없음", "कोई स्प्रेडशीट चयनित नहीं", "لم يتم تحديد جدول بيانات"],
+  ["Open Plugin Tools to run this action.", "Abre las herramientas de plugins para ejecutar esta acción.", "Ouvrez les outils de modules pour exécuter cette action.", "Plugin-Werkzeuge öffnen, um diese Aktion auszuführen.", "Abra as ferramentas de plugin para executar esta ação.", "打开插件工具以运行此操作。", "この操作を実行するにはプラグインツールを開いてください。", "이 작업을 실행하려면 플러그인 도구를 여세요.", "यह क्रिया चलाने के लिए plugin tools खोलें।", "افتح أدوات المكونات الإضافية لتشغيل هذا الإجراء."],
+  ["Preview not available for this file type", "Vista previa no disponible para este tipo de archivo", "Aperçu non disponible pour ce type de fichier", "Vorschau für diesen Dateityp nicht verfügbar", "Prévia indisponível para este tipo de arquivo", "此文件类型不支持预览", "このファイル形式はプレビューできません", "이 파일 형식은 미리볼 수 없습니다", "इस फ़ाइल प्रकार के लिए पूर्वावलोकन उपलब्ध नहीं", "المعاينة غير متاحة لهذا النوع من الملفات"],
+  ["Search files...", "Buscar archivos...", "Rechercher des fichiers...", "Dateien suchen...", "Buscar arquivos...", "搜索文件...", "ファイルを検索...", "파일 검색...", "फ़ाइलें खोजें...", "البحث في الملفات..."],
+  ["That file cannot be moved to the selected folder.", "Ese archivo no se puede mover a la carpeta seleccionada.", "Ce fichier ne peut pas être déplacé dans le dossier sélectionné.", "Diese Datei kann nicht in den ausgewählten Ordner verschoben werden.", "Esse arquivo não pode ser movido para a pasta selecionada.", "该文件无法移动到所选文件夹。", "そのファイルは選択したフォルダーに移動できません。", "해당 파일은 선택한 폴더로 이동할 수 없습니다.", "वह फ़ाइल चयनित फ़ोल्डर में नहीं ले जाई जा सकती।", "لا يمكن نقل هذا الملف إلى المجلد المحدد."],
+  ["Linear", "Lineal", "Linéaire", "Linear", "Linear", "线性", "線形", "선형", "रेखीय", "خطي"],
+  ["Polyline", "Polilínea", "Polyligne", "Polylinie", "Polilinha", "多段线", "ポリライン", "폴리라인", "पॉलीलाइन", "خط متعدد"],
+  ["Rectangle", "Rectángulo", "Rectangle", "Rechteck", "Retângulo", "矩形", "長方形", "사각형", "आयत", "مستطيل"],
+  ["Triangle", "Triángulo", "Triangle", "Dreieck", "Triângulo", "三角形", "三角形", "삼각형", "त्रिभुज", "مثلث"],
+  ["Ellipse", "Elipse", "Ellipse", "Ellipse", "Elipse", "椭圆", "楕円", "타원", "दीर्घवृत्त", "قطع ناقص"],
+  ["Vertical", "Vertical", "Vertical", "Vertikal", "Vertical", "垂直", "垂直", "수직", "ऊर्ध्वाधर", "رأسي"],
+  ["Wall", "Muro", "Mur", "Wand", "Parede", "墙", "壁", "벽", "दीवार", "جدار"],
+  ["Drop", "Caída", "Chute", "Abfall", "Queda", "落差", "落差", "낙차", "ड्रॉप", "هبوط"],
+  ["Smart", "Inteligente", "Intelligent", "Smart", "Inteligente", "智能", "スマート", "스마트", "स्मार्ट", "ذكي"],
+  ["Auto", "Automático", "Auto", "Automatisch", "Automático", "自动", "自動", "자동", "स्वचालित", "تلقائي"],
+  ["Count", "Conteo", "Comptage", "Anzahl", "Contagem", "计数", "カウント", "개수", "गिनती", "العد"],
+  ["Ask", "Preguntar", "Demander", "Fragen", "Perguntar", "询问", "質問", "질문", "पूछें", "اسأل"],
+  ["Surface", "Superficie", "Surface", "Oberfläche", "Superfície", "表面", "表面", "표면", "सतह", "سطح"],
+  ["Area", "Área", "Aire", "Fläche", "Área", "面积", "面積", "면적", "क्षेत्रफल", "المساحة"],
+  ["Volume", "Volumen", "Volume", "Volumen", "Volume", "体积", "体積", "부피", "आयतन", "الحجم"],
+  ["Elements", "Elementos", "Éléments", "Elemente", "Elementos", "元素", "要素", "요소", "तत्व", "العناصر"],
+  ["Object", "Objeto", "Objet", "Objekt", "Objeto", "对象", "オブジェクト", "객체", "ऑब्जेक्ट", "الكائن"],
+  ["Objects", "Objetos", "Objets", "Objekte", "Objetos", "对象", "オブジェクト", "객체", "ऑब्जेक्ट", "الكائنات"],
+  ["Rows", "Filas", "Lignes", "Zeilen", "Linhas", "行", "行", "행", "पंक्तियाँ", "الصفوف"],
+  ["Row", "Fila", "Ligne", "Zeile", "Linha", "行", "行", "행", "पंक्ति", "الصف"],
+  ["Columns", "Columnas", "Colonnes", "Spalten", "Colunas", "列", "列", "열", "स्तंभ", "الأعمدة"],
+  ["Column", "Columna", "Colonne", "Spalte", "Coluna", "列", "列", "열", "स्तंभ", "العمود"],
+  ["Drawing", "Plano", "Dessin", "Zeichnung", "Desenho", "图纸", "図面", "도면", "ड्रॉइंग", "الرسم"],
+  ["Drawings", "Planos", "Dessins", "Zeichnungen", "Desenhos", "图纸", "図面", "도면", "ड्रॉइंग", "الرسومات"],
+  ["Model", "Modelo", "Modèle", "Modell", "Modelo", "模型", "モデル", "모델", "मॉडल", "النموذج"],
+  ["Tool", "Herramienta", "Outil", "Werkzeug", "Ferramenta", "工具", "ツール", "도구", "उपकरण", "الأداة"],
+  ["Tools", "Herramientas", "Outils", "Werkzeuge", "Ferramentas", "工具", "ツール", "도구", "उपकरण", "الأدوات"],
+  ["Trade", "Oficio", "Métier", "Gewerk", "Disciplina", "专业", "工種", "공종", "ट्रेड", "التخصص"],
+  ["Spreadsheet", "Hoja de cálculo", "Feuille de calcul", "Tabellenkalkulation", "Planilha", "电子表格", "スプレッドシート", "스프레드시트", "स्प्रेडशीट", "جدول بيانات"],
+  ["Target", "Destino", "Cible", "Ziel", "Destino", "目标", "対象", "대상", "लक्ष्य", "الهدف"],
+  ["Numeric", "Numéricos", "Numériques", "Numerisch", "Numéricos", "数值", "数値", "숫자", "संख्यात्मक", "رقمية"],
+  ["Mapped", "Mapeados", "Mappés", "Zugeordnet", "Mapeados", "已映射", "マッピング済み", "매핑됨", "मैप किए गए", "معينة"],
+  ["Fields", "Campos", "Champs", "Felder", "Campos", "字段", "フィールド", "필드", "फ़ील्ड", "الحقول"],
+  ["Field", "Campo", "Champ", "Feld", "Campo", "字段", "フィールド", "필드", "फ़ील्ड", "الحقل"],
+  ["Upload", "Subir", "Téléverser", "Hochladen", "Enviar", "上传", "アップロード", "업로드", "अपलोड करें", "رفع"],
+  ["Files", "Archivos", "Fichiers", "Dateien", "Arquivos", "文件", "ファイル", "파일", "फ़ाइलें", "الملفات"],
+  ["File", "Archivo", "Fichier", "Datei", "Arquivo", "文件", "ファイル", "파일", "फ़ाइल", "الملف"],
+  ["Books", "Libros", "Livres", "Bücher", "Livros", "书籍", "ブック", "책", "पुस्तकें", "الدفاتر"],
+  ["Knowledge", "Conocimiento", "Connaissances", "Wissen", "Conhecimento", "知识", "ナレッジ", "지식", "ज्ञान", "المعرفة"],
+  ["Scale", "Escala", "Échelle", "Maßstab", "Escala", "比例", "スケール", "축척", "स्केल", "المقياس"],
+  ["Legend", "Leyenda", "Légende", "Legende", "Legenda", "图例", "凡例", "범례", "लेजेंड", "وسيلة الإيضاح"],
+  ["Symbol", "Símbolo", "Symbole", "Symbol", "Símbolo", "符号", "記号", "기호", "प्रतीक", "الرمز"],
+  ["Undo", "Deshacer", "Annuler", "Rückgängig", "Desfazer", "撤销", "元に戻す", "실행 취소", "पूर्ववत करें", "تراجع"],
+  ["Redo", "Rehacer", "Rétablir", "Wiederholen", "Refazer", "重做", "やり直す", "다시 실행", "फिर करें", "إعادة"],
+  ["Export", "Exportar", "Exporter", "Exportieren", "Exportar", "导出", "エクスポート", "내보내기", "निर्यात करें", "تصدير"],
+  ["Selected", "Seleccionado", "Sélectionné", "Ausgewählt", "Selecionado", "已选", "選択済み", "선택됨", "चयनित", "المحدد"],
+  ["View", "Vista", "Vue", "Ansicht", "Visualização", "视图", "ビュー", "보기", "दृश्य", "العرض"],
+  ["Current Source", "Origen actual", "Source actuelle", "Aktuelle Quelle", "Origem atual", "当前来源", "現在のソース", "현재 소스", "वर्तमान स्रोत", "المصدر الحالي"],
+  ["Sensitivity", "Sensibilidad", "Sensibilité", "Empfindlichkeit", "Sensibilidade", "灵敏度", "感度", "민감도", "संवेदनशीलता", "الحساسية"],
+  ["Scanning", "Escaneando", "Analyse", "Scan läuft", "Escaneando", "正在扫描", "スキャン中", "스캔 중", "स्कैन हो रहा है", "جارٍ المسح"],
+  ["Index", "Índice", "Index", "Index", "Índice", "索引", "インデックス", "색인", "इंडेक्स", "الفهرس"],
+  ["Sync", "Sincronizar", "Synchroniser", "Synchronisieren", "Sincronizar", "同步", "同期", "동기화", "सिंक", "مزامنة"],
+  ["Expected", "Esperado", "Attendu", "Erwartet", "Esperado", "预期", "想定", "예상", "अपेक्षित", "المتوقع"],
+  ["Known", "Conocido", "Connu", "Bekannt", "Conhecido", "已知", "既知", "알려진", "ज्ञात", "المعروف"],
+  ["Dimension", "Dimensión", "Dimension", "Abmessung", "Dimensão", "尺寸", "寸法", "치수", "आयाम", "البعد"],
+  ["Distance", "Distancia", "Distance", "Abstand", "Distância", "距离", "距離", "거리", "दूरी", "المسافة"],
+  ["Detected", "Detectado", "Détecté", "Erkannt", "Detectado", "已检测", "検出済み", "감지됨", "पहचाना गया", "مكتشف"],
+  ["Title Block", "Cajetín", "Cartouche", "Schriftfeld", "Carimbo", "标题栏", "タイトルブロック", "제목란", "टाइटल ब्लॉक", "كتلة العنوان"],
+  ["Notation", "Notación", "Notation", "Notation", "Notação", "标注", "表記", "표기", "नोटेशन", "الترميز"],
+  ["Manual", "Manual", "Manuel", "Manuell", "Manual", "手动", "手動", "수동", "मैनुअल", "يدوي"],
+  ["Presets", "Preajustes", "Préréglages", "Voreinstellungen", "Predefinições", "预设", "プリセット", "프리셋", "प्रीसेट", "الإعدادات المسبقة"],
+  ["Matched", "Coincidente", "Correspondant", "Abgeglichen", "Correspondente", "已匹配", "一致", "일치", "मेल खाया", "مطابق"],
+  ["Resulting", "Resultante", "Résultant", "Ergebnis", "Resultante", "结果", "結果", "결과", "परिणामी", "الناتج"],
+  ["Reject", "Rechazar", "Rejeter", "Ablehnen", "Rejeitar", "拒绝", "却下", "거부", "अस्वीकार करें", "رفض"],
+  ["Accept", "Aceptar", "Accepter", "Akzeptieren", "Aceitar", "接受", "承認", "수락", "स्वीकार करें", "قبول"],
+  ["Tip", "Consejo", "Astuce", "Tipp", "Dica", "提示", "ヒント", "팁", "सुझाव", "نصيحة"],
+  ["Chat", "Chat", "Clavardage", "Chat", "Chat", "聊天", "チャット", "채팅", "चैट", "الدردشة"],
+  ["Analysis", "Análisis", "Analyse", "Analyse", "Análise", "分析", "分析", "분석", "विश्लेषण", "التحليل"],
+  ["Preparing", "Preparando", "Préparation", "Vorbereitung", "Preparando", "准备中", "準備中", "준비 중", "तैयार हो रहा है", "جارٍ التحضير"],
+  ["Loading", "Cargando", "Chargement", "Laden", "Carregando", "加载中", "読み込み中", "로드 중", "लोड हो रहा है", "جارٍ التحميل"],
+  ["Preview", "Vista previa", "Aperçu", "Vorschau", "Prévia", "预览", "プレビュー", "미리보기", "पूर्वावलोकन", "معاينة"],
+  ["Download", "Descargar", "Télécharger", "Herunterladen", "Baixar", "下载", "ダウンロード", "다운로드", "डाउनलोड", "تنزيل"],
+  ["Fullscreen", "Pantalla completa", "Plein écran", "Vollbild", "Tela cheia", "全屏", "全画面", "전체 화면", "पूर्ण स्क्रीन", "ملء الشاشة"],
+  ["Zoom", "Zoom", "Zoom", "Zoom", "Zoom", "缩放", "ズーム", "확대/축소", "ज़ूम", "تكبير"],
+  ["Width", "Ancho", "Largeur", "Breite", "Largura", "宽度", "幅", "너비", "चौड़ाई", "العرض"],
+  ["Content", "Contenido", "Contenu", "Inhalt", "Conteúdo", "内容", "コンテンツ", "콘텐츠", "सामग्री", "المحتوى"],
+  ["Text", "Texto", "Texte", "Text", "Texto", "文本", "テキスト", "텍스트", "पाठ", "النص"],
+  ["Image", "Imagen", "Image", "Bild", "Imagem", "图像", "画像", "이미지", "छवि", "الصورة"],
+  ["Caption", "Leyenda", "Légende", "Bildunterschrift", "Legenda", "标题", "キャプション", "캡션", "कैप्शन", "التسمية"],
+  ["Report", "Informe", "Rapport", "Bericht", "Relatório", "报告", "レポート", "보고서", "रिपोर्ट", "التقرير"],
+  ["Lead", "Carta inicial", "Lettre", "Anschreiben", "Carta", "引导", "リード", "리드", "लीड", "التمهيد"],
+  ["Letter", "Carta", "Lettre", "Brief", "Carta", "信函", "レター", "서신", "पत्र", "الخطاب"],
+  ["Building", "Creando", "Création", "Erstellung", "Criando", "构建", "作成中", "작성", "बनाना", "البناء"],
+  ["Replace", "Reemplazar", "Remplacer", "Ersetzen", "Substituir", "替换", "置換", "교체", "बदलें", "استبدال"],
+  ["Estimator", "Estimador", "Estimateur", "Kalkulator", "Estimador", "估算员", "見積担当", "견적 담당자", "अनुमानकर्ता", "المقدّر"],
+  ["Scratchpad", "Bloc de notas", "Bloc-notes", "Notizbereich", "Rascunho", "草稿板", "スクラッチパッド", "메모장", "स्क्रैचपैड", "المسودة"],
+  ["Single", "Único", "Unique", "Einzeln", "Único", "单个", "単一", "단일", "एकल", "واحد"],
+  ["Sell", "Venta", "Vente", "Verkauf", "Venda", "销售", "売価", "판매", "विक्रय", "البيع"],
+  ["Vendor", "Proveedor", "Fournisseur", "Anbieter", "Fornecedor", "供应商", "ベンダー", "공급업체", "विक्रेता", "المورّد"],
+  ["Vendors", "Proveedores", "Fournisseurs", "Anbieter", "Fornecedores", "供应商", "ベンダー", "공급업체", "विक्रेता", "المورّدون"],
+  ["MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "MasterFormat", "ماستر فورمات"],
+  ["UniFormat", "UniFormat", "UniFormat", "UniFormat", "UniFormat", "UniFormat", "UniFormat", "UniFormat", "UniFormat", "يونيفورمات"],
+  ["Uniclass", "Uniclass", "Uniclass", "Uniclass", "Uniclass", "Uniclass", "Uniclass", "Uniclass", "Uniclass", "يونيكلاس"],
+  ["Rules", "Reglas", "Règles", "Regeln", "Regras", "规则", "ルール", "규칙", "नियम", "القواعد"],
+  ["Measurement", "Medición", "Mesure", "Messung", "Medição", "测量", "測定", "측정", "माप", "القياس"],
+  ["Company", "Empresa", "Entreprise", "Unternehmen", "Empresa", "公司", "会社", "회사", "कंपनी", "الشركة"],
+  ["Codes", "Códigos", "Codes", "Codes", "Códigos", "代码", "コード", "코드", "कोड", "الأكواد"],
+  ["Full", "Completo", "Complet", "Vollständig", "Completo", "完整", "完全", "전체", "पूर्ण", "كامل"],
+  ["Fixed", "Fijo", "Fixe", "Fest", "Fixo", "固定", "固定", "고정", "निश्चित", "ثابت"],
+  ["Optional", "Opcional", "Optionnel", "Optional", "Opcional", "可选", "任意", "선택", "वैकल्पिक", "اختياري"],
+  ["Standalone", "Independiente", "Autonome", "Eigenständig", "Independente", "独立", "単独", "독립", "स्वतंत्र", "مستقل"],
+  ["Avg", "Prom.", "Moy.", "Durchschn.", "Méd.", "平均", "平均", "평균", "औसत", "متوسط"],
+  ["Rate", "Tarifa", "Taux", "Satz", "Taxa", "费率", "レート", "요율", "दर", "السعر"],
+  ["Entire", "Completa", "Entier", "Gesamt", "Inteira", "整个", "全体", "전체", "संपूर्ण", "كامل"],
+  ["Rollups", "Acumulados", "Regroupements", "Rollups", "Consolidações", "汇总", "ロールアップ", "롤업", "रोलअप", "التجميعات"],
+  ["Raw", "Bruto", "Brut", "Roh", "Bruto", "原始", "未加工", "원시", "कच्चा", "خام"],
+  ["Customer", "Cliente", "Client", "Kunde", "Cliente", "客户", "顧客", "고객", "ग्राहक", "العميل"],
+  ["Adjustments", "Ajustes", "Ajustements", "Anpassungen", "Ajustes", "调整", "調整", "조정", "समायोजन", "التعديلات"],
+  ["Risk", "Riesgo", "Risque", "Risiko", "Risco", "风险", "リスク", "위험", "जोखिम", "المخاطر"],
+  ["Range", "Rango", "Plage", "Bereich", "Intervalo", "范围", "範囲", "범위", "सीमा", "النطاق"],
+  ["Concentration", "Concentración", "Concentration", "Konzentration", "Concentração", "集中度", "集中", "집중도", "सघनता", "التركيز"],
+  ["Driver", "Impulsor", "Facteur", "Treiber", "Impulsionador", "驱动项", "ドライバー", "동인", "चालक", "المحرّك"],
+  ["Largest", "Mayor", "Plus grand", "Größte", "Maior", "最大", "最大", "최대", "सबसे बड़ा", "الأكبر"],
+  ["Blended", "Combinado", "Combiné", "Gemischt", "Combinado", "混合", "混合", "혼합", "मिश्रित", "مختلط"],
+  ["Gross", "Bruto", "Brut", "Brutto", "Bruto", "毛", "粗", "총", "सकल", "الإجمالي"],
+  ["Resources", "Recursos", "Ressources", "Ressourcen", "Recursos", "资源", "リソース", "리소스", "संसाधन", "الموارد"],
+  ["Composition", "Composición", "Composition", "Zusammensetzung", "Composição", "组成", "構成", "구성", "संरचना", "التركيب"],
+  ["Captured", "Capturado", "Capturé", "Erfasst", "Capturado", "已捕获", "取得済み", "캡처됨", "कैप्चर किया गया", "ملتقط"],
+  ["Filters", "Filtros", "Filtres", "Filter", "Filtros", "筛选器", "フィルター", "필터", "फ़िल्टर", "المرشحات"],
+  ["Pivot", "Tabla dinámica", "Tableau croisé", "Pivot", "Tabela dinâmica", "透视", "ピボット", "피벗", "पिवट", "جدول محوري"],
+  ["Proposal", "Propuesta", "Proposition", "Angebot", "Proposta", "提案", "提案", "제안", "प्रस्ताव", "المقترح"],
+  ["Fixed add", "Adición fija", "Ajout fixe", "Fester Zuschlag", "Adição fixa", "固定增加", "固定追加", "고정 추가", "निश्चित जोड़", "إضافة ثابتة"],
+  ["Labour", "Mano de obra", "Main-d’œuvre", "Arbeit", "Mão de obra", "人工", "労務", "노무", "श्रम", "العمالة"],
+  ["Sub-class", "Subclase", "Sous-classe", "Unterklasse", "Subclasse", "子类", "サブクラス", "하위 클래스", "उप-वर्ग", "فئة فرعية"],
+  ["Provider", "Proveedor", "Fournisseur", "Anbieter", "Fornecedor", "提供商", "プロバイダー", "공급자", "प्रदाता", "المزوّد"],
+  ["Metadata", "Metadatos", "Métadonnées", "Metadaten", "Metadados", "元数据", "メタデータ", "메타데이터", "मेटाडेटा", "البيانات الوصفية"],
+  ["External", "Externo", "Externe", "Extern", "Externo", "外部", "外部", "외부", "बाहरी", "خارجي"],
+  ["Libraries", "Bibliotecas", "Bibliothèques", "Bibliotheken", "Bibliotecas", "库", "ライブラリ", "라이브러리", "लाइब्रेरी", "المكتبات"],
+  ["Tabs", "Pestañas", "Onglets", "Tabs", "Abas", "标签页", "タブ", "탭", "टैब", "علامات التبويب"],
+  ["Folders", "Carpetas", "Dossiers", "Ordner", "Pastas", "文件夹", "フォルダー", "폴더", "फ़ोल्डर", "المجلدات"],
+  ["Toggle", "Alternar", "Basculer", "Umschalten", "Alternar", "切换", "切替", "전환", "टॉगल", "تبديل"],
+  ["Duplicate", "Duplicar", "Dupliquer", "Duplizieren", "Duplicar", "复制", "複製", "복제", "डुप्लिकेट", "تكرار"],
+  ["Assembly", "Ensamblaje", "Assemblage", "Baugruppe", "Montagem", "组件", "アセンブリ", "어셈블리", "असेंबली", "التجميعة"],
+  ["Root", "Raíz", "Racine", "Stamm", "Raiz", "根", "ルート", "루트", "रूट", "الجذر"],
+  ["Detail", "Detalle", "Détail", "Detail", "Detalhe", "详细", "詳細", "세부 정보", "विवरण", "التفصيل"],
+  ["Rich", "Enriquecido", "Riche", "Rich", "Rico", "富文本", "リッチ", "리치", "रिच", "غني"],
+  ["Whiteboard", "Pizarra", "Tableau blanc", "Whiteboard", "Quadro branco", "白板", "ホワイトボード", "화이트보드", "व्हाइटबोर्ड", "لوح أبيض"],
+  ["Diagram", "Diagrama", "Diagramme", "Diagramm", "Diagrama", "图表", "図", "다이어그램", "आरेख", "مخطط"],
+  ["Markdown", "Markdown", "Markdown", "Markdown", "Markdown", "Markdown", "Markdown", "Markdown", "Markdown", "ماركداون"],
+  ["Checklist", "Lista de verificación", "Liste de contrôle", "Checkliste", "Checklist", "检查清单", "チェックリスト", "체크리스트", "चेकलिस्ट", "قائمة تحقق"],
+  ["Punch", "Remates", "Réserves", "Mängel", "Pendências", "待办", "パンチ", "펀치", "पंच", "النواقص"],
+  ["List", "Lista", "Liste", "Liste", "Lista", "列表", "リスト", "목록", "सूची", "القائمة"],
+  ["Separate", "Separado", "Séparé", "Getrennt", "Separado", "分开", "個別", "분리", "अलग", "منفصل"],
+  ["Combined", "Combinado", "Combiné", "Kombiniert", "Combinado", "合并", "結合", "결합", "संयुक्त", "مجمّع"],
+  ["Tables", "Tablas", "Tableaux", "Tabellen", "Tabelas", "表格", "表", "표", "तालिकाएँ", "الجداول"],
+  ["Accent", "Acento", "Accent", "Akzent", "Destaque", "强调", "アクセント", "강조", "एक्सेंट", "تمييز"],
+  ["Wash", "Lavado", "Lavis", "Waschung", "Lavagem", "淡色", "ウォッシュ", "워시", "वॉश", "غسل"],
+  ["Texture", "Textura", "Texture", "Textur", "Textura", "纹理", "テクスチャ", "텍스처", "टेक्सचर", "الملمس"],
+  ["Footer", "Pie de página", "Pied de page", "Fußzeile", "Rodapé", "页脚", "フッター", "바닥글", "फुटर", "التذييل"],
+  ["Section", "Sección", "Section", "Abschnitt", "Seção", "章节", "セクション", "섹션", "अनुभाग", "القسم"],
+  ["Sub-section", "Subsección", "Sous-section", "Unterabschnitt", "Subseção", "子章节", "サブセクション", "하위 섹션", "उप-अनुभाग", "قسم فرعي"],
+  ["Table", "Tabla", "Tableau", "Tabelle", "Tabela", "表格", "表", "표", "तालिका", "الجدول"],
+  ["Label", "Etiqueta", "Libellé", "Beschriftung", "Rótulo", "标签", "ラベル", "레이블", "लेबल", "التسمية"],
+  ["Group", "Grupo", "Groupe", "Gruppe", "Grupo", "组", "グループ", "그룹", "समूह", "المجموعة"],
+  ["Click", "Haz clic", "Cliquer", "Klicken", "Clique", "点击", "クリック", "클릭", "क्लिक करें", "انقر"],
+  ["Selection", "Selección", "Sélection", "Auswahl", "Seleção", "选择", "選択", "선택", "चयन", "التحديد"],
+  ["Assign", "Asignar", "Assigner", "Zuweisen", "Atribuir", "分配", "割り当て", "할당", "असाइन करें", "تعيين"],
+  ["Applied", "Aplicado", "Appliqué", "Angewendet", "Aplicado", "已应用", "適用済み", "적용됨", "लागू", "مطبق"],
+  ["Applies", "Aplica", "S’applique", "Gilt", "Aplica", "适用于", "適用", "적용", "लागू होता है", "ينطبق"],
+  ["Back", "Volver", "Retour", "Zurück", "Voltar", "返回", "戻る", "뒤로", "वापस", "رجوع"],
+  ["Condition", "Condición", "Condition", "Bedingung", "Condição", "条件", "条件", "조건", "स्थिति", "الشرط"],
+  ["Difficulty", "Dificultad", "Difficulté", "Schwierigkeit", "Dificuldade", "难度", "難易度", "난이도", "कठिनाई", "الصعوبة"],
+  ["Score", "Puntaje", "Score", "Wert", "Pontuação", "评分", "スコア", "점수", "स्कोर", "الدرجة"],
+  ["Calibrated", "Calibrado", "Calibré", "Kalibriert", "Calibrado", "已校准", "校正済み", "보정됨", "कैलिब्रेटेड", "معاير"],
+  ["Multiplier", "Multiplicador", "Multiplicateur", "Multiplikator", "Multiplicador", "倍数", "倍率", "승수", "गुणक", "المضاعف"],
+  ["Duration", "Duración", "Durée", "Dauer", "Duração", "持续时间", "期間", "기간", "अवधि", "المدة"],
+  ["Extended", "Extendido", "Étendu", "Erweitert", "Estendido", "扩展", "延長", "확장", "विस्तारित", "ممتد"],
+  ["Bucket", "Grupo", "Lot", "Bucket", "Agrupamento", "分组", "バケット", "버킷", "बकेट", "حاوية"],
+  ["Hierarchy", "Jerarquía", "Hiérarchie", "Hierarchie", "Hierarquia", "层级", "階層", "계층", "पदानुक्रम", "التسلسل"],
+  ["Length", "Longitud", "Longueur", "Länge", "Comprimento", "长度", "長さ", "길이", "लंबाई", "الطول"],
+  ["Spacing", "Espaciado", "Espacement", "Abstand", "Espaçamento", "间距", "間隔", "간격", "अंतर", "التباعد"],
+  ["Error", "Error", "Erreur", "Fehler", "Erro", "错误", "エラー", "오류", "त्रुटि", "خطأ"],
+  ["Failed", "Falló", "Échec", "Fehlgeschlagen", "Falhou", "失败", "失敗", "실패", "विफल", "فشل"],
+  ["Extracted", "Extraído", "Extrait", "Extrahiert", "Extraído", "已提取", "抽出済み", "추출됨", "निकाला गया", "مستخرج"],
+  ["Configured", "Configurado", "Configuré", "Konfiguriert", "Configurado", "已配置", "設定済み", "구성됨", "कॉन्फ़िगर", "مكوّن"],
+  ["Low", "Bajo", "Faible", "Niedrig", "Baixo", "低", "低", "낮음", "कम", "منخفض"],
+  ["Match", "Coincidencia", "Correspondance", "Treffer", "Correspondência", "匹配", "一致", "일치", "मिलान", "مطابقة"],
+  ["Matches", "Coincidencias", "Correspondances", "Treffer", "Correspondências", "匹配", "一致", "일치", "मिलान", "المطابقات"],
+  ["Ready", "Listo", "Prêt", "Bereit", "Pronto", "就绪", "準備完了", "준비됨", "तैयार", "جاهز"],
+  ["Mechanical", "Mecánico", "Mécanique", "Mechanisch", "Mecânico", "机械", "機械", "기계", "मैकेनिकल", "ميكانيكي"],
+  ["Foundation", "Cimentación", "Fondation", "Fundament", "Fundação", "基础", "基礎", "기초", "नींव", "الأساس"],
+  ["Walls", "Muros", "Murs", "Wände", "Paredes", "墙", "壁", "벽", "दीवारें", "الجدران"],
+  ["Electrical", "Eléctrico", "Électrique", "Elektrisch", "Elétrico", "电气", "電気", "전기", "विद्युत", "كهربائي"],
+  ["Measure distance between two points", "Medir distancia entre dos puntos", "Mesurer la distance entre deux points", "Abstand zwischen zwei Punkten messen", "Medir distância entre dois pontos", "测量两点之间的距离", "2点間の距離を測定", "두 점 사이 거리 측정", "दो बिंदुओं के बीच दूरी मापें", "قياس المسافة بين نقطتين"],
+  ["Measure length along multiple points", "Medir longitud a lo largo de varios puntos", "Mesurer la longueur sur plusieurs points", "Länge über mehrere Punkte messen", "Medir comprimento por vários pontos", "沿多个点测量长度", "複数点に沿って長さを測定", "여러 점을 따라 길이 측정", "कई बिंदुओं पर लंबाई मापें", "قياس الطول عبر نقاط متعددة"],
+  ["Polyline with drop distance at each vertex", "Polilínea con caída en cada vértice", "Polyligne avec chute à chaque sommet", "Polylinie mit Abfall an jedem Scheitel", "Polilinha com queda em cada vértice", "每个顶点带落差的多段线", "各頂点に落差があるポリライン", "각 꼭짓점에 낙차가 있는 폴리라인", "हर शीर्ष पर ड्रॉप दूरी वाली पॉलीलाइन", "خط متعدد مع هبوط عند كل رأس"],
+  ["Click to count individual items", "Haz clic para contar elementos individuales", "Cliquez pour compter les éléments individuels", "Klicken, um einzelne Positionen zu zählen", "Clique para contar itens individuais", "点击计数单个项目", "クリックして個別項目をカウント", "개별 항목을 세려면 클릭", "व्यक्तिगत आइटम गिनने के लिए क्लिक करें", "انقر لعد العناصر الفردية"],
+  ["Auto-count items along a line at interval", "Contar automáticamente elementos a intervalos en una línea", "Compter automatiquement les éléments à intervalle le long d’une ligne", "Positionen in Intervallen entlang einer Linie automatisch zählen", "Contar automaticamente itens em intervalos ao longo de uma linha", "沿线按间距自动计数项目", "線に沿って間隔ごとに自動カウント", "선 위 간격별 항목 자동 계산", "रेखा पर अंतराल के अनुसार आइटम स्वतः गिनें", "عد العناصر تلقائيًا على خط بفواصل"],
+  ["Rectangular area measurement", "Medición de área rectangular", "Mesure d’aire rectangulaire", "Rechteckige Flächenmessung", "Medição de área retangular", "矩形面积测量", "長方形面積の測定", "사각형 면적 측정", "आयताकार क्षेत्र मापन", "قياس مساحة مستطيلة"],
+  ["Freeform polygon area measurement", "Medición de área poligonal libre", "Mesure d’aire de polygone libre", "Freie Polygonflächenmessung", "Medição de área de polígono livre", "自由多边形面积测量", "自由ポリゴン面積の測定", "자유형 다각형 면적 측정", "मुक्त बहुभुज क्षेत्र मापन", "قياس مساحة مضلع حر"],
+  ["Triangular area measurement", "Medición de área triangular", "Mesure d’aire triangulaire", "Dreieckige Flächenmessung", "Medição de área triangular", "三角形面积测量", "三角形面積の測定", "삼각형 면적 측정", "त्रिभुज क्षेत्र मापन", "قياس مساحة مثلثة"],
+  ["Elliptical area measurement", "Medición de área elíptica", "Mesure d’aire elliptique", "Elliptische Flächenmessung", "Medição de área elíptica", "椭圆面积测量", "楕円面積の測定", "타원 면적 측정", "दीर्घवृत्त क्षेत्र मापन", "قياس مساحة بيضاوية"],
+  ["Wall area from perimeter and height", "Área de muro desde perímetro y altura", "Aire de mur à partir du périmètre et de la hauteur", "Wandfläche aus Umfang und Höhe", "Área de parede por perímetro e altura", "按周长和高度计算墙面积", "周長と高さから壁面積を計算", "둘레와 높이로 벽 면적 계산", "परिमाप और ऊँचाई से दीवार क्षेत्र", "مساحة الجدار من المحيط والارتفاع"],
+  ["Set scale by measuring a known distance", "Definir escala midiendo una distancia conocida", "Définir l’échelle en mesurant une distance connue", "Maßstab durch Messen einer bekannten Strecke setzen", "Definir escala medindo uma distância conhecida", "通过测量已知距离设置比例", "既知距離を測ってスケールを設定", "알려진 거리를 측정해 축척 설정", "ज्ञात दूरी मापकर स्केल सेट करें", "تعيين المقياس بقياس مسافة معروفة"],
+  ["Extract estimate-ready line items, quantities, vendor BOM rows, equipment schedules, alternates, and allowances.", "Extrae partidas listas para estimar, cantidades, filas BOM de proveedor, programas de equipo, alternativos y asignaciones.", "Extraire les lignes prêtes pour l’estimation, quantités, lignes de nomenclature fournisseur, calendriers d’équipement, variantes et provisions.", "Kalkulationsfertige Positionen, Mengen, Lieferanten-BOM-Zeilen, Gerätepläne, Alternativen und Zulagen extrahieren.", "Extraia itens prontos para estimativa, quantidades, linhas BOM de fornecedor, cronogramas de equipamento, alternativas e verbas.", "提取可用于估算的明细项、数量、供应商 BOM 行、设备计划、备选项和暂列金额。", "見積用の明細、数量、ベンダーBOM行、機器スケジュール、代替案、許容額を抽出します。", "견적 준비 라인 항목, 수량, 공급업체 BOM 행, 장비 일정, 대안 및 허용액을 추출합니다.", "अनुमान-ready लाइन आइटम, मात्रा, विक्रेता BOM पंक्तियाँ, उपकरण शेड्यूल, विकल्प और भत्ते निकालें।", "استخرج البنود الجاهزة للتقدير والكميات وصفوف BOM للمورّد وجداول المعدات والبدائل والمخصصات."],
+  ["Stage the results by worksheet with source references before applying anything.", "Organiza los resultados por hoja con referencias de origen antes de aplicar nada.", "Préparez les résultats par feuille avec les références source avant toute application.", "Ergebnisse vor dem Anwenden nach Arbeitsblatt mit Quellenangaben bereitstellen.", "Prepare os resultados por planilha com referências de origem antes de aplicar qualquer coisa.", "应用前按工作表暂存结果并附来源引用。", "適用前にソース参照付きでワークシート別に結果を準備します。", "적용하기 전에 원본 참조와 함께 워크시트별로 결과를 준비합니다.", "कुछ भी लागू करने से पहले स्रोत संदर्भों के साथ परिणामों को वर्कशीट अनुसार रखें।", "نظّم النتائج حسب ورقة العمل مع مراجع المصدر قبل تطبيق أي شيء."],
+  ["Use tables, schedules, quotes, and written scope.", "Usa tablas, programas, cotizaciones y alcance escrito.", "Utiliser tableaux, calendriers, devis et portée écrite.", "Tabellen, Pläne, Angebote und schriftlichen Umfang verwenden.", "Use tabelas, cronogramas, cotações e escopo escrito.", "使用表格、计划、报价和书面范围。", "表、スケジュール、見積、記載された範囲を使用します。", "표, 일정, 견적, 작성된 범위를 사용합니다.", "तालिकाएँ, शेड्यूल, कोटेशन और लिखित दायरे का उपयोग करें।", "استخدم الجداول والجداول الزمنية والعروض والنطاق المكتوب."],
+  ["Open the configured tool catalog for this workspace.", "Abre el catálogo de herramientas configurado para este espacio de trabajo.", "Ouvrir le catalogue d’outils configuré pour cet espace de travail.", "Den konfigurierten Werkzeugkatalog für diesen Arbeitsbereich öffnen.", "Abra o catálogo de ferramentas configurado para este workspace.", "打开此工作区配置的工具目录。", "このワークスペース用に設定されたツールカタログを開きます。", "이 워크스페이스에 구성된 도구 카탈로그를 엽니다.", "इस कार्यक्षेत्र के लिए कॉन्फ़िगर टूल कैटलॉग खोलें।", "افتح كتالوج الأدوات المكوّن لمساحة العمل هذه."],
+  ["Drawing scale isn't set — measurements will be in pixels until you calibrate.", "La escala del plano no está definida; las mediciones estarán en píxeles hasta calibrar.", "L’échelle du dessin n’est pas définie; les mesures seront en pixels jusqu’au calibrage.", "Der Zeichnungsmaßstab ist nicht gesetzt; Messungen bleiben bis zur Kalibrierung in Pixeln.", "A escala do desenho não está definida; as medições ficarão em pixels até calibrar.", "尚未设置图纸比例，校准前测量将以像素显示。", "図面スケールが未設定です。校正するまで測定値はピクセルになります。", "도면 축척이 설정되지 않았습니다. 보정 전까지 측정값은 픽셀입니다.", "ड्रॉइंग स्केल सेट नहीं है; कैलिब्रेट होने तक माप पिक्सेल में रहेंगे।", "لم يتم تعيين مقياس الرسم؛ ستبقى القياسات بالبكسل حتى المعايرة."],
+  ["Click below to set the scale, or pick the Calibrate tool from the side palette.", "Haz clic abajo para definir la escala o elige Calibrar en la paleta lateral.", "Cliquez ci-dessous pour définir l’échelle ou choisissez l’outil Calibrer dans la palette latérale.", "Unten klicken, um den Maßstab zu setzen, oder das Kalibrieren-Werkzeug aus der Seitenpalette wählen.", "Clique abaixo para definir a escala ou escolha a ferramenta Calibrar na paleta lateral.", "点击下方设置比例，或从侧边工具栏选择校准工具。", "下をクリックしてスケールを設定するか、サイドパレットから校正ツールを選択します。", "아래를 클릭해 축척을 설정하거나 사이드 팔레트에서 보정 도구를 선택하세요.", "स्केल सेट करने के लिए नीचे क्लिक करें, या साइड पैलेट से Calibrate टूल चुनें।", "انقر أدناه لتعيين المقياس أو اختر أداة المعايرة من اللوحة الجانبية."],
+  ["Click and drag a tight box around one example. The CV pipeline finds all visual matches and shows them in a review modal.", "Haz clic y arrastra un recuadro ajustado alrededor de un ejemplo. El flujo CV encuentra coincidencias visuales y las muestra en un modal de revisión.", "Cliquez-glissez un cadre serré autour d’un exemple. Le pipeline CV trouve les correspondances visuelles et les affiche dans une fenêtre de révision.", "Einen engen Rahmen um ein Beispiel ziehen. Die CV-Pipeline findet visuelle Treffer und zeigt sie in einem Prüfmodal.", "Clique e arraste uma caixa justa em torno de um exemplo. O pipeline de CV encontra correspondências visuais e mostra em um modal de revisão.", "在一个示例周围拖出紧密框选。CV 流程会查找所有视觉匹配并在审核窗口中显示。", "例の周囲をぴったりドラッグします。CV パイプラインが一致を見つけ、レビュー画面に表示します。", "예시 하나를 촘촘히 드래그해 박스로 지정합니다. CV 파이프라인이 시각적 일치를 찾아 검토 모달에 표시합니다.", "एक उदाहरण के चारों ओर सटीक बॉक्स खींचें। CV पाइपलाइन सभी दृश्य मिलान ढूँढकर समीक्षा मोडल में दिखाती है।", "انقر واسحب مربعًا محكمًا حول مثال واحد. يعثر مسار الرؤية على كل المطابقات المرئية ويعرضها في نافذة مراجعة."],
+  ["Select a drawing to begin takeoff", "Selecciona un plano para comenzar la medición", "Sélectionnez un dessin pour commencer le métré", "Zeichnung auswählen, um das Aufmaß zu beginnen", "Selecione um desenho para iniciar o levantamento", "选择图纸开始算量", "図面を選択して拾い出しを開始", "도면을 선택해 물량 산출 시작", "टेकऑफ शुरू करने के लिए ड्रॉइंग चुनें", "اختر رسمًا لبدء حصر الكميات"],
+  ["Upload drawings via the Documents tab, then select one here to start measuring.", "Sube planos en la pestaña Documentos y luego selecciona uno aquí para empezar a medir.", "Téléversez les dessins dans l’onglet Documents, puis sélectionnez-en un ici pour commencer les mesures.", "Zeichnungen über den Dokumente-Tab hochladen und hier eine zum Messen auswählen.", "Envie desenhos pela aba Documentos e selecione um aqui para começar a medir.", "通过“文档”标签上传图纸，然后在此选择一个开始测量。", "ドキュメントタブで図面をアップロードし、ここで選択して測定を開始します。", "문서 탭에서 도면을 업로드한 뒤 여기에서 선택해 측정을 시작하세요.", "Documents टैब से ड्रॉइंग अपलोड करें, फिर माप शुरू करने के लिए यहाँ चुनें।", "حمّل الرسومات عبر تبويب المستندات ثم اختر واحدًا هنا لبدء القياس."],
+  ["Compare a measurement against a known dimension to spot calibration drift.", "Compara una medición con una dimensión conocida para detectar desviaciones de calibración.", "Comparer une mesure à une dimension connue pour repérer une dérive de calibrage.", "Eine Messung mit einer bekannten Abmessung vergleichen, um Kalibrierabweichungen zu erkennen.", "Compare uma medição com uma dimensão conhecida para detectar desvio de calibração.", "将测量值与已知尺寸比较以发现校准偏差。", "測定値を既知寸法と比較して校正のずれを見つけます。", "측정값을 알려진 치수와 비교해 보정 오차를 찾습니다.", "कैलिब्रेशन drift पहचानने के लिए माप की तुलना ज्ञात आयाम से करें।", "قارن قياسًا ببعد معروف لاكتشاف انحراف المعايرة."],
+  ["No scale notation found on this page. Use the manual presets below.", "No se encontró notación de escala en esta página. Usa los preajustes manuales abajo.", "Aucune notation d’échelle trouvée sur cette page. Utilisez les préréglages manuels ci-dessous.", "Keine Maßstabsangabe auf dieser Seite gefunden. Die manuellen Voreinstellungen unten verwenden.", "Nenhuma notação de escala encontrada nesta página. Use as predefinições manuais abaixo.", "此页面未找到比例标注。请使用下方手动预设。", "このページにスケール表記が見つかりません。下の手動プリセットを使用してください。", "이 페이지에서 축척 표기를 찾지 못했습니다. 아래 수동 프리셋을 사용하세요.", "इस पेज पर कोई स्केल नोटेशन नहीं मिला। नीचे मैनुअल प्रीसेट उपयोग करें।", "لم يتم العثور على ترميز مقياس في هذه الصفحة. استخدم الإعدادات اليدوية أدناه."],
+  ["Quote-level modifiers, alternates, allowances, and custom totals that feed into the final quoted total.", "Modificadores de cotización, alternativos, asignaciones y totales personalizados que alimentan el total final cotizado.", "Modificateurs de devis, variantes, provisions et totaux personnalisés alimentant le total final du devis.", "Angebotsweite Modifikatoren, Alternativen, Zulagen und benutzerdefinierte Summen für die endgültige Angebotssumme.", "Modificadores da cotação, alternativas, verbas e totais personalizados que alimentam o total final cotado.", "影响最终报价总额的报价级调整、备选项、暂列金额和自定义总计。", "最終見積合計に反映される見積レベルの修正、代替案、許容額、カスタム合計。", "최종 견적 총액에 반영되는 견적 수준 수정, 대안, 허용액, 사용자 지정 합계입니다.", "अंतिम कोटेड कुल में जुड़ने वाले कोटेशन-स्तर संशोधक, विकल्प, भत्ते और कस्टम कुल।", "معدلات وبدائل ومخصصات وإجماليات مخصصة على مستوى العرض تدخل في إجمالي العرض النهائي."],
+  ["Choose how the factor-adjusted line subtotal is organized before quote-level adjustments.", "Elige cómo se organiza el subtotal de líneas ajustado por factores antes de los ajustes de cotización.", "Choisissez comment le sous-total des lignes ajusté par facteurs est organisé avant les ajustements de devis.", "Festlegen, wie die faktorbereinigte Zeilensumme vor Angebotsanpassungen organisiert wird.", "Escolha como o subtotal das linhas ajustado por fatores é organizado antes dos ajustes da cotação.", "选择在报价级调整前如何组织经过系数调整的明细小计。", "見積レベル調整前に、係数調整済み行小計をどう整理するか選択します。", "견적 수준 조정 전에 계수 조정 라인 소계를 구성하는 방식을 선택하세요.", "कोटेशन-स्तर समायोजन से पहले factor-adjusted लाइन subtotal कैसे व्यवस्थित होगा चुनें।", "اختر كيفية تنظيم المجموع الفرعي للبنود المعدل بالعوامل قبل تعديلات العرض."],
+  ["Read-only audit from direct cost through factors, line subtotal, adjustments, and customer total.", "Auditoría de solo lectura desde costo directo hasta factores, subtotal de líneas, ajustes y total del cliente.", "Audit en lecture seule du coût direct aux facteurs, sous-total des lignes, ajustements et total client.", "Schreibgeschützte Prüfung von Direktkosten über Faktoren, Zeilensumme, Anpassungen bis Kundensumme.", "Auditoria somente leitura do custo direto aos fatores, subtotal das linhas, ajustes e total do cliente.", "从直接成本到系数、明细小计、调整和客户总额的只读审计。", "直接原価から係数、行小計、調整、顧客合計までの読み取り専用監査。", "직접 비용부터 계수, 라인 소계, 조정, 고객 총액까지의 읽기 전용 감사입니다.", "प्रत्यक्ष लागत से कारक, लाइन subtotal, समायोजन और ग्राहक कुल तक read-only ऑडिट।", "تدقيق للقراءة فقط من التكلفة المباشرة عبر العوامل والمجموع الفرعي والتعديلات وإجمالي العميل."],
+  ["No estimate factors or quote adjustments in the price build.", "No hay factores de estimación ni ajustes de cotización en la construcción de precio.", "Aucun facteur d’estimation ni ajustement de devis dans la construction du prix.", "Keine Kalkulationsfaktoren oder Angebotsanpassungen im Preisaufbau.", "Nenhum fator de estimativa ou ajuste da cotação na composição de preço.", "价格构成中没有估算系数或报价调整。", "価格構成に見積係数または見積調整はありません。", "가격 구성에 견적 계수나 견적 조정이 없습니다.", "मूल्य निर्माण में कोई अनुमान कारक या कोटेशन समायोजन नहीं है।", "لا توجد عوامل تقدير أو تعديلات عرض في بناء السعر."],
+  ["Enter overhead, profit, tax, allowances, alternates, and custom totals after the base estimate.", "Ingresa gastos generales, utilidad, impuestos, asignaciones, alternativos y totales personalizados después de la estimación base.", "Saisissez frais généraux, profit, taxes, provisions, variantes et totaux personnalisés après l’estimation de base.", "Gemeinkosten, Gewinn, Steuer, Zulagen, Alternativen und benutzerdefinierte Summen nach der Basiskalkulation eingeben.", "Insira overhead, lucro, imposto, verbas, alternativas e totais personalizados após a estimativa base.", "在基础估算后输入管理费、利润、税、暂列金额、备选项和自定义总计。", "基本見積の後に間接費、利益、税、許容額、代替案、カスタム合計を入力します。", "기본 견적 후 간접비, 이익, 세금, 허용액, 대안 및 사용자 지정 합계를 입력하세요.", "बेस अनुमान के बाद overhead, profit, tax, allowances, alternates और custom totals दर्ज करें।", "أدخل المصاريف العامة والربح والضريبة والمخصصات والبدائل والإجماليات المخصصة بعد التقدير الأساسي."],
+  ["No resource composition has been captured yet.", "Aún no se ha capturado composición de recursos.", "Aucune composition de ressources n’a encore été capturée.", "Noch keine Ressourcenzusammensetzung erfasst.", "Nenhuma composição de recursos foi capturada ainda.", "尚未捕获资源组成。", "リソース構成はまだ取得されていません。", "아직 리소스 구성이 캡처되지 않았습니다.", "अभी कोई संसाधन संरचना कैप्चर नहीं हुई है।", "لم يتم التقاط أي تركيب موارد بعد."],
+  ["No resources match the current filters.", "Ningún recurso coincide con los filtros actuales.", "Aucune ressource ne correspond aux filtres actuels.", "Keine Ressourcen entsprechen den aktuellen Filtern.", "Nenhum recurso corresponde aos filtros atuais.", "没有资源匹配当前筛选器。", "現在のフィルターに一致するリソースはありません。", "현재 필터와 일치하는 리소스가 없습니다.", "वर्तमान फ़िल्टर से कोई संसाधन मेल नहीं खाता।", "لا توجد موارد تطابق المرشحات الحالية."],
+  ["Add sections below to create a comprehensive report", "Agrega secciones abajo para crear un informe completo", "Ajoutez des sections ci-dessous pour créer un rapport complet", "Unten Abschnitte hinzufügen, um einen vollständigen Bericht zu erstellen", "Adicione seções abaixo para criar um relatório abrangente", "在下方添加章节以创建完整报告", "下にセクションを追加して包括的なレポートを作成", "아래에 섹션을 추가해 종합 보고서를 만드세요", "व्यापक रिपोर्ट बनाने के लिए नीचे अनुभाग जोड़ें", "أضف أقسامًا أدناه لإنشاء تقرير شامل"],
+  ["Internal estimator notes and scratch work...", "Notas internas del estimador y borradores...", "Notes internes de l’estimateur et brouillon...", "Interne Kalkulatornotizen und Entwürfe...", "Notas internas do estimador e rascunhos...", "内部估算员备注和草稿...", "内部見積メモと下書き...", "내부 견적자 메모 및 초안...", "आंतरिक अनुमानकर्ता नोट्स और scratch work...", "ملاحظات المقدّر الداخلية ومسودات العمل..."],
+  ["Start Building Your Report", "Comienza a crear tu informe", "Commencer votre rapport", "Bericht erstellen", "Comece a criar seu relatório", "开始构建报告", "レポート作成を開始", "보고서 작성 시작", "अपनी रिपोर्ट बनाना शुरू करें", "ابدأ بناء تقريرك"],
+  ["Connect this takeoff mark&rsquo;s measurement to a worksheet line item", "Conecta la medición de esta marca de medición con una partida de hoja", "Relier la mesure de cette marque de métré à une ligne de feuille", "Messung dieser Aufmaßmarke mit einer Arbeitsblattposition verknüpfen", "Conecte a medição desta marca de levantamento a um item da planilha", "将此算量标记的测量连接到工作表明细项", "この拾い出しマークの測定値をワークシート明細に接続", "이 물량 산출 마크의 측정값을 워크시트 라인 항목에 연결", "इस टेकऑफ मार्क के माप को वर्कशीट लाइन आइटम से जोड़ें", "اربط قياس علامة الحصر هذه ببند في ورقة العمل"],
+  ["Select a tool and click on the drawing to start measuring", "Selecciona una herramienta y haz clic en el plano para comenzar a medir", "Sélectionnez un outil et cliquez sur le dessin pour commencer à mesurer", "Werkzeug auswählen und auf die Zeichnung klicken, um zu messen", "Selecione uma ferramenta e clique no desenho para começar a medir", "选择工具并点击图纸开始测量", "ツールを選択し図面をクリックして測定を開始", "도구를 선택하고 도면을 클릭해 측정을 시작하세요", "एक उपकरण चुनें और माप शुरू करने के लिए ड्रॉइंग पर क्लिक करें", "اختر أداة وانقر على الرسم لبدء القياس"],
+  ["This plugin search action is missing its tool metadata.", "A esta acción de búsqueda de plugin le faltan metadatos de herramienta.", "Cette action de recherche de module manque de métadonnées d’outil.", "Dieser Plugin-Suchaktion fehlen Werkzeugmetadaten.", "Esta ação de busca do plugin não tem metadados da ferramenta.", "此插件搜索操作缺少工具元数据。", "このプラグイン検索アクションにはツールメタデータがありません。", "이 플러그인 검색 작업에 도구 메타데이터가 없습니다.", "इस प्लगइन खोज क्रिया में टूल मेटाडेटा नहीं है।", "يفتقد إجراء بحث المكوّن الإضافي هذا بيانات تعريف الأداة."],
+  ["Type at least 2 characters before searching an external provider.", "Escribe al menos 2 caracteres antes de buscar en un proveedor externo.", "Saisissez au moins 2 caractères avant de rechercher un fournisseur externe.", "Vor der Suche bei einem externen Anbieter mindestens 2 Zeichen eingeben.", "Digite pelo menos 2 caracteres antes de buscar em um provedor externo.", "搜索外部提供商前至少输入 2 个字符。", "外部プロバイダーを検索する前に2文字以上入力してください。", "외부 공급자를 검색하기 전에 최소 2자를 입력하세요.", "बाहरी प्रदाता खोजने से पहले कम से कम 2 अक्षर लिखें।", "اكتب حرفين على الأقل قبل البحث لدى مزود خارجي."],
+  ["All estimate search sources are disabled for this quote.", "Todas las fuentes de búsqueda de estimación están desactivadas para esta cotización.", "Toutes les sources de recherche d’estimation sont désactivées pour ce devis.", "Alle Kalkulationssuchquellen sind für dieses Angebot deaktiviert.", "Todas as fontes de busca de estimativa estão desativadas para esta cotação.", "此报价已禁用所有估算搜索来源。", "この見積ではすべての見積検索ソースが無効です。", "이 견적의 모든 견적 검색 소스가 비활성화되었습니다.", "इस कोटेशन के लिए सभी अनुमान खोज स्रोत अक्षम हैं।", "تم تعطيل كل مصادر بحث التقدير لهذا العرض."],
+  ["Search every indexed source, select many rows, or open assemblies and plugin tools from here.", "Busca en todas las fuentes indexadas, selecciona varias filas o abre ensamblajes y herramientas de plugin desde aquí.", "Recherchez dans toutes les sources indexées, sélectionnez plusieurs lignes ou ouvrez assemblages et outils de module ici.", "Alle indexierten Quellen durchsuchen, mehrere Zeilen auswählen oder Baugruppen und Plugin-Werkzeuge von hier öffnen.", "Busque em todas as fontes indexadas, selecione várias linhas ou abra montagens e ferramentas de plugin daqui.", "搜索所有已索引来源，选择多行，或从此打开组件和插件工具。", "すべてのインデックス済みソースを検索し、複数行を選択し、ここからアセンブリやプラグインツールを開けます。", "모든 색인 소스를 검색하고 여러 행을 선택하거나 여기서 어셈블리와 플러그인 도구를 여세요.", "हर indexed स्रोत खोजें, कई पंक्तियाँ चुनें, या यहाँ से assemblies और plugin tools खोलें।", "ابحث في كل مصدر مفهرس وحدد عدة صفوف أو افتح التجميعات وأدوات المكونات الإضافية من هنا."],
+  ["Primary quote package for client delivery", "Paquete principal de cotización para entregar al cliente", "Paquet de devis principal pour livraison au client", "Primäres Angebotspaket für die Kundenausgabe", "Pacote principal da cotação para entrega ao cliente", "用于客户交付的主要报价包", "顧客提出用の主要見積パッケージ", "고객 전달용 기본 견적 패키지", "ग्राहक डिलीवरी के लिए प्राथमिक कोटेशन पैकेज", "حزمة العرض الأساسية لتسليم العميل"],
+  ["Detailed backup with worksheet pricing detail", "Respaldo detallado con precios de hoja", "Sauvegarde détaillée avec prix par feuille", "Detaillierte Sicherung mit Arbeitsblattpreisen", "Backup detalhado com preços da planilha", "包含工作表价格明细的详细备份", "ワークシート価格詳細付きの詳細バックアップ", "워크시트 가격 상세가 포함된 세부 백업", "वर्कशीट मूल्य विवरण सहित विस्तृत बैकअप", "نسخة احتياطية مفصلة مع تفاصيل تسعير ورقة العمل"],
+  ["Field/site issue version of the quote", "Versión de campo/sitio de la cotización", "Version chantier/site du devis", "Feld-/Standortversion des Angebots", "Versão de campo/local da cotação", "报价的现场版本", "見積の現場版", "견적의 현장/사이트 버전", "कोटेशन का फ़ील्ड/साइट संस्करण", "إصدار ميداني/موقعي من العرض"],
+  ["Closeout package without estimate detail", "Paquete de cierre sin detalle de estimación", "Dossier de clôture sans détail d’estimation", "Abschlusspaket ohne Kalkulationsdetails", "Pacote de encerramento sem detalhe de estimativa", "不含估算明细的收尾包", "見積詳細なしのクローズアウトパッケージ", "견적 상세가 없는 마감 패키지", "अनुमान विवरण के बिना closeout पैकेज", "حزمة إغلاق بدون تفاصيل التقدير"],
+  ["Project schedule and task sequence", "Programa del proyecto y secuencia de tareas", "Calendrier du projet et séquence des tâches", "Projektterminplan und Aufgabenfolge", "Cronograma do projeto e sequência de tarefas", "项目计划和任务顺序", "プロジェクトスケジュールとタスク順序", "프로젝트 일정 및 작업 순서", "प्रोजेक्ट शेड्यूल और कार्य क्रम", "جدول المشروع وتسلسل المهام"],
+  ["Organization branding is pulled automatically from settings.", "La marca de la organización se toma automáticamente de la configuración.", "L’image de marque de l’organisation est reprise automatiquement des paramètres.", "Organisationsbranding wird automatisch aus den Einstellungen übernommen.", "A marca da organização é puxada automaticamente das configurações.", "组织品牌会自动从设置中获取。", "組織ブランディングは設定から自動取得されます。", "조직 브랜딩은 설정에서 자동으로 가져옵니다.", "संगठन branding सेटिंग्स से स्वतः ली जाती है।", "يتم جلب هوية المؤسسة تلقائيًا من الإعدادات."],
+  ["Drag this section in the list above to place it anywhere in the PDF.", "Arrastra esta sección en la lista superior para ubicarla en cualquier lugar del PDF.", "Faites glisser cette section dans la liste ci-dessus pour la placer n’importe où dans le PDF.", "Diesen Abschnitt in der Liste oben ziehen, um ihn beliebig im PDF zu platzieren.", "Arraste esta seção na lista acima para posicioná-la em qualquer lugar do PDF.", "在上方列表中拖动此章节，可将其放在 PDF 任意位置。", "上のリストでこのセクションをドラッグしてPDF内の任意の場所に配置します。", "위 목록에서 이 섹션을 드래그해 PDF 어디든 배치하세요.", "PDF में कहीं भी रखने के लिए ऊपर सूची में इस अनुभाग को खींचें।", "اسحب هذا القسم في القائمة أعلاه لوضعه في أي مكان داخل PDF."],
+  ["Header uses the organization name and quote number automatically.", "El encabezado usa automáticamente el nombre de la organización y el número de cotización.", "L’en-tête utilise automatiquement le nom de l’organisation et le numéro du devis.", "Die Kopfzeile verwendet automatisch Organisationsname und Angebotsnummer.", "O cabeçalho usa automaticamente o nome da organização e o número da cotação.", "页眉会自动使用组织名称和报价编号。", "ヘッダーは組織名と見積番号を自動使用します。", "머리글은 조직 이름과 견적 번호를 자동으로 사용합니다.", "हेडर संगठन नाम और कोटेशन नंबर स्वतः उपयोग करता है।", "يستخدم الرأس اسم المؤسسة ورقم العرض تلقائيًا."],
+  ["Footer uses the organization website and issue date automatically.", "El pie usa automáticamente el sitio web de la organización y la fecha de emisión.", "Le pied de page utilise automatiquement le site Web de l’organisation et la date d’émission.", "Die Fußzeile verwendet automatisch Organisationswebsite und Ausgabedatum.", "O rodapé usa automaticamente o site da organização e a data de emissão.", "页脚会自动使用组织网站和发布日期。", "フッターは組織Webサイトと発行日を自動使用します。", "바닥글은 조직 웹사이트와 발행일을 자동으로 사용합니다.", "फुटर संगठन वेबसाइट और जारी तिथि स्वतः उपयोग करता है।", "يستخدم التذييل موقع المؤسسة وتاريخ الإصدار تلقائيًا."],
+  ["Internal mode — cost, markup, margin & profit are visible. Do not share with customers.", "Modo interno: costo, markup, margen y utilidad son visibles. No compartir con clientes.", "Mode interne : coût, majoration, marge et profit sont visibles. Ne pas partager avec les clients.", "Interner Modus: Kosten, Aufschlag, Marge und Gewinn sind sichtbar. Nicht mit Kunden teilen.", "Modo interno: custo, markup, margem e lucro estão visíveis. Não compartilhe com clientes.", "内部模式：成本、加价、利润率和利润可见。请勿与客户共享。", "内部モード: 原価、マークアップ、マージン、利益が表示されます。顧客と共有しないでください。", "내부 모드: 비용, 마크업, 마진, 이익이 표시됩니다. 고객과 공유하지 마세요.", "आंतरिक मोड: लागत, markup, margin और profit दिखते हैं। ग्राहकों से साझा न करें।", "الوضع الداخلي: التكلفة والزيادة والهامش والربح ظاهرة. لا تشاركها مع العملاء."]
 ];
 
 const TRANSLATIONS = Object.fromEntries(
@@ -378,6 +740,158 @@ const TRANSLATIONS = Object.fromEntries(
     Object.fromEntries(ENTRIES.map(([english, ...values]) => [english, values[localeIndex] ?? english])),
   ]),
 ) as Record<NonEnglishLocale, Record<string, string>>;
+
+function termKey(value: string) {
+  return value
+    .replace(/&rsquo;/g, "'")
+    .replace(/[’]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isComposableTerm(value: string) {
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 &&
+    trimmed.length <= 48 &&
+    !/[.!?]/.test(trimmed.replace(/\.\.\.$/, "")) &&
+    /^[A-Za-z0-9][A-Za-z0-9 '&()+,\-/:#%×.]*$/.test(trimmed)
+  );
+}
+
+const TERM_TRANSLATIONS = Object.fromEntries(
+  LOCALES.map((locale, localeIndex) => [
+    locale,
+    Object.fromEntries(
+      ENTRIES
+        .filter(([english]) => isComposableTerm(english))
+        .map(([english, ...values]) => [termKey(english), values[localeIndex] ?? english]),
+    ),
+  ]),
+) as Record<NonEnglishLocale, Record<string, string>>;
+
+const PRESERVED_WORDS = new Set([
+  "2D",
+  "3D",
+  "AI",
+  "API",
+  "ASTM",
+  "BIM",
+  "BOM",
+  "CAD",
+  "CSI",
+  "CSV",
+  "CV",
+  "DIN",
+  "DWG",
+  "DXF",
+  "ICMS",
+  "JSON",
+  "NRM",
+  "OCR",
+  "PDF",
+  "PDFS",
+  "U1",
+  "U2",
+  "U3",
+  "XLS",
+  "XLSX",
+]);
+
+function isWordToken(value: string) {
+  return /^(?:[A-Za-z][A-Za-z0-9]*(?:['’][A-Za-z0-9]+)?|\d+[A-Za-z][A-Za-z0-9]*)$/.test(value);
+}
+
+function translateSingleWord(terms: Record<string, string>, token: string) {
+  const direct = terms[termKey(token)];
+  if (direct) return direct;
+
+  const title = token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+  const titled = terms[termKey(title)];
+  if (titled) return titled;
+
+  const upper = token.toUpperCase();
+  if (PRESERVED_WORDS.has(upper) || /^[A-Z]{2,}\d*$/.test(token)) return token;
+
+  if (token.endsWith("s")) {
+    const singular = terms[termKey(token.slice(0, -1))];
+    if (singular) return singular;
+  }
+
+  return null;
+}
+
+function translateComposedPhrase(locale: NonEnglishLocale, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 90) return null;
+  if (/[{}[\]|<>]/.test(trimmed)) return null;
+  if (/https?:|\/api\/|^\//i.test(trimmed)) return null;
+  if (/[.!?]/.test(trimmed.replace(/\.\.\.$/, "").replace(/…$/, "").replace(/\b(?:Ext|Conf)\./g, ""))) return null;
+
+  const tokens = trimmed.match(/\d+[A-Za-z][A-Za-z0-9]*|[A-Za-z][A-Za-z0-9]*(?:['’][A-Za-z0-9]+)?|\d+(?:\.\d+)?|[^A-Za-z0-9]+/g);
+  if (!tokens) return null;
+
+  const wordCount = tokens.filter(isWordToken).length;
+  if (wordCount === 0 || wordCount > 8) return null;
+
+  const terms = TERM_TRANSLATIONS[locale];
+  let translatedWords = 0;
+  let output = "";
+
+  for (let index = 0; index < tokens.length;) {
+    const token = tokens[index] ?? "";
+    if (!isWordToken(token)) {
+      output += token;
+      index += 1;
+      continue;
+    }
+
+    let consumed = 0;
+    let translated: string | null = null;
+    for (let words = Math.min(4, wordCount); words >= 2; words -= 1) {
+      const phraseTokens: string[] = [];
+      let cursor = index;
+      let seenWords = 0;
+      while (cursor < tokens.length && seenWords < words) {
+        const current = tokens[cursor] ?? "";
+        if (isWordToken(current)) {
+          phraseTokens.push(current);
+          seenWords += 1;
+          cursor += 1;
+          continue;
+        }
+        if (/^\s+$/.test(current)) {
+          phraseTokens.push(" ");
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+
+      if (seenWords === words) {
+        const candidate = terms[termKey(phraseTokens.join(""))];
+        if (candidate) {
+          consumed = cursor - index;
+          translated = candidate;
+          break;
+        }
+      }
+    }
+
+    if (!translated) {
+      translated = translateSingleWord(terms, token);
+      consumed = 1;
+    }
+
+    if (!translated) return null;
+    if (translated !== token) translatedWords += 1;
+    output += translated;
+    index += consumed;
+  }
+
+  return translatedWords > 0 ? output : null;
+}
 
 const TERMS: Record<NonEnglishLocale, {
   due: string;
@@ -533,7 +1047,8 @@ function translate(locale: SupportedLocale, value: string) {
   const trimmed = value.trim();
   if (!trimmed) return value;
 
-  const translated = dictionary[trimmed] ?? translateDynamic(locale as NonEnglishLocale, trimmed);
+  const activeLocale = locale as NonEnglishLocale;
+  const translated = dictionary[trimmed] ?? translateDynamic(activeLocale, trimmed) ?? translateComposedPhrase(activeLocale, trimmed);
   return translated ? `${leading}${translated}${trailing}` : value;
 }
 
