@@ -2076,6 +2076,8 @@ export class PrismaApiStore {
         LEFT JOIN "ResourceCatalogItem" r ON r."id" = ec."resourceId"
         LEFT JOIN "PriceObservation" po ON po."id" = ec."sourceObservationId"
         WHERE ec."organizationId" = $1::text
+          AND ec."vendorName" = ''
+          AND ec."vendorProductId" IS NULL
           AND ($2::text IS NULL OR ec."projectId" IS NULL OR ec."projectId" = $2::text)
         ON CONFLICT ("id") DO UPDATE SET
           "projectId" = EXCLUDED."projectId",
@@ -2327,8 +2329,8 @@ export class PrismaApiStore {
               WHEN 'effective_cost' THEN 1.3
               WHEN 'assembly' THEN 1.15
               WHEN 'labor_unit' THEN 0.85
-              WHEN 'external_action' THEN 0.35
-              WHEN 'plugin_tool' THEN 0.25
+              WHEN 'external_action' THEN 1.1
+              WHEN 'plugin_tool' THEN 1.25
               ELSE 0
             END
             + CASE
