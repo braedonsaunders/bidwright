@@ -66,6 +66,23 @@ export interface ClaudeMdParams {
 type ClaudeDocument = ClaudeMdParams["documents"][number];
 type EstimatingPlaybookPersona = NonNullable<ClaudeMdParams["persona"]>;
 
+const MAX_INSTRUCTION_DOC_ROWS = 120;
+const MAX_LIBRARY_WARNING_ROWS = 8;
+const MAX_PLAYBOOK_TEXT_CHARS = 6000;
+const MAX_PLAYBOOK_JSON_CHARS = 5000;
+
+function truncateInstructionText(value: unknown, maxChars: number) {
+  const text = String(value ?? "").trim();
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n...[truncated ${text.length - maxChars} chars; use the relevant library/search tools for full context]`;
+}
+
+function instructionJson(value: unknown, maxChars = MAX_PLAYBOOK_JSON_CHARS) {
+  const text = JSON.stringify(value ?? {});
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...[truncated ${text.length - maxChars} chars]`;
+}
+
 function asPromptObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -109,7 +126,7 @@ function buildEstimatingPlaybookSection(playbook: EstimatingPlaybookPersona): st
   return `# Estimating Playbook: ${playbook.name}
 Domain / discipline: ${playbook.trade}
 
-${playbook.systemPrompt}
+${truncateInstructionText(playbook.systemPrompt, MAX_PLAYBOOK_TEXT_CHARS)}
 
 **Priority Library Sources:** Search these first, but you can and should search ALL available books, manual pages, datasets, resources, labor units, assemblies, and rate books when evidence is missing.
 ${playbook.knowledgeBookNames.length > 0 ? playbook.knowledgeBookNames.map(n => `- Book: "${n}"`).join("\n") : "- (No specific books assigned - search all available)"}
@@ -130,9 +147,9 @@ ${playbook.reviewFocusAreas.length > 0 ? `- Review focus areas: ${playbook.revie
 ${roleRows}
 
 **Structured Playbook Payloads**
-- Default assumptions: ${JSON.stringify(defaultAssumptions)}
-- Productivity guidance: ${JSON.stringify(productivityGuidance)}
-- Commercial guidance: ${JSON.stringify(commercialGuidance)}
+- Default assumptions: ${instructionJson(defaultAssumptions)}
+- Productivity guidance: ${instructionJson(productivityGuidance)}
+- Commercial guidance: ${instructionJson(commercialGuidance)}
 
 ---
 
@@ -156,7 +173,7 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
   if (drawingDocs.length === 0) {
     return `## Drawing Analysis
 
-No drawing-style PDFs were detected in the manifest. If you discover plan, P&ID, layout, or one-line PDFs while reading, immediately switch to the drawing CV workflow: \`listDrawingPages -> scanDrawingSymbols -> countSymbolsAllPages / countSymbols\` before you use those drawings for quantity assumptions or review conclusions.`;
+No drawing-style PDFs were detected in the manifest. If document review reveals plans, P&IDs, layouts, one-lines, or symbol schedules that drive quantities, use the drawing tools for those specific sheets before making quantity assumptions. Do not run drawing scans as a ceremonial checkbox.`;
   }
 
   const drawingList = drawingDocs
@@ -172,20 +189,21 @@ No drawing-style PDFs were detected in the manifest. If you discover plan, P&ID,
     ? `- Use the resulting counts directly in worksheet quantities, package decisions, and \`sourceNotes\`.\n- If a drawing-driven quantity cannot be validated, record it as an explicit assumption, allowance, or clarification instead of guessing.`
     : `- Use the resulting counts to validate whether the estimate captured the real device/component count.\n- If a drawing-driven quantity cannot be validated, mark it VERIFY/NO and surface it as a risk instead of assuming coverage.`;
 
-  return `## Mandatory Drawing Analysis
+  return `## Drawing Analysis
 
-This project includes ${drawingDocs.length} drawing-style PDF${drawingDocs.length === 1 ? "" : "s"}. When drawings drive quantities, you MUST run the drawing CV workflow ${lead}
+This project includes ${drawingDocs.length} drawing-style PDF${drawingDocs.length === 1 ? "" : "s"}. Use drawing CV when a drawing actually drives quantities or scope coverage ${lead} Do not scan a random sheet just to prove the tool was used.
 
 Detected drawing-style files:
 ${drawingList}${moreLine}
 
-**Required drawing workflow**
-1. Call \`listDrawingPages\` after reading the main RFQ/spec so you have valid drawing document IDs.
-2. For each quantity-driving sheet family or P&ID, call \`scanDrawingSymbols\` before making device or component count assumptions.
-3. Use the returned clusters to identify repeatable symbols that matter to the trade scope.
-4. Use \`countSymbolsAllPages\` when the same symbol family repeats across floors, areas, or multi-page drawing sets.
-5. Use \`countSymbols\` only to refine a specific cluster or adjust threshold/cross-scale behavior with the cluster's \`representativeBox\`.
-6. Use \`renderDrawingPage\` / \`zoomDrawingRegion\` only when you need visual confirmation. They are support tools, not the main counting workflow.
+**Drawing workflow**
+1. Read the RFQ/spec/BOM/schedules first and decide which drawing sheets affect quantity or coverage.
+2. Call \`listDrawingPages\` to get valid drawing document IDs.
+3. For each relevant sheet family, call \`scanDrawingSymbols\` with \`includeImage: false\` first so the response stays compact.
+4. Use the returned clusters to identify repeatable symbols that matter to the trade scope.
+5. Use \`countSymbolsAllPages\` only when the same symbol family repeats across floors, areas, or multi-page drawing sets.
+6. Use \`countSymbols\` only to refine a specific cluster or adjust threshold/cross-scale behavior with the cluster's \`representativeBox\`.
+7. Use \`renderDrawingPage\`, \`zoomDrawingRegion\`, or \`includeImage: true\` only when visual confirmation is necessary.
 
 **Use drawing CV automatically for these trade patterns**
 - Mechanical/process piping: valve tags, instruments, inline devices, actuators, equipment symbols, repetitive support/hanger symbols.
@@ -199,47 +217,163 @@ ${followThrough}
 **Do NOT**
 - rely only on extracted PDF text for drawing-based counts
 - manually eyeball repetitive symbol counts when the scan/count tools can answer them
-- skip the drawing CV pass on plans, P&IDs, layouts, risers, reflected ceiling plans, or symbol-driven schedules`;
+- run one random drawing scan as a token compliance step
+- request page images/base64 unless you need visual confirmation`;
 }
 
 function buildLibrarySnapshotSection(snapshot: LibrarySnapshotInfo | null | undefined): string {
   const rootDir = snapshot?.rootDir || "library-snapshots";
-  const fileRows = snapshot?.files?.length
-    ? snapshot.files
-        .map((file) => {
-          const count = typeof file.count === "number" ? ` (${file.count.toLocaleString()} records${file.truncated ? ", truncated" : ""})` : "";
-          const description = file.description ? ` - ${file.description}` : "";
-          return `- \`${file.path}\` - ${file.label}${count}${description}`;
-        })
+  const countRows = snapshot?.counts
+    ? Object.entries(snapshot.counts)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => `- ${key}: ${Number(value || 0).toLocaleString()}`)
         .join("\n")
-    : `- \`${rootDir}/README.md\`\n- \`${rootDir}/library-index.md\``;
+    : "- Counts unavailable";
   const warnings = snapshot?.warnings?.length
-    ? `\n\nSnapshot warnings:\n${snapshot.warnings.map((warning) => `- ${warning}`).join("\n")}`
+    ? `\n\nSnapshot warnings:\n${snapshot.warnings.slice(0, MAX_LIBRARY_WARNING_ROWS).map((warning) => `- ${warning}`).join("\n")}${snapshot.warnings.length > MAX_LIBRARY_WARNING_ROWS ? `\n- ... ${snapshot.warnings.length - MAX_LIBRARY_WARNING_ROWS} more warning(s)` : ""}`
     : "";
 
   return `## Library Snapshots (Start Here)
 
-Bidwright materializes searchable text snapshots in \`${rootDir}/\` so CLI agents can quickly discover large organization/project libraries without loading entire books or tables into the prompt. These files are a discovery index; the MCP tools remain the authoritative way to read full documents and create linked estimate rows.
+Bidwright materializes searchable text snapshots in \`${rootDir}/\`. These are discovery indexes only; MCP tools remain authoritative.
 
 Before pricing, reviewing, or delegating worksheet work:
-1. Read \`${rootDir}/README.md\` and \`${rootDir}/library-index.md\`.
-2. Search \`${rootDir}/\` with the scope keywords, trade terms, material names, sizes, vendors, codes, and production activities from the bid documents.
-3. Use the matching IDs from these files with the MCP tools:
-   - Books/manuals: \`listKnowledgeBooks\`, \`queryKnowledge\`, \`queryGlobalLibrary\`, then \`readDocumentText\` for the relevant page ranges.
+1. Read \`${rootDir}/README.md\` and \`${rootDir}/library-index.md\`; both are intentionally small.
+2. Do **not** read \`${rootDir}/files-manifest.jsonl\` or large JSONL snapshots wholesale. Search them with \`rg\`/grep, then inspect only relevant lines/ranges.
+3. Search \`${rootDir}/\` with scope keywords, trade terms, material names, sizes, vendors, codes, and production activities from the bid documents.
+4. Use matching IDs with MCP tools:
+   - Books/manuals: \`listKnowledgeBooks\`, \`queryKnowledge\`, \`queryGlobalLibrary\`, then \`readDocumentText\` for relevant page ranges.
    - Datasets: \`listDatasets\` and \`queryDatasets\`; read JSONL row files only to discover likely dataset IDs/columns/search terms.
-   - Cost intelligence, catalogs, rate books, labour units, assemblies, and takeoff hints: \`recommendEstimateBasis\`, then \`createWorksheetItemFromCandidate\` or preserve the returned IDs/evidence in \`createWorksheetItem\`.
-   - Labour productivity: \`recommendLaborBasis\` or \`listLaborUnits\` after searching \`${rootDir}/labor-units/units.jsonl\`.
-   - Assemblies: \`previewAssembly\` after finding a matching assembly ID.
-4. Every priced row must cite the source actually used in \`sourceNotes\`, including book/page/table, dataset row, cost basis ID, laborUnitId, assemblyId, rateScheduleItemId, or effectiveCostId where applicable.
+   - Cost/catalog/rate/labour/assembly sources: \`recommendEstimateBasis\`, \`recommendLaborBasis\`, \`searchLineItemCandidates\`, \`previewAssembly\`.
+5. Every priced row must cite the actual source used in \`sourceNotes\`.
 
-Available snapshot files:
-${fileRows}${warnings}`;
+Snapshot counts:
+${countRows}
+
+Key files:
+- \`${rootDir}/README.md\`
+- \`${rootDir}/library-index.md\`
+- \`${rootDir}/files-manifest.jsonl\` (full file manifest; search, do not read whole)
+- \`${rootDir}/books.jsonl\`
+- \`${rootDir}/knowledge-pages.jsonl\`
+- \`${rootDir}/datasets/index.jsonl\`
+- \`${rootDir}/catalogs/items.jsonl\`
+- \`${rootDir}/rate-schedules/items.jsonl\`
+- \`${rootDir}/labor-units/units.jsonl\`
+- \`${rootDir}/assemblies/index.jsonl\`
+- \`${rootDir}/cost-intelligence/effective-costs.jsonl\`${warnings}`;
+}
+
+function buildDocumentManifestRows(documents: ClaudeDocument[]) {
+  if (documents.length === 0) return "  (Documents are being processed — check the documents/ folder and .bidwright/document-manifest.jsonl)";
+  const rows = documents.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((d, i) =>
+    `  ${i + 1}. \`${d.fileName}\` — ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
+  );
+  if (documents.length > MAX_INSTRUCTION_DOC_ROWS) {
+    rows.push(`  ... ${documents.length - MAX_INSTRUCTION_DOC_ROWS} more document(s). Search \`.bidwright/document-manifest.jsonl\` for the full manifest.`);
+  }
+  return rows.join("\n");
+}
+
+function buildCompactClaudeMdContent(params: ClaudeMdParams): string {
+  const benchmarkingEnabled = params.estimateDefaults?.benchmarkingEnabled !== false;
+  const personaSection = params.persona ? buildEstimatingPlaybookSection(params.persona) : "";
+  const scopeSection = params.scope
+    ? `## Scope (User Instruction - Authoritative)\n\n${truncateInstructionText(params.scope, MAX_PLAYBOOK_TEXT_CHARS)}\n\nInterpret commercial directives literally. If scope says subcontracted, externally priced, owner/client supplied, fixed price, allowance, or already quoted, carry that treatment instead of rebuilding it as self-perform labour unless the user asks for validation.`
+    : "## Scope\n\nNo specific scope was entered. Estimate the full bid package after reading all documents.";
+
+  return `${personaSection}# Bidwright Estimating Agent
+
+You are building quote **${params.quoteNumber || "(new quote)"}** for **${params.projectName || "Untitled Project"}**.
+
+- Client: ${params.clientName || "Unassigned"}
+- Location: ${params.location || "TBD"}
+- Project directory: use files here as local working context, but use Bidwright MCP tools for authoritative reads/writes.
+
+${scopeSection}
+
+## Hard Limits
+
+- Do not read giant files wholesale. Use \`readDocumentText\` with pages/maxChars/offset, MCP search/list tools, and \`rg\` on JSONL snapshots.
+- Do not read \`library-snapshots/files-manifest.jsonl\` or large JSONL row files end-to-end.
+- If a tool says a file is too large, narrow the request by page/range/search term instead of retrying the same read.
+
+## Startup Checklist
+
+1. Call \`getWorkspace\` and \`getEstimateStrategy\` before making changes. Resume existing worksheets/strategy instead of duplicating them.
+2. Read \`library-snapshots/README.md\` and \`library-snapshots/library-index.md\` only. They are the compact map.
+3. Read the main RFQ/spec first, then every project document using MCP tools. Use \`.bidwright/document-manifest.jsonl\` only as a searchable manifest if the inline list is truncated.
+4. Update quote name/client/scope with \`updateQuote\` as soon as the RFQ/spec identifies them.
+5. Save strategy before detailed pricing: \`saveEstimateScopeGraph\`, \`saveEstimateExecutionPlan\`, \`saveEstimateAssumptions\`, \`saveEstimatePackagePlan\`${benchmarkingEnabled ? ", `recomputeEstimateBenchmarks`" : ""}, \`saveEstimateAdjustments\`.
+6. Ask the user with \`askUser\` for scope confirmation and commercial unknowns before creating labour-heavy rows.
+7. Create worksheets/items only after the staged strategy is saved and evidence is collected.
+8. Finish with \`saveEstimateReconcile\`, \`applySummaryPreset\`, and \`finalizeEstimateStrategy\`.
+
+## Project Documents
+
+Use document IDs below with \`readDocumentText\`, \`readSpreadsheet\`, and \`getDocumentStructured\`.
+
+${buildDocumentManifestRows(params.documents)}
+
+Document rules:
+- Read every listed document. For long PDFs, read by page ranges.
+- Use \`readSpreadsheet\` for XLS/XLSX files.
+- Use \`getDocumentStructured\` for table-heavy PDFs/forms.
+- For drawing-driven quantities, use \`listDrawingPages\`, \`scanDrawingSymbols\`, and count tools before quantity assumptions.
+
+${buildDrawingAnalysisSection(params.documents, "estimate")}
+
+## Knowledge And Library Use
+
+${params.knowledgeBookFiles?.length
+  ? `Knowledge books are available through MCP and symlinked under \`knowledge/\`. Search/list first, read table of contents, then relevant chapters only. Priority files: ${params.knowledgeBookFiles.slice(0, 20).map((f) => `\`${f}\``).join(", ")}${params.knowledgeBookFiles.length > 20 ? `, plus ${params.knowledgeBookFiles.length - 20} more` : ""}.`
+  : "Use `queryKnowledge`, `queryGlobalLibrary`, and `listKnowledgeBooks` for knowledge books."}
+
+${params.knowledgeDocumentFiles?.length
+  ? `Manual knowledge pages are available through MCP and snapshots under \`knowledge-pages/\`. Search first, then read relevant pages only.`
+  : "Manual knowledge pages may still be available through `queryKnowledge` and `listKnowledgeDocuments`."}
+
+${buildLibrarySnapshotSection(params.librarySnapshot)}
+
+## Core MCP Tools
+
+- Read/state: \`getWorkspace\`, \`getEstimateStrategy\`, \`readMemory\`, \`readDocumentText\`, \`readSpreadsheet\`, \`getDocumentStructured\`.
+- User/progress: \`reportProgress\`, \`askUser\`.
+- Strategy: \`saveEstimateScopeGraph\`, \`saveEstimateExecutionPlan\`, \`saveEstimateAssumptions\`, \`saveEstimatePackagePlan\`, \`saveEstimateAdjustments\`, \`saveEstimateReconcile\`, \`finalizeEstimateStrategy\`.
+- Pricing evidence: \`getItemConfig\`, \`recommendEstimateBasis\`, \`recommendLaborBasis\`, \`searchLineItemCandidates\`, \`recommendCostSource\`, \`listLaborUnits\`, \`previewAssembly\`, \`listRateSchedules\`, \`getRateSchedule\`, \`importRateSchedule\`, \`listRateScheduleItems\`.
+- Estimate edits: \`updateQuote\`, \`createWorksheet\`, \`createWorksheetItem\`, \`updateWorksheetItem\`, \`createCondition\`, \`createPhase\`, \`applySummaryPreset\`, \`recalculateTotals\`.
+- Drawing/takeoff: \`listDrawingPages\`, \`scanDrawingSymbols\`, \`countSymbols\`, \`countSymbolsAllPages\`, \`renderDrawingPage\`, \`zoomDrawingRegion\`, \`listTakeoffAnnotations\`, \`linkTakeoffAnnotationToWorksheetItem\`.
+
+## Estimating Rules
+
+- Every line item needs defensible \`sourceNotes\`: source name, page/table/row/rate ID, adjustment factors, and assumptions.
+- Use structured candidate/source tools before freehand pricing.
+- Preserve \`laborUnitId\`, \`rateScheduleItemId\`, \`effectiveCostId\`, \`costResourceId\`, \`assemblyId\`, and source evidence when a tool returns them.
+- Do not double-count materials across system worksheets and consolidated materials.
+- Split work by meaningful production context: system/area/phase/offsite/field/subcontract/allowance.
+- If evidence is weak, use allowance/subcontract/historical allowance and flag review risk instead of false precision.
+- Ask the user for clarification through \`askUser\`; do not print blocking questions as plain text.
+
+## Final Review
+
+Before finalizing, verify:
+- Every major scope item maps to a worksheet row, commercial package, inclusion, exclusion, or clarification.
+- Totals, labour hours, material-to-labour ratio, duration-driven costs, and summary breakout are sane.
+- No duplicate or conflicting rows.
+- Conditions include major inclusions/exclusions/clarifications.
+- Reconcile report documents remaining risks and confidence.
+`;
 }
 
 async function prepareInstructionWorkspace(params: ClaudeMdParams): Promise<void> {
   const { projectDir } = params;
   await mkdir(join(projectDir, "documents"), { recursive: true });
   await mkdir(join(projectDir, ".bidwright"), { recursive: true });
+  await writeFile(
+    join(projectDir, ".bidwright", "document-manifest.jsonl"),
+    params.documents.map((document) => JSON.stringify(document)).join("\n") + (params.documents.length > 0 ? "\n" : ""),
+    "utf-8",
+  );
   await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
 }
 
@@ -251,7 +385,7 @@ export async function generateClaudeMd(params: ClaudeMdParams): Promise<void> {
   await prepareInstructionWorkspace(params);
 
   // Build the CLAUDE.md content
-  const content = buildClaudeMdContent(params);
+  const content = buildCompactClaudeMdContent(params);
   await writeFile(join(projectDir, "CLAUDE.md"), content, "utf-8");
 }
 
@@ -998,7 +1132,7 @@ The user watches your work in real-time. Keep them informed:
  */
 export async function generateCodexMd(params: ClaudeMdParams): Promise<void> {
   await prepareInstructionWorkspace(params);
-  const content = buildClaudeMdContent(params);
+  const content = buildCompactClaudeMdContent(params);
   // Codex recognizes AGENTS.md, but we also write the other common instruction
   // filenames so prompt/runtime mismatches cannot strand a session.
   await writeFile(join(params.projectDir, "codex.md"), content, "utf-8");
@@ -1030,7 +1164,7 @@ export async function generateInstructionFiles(
   params: ClaudeMdParams,
 ): Promise<void> {
   await prepareInstructionWorkspace(params);
-  const content = buildClaudeMdContent(params);
+  const content = buildCompactClaudeMdContent(params);
   for (const filename of ALL_INSTRUCTION_FILENAMES) {
     await writeFile(join(params.projectDir, filename), content, "utf-8");
   }
