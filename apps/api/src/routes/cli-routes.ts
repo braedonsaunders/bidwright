@@ -1206,7 +1206,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${effectiveScope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
       : "";
 
-    const startupDirective = `Read ${instructionFile} now. Then read library-snapshots/README.md and library-snapshots/library-index.md before pricing anything.${scopeDirective}`;
+    const startupDirective = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md before pricing anything. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads.${scopeDirective}`;
     const userPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : "";
     const initialPrompt = userPrompt
       ? `${startupDirective}\n\nThen follow this user request:\n${userPrompt}`

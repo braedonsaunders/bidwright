@@ -86,7 +86,7 @@ COMMON PITFALLS:
       const { apiGet } = await import("../api-client.js");
       const workspace = await apiGet(`/projects/${getProjectId()}/workspace`);
       const docs = (workspace.sourceDocuments ?? workspace.documents ?? [])
-        .filter((d: any) => d.fileType === "application/pdf" || d.documentType === "drawing")
+        .filter((d: any) => d.fileType === "application/pdf" || d.fileType === "pdf" || d.documentType === "drawing")
         .map((d: any) => ({
           id: d.id,
           fileName: d.fileName ?? d.name,
@@ -526,13 +526,15 @@ TIPS:
   // ── scanDrawingSymbols ────────────────────────────────────
   server.tool(
     "scanDrawingSymbols",
-    `Proactively scan an entire drawing page to discover ALL repeating symbol types automatically. Returns a structured inventory of every symbol cluster found — with counts, thumbnails, and locations — so you can understand the drawing without manually zooming around.
+    `Scan a drawing page to discover repeating symbol types automatically. Returns a compact structured inventory of symbol clusters with counts and locations.
 
-WHEN TO USE: This is the BEST FIRST STEP for any task involving counting, identifying, or analyzing symbols on a construction drawing. Call this BEFORE renderDrawingPage or zoomDrawingRegion — it gives you more information in a single call.
+WHEN TO USE: Use this only when a project document/RFQ/spec makes a specific drawing sheet relevant to a quantity or coverage question. Do NOT run it once on a random drawing just to satisfy a workflow checkbox. First identify the drawing/purpose with readDocumentText, schedules, title blocks, or listDrawingPages, then scan the relevant page.
 
 INPUTS:
 - documentId: Document ID from listDrawingPages
 - pageNumber: Page to scan (1-based, default 1)
+- maxClusters: Limit returned clusters. Default 20 keeps responses small.
+- includeImage: Default false. Set true only when you need the rendered page image in the tool response.
 
 OUTPUT: A structured inventory with:
 - clusters: Array of symbol types found, each containing:
@@ -542,17 +544,18 @@ OUTPUT: A structured inventory with:
   - matchCount: How many instances of this symbol were found on the page
   - avgConfidence: Average template matching confidence (0-1)
   - representativeBox: Bounding box of the best example (use as bbox for countSymbols if you need to refine)
-  - topMatches: Up to 5 match locations with coordinates and confidence
+  - topMatches: Up to 3 match locations with coordinates and confidence
 - imageWidth, imageHeight: The coordinate space (150 DPI) — use these if you call countSymbols to refine
 - totalClusters: Number of distinct symbol types found
 - totalSymbolsFound: Total symbol instances across all clusters
 
 WORKFLOW:
-1. Call scanDrawingSymbols → get the full inventory
-2. Interpret each cluster: "Cluster 0 is valve tags (medium, 110x42, 46 found)" etc.
-3. If the user asked about specific symbols, find the matching cluster and report its count
-4. If you need to refine a count (different threshold, cross-scale, etc.), call countSymbols with that cluster's representativeBox
-5. Do NOT zoom around manually — the scan already found everything
+1. Choose a relevant sheet/page based on the scope question.
+2. Call scanDrawingSymbols with includeImage=false for a compact inventory.
+3. Interpret each cluster: "Cluster 0 is valve tags (medium, 110x42, 46 found)" etc.
+4. If the user asked about specific symbols, find the matching cluster and report its count.
+5. If you need to refine a count (different threshold, cross-scale, etc.), call countSymbols with that cluster's representativeBox.
+6. If you need visual confirmation, call renderDrawingPage or scanDrawingSymbols with includeImage=true for the specific page only.
 
 WHAT THIS REPLACES:
 - You no longer need to: renderDrawingPage → zoom → zoom → zoom → zoom → countSymbols
@@ -563,17 +566,10 @@ Avg scan time 2-5 seconds per page.`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
       pageNumber: z.number().min(1).default(1).describe("Page number to scan (1-based)"),
+      maxClusters: z.number().min(1).max(100).default(20).describe("Maximum number of clusters to return; keeps tool output compact"),
+      includeImage: z.boolean().default(false).describe("Include the rendered page image. Defaults false to avoid huge base64/image payloads."),
     },
-    async ({ documentId, pageNumber }) => {
-      // First render the page image so the agent can see it
-      const renderResult = await apiPost("/api/vision/render-page", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        dpi: 150,
-      });
-
-      // Then scan for symbols
+    async ({ documentId, pageNumber, maxClusters, includeImage }) => {
       const scanResult = await apiPost("/api/vision/scan-drawing", {
         projectId: getProjectId(),
         documentId,
@@ -582,15 +578,23 @@ Avg scan time 2-5 seconds per page.`,
 
       const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 
-      // Include the page image so the agent can see the drawing
-      if (renderResult.success && renderResult.image) {
-        const base64Match = (renderResult.image as string).match(/^data:image\/png;base64,(.+)$/);
-        if (base64Match) {
-          content.push({
-            type: "image" as const,
-            data: base64Match[1],
-            mimeType: "image/png" as const,
-          });
+      if (includeImage) {
+        const renderResult = await apiPost("/api/vision/render-page", {
+          projectId: getProjectId(),
+          documentId,
+          pageNumber,
+          dpi: 150,
+        });
+
+        if (renderResult.success && renderResult.image) {
+          const base64Match = (renderResult.image as string).match(/^data:image\/png;base64,(.+)$/);
+          if (base64Match) {
+            content.push({
+              type: "image" as const,
+              data: base64Match[1],
+              mimeType: "image/png" as const,
+            });
+          }
         }
       }
 
@@ -615,20 +619,25 @@ Avg scan time 2-5 seconds per page.`,
           imageHeight: scanResult.imageHeight,
         },
         topMatches: (c.topMatches ?? []).slice(0, 3),
-      }));
+      })).slice(0, maxClusters);
+      const omittedClusters = Math.max(0, Number(scanResult.totalClusters ?? 0) - clusters.length);
 
       content.push({
         type: "text" as const,
         text: JSON.stringify({
           totalClusters: scanResult.totalClusters,
           totalSymbolsFound: scanResult.totalSymbolsFound,
+          returnedClusters: clusters.length,
+          omittedClusters,
           imageWidth: scanResult.imageWidth,
           imageHeight: scanResult.imageHeight,
           scanDuration_ms: scanResult.scanDuration_ms,
           documentId,
           pageNumber,
           clusters,
-          note: "Each cluster represents a distinct symbol type. Use representativeBox with countSymbols if you need to refine the count (e.g. different threshold or cross-scale search).",
+          note: includeImage
+            ? "Each cluster represents a distinct symbol type. Use representativeBox with countSymbols if you need to refine the count."
+            : "Compact response: no page image returned. Set includeImage=true or call renderDrawingPage only when visual confirmation is necessary. Use representativeBox with countSymbols if you need to refine a count.",
         }, null, 2),
       });
 

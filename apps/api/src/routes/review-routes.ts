@@ -452,7 +452,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
     // Spawn CLI
     const instructionFile = adapter.primaryInstructionFile;
-    const initialPrompt = `Read ${instructionFile} now. Then read library-snapshots/README.md and library-snapshots/library-index.md so the review checks all available books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. Execute the FULL review workflow:
+    const initialPrompt = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md so the review can discover available books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads. Execute the FULL review workflow:
 
 1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
 2. Read EVERY project document (specs, RFQs, BOMs, drawings) using Read tool on documents/ folder

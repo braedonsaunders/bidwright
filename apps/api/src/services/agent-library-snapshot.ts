@@ -48,6 +48,8 @@ const MAX_DATASET_ROWS_PER_FILE = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_DAT
 const MAX_LABOR_UNITS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_LABOR_UNITS", 25000);
 const MAX_CATALOG_ITEMS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_CATALOG_ITEMS", 25000);
 const MAX_COST_ROWS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_COST_ROWS", 50000);
+const MAX_INDEX_FILE_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_FILE_ROWS", 40);
+const MAX_INDEX_WARNING_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_WARNINGS", 12);
 
 function envPositiveInt(key: string, fallback: number) {
   const parsed = Number(process.env[key]);
@@ -100,6 +102,14 @@ function asRecord(value: unknown): JsonRecord {
 
 function asRecordArray(value: unknown[]): JsonRecord[] {
   return value.map(asRecord);
+}
+
+function snapshotFileGroup(path: string) {
+  const withoutRoot = path.startsWith(`${SNAPSHOT_ROOT}/`)
+    ? path.slice(SNAPSHOT_ROOT.length + 1)
+    : path;
+  const [first] = withoutRoot.split("/");
+  return first.includes(".") ? "root" : first || "root";
 }
 
 async function safeCall<T>(
@@ -243,28 +253,66 @@ function buildIndexMarkdown(snapshot: LibrarySnapshotInfo) {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `- ${key}: ${value.toLocaleString()}`)
     .join("\n") || "- No library counts available";
-  const fileRows = snapshot.files
+  const groupedFiles = new Map<string, { files: number; records: number; truncated: number }>();
+  for (const file of snapshot.files) {
+    const key = snapshotFileGroup(file.path);
+    const current = groupedFiles.get(key) ?? { files: 0, records: 0, truncated: 0 };
+    current.files += 1;
+    current.records += typeof file.count === "number" ? file.count : 0;
+    current.truncated += file.truncated ? 1 : 0;
+    groupedFiles.set(key, current);
+  }
+  const groupRows = Array.from(groupedFiles.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([group, stats]) => {
+      const records = stats.records > 0 ? `, ${stats.records.toLocaleString()} records` : "";
+      const truncated = stats.truncated > 0 ? `, ${stats.truncated.toLocaleString()} truncated` : "";
+      return `- ${group}: ${stats.files.toLocaleString()} file${stats.files === 1 ? "" : "s"}${records}${truncated}`;
+    })
+    .join("\n") || "- No snapshot files available";
+  const sampleRows = snapshot.files
+    .slice(0, MAX_INDEX_FILE_ROWS)
     .map((file) => {
       const count = typeof file.count === "number" ? ` (${file.count.toLocaleString()} records${file.truncated ? ", truncated" : ""})` : "";
       const description = file.description ? ` - ${file.description}` : "";
       return `- \`${file.path}\` - ${file.label}${count}${description}`;
     })
     .join("\n");
+  const omittedCount = Math.max(0, snapshot.files.length - MAX_INDEX_FILE_ROWS);
   const warningRows = snapshot.warnings.length > 0
-    ? `\n\n## Warnings\n\n${snapshot.warnings.map((warning) => `- ${warning}`).join("\n")}`
+    ? `\n\n## Warnings\n\n${snapshot.warnings.slice(0, MAX_INDEX_WARNING_ROWS).map((warning) => `- ${warning}`).join("\n")}${snapshot.warnings.length > MAX_INDEX_WARNING_ROWS ? `\n- ... ${snapshot.warnings.length - MAX_INDEX_WARNING_ROWS} more warning(s) in \`${SNAPSHOT_ROOT}/files-manifest.jsonl\`` : ""}`
     : "";
 
   return `# Bidwright Library Index
 
 Generated: ${snapshot.generatedAt}
 
+This is a compact map. Do not read large JSONL files wholesale. Search \`${SNAPSHOT_ROOT}/\` with \`rg\`/grep or use the MCP query/list tools, then read only the relevant source/page/range.
+
 ## Counts
 
 ${countRows}
 
-## Files
+## Entry Points
 
-${fileRows}
+- \`${SNAPSHOT_ROOT}/README.md\` - usage guide
+- \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` - full snapshot file manifest, one file per line; search it, do not read it all
+- \`${SNAPSHOT_ROOT}/books.jsonl\` - knowledge book IDs
+- \`${SNAPSHOT_ROOT}/knowledge-pages.jsonl\` - authored knowledge page IDs
+- \`${SNAPSHOT_ROOT}/datasets/index.jsonl\` - dataset IDs and row-file paths
+- \`${SNAPSHOT_ROOT}/catalogs/items.jsonl\` - catalog item discovery rows
+- \`${SNAPSHOT_ROOT}/rate-schedules/items.jsonl\` - rate item discovery rows
+- \`${SNAPSHOT_ROOT}/labor-units/units.jsonl\` - labor productivity discovery rows
+- \`${SNAPSHOT_ROOT}/assemblies/index.jsonl\` - assembly IDs
+- \`${SNAPSHOT_ROOT}/cost-intelligence/effective-costs.jsonl\` - effective cost basis discovery rows
+
+## File Groups
+
+${groupRows}
+
+## Sample Files
+
+${sampleRows}${omittedCount > 0 ? `\n- ... ${omittedCount.toLocaleString()} more file(s). Search \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` for the full manifest.` : ""}
 ${warningRows}
 `;
 }
@@ -287,7 +335,7 @@ Use them like this:
 
 JSONL files contain one searchable record per line. Large datasets may be truncated in these snapshots; when that happens, use \`queryDatasets\` or the relevant MCP list/search tool for the full source.
 
-Start with \`${SNAPSHOT_ROOT}/library-index.md\`.
+Start with \`${SNAPSHOT_ROOT}/library-index.md\`. Search \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` when you need the full file list.
 
 Generated: ${snapshot.generatedAt}
 `;
@@ -693,9 +741,16 @@ export async function writeAgentLibrarySnapshot({
     path: `${SNAPSHOT_ROOT}/library-index.md`,
     label: "Counts and file manifest",
   };
-  snapshot.files = [readmeFile, indexFile, ...files];
+  const manifestFile: LibrarySnapshotFile = {
+    path: `${SNAPSHOT_ROOT}/files-manifest.jsonl`,
+    label: "Full snapshot file manifest",
+    description: "One file per JSONL row; search this file instead of reading a huge markdown index.",
+    count: files.length + 3,
+  };
+  snapshot.files = [readmeFile, indexFile, manifestFile, ...files];
 
   await writeFile(join(rootPath, "README.md"), buildReadme(snapshot), "utf-8");
+  await writeFile(join(rootPath, "files-manifest.jsonl"), toJsonLines(snapshot.files), "utf-8");
   await writeFile(join(rootPath, "library-index.md"), buildIndexMarkdown(snapshot), "utf-8");
 
   return snapshot;
