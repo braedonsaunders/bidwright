@@ -30,6 +30,7 @@ model Organization {
   knowledgeLibraryCabinets KnowledgeLibraryCabinet[]
   datasets                 Dataset[]
   rateSchedules            RateSchedule[]
+  rateBookAssignments      RateBookAssignment[]
   customers                Customer[]
   departments              Department[]
   estimatorPersonas        EstimatorPersona[]
@@ -183,6 +184,7 @@ model Project {
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
   priceObservations           PriceObservation[]
   effectiveCosts              EffectiveCost[]
+  rateBookAssignments         RateBookAssignment[]
 
   @@index([organizationId])
 }
@@ -368,6 +370,7 @@ model WorksheetItem {
   // last priced. Shape: CostSnapshot in @bidwright/domain. Null/empty for
   // rows that have never been auto-resolved.
   costSnapshot       Json              @default("{}")
+  rateResolution     Json              @default("{}")
   sourceNotes        String            @default("")
   costResourceId     String?
   costResource       ResourceCatalogItem? @relation("WorksheetItemCostResource", fields: [costResourceId], references: [id], onDelete: SetNull)
@@ -742,7 +745,7 @@ model RateSchedule {
   organization     Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name             String
   description      String         @default("")
-  category         String         @default("labour")
+  category         String         @default("")
   scope            String         @default("global")
   projectId        String?
   revisionId       String?
@@ -758,9 +761,37 @@ model RateSchedule {
 
   tiers RateScheduleTier[]
   items RateScheduleItem[]
+  assignments RateBookAssignment[]
 
   @@index([organizationId])
   @@index([revisionId])
+}
+
+model RateBookAssignment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  rateScheduleId String
+  rateSchedule   RateSchedule @relation(fields: [rateScheduleId], references: [id], onDelete: Cascade)
+  customerId     String?
+  customer       Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  projectId      String?
+  project        Project?     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category       String       @default("")
+  priority       Int          @default(0)
+  active         Boolean      @default(true)
+  effectiveDate  String?
+  expiryDate     String?
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+  @@index([rateScheduleId])
+  @@index([customerId])
+  @@index([projectId])
+  @@index([organizationId, customerId, category])
+  @@index([organizationId, projectId, category])
 }
 
 model RateScheduleTier {
@@ -779,8 +810,10 @@ model RateScheduleItem {
   id            String       @id @default(cuid())
   scheduleId    String
   schedule      RateSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  catalogItemId String
-  catalogItem   CatalogItem  @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  catalogItemId String?
+  catalogItem   CatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  resourceId    String?
+  resource      ResourceCatalogItem? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
   code          String       @default("")
   name          String       @default("")
   unit          String       @default("HR")
@@ -795,6 +828,7 @@ model RateScheduleItem {
 
   @@index([scheduleId])
   @@index([catalogItemId])
+  @@index([resourceId])
 }
 
 // ── Report Sections ───────────────────────────────────────────────────────
@@ -1335,6 +1369,7 @@ model ResourceCatalogItem {
   vendorProducts    CostVendorProduct[]
   assemblyComponents AssemblyComponent[]
   worksheetItems    WorksheetItem[] @relation("WorksheetItemCostResource")
+  rateScheduleItems RateScheduleItem[]
 
   @@index([organizationId])
   @@index([organizationId, resourceType])
@@ -1977,6 +2012,7 @@ model Customer {
 
   contacts CustomerContact[]
   quotes   Quote[]
+  rateBookAssignments RateBookAssignment[]
 
   @@index([organizationId])
 }

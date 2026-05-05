@@ -105,7 +105,16 @@ const PdfCanvasViewer = dynamic(
   { ssr: false },
 );
 
-type Tab = "books" | "pages" | "datasets";
+type KnowledgeWorkspaceTab = "books_notes" | "datasets";
+type ReferenceWorkspaceTab = "books" | "notes";
+
+function workspaceTabFromParam(tabParam: string | null): KnowledgeWorkspaceTab {
+  return tabParam === "datasets" ? "datasets" : "books_notes";
+}
+
+function referenceTabFromParam(tabParam: string | null): ReferenceWorkspaceTab {
+  return tabParam === "pages" || tabParam === "notes" ? "notes" : "books";
+}
 
 const BOOK_CATEGORIES = [
   "estimating",
@@ -291,16 +300,17 @@ export function KnowledgePage({
 }) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const initialTab: Tab = tabParam === "pages" || tabParam === "datasets" ? tabParam : "books";
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [workspaceTab, setWorkspaceTab] = useState<KnowledgeWorkspaceTab>(workspaceTabFromParam(tabParam));
+  const [referenceTab, setReferenceTab] = useState<ReferenceWorkspaceTab>(referenceTabFromParam(tabParam));
   const [books, setBooks] = useState(initialBooks);
   const [documents, setDocuments] = useState(initialDocuments);
   const [cabinets, setCabinets] = useState(initialCabinets);
   const [datasets, setDatasets] = useState(initialDatasets);
 
   useEffect(() => {
-    if (tabParam === "books" || tabParam === "pages" || tabParam === "datasets") {
-      setTab(tabParam);
+    if (tabParam === "books" || tabParam === "pages" || tabParam === "notes" || tabParam === "datasets") {
+      setWorkspaceTab(workspaceTabFromParam(tabParam));
+      setReferenceTab(referenceTabFromParam(tabParam));
     }
   }, [tabParam]);
 
@@ -342,9 +352,9 @@ export function KnowledgePage({
       <FadeIn>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-fg">Knowledge & Datasets</h1>
+          <h1 className="text-lg font-semibold text-fg">Knowledge Library</h1>
           <p className="text-xs text-fg/50 mt-0.5">
-            Upload books, author manual pages, and manage structured datasets for estimating.
+            Manage books, notes, and structured datasets for estimating.
           </p>
         </div>
       </div>
@@ -356,17 +366,16 @@ export function KnowledgePage({
       <div className="flex items-center gap-1 border-b border-line">
         {(
           [
-            { key: "books", label: "Books", icon: BookOpen, count: books.length },
-            { key: "pages", label: "Pages", icon: FileText, count: documents.length },
+            { key: "books_notes", label: "Books & Notes", icon: BookOpen, count: books.length + documents.length },
             { key: "datasets", label: "Datasets", icon: Database, count: datasets.length },
           ] as const
         ).map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => setWorkspaceTab(t.key)}
             className={cn(
               "flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium transition-colors border-b-2 -mb-px",
-              tab === t.key
+              workspaceTab === t.key
                 ? "border-accent text-accent"
                 : "border-transparent text-fg/50 hover:text-fg/70"
             )}
@@ -381,8 +390,35 @@ export function KnowledgePage({
       </div>
       </FadeIn>
 
+      {workspaceTab === "books_notes" && (
+        <FadeIn delay={0.08} className="shrink-0">
+          <div className="flex items-center gap-1 rounded-md border border-line bg-panel2/30 p-0.5 self-start">
+            {(
+              [
+                { key: "books", label: "Books", icon: BookOpen, count: books.length },
+                { key: "notes", label: "Notes", icon: FileText, count: documents.length },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setReferenceTab(t.key)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-[11px] font-medium transition-colors",
+                  referenceTab === t.key ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:text-fg/70",
+                )}
+              >
+                <t.icon className="h-3.5 w-3.5" />
+                {t.label}
+                <span className="tabular-nums text-fg/35">{t.count}</span>
+              </button>
+            ))}
+          </div>
+        </FadeIn>
+      )}
+
       <FadeIn delay={0.1} className="min-h-0 flex-1">
-      {tab === "books" && (
+      {workspaceTab === "books_notes" && referenceTab === "books" && (
         <BooksTab
           books={books}
           cabinets={cabinets}
@@ -392,7 +428,7 @@ export function KnowledgePage({
           onDatasetsRefresh={refreshDatasets}
         />
       )}
-      {tab === "datasets" && (
+      {workspaceTab === "datasets" && (
         <DatasetsTab
           datasets={datasets}
           books={books}
@@ -401,7 +437,7 @@ export function KnowledgePage({
           onCabinetsRefresh={refreshCabinets}
         />
       )}
-      {tab === "pages" && (
+      {workspaceTab === "books_notes" && referenceTab === "notes" && (
         <PagesTab
           documents={documents}
           cabinets={cabinets}

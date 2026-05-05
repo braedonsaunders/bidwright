@@ -1,6 +1,6 @@
 import type { PrismaApiStore } from "../prisma-store.js";
 import { createLLMAdapter } from "@bidwright/agent";
-import { createPdfParser } from "@bidwright/ingestion";
+import { createPdfParser, parseFile } from "@bidwright/ingestion";
 import { createEmbedder, PgVectorStore, type VectorRecord } from "@bidwright/vector";
 import { prisma } from "@bidwright/db";
 import type { KnowledgeBook, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentPage, SourceDocument } from "@bidwright/domain";
@@ -353,14 +353,43 @@ async function extractText(
     } as any;
   }
 
-  // Excel/CSV: convert to text table
-  if (
-    mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-    mimeType === "application/vnd.ms-excel" ||
-    mimeType === "text/csv"
-  ) {
-    const text = buffer.toString("utf-8");
-    return { text, pageCount: 1 };
+  const extension = path.extname(filename).slice(1).toLowerCase();
+  const fileHandlerExtensions = new Set(["xlsx", "xls", "csv", "tsv", "docx", "doc", "rtf", "pptx", "html", "htm", "mhtml", "mht"]);
+  const fileHandlerMimes = new Set([
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "text/csv",
+    "text/tab-separated-values",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/rtf",
+    "text/rtf",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/html",
+    "multipart/related",
+  ]);
+
+  if (fileHandlerExtensions.has(extension) || fileHandlerMimes.has(mimeType)) {
+    const doc = await parseFile(buffer, filename, mimeType);
+    const parts = doc.pages.map((page) => page.content).filter(Boolean);
+    if (doc.tables.length > 0) {
+      parts.push("\n\n--- EXTRACTED TABLES ---\n");
+      for (const table of doc.tables) {
+        if (table.rawMarkdown) parts.push(table.rawMarkdown);
+      }
+    }
+    const extractedTables = doc.tables.map((table, index) => ({
+      index,
+      rows: table.rows,
+      pageNumber: table.pageNumber,
+      markdown: table.rawMarkdown,
+    }));
+
+    return {
+      text: parts.join("\n\n--- Page Break ---\n\n") || doc.content,
+      pageCount: doc.metadata.pageCount || doc.pages.length || 1,
+      tables: extractedTables.length > 0 ? extractedTables : undefined,
+    } as any;
   }
 
   // Images: store metadata, mark for vision processing

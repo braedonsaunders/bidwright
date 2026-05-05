@@ -14,6 +14,100 @@ function modelEditorPath(asset: any) {
   return `/model-editor/index.html?${params.toString()}`;
 }
 
+function asRecord(value: any): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function asArray(value: any): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function compactValue(value: any, maxLength = 120) {
+  if (value == null) return value;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
+function topRecordEntries(value: any, limit = 8) {
+  return Object.entries(asRecord(value))
+    .map(([key, entry]) => {
+      const record = asRecord(entry);
+      const count = Number(record.count ?? record.total ?? record.elements ?? record.quantity ?? entry ?? 0);
+      return {
+        key,
+        count: Number.isFinite(count) ? count : undefined,
+        sample: Object.keys(record).length > 0 ? compactValue(record.sample ?? record.label ?? record.name ?? record.type) : undefined,
+      };
+    })
+    .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
+    .slice(0, limit);
+}
+
+function previewRows(rows: any[], limit = 8) {
+  return rows.slice(0, limit).map((row) => {
+    const record = asRecord(row);
+    return {
+      id: record.id ?? record.elementId ?? record.quantityId ?? null,
+      name: compactValue(record.name ?? record.description ?? record.label ?? record.type ?? record.class ?? ""),
+      class: compactValue(record.class ?? record.category ?? record.kind ?? ""),
+      material: compactValue(record.material ?? ""),
+      level: compactValue(record.level ?? record.storey ?? ""),
+      quantity: record.quantity ?? record.value ?? record.total ?? null,
+      unit: record.unit ?? record.uom ?? null,
+    };
+  });
+}
+
+function issuePreview(issues: any[], limit = 6) {
+  return issues.slice(0, limit).map((issue) => {
+    const record = asRecord(issue);
+    return {
+      severity: record.severity ?? record.level ?? "info",
+      code: record.code ?? record.type ?? null,
+      message: compactValue(record.message ?? record.description ?? issue, 180),
+    };
+  });
+}
+
+function summarizeModelAsset(asset: any) {
+  const manifest = asRecord(asset.manifest);
+  const counts = asRecord(asset._count);
+  const bom = asArray(asset.bom);
+  const quantities = asArray(asset.quantities);
+  const elements = asArray(asset.elements);
+  const issues = asArray(asset.issues);
+  const manifestCounts = asRecord(manifest.counts);
+  const elementCount = counts.elements ?? manifestCounts.elements ?? manifest.elementCount ?? elements.length;
+  const quantityCount = counts.quantities ?? manifestCounts.quantities ?? manifest.quantityCount ?? quantities.length;
+  const bomCount = bom.length || manifestCounts.bomRows || manifest.bomRowCount || 0;
+  const issueCount = counts.issues ?? manifestCounts.issues ?? issues.length;
+
+  return {
+    status: asset.status,
+    format: asset.format,
+    units: asset.units ?? manifest.units ?? null,
+    parser: manifest.parser ?? manifest.parserName ?? manifest.generator ?? null,
+    source: manifest.source ?? (asset.sourceDocumentId ? "source_document" : "file_node"),
+    counts: {
+      elements: elementCount,
+      quantities: quantityCount,
+      bomRows: bomCount,
+      issues: issueCount,
+    },
+    elementStats: topRecordEntries(asset.elementStats, 10),
+    bomPreview: previewRows(bom, 10),
+    quantityPreview: previewRows(quantities, 10),
+    elementPreview: previewRows(elements, 10),
+    issuesPreview: issuePreview(issues, 8),
+    agentHints: [
+      elementCount ? "Use queryModelElements for filtered object/type/material/level searches." : null,
+      quantityCount || bomCount ? "Use extractModelBom for persisted estimating quantities before creating worksheet items." : null,
+      Boolean(manifest.editableInBidWrightModelEditor) ? "Open bidwrightEditorPath for visual QA or manual model review." : null,
+    ].filter(Boolean),
+  };
+}
+
 function normalizedAsset(asset: any) {
   const manifest = asset.manifest ?? {};
   return {
@@ -30,6 +124,7 @@ function normalizedAsset(asset: any) {
     editableInBidWrightModelEditor: Boolean(manifest.editableInBidWrightModelEditor),
     bidwrightEditorPath: modelEditorPath(asset),
     counts: asset._count ?? null,
+    agentSummary: summarizeModelAsset(asset),
     updatedAt: asset.updatedAt ?? null,
   };
 }
@@ -84,6 +179,7 @@ The manifest includes parser status, source lineage, native file metadata, eleme
             text: JSON.stringify(
               {
                 model: normalizedAsset(asset),
+                agentSummary: summarizeModelAsset(asset),
                 manifest: asset.manifest,
                 elementStats: asset.elementStats,
                 bom: asset.bom,

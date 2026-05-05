@@ -60,7 +60,7 @@ const defaultStages: Array<Omit<EstimateRunStage, "status" | "approvalState" | "
   {
     id: "quote_metadata",
     title: "Quote Metadata",
-    description: "Set project name, client, scope description, and internal notes.",
+    description: "Set project name, client, scope description, and customer-facing estimate notes.",
     order: 20,
     gates: [{ id: "intake_complete", label: "Intake complete", requiresStageIds: ["intake"] }],
     expectedToolIds: ["updateQuote"],

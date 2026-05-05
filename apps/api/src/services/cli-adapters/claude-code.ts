@@ -203,6 +203,52 @@ async function listModels(opts: { customPath?: string }): Promise<CliModelOption
   return dedupeModels(models);
 }
 
+function stringifyToolResultContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
+function consumeToolDuration(toolUseId: string | null | undefined, state: ParserState): number {
+  if (toolUseId && state.toolStartTimes.has(toolUseId)) {
+    const duration = Date.now() - state.toolStartTimes.get(toolUseId)!;
+    state.toolStartTimes.delete(toolUseId);
+    return duration;
+  }
+
+  if (state.toolStartTimes.size > 0) {
+    const lastKey = [...state.toolStartTimes.keys()].pop()!;
+    const duration = Date.now() - state.toolStartTimes.get(lastKey)!;
+    state.toolStartTimes.delete(lastKey);
+    return duration;
+  }
+
+  return 0;
+}
+
+function pushToolResultEvent(
+  events: SSEEventData[],
+  state: ParserState,
+  options: {
+    toolUseId?: string | null;
+    content: unknown;
+    success?: boolean;
+  },
+) {
+  events.push({
+    type: "tool_result",
+    data: {
+      toolUseId: options.toolUseId,
+      content: stringifyToolResultContent(options.content),
+      duration_ms: consumeToolDuration(options.toolUseId, state),
+      success: options.success,
+    },
+  });
+}
+
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
@@ -228,23 +274,23 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   } else if (msg.type === "tool" || msg.type === "tool_result") {
     const content = msg.content || msg.message?.content;
     const toolUseId = msg.tool_use_id || msg.message?.tool_use_id;
-    let duration_ms = 0;
-    if (toolUseId && state.toolStartTimes.has(toolUseId)) {
-      duration_ms = Date.now() - state.toolStartTimes.get(toolUseId)!;
-      state.toolStartTimes.delete(toolUseId);
-    } else if (state.toolStartTimes.size > 0) {
-      const lastKey = [...state.toolStartTimes.keys()].pop()!;
-      duration_ms = Date.now() - state.toolStartTimes.get(lastKey)!;
-      state.toolStartTimes.delete(lastKey);
-    }
-    events.push({
-      type: "tool_result",
-      data: {
-        toolUseId,
-        content: typeof content === "string" ? content : JSON.stringify(content),
-        duration_ms,
-      },
+    pushToolResultEvent(events, state, {
+      toolUseId,
+      content,
+      success: msg.is_error === true ? false : undefined,
     });
+  } else if (msg.type === "user") {
+    const content = msg.message?.content || msg.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type !== "tool_result") continue;
+        pushToolResultEvent(events, state, {
+          toolUseId: block.tool_use_id || block.toolUseId || msg.tool_use_id || msg.message?.tool_use_id,
+          content: block.content ?? msg.toolUseResult ?? msg.content,
+          success: block.is_error === true ? false : undefined,
+        });
+      }
+    }
   } else if (msg.type === "result") {
     events.push({
       type: "progress",

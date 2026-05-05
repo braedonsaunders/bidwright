@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { ChevronDown, Copy, Info, Puzzle, Trash2, X } from "lucide-react";
+import { ChevronDown, Copy, Info, Layers, Puzzle, Trash2, X } from "lucide-react";
 import type {
   EntityCategory,
   ProjectWorkspaceData,
@@ -132,6 +132,8 @@ export function ItemDetailDrawer({
     item.price > 0
       ? ((item.price - extCost) / item.price * 100).toFixed(1) + "%"
       : "--";
+  const rateResolution = item.rateResolution ?? null;
+  const drawerWide = activeTab === "pricing" || (showPluginTab && activeTab === "plugin");
 
   function nextClassification(key: string, value: string) {
     const next = { ...(item.classification ?? {}) };
@@ -307,13 +309,13 @@ export function ItemDetailDrawer({
 
   return (
     <motion.div
-      initial={{ x: showPluginTab && activeTab === "plugin" ? 760 : 420 }}
+      initial={{ x: drawerWide ? 760 : 420 }}
       animate={{ x: 0 }}
-      exit={{ x: showPluginTab && activeTab === "plugin" ? 760 : 420 }}
+      exit={{ x: drawerWide ? 760 : 420 }}
       transition={{ type: "spring", damping: 30, stiffness: 300 }}
       className={cn(
         "fixed inset-y-0 right-0 z-40 border-l border-line bg-panel shadow-2xl flex flex-col",
-        showPluginTab && activeTab === "plugin" ? "w-full max-w-[780px]" : "w-full max-w-[420px]",
+        showPluginTab && activeTab === "plugin" ? "w-full max-w-[780px]" : activeTab === "pricing" ? "w-full max-w-[560px]" : "w-full max-w-[420px]",
       )}
     >
       {/* Category Color Stripe */}
@@ -363,17 +365,21 @@ export function ItemDetailDrawer({
         onValueChange={setActiveTab}
         className="flex min-h-0 flex-1 flex-col"
       >
-        {showPluginTab && (
-          <div className="border-b border-line px-4 py-2">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="details">Details</TabsTrigger>
+        <div className="border-b border-line px-4 py-2">
+          <TabsList className={cn("grid w-full", showPluginTab ? "grid-cols-3" : "grid-cols-2")}>
+            <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="pricing" className="gap-1.5">
+              <Layers className="h-3.5 w-3.5" />
+              Cost Stack
+            </TabsTrigger>
+            {showPluginTab && (
               <TabsTrigger value="plugin" className="gap-1.5">
                 <Puzzle className="h-3.5 w-3.5" />
                 Plugin
               </TabsTrigger>
-            </TabsList>
-          </div>
-        )}
+            )}
+          </TabsList>
+        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <TabsContent value="details" className="mt-0 space-y-4">
@@ -577,6 +583,10 @@ export function ItemDetailDrawer({
             )}
           </TabsContent>
 
+          <TabsContent value="pricing" className="mt-0">
+            <CostStackTab item={item} rateResolution={rateResolution} />
+          </TabsContent>
+
           {showPluginTab && (
             <TabsContent value="plugin" className="mt-0">
               <ItemPluginTab
@@ -590,5 +600,173 @@ export function ItemDetailDrawer({
         </div>
       </Tabs>
     </motion.div>
+  );
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) return "--";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatResolutionDate(value: string | undefined) {
+  if (!value) return "--";
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) return "--";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function basisLabel(value: string) {
+  return value.replace(/_/g, " ");
+}
+
+function targetLabel(value: string) {
+  if (value === "both") return "Cost + Sell";
+  return value === "price" ? "Sell" : "Cost";
+}
+
+function componentTone(target: string) {
+  if (target === "price") return "text-success";
+  if (target === "both") return "text-accent";
+  return "text-fg";
+}
+
+function CostStackTab({
+  item,
+  rateResolution,
+}: {
+  item: WorkspaceWorksheetItem;
+  rateResolution: WorkspaceWorksheetItem["rateResolution"];
+}) {
+  if (!rateResolution || rateResolution.components.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-lg border border-line bg-panel2/25 px-3 py-4">
+          <div className="flex items-start gap-2">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-fg/40" />
+            <div>
+              <div className="text-sm font-semibold text-fg">No rate-book override</div>
+              <p className="mt-1 text-xs leading-relaxed text-fg/50">
+                This row is currently priced from its worksheet fields, category calculation, or base resource values. Link a rate-book resource to let the imported book override both cost and sell price.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <MetricTile label="Current Unit Cost" value={formatMoney(item.cost, 2)} />
+          <MetricTile label="Current Sell" value={formatMoney(item.price, 2)} />
+        </div>
+      </div>
+    );
+  }
+
+  const costComponents = rateResolution.components.filter((component) => component.target === "cost" || component.target === "both");
+  const priceComponents = rateResolution.components.filter((component) => component.target === "price" || component.target === "both");
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-line bg-panel2/25 p-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-fg">{rateResolution.rateBookName ?? "Rate book"}</div>
+            <div className="mt-0.5 truncate text-xs text-fg/50">{rateResolution.rateBookItemName ?? item.entityName}</div>
+          </div>
+          <Badge tone="info">{rateResolution.currency ?? "USD"}</Badge>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <MetricTile label="Total Cost" value={formatMoney(rateResolution.totalCost, 2)} />
+          <MetricTile label="Sell Price" value={formatMoney(rateResolution.totalPrice, 2)} />
+          <MetricTile label="Markup" value={formatPercent(rateResolution.markup)} />
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-fg/45">
+          <span>Resolved {formatResolutionDate(rateResolution.resolvedAt)}</span>
+          {rateResolution.customerName ? <span>Customer {rateResolution.customerName}</span> : null}
+          {rateResolution.region ? <span>Region {rateResolution.region}</span> : null}
+        </div>
+      </div>
+
+      {rateResolution.warnings.length > 0 ? (
+        <div className="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-warning">
+          {rateResolution.warnings.join(" ")}
+        </div>
+      ) : null}
+
+      <CostComponentSection
+        title="Cost Side"
+        subtitle="Resource cost, burden, travel, and other cost-side rules from the rate book."
+        components={costComponents}
+        total={rateResolution.totalCost}
+      />
+      <CostComponentSection
+        title="Sell Side"
+        subtitle="Customer-facing sell rates and price-side adjustments from the same rate book."
+        components={priceComponents}
+        total={rateResolution.totalPrice}
+      />
+    </div>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-line bg-bg/35 px-2.5 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">{label}</div>
+      <div className="mt-1 font-mono text-sm font-semibold text-fg">{value}</div>
+    </div>
+  );
+}
+
+function CostComponentSection({
+  title,
+  subtitle,
+  components,
+  total,
+}: {
+  title: string;
+  subtitle: string;
+  components: NonNullable<WorkspaceWorksheetItem["rateResolution"]>["components"];
+  total: number;
+}) {
+  return (
+    <section className="rounded-lg border border-line">
+      <div className="border-b border-line px-3 py-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-fg">{title}</div>
+            <div className="mt-0.5 text-[11px] text-fg/45">{subtitle}</div>
+          </div>
+          <div className="font-mono text-xs font-semibold text-fg">{formatMoney(total, 2)}</div>
+        </div>
+      </div>
+      {components.length === 0 ? (
+        <div className="px-3 py-4 text-center text-xs text-fg/40">No components on this side.</div>
+      ) : (
+        <div className="divide-y divide-line">
+          {components.map((component) => (
+            <div key={component.id} className="grid grid-cols-[1fr_auto] gap-3 px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-xs font-medium text-fg">{component.label}</span>
+                  <span className={cn("text-[10px] font-medium uppercase", componentTone(component.target))}>
+                    {targetLabel(component.target)}
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-fg/40">
+                  <span>{basisLabel(component.basis)}</span>
+                  <span>Qty {component.quantity.toLocaleString()}</span>
+                  <span>Rate {formatMoney(component.rate, 2)}</span>
+                  {component.code ? <span>{component.code}</span> : null}
+                </div>
+              </div>
+              <div className="font-mono text-xs font-semibold text-fg">{formatMoney(component.amount, 2)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

@@ -331,6 +331,41 @@ const TOGGLEABLE_COLUMNS: ColumnId[] = [
   "phaseId",
 ];
 
+const ESTIMATE_TABLE_COLUMN_ORDER: ColumnId[] = [
+  "expand",
+  "checkbox",
+  "reorder",
+  ...TOGGLEABLE_COLUMNS,
+  "actions",
+];
+
+const ESTIMATE_TABLE_COLUMN_WIDTHS: Record<ColumnId, number> = {
+  expand: 32,
+  checkbox: 32,
+  reorder: 56,
+  lineOrder: 32,
+  entityName: 200,
+  vendor: 120,
+  description: 220,
+  quantity: 64,
+  uom: 64,
+  factors: 80,
+  units: 160,
+  unit1: 48,
+  unit2: 48,
+  unit3: 48,
+  cost: 80,
+  extCost: 96,
+  markup: 64,
+  price: 96,
+  margin: 64,
+  phaseId: 88,
+  actions: 40,
+};
+
+const WORKSHEET_ORGANIZER_PANEL_WIDTH = 256;
+const WORKSHEET_ORGANIZER_PANEL_GAP = 8;
+
 const ENTITY_DROPDOWN_WIDTH = 560;
 const ENTITY_DROPDOWN_MARGIN = 8;
 const ENTITY_DROPDOWN_HEADER_HEIGHT = 84;
@@ -1904,19 +1939,6 @@ export function EstimateGrid({
   const entityCellRef = useRef<HTMLTableCellElement | null>(null);
   const entityDropdownRef = useRef<HTMLDivElement | null>(null);
 
-  // Scroll to highlighted item from global search
-  useEffect(() => {
-    if (!highlightItemId) return;
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-item-id="${highlightItemId}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("ring-2", "ring-accent/50", "bg-accent/10");
-        setTimeout(() => el.classList.remove("ring-2", "ring-accent/50", "bg-accent/10"), 2500);
-      }
-    });
-  }, [highlightItemId]);
-
   // Filter state
   const [categoryFilter, setCategoryFilter] = useState("");
   const [phaseFilter, setPhaseFilter] = useState("");
@@ -1945,6 +1967,22 @@ export function EstimateGrid({
 
   // Selected row
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
+
+  // Scroll to highlighted item from global search or agent navigation.
+  useEffect(() => {
+    if (!highlightItemId) return;
+    setSelectedRowId(highlightItemId);
+    setSelectedCell({ rowId: highlightItemId, column: "entityName" });
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-cell-row="${highlightItemId}"][data-cell-col="entityName"]`)
+        || document.querySelector(`[data-item-id="${highlightItemId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-accent/50", "bg-accent/10");
+        setTimeout(() => el.classList.remove("ring-2", "ring-accent/50", "bg-accent/10"), 2500);
+      }
+    });
+  }, [highlightItemId]);
 
   // Collapsed category groups
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
@@ -2708,9 +2746,12 @@ export function EstimateGrid({
       ? getWorksheetFolderPath(workspace.worksheetFolders ?? [], activeFolder.id)
       : findWs(workspace, activeTab)?.name ?? "Worksheet";
 
-  const fitLevel: FitLevel = gridWidth > 0 && gridWidth < 760
+  const fitWidth = worksheetViewMode === "organizer" && gridWidth > 0
+    ? gridWidth + WORKSHEET_ORGANIZER_PANEL_WIDTH + WORKSHEET_ORGANIZER_PANEL_GAP
+    : gridWidth;
+  const fitLevel: FitLevel = fitWidth > 0 && fitWidth < 760
     ? "tight"
-    : gridWidth > 0 && gridWidth < 1040
+    : fitWidth > 0 && fitWidth < 1040
       ? "compact"
       : "full";
 
@@ -2933,6 +2974,12 @@ export function EstimateGrid({
     // actions column
     if (isColVisible("actions")) count++;
     return count;
+  }, [isColVisible]);
+
+  const tableMinWidth = useMemo(() => {
+    return ESTIMATE_TABLE_COLUMN_ORDER.reduce((width, column) => (
+      isColVisible(column) ? width + ESTIMATE_TABLE_COLUMN_WIDTHS[column] : width
+    ), 0);
   }, [isColVisible]);
 
   // ─── Cell editing ───
@@ -5908,7 +5955,7 @@ export function EstimateGrid({
           ) : (
             <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line">
               <div className="min-h-0 flex-1 overflow-auto">
-                <table className="w-full table-fixed text-sm">
+                <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
                 <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
                     {/* Expand button column */}
@@ -7426,7 +7473,7 @@ function WorksheetOrganizerPanel({
       >
         <span className="w-3.5 shrink-0" />
         <Table2 className="h-3.5 w-3.5 shrink-0 text-fg/35" />
-        <span className="min-w-0 flex-1 truncate font-medium">{worksheet.name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium" title={worksheet.name}>{worksheet.name}</span>
         <span className="text-[10px] text-fg/30">{worksheet.items.length}</span>
         <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatMoney(price)}</span>
       </button>

@@ -180,6 +180,65 @@ export interface WorksheetFolder {
   order: number;
 }
 
+export type WorksheetItemSourceBasisKind =
+  | "takeoff"
+  | "model_takeoff"
+  | "dwg_takeoff"
+  | "cost_intelligence_exact"
+  | "cost_intelligence_similar"
+  | "cost_intelligence_context"
+  | "labor_unit"
+  | "catalog"
+  | "rate_schedule"
+  | "assembly"
+  | "plugin"
+  | "document"
+  | "assumption"
+  | "manual";
+
+export type WorksheetItemSourceBasisMatchType = "exact" | "similar" | "context" | "fallback";
+export type WorksheetItemSourceQuality = "strong" | "good" | "weak" | "missing";
+
+export interface WorksheetItemSourceBasis {
+  kind: WorksheetItemSourceBasisKind;
+  label: string;
+  description?: string;
+  matchType?: WorksheetItemSourceBasisMatchType;
+  sourceQuality?: WorksheetItemSourceQuality;
+  confidence?: number;
+  query?: string;
+  sourceType?: string;
+  sourceId?: string | null;
+  sourceName?: string;
+  documentId?: string;
+  pageNumber?: number;
+  annotationId?: string;
+  takeoffLinkId?: string;
+  modelId?: string;
+  modelElementId?: string;
+  modelTakeoffLinkId?: string;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  laborUnitId?: string | null;
+  rateScheduleItemId?: string | null;
+  itemId?: string | null;
+  vendor?: string;
+  notes?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorksheetItemSourceEvidence {
+  basis?: WorksheetItemSourceBasis;
+  basisTrail?: WorksheetItemSourceBasis[];
+  pricing?: Record<string, unknown>;
+  labor?: Record<string, unknown>;
+  takeoff?: Record<string, unknown>;
+  warnings?: string[];
+  sourceQuality?: WorksheetItemSourceQuality;
+  matchType?: WorksheetItemSourceBasisMatchType;
+  [key: string]: unknown;
+}
+
 export interface WorksheetItem {
   id: string;
   worksheetId: string;
@@ -208,12 +267,17 @@ export interface WorksheetItem {
    * since the snapshot was taken.
    */
   costSnapshot?: CostSnapshot;
+  /**
+   * Rate-book pricing audit for this row. It explains how the imported quote
+   * rate book priced the resource and overrode the row's base cost/price.
+   */
+  rateResolution?: RateResolutionSnapshot | null;
   sourceNotes?: string;
   costResourceId?: string | null;
   effectiveCostId?: string | null;
   laborUnitId?: string | null;
   resourceComposition?: Record<string, unknown>;
-  sourceEvidence?: Record<string, unknown>;
+  sourceEvidence?: WorksheetItemSourceEvidence;
   sourceAssemblyId?: string | null;
   assemblyInstanceId?: string | null;
 }
@@ -246,6 +310,55 @@ export interface CostSnapshot {
   currency?: string;
   /** Optional region tag for regional pricing. */
   region?: string;
+}
+
+export interface RateResolutionComponent {
+  id: string;
+  code: string;
+  label: string;
+  kind: string;
+  source: "rate_book" | "manual" | "catalog" | "system";
+  target: "cost" | "price" | "both";
+  basis: string;
+  quantity: number;
+  rate: number;
+  amount: number;
+  rateBookId?: string | null;
+  rateBookItemId?: string | null;
+  tierId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RateResolutionSnapshot {
+  source: "rate_book" | "manual";
+  engineVersion: number;
+  resolvedAt: string;
+  projectId?: string | null;
+  revisionId?: string | null;
+  customerId?: string | null;
+  customerName?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  entityType?: string | null;
+  rateBookId?: string | null;
+  rateBookName?: string | null;
+  rateBookItemId?: string | null;
+  rateBookItemName?: string | null;
+  resourceId?: string | null;
+  catalogItemId?: string | null;
+  currency?: string;
+  region?: string;
+  quantity: number;
+  uom: string;
+  tierUnits: Record<string, number>;
+  components: RateResolutionComponent[];
+  baseCost: number;
+  basePrice: number;
+  totalCost: number;
+  unitCost: number;
+  totalPrice: number;
+  markup: number;
+  warnings: string[];
 }
 
 export interface Phase {
@@ -980,7 +1093,8 @@ export interface RateScheduleTier {
 export interface RateScheduleItem {
   id: string;
   scheduleId: string;
-  catalogItemId: string;
+  catalogItemId: string | null;
+  resourceId?: string | null;
   code: string;
   name: string;
   unit: string;
@@ -1014,6 +1128,22 @@ export interface RateSchedule {
 export interface RateScheduleWithChildren extends RateSchedule {
   tiers: RateScheduleTier[];
   items: RateScheduleItem[];
+}
+
+export interface RateBookAssignment {
+  id: string;
+  organizationId: string;
+  rateScheduleId: string;
+  customerId: string | null;
+  projectId: string | null;
+  category: string;
+  priority: number;
+  active: boolean;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Activity {
@@ -1355,7 +1485,7 @@ export interface PluginOutputLineItem {
   effectiveCostId?: string | null;
   laborUnitId?: string | null;
   resourceComposition?: Record<string, unknown>;
-  sourceEvidence?: Record<string, unknown>;
+  sourceEvidence?: WorksheetItemSourceEvidence;
   metadata?: Record<string, unknown>;
 }
 
@@ -1612,6 +1742,8 @@ export interface AppSettings {
     llmModel: string;
     azureDiEndpoint?: string;
     azureDiKey?: string;
+    documentExtractionProvider?: "azure" | "local" | "auto";
+    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

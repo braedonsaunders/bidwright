@@ -104,7 +104,7 @@ import {
   type WorkspaceSyncMessage,
 } from "@/lib/workspace-sync";
 import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
-import { AgentChat } from "@/components/workspace/agent-chat";
+import { AgentChat, type AgentNavigationIntent } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
 import { SetupTab } from "@/components/workspace/setup-tab";
@@ -1392,14 +1392,58 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     setError(null);
   }, []);
 
-  const refreshWorkspace = useCallback(() => {
-    startTransition(async () => {
-      try {
-        const fresh = await getProjectWorkspace(workspace.project.id);
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      const fresh = await getProjectWorkspace(workspace.project.id);
+      startTransition(() => {
         apply(fresh);
-      } catch { /* silent - user can still manually refresh */ }
-    });
-  }, [workspace.project.id]);
+      });
+      return fresh;
+    } catch {
+      return null;
+    }
+  }, [apply, startTransition, workspace.project.id]);
+
+  const handleAgentNavigate = useCallback(async (intent: AgentNavigationIntent) => {
+    const fresh = await refreshWorkspace();
+    const currentWorkspace = fresh?.workspace ?? workspace;
+
+    if (intent.type === "setup") {
+      handleSearchNavigate({ tab: "setup", field: intent.field });
+      return;
+    }
+
+    if (intent.type === "worksheet") {
+      let worksheetId = intent.worksheetId;
+      if (!worksheetId && intent.itemId) {
+        worksheetId = (currentWorkspace.worksheets ?? []).find((ws) =>
+          ws.items.some((item) => item.id === intent.itemId),
+        )?.id;
+      }
+
+      handleEstimateSubTabChange("worksheets");
+      if (worksheetId) setSelectedWsId(worksheetId);
+      if (intent.itemId) {
+        setSearchHighlight({
+          tab: "estimate",
+          subTab: "worksheets",
+          worksheetId: worksheetId ?? "all",
+          itemId: intent.itemId,
+        });
+        setTimeout(() => setSearchHighlight(null), 3000);
+      }
+      return;
+    }
+
+    if (intent.type === "document") {
+      handleSearchNavigate({ tab: "documents", documentId: intent.documentId });
+      return;
+    }
+
+    if (intent.type === "summarize") {
+      handleTabChange("summarize");
+    }
+  }, [handleEstimateSubTabChange, handleSearchNavigate, handleTabChange, refreshWorkspace, workspace]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("BroadcastChannel" in window)) return;
@@ -2135,7 +2179,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         }} />
 
       <AIModal open={modal === "aiNotes"} onClose={closeModal} title="AI - Rewrite Notes"
-        message="Rewrite the estimator notes using AI? This will replace the current notes."
+        message="Rewrite the customer-facing estimate notes using AI? This will replace the current notes."
         result={aiResult} isPending={isPending}
         onConfirm={() => {
           startTransition(async () => {
@@ -2203,6 +2247,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         initialPersonaId={intakePersonaId}
         onIntakeStarted={() => setAutoIntake(false)}
         onWorkspaceMutated={refreshWorkspace}
+        onAgentNavigate={handleAgentNavigate}
       />
 
       <RevisionDiffModal

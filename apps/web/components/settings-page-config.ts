@@ -1,13 +1,13 @@
-import { Building2, Layers, Users, Zap } from "lucide-react";
+import { ArrowUpDown, Building2, Layers, Users, Zap } from "lucide-react";
 import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
 import type { BrandProfile } from "@/lib/api";
 
 export const STORAGE_KEY = "bidwright-settings";
 
-export type SettingsGroup = "organization" | "data" | "integrations" | "users";
+export type SettingsGroup = "organization" | "data" | "importExport" | "integrations" | "users";
 export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
-export type DataSubTab = "uoms" | "conditions" | "factors";
+export type DataSubTab = "categories" | "uoms" | "conditions" | "factors";
 export type IntegrationsSubTab = "agent" | "apikeys" | "email" | "plugins" | "integrations";
 
 export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
@@ -19,6 +19,7 @@ export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
 ];
 
 export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
+  { id: "categories", label: "Categories" },
   { id: "uoms", label: "Units" },
   { id: "factors", label: "Factors" },
   { id: "conditions", label: "Conditions" },
@@ -83,6 +84,8 @@ export interface IntegrationSettings {
   llmModel: string;
   azureDiEndpoint: string;
   azureDiKey: string;
+  documentExtractionProvider: "azure" | "local" | "auto";
+  azureDiModel: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
   agentRuntime?: string | null;
   agentModel?: string | null;
   agentReasoningEffort?: string | null;
@@ -165,6 +168,8 @@ export const DEFAULT_SETTINGS: AllSettings = {
     llmModel: "claude-sonnet-4-20250514",
     azureDiEndpoint: "",
     azureDiKey: "",
+    documentExtractionProvider: "azure",
+    azureDiModel: "prebuilt-layout",
     agentReasoningEffort: "extra_high",
   },
   termsAndConditions: "",
@@ -173,6 +178,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
 export const GROUPS: { key: SettingsGroup; label: string; icon: typeof Building2 }[] = [
   { key: "organization", label: "Organization", icon: Building2 },
   { key: "data", label: "Data Management", icon: Layers },
+  { key: "importExport", label: "Import / Export", icon: ArrowUpDown },
   { key: "integrations", label: "Integrations", icon: Zap },
   { key: "users", label: "Users & Access", icon: Users },
 ];

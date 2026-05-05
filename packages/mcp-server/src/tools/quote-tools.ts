@@ -63,6 +63,16 @@ function plainTextToHtml(text: string): string {
   return htmlParts.join("");
 }
 
+function toolUiText(message: string, uiEvent: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    success: true,
+    message,
+    uiEvent,
+    sideEffects: [String(uiEvent.kind || "workspace.updated")],
+    ...extra,
+  }, null, 2);
+}
+
 export function registerQuoteTools(server: McpServer) {
 
   // ── Cached workspace fetcher (shared across tool handlers) ──────────
@@ -518,7 +528,13 @@ export function registerQuoteTools(server: McpServer) {
       const wsId = created?.id ?? "unknown";
       invalidateWs();
       const path = created ? [folderPath || "", name].filter(Boolean).join(" / ") : name;
-      return { content: [{ type: "text" as const, text: `Created worksheet: ${path} (worksheetId: ${wsId})` }] };
+      return { content: [{ type: "text" as const, text: toolUiText(`Created worksheet: ${path}`, {
+        kind: "worksheet.created",
+        worksheetId: wsId,
+        name,
+        path,
+        folderId: resolvedFolderId ?? null,
+      }) }] };
     }
   );
 
@@ -751,7 +767,19 @@ export function registerQuoteTools(server: McpServer) {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
         invalidateWs();
         const itemId = (data as any)?.id || (data as any)?.item?.id || "";
-        return { content: [{ type: "text" as const, text: `Created item: ${rest.entityName} (${cat})${itemId ? ` [id: ${itemId}]` : ""}` }] };
+        return { content: [{ type: "text" as const, text: toolUiText(`Created item: ${rest.entityName} (${cat})`, {
+          kind: "worksheet_item.created",
+          worksheetId,
+          itemId,
+          entityName: rest.entityName,
+          category: cat,
+          categoryId: body.categoryId ?? null,
+          quantity: rest.quantity,
+          uom: rest.uom,
+          unitCost: rest.cost ?? 0,
+          unitPrice: price,
+          sourceNotes: rest.sourceNotes ?? "",
+        }) }] };
       } catch (err: any) {
         const msg = err?.message || String(err);
         return { content: [{ type: "text" as const, text: `ERROR creating item "${rest.entityName}": ${msg}. Check field values and try again.` }], isError: true };
@@ -794,7 +822,21 @@ export function registerQuoteTools(server: McpServer) {
         (patch as any).markup = (patch as any).markup / 100;
       }
       const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
-      return { content: [{ type: "text" as const, text: `Updated item ${itemId}` }] };
+      invalidateWs();
+      const updated = (data as any)?.item || (data as any)?.worksheetItem || data || {};
+      return { content: [{ type: "text" as const, text: toolUiText(`Updated item ${itemId}`, {
+        kind: "worksheet_item.updated",
+        worksheetId: updated.worksheetId ?? (patch as any).worksheetId ?? null,
+        itemId,
+        entityName: updated.entityName ?? (patch as any).entityName ?? null,
+        category: updated.category ?? (patch as any).category ?? null,
+        quantity: updated.quantity ?? (patch as any).quantity ?? null,
+        uom: updated.uom ?? (patch as any).uom ?? null,
+        unitCost: updated.cost ?? (patch as any).cost ?? null,
+        unitPrice: updated.price ?? (patch as any).price ?? null,
+        fields: Object.keys(patch),
+        patch,
+      }) }] };
     }
   );
 
@@ -813,13 +855,13 @@ export function registerQuoteTools(server: McpServer) {
   // ── updateQuote ───────────────────────────────────────────
   server.tool(
     "updateQuote",
-    "Update the quote metadata — project name, client info, description, notes, scope summary. The description supports rich text (HTML). If you provide plain text with newlines, it will be auto-converted to HTML paragraphs.",
+    "Update the quote metadata — project name, client info, scope description, and customer-facing estimate notes. The description supports rich text (HTML). If you provide plain text with newlines, it will be auto-converted to HTML paragraphs. Use updateRevision.scratchpad for internal estimator notes or scratch work.",
     {
       projectName: z.string().optional(),
       clientName: z.string().optional(),
       clientEmail: z.string().optional(),
       projectAddress: z.string().optional(),
-      notes: z.string().optional(),
+      notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output. Do not put internal reasoning, TODOs, or private estimator scratch work here."),
       description: z.string().optional().describe("Scope of work description. Can be plain text (auto-converted to HTML) or HTML. Use \\n for line breaks in plain text, or provide HTML directly with <p>, <ul>, <li>, <strong>, <h3> tags."),
     },
     async (input) => {
@@ -857,7 +899,14 @@ export function registerQuoteTools(server: McpServer) {
       }
 
       invalidateWs();
-      return { content: [{ type: "text" as const, text: "Quote updated" }] };
+      return { content: [{ type: "text" as const, text: toolUiText("Quote updated", {
+        kind: "quote.updated",
+        fields: Object.keys(input),
+        projectName: input.projectName ?? null,
+        clientName: input.clientName ?? null,
+        descriptionUpdated: Boolean(input.description),
+        notesUpdated: Boolean(input.notes),
+      }) }] };
     }
   );
 
@@ -1373,7 +1422,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── updateRevision ──────────────────────────────────────────
   server.tool(
     "updateRevision",
-    `Update revision-level settings — breakout style, dates, status, quote type, print options, and more. Use this to configure how the quote is presented to the client.`,
+    `Update revision-level settings — breakout style, dates, status, quote type, print options, customer-facing notes, internal scratchpad, and more. Use this to configure how the quote is presented to the client.`,
     {
       breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail", "labour_material_equipment"]).optional()
         .describe("How costs are organized on the quote: grand_total (lump sum), category (by material/labour/etc), phase (by project phase), phase_detail (phases with category breakdown), labour_material_equipment (L/M/E columns)"),
@@ -1381,7 +1430,8 @@ export function registerQuoteTools(server: McpServer) {
       type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional().describe("Quote type: Firm (binding), Budget (estimate), BudgetDNE (do not exceed)"),
       title: z.string().optional().describe("Revision title"),
       description: z.string().optional(),
-      notes: z.string().optional(),
+      notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output."),
+      scratchpad: z.string().optional().describe("Internal estimator/agent notes and scratch work. Not customer-facing."),
       defaultMarkup: z.number().optional().describe("Default markup percentage for new items"),
       dateQuote: z.string().nullable().optional().describe("Quote date (ISO string)"),
       dateDue: z.string().nullable().optional().describe("Due date (ISO string)"),
@@ -1528,7 +1578,10 @@ export function registerQuoteTools(server: McpServer) {
     },
     async ({ preset }) => {
       await apiPost(projectPath("/summary-rows/apply-preset"), { preset });
-      return { content: [{ type: "text" as const, text: `Applied summary preset: ${preset}` }] };
+      return { content: [{ type: "text" as const, text: toolUiText(`Applied summary preset: ${preset}`, {
+        kind: "summary_preset.applied",
+        preset,
+      }) }] };
     }
   );
 

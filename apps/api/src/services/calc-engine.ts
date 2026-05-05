@@ -13,6 +13,7 @@ import type {
   LineTotal,
   MarkupRatio,
   PerUnitCost,
+  RateResolutionSnapshot,
   WorksheetItem,
 } from "@bidwright/domain";
 import {
@@ -24,6 +25,7 @@ import {
   ZERO_MARKUP,
   ZERO_PER_UNIT_COST,
   normalizeCalculationType,
+  resolveRateBookLine,
 } from "@bidwright/domain";
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -31,20 +33,34 @@ import {
 export interface RateScheduleContext {
   id: string;
   category: string;
+  name?: string;
+  defaultMarkup?: number;
+  metadata?: Record<string, unknown>;
   tiers: Array<{ id: string; name: string; multiplier: number; sortOrder: number; uom?: string | null }>;
   items: Array<{
     id: string;
+    scheduleId?: string;
+    catalogItemId?: string | null;
+    resourceId?: string | null;
     name: string;
     code: string;
+    unit?: string;
     rates: Record<string, number>;
     costRates: Record<string, number>;
     burden: number;
     perDiem: number;
+    metadata?: Record<string, unknown>;
   }>;
 }
 
 export interface CalcContext {
   rateSchedules?: RateScheduleContext[];
+  projectId?: string | null;
+  revisionId?: string | null;
+  customerId?: string | null;
+  customerName?: string | null;
+  currency?: string;
+  region?: string;
 }
 
 /**
@@ -56,6 +72,7 @@ export interface CalcResult {
   cost?: PerUnitCost;
   price?: LineTotal;
   markup?: MarkupRatio;
+  rateResolution?: RateResolutionSnapshot | null;
 }
 
 // ── Storage convention (now type-enforced via @bidwright/domain/money) ────
@@ -100,60 +117,31 @@ function resolveTierId(tierId: string, validKeys: string[]): string {
   return match ?? tierId;
 }
 
-function calcRateSchedule(item: WorksheetItem, ctx: CalcContext): CalcResult | null {
-  const match = findRateScheduleItem(item, ctx);
-  if (!match) return null;
-
-  const { rsItem } = match;
-  const tierUnits = item.tierUnits ?? {};
-  if (Object.keys(tierUnits).length === 0) return null;
-
-  // Cost rates come directly from the rate schedule item.
-  const effectiveCostRates = rsItem.costRates;
-
-  // Collect valid tier IDs for prefix matching
-  const validRateKeys = Object.keys(rsItem.rates);
-  const validCostKeys = Object.keys(effectiveCostRates);
-
-  let totalPrice = 0;
-  let totalCost = 0;
-  let totalHours = 0;
-
-  for (const [rawTierId, hours] of Object.entries(tierUnits)) {
-    const h = Number(hours) || 0;
-    const priceKey = resolveTierId(rawTierId, validRateKeys);
-    const costKey = resolveTierId(rawTierId, validCostKeys);
-    totalPrice += (rsItem.rates[priceKey] ?? 0) * h;
-    totalCost += (effectiveCostRates[costKey] ?? 0) * h;
-    totalHours += h;
-  }
-
-  totalPrice *= item.quantity;
-  totalCost *= item.quantity;
-
-  // Burden: per-item flat $/hr, scaled by hours × qty.
-  if (rsItem.burden > 0) {
-    totalCost += rsItem.burden * totalHours * item.quantity;
-  }
-
-  // Per diem: per-item $/day, scaled by ceil(hours / 8) × qty.
-  if (rsItem.perDiem > 0) {
-    totalCost += rsItem.perDiem * Math.ceil(totalHours / 8) * item.quantity;
-  }
-
-  const price = asLineTotal(totalPrice);
-  const extCost = asLineTotal(totalCost);
+function calcRateSchedule(item: WorksheetItem, category: EntityCategory | undefined, ctx: CalcContext): CalcResult | null {
+  const resolution = resolveRateBookLine(item, category, {
+    rateBooks: ctx.rateSchedules ?? [],
+    projectId: ctx.projectId,
+    revisionId: ctx.revisionId,
+    customerId: ctx.customerId,
+    customerName: ctx.customerName,
+    currency: ctx.currency,
+    region: ctx.region,
+  });
+  if (!resolution) return null;
+  const price = asLineTotal(resolution.price);
+  const extCost = asLineTotal(resolution.cost * item.quantity);
   return {
     price,
-    cost: perUnitFromLine(extCost, item.quantity),
+    cost: asPerUnitCost(resolution.cost),
     markup: deriveMarkupRatio(price, extCost),
+    rateResolution: resolution.snapshot,
   };
 }
 
 // ── Strategies ────────────────────────────────────────────────────────────
 
 function calcTieredRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
-  const rsResult = calcRateSchedule(item, ctx);
+  const rsResult = calcRateSchedule(item, undefined, ctx);
   if (rsResult) return rsResult;
 
   return {};
@@ -163,7 +151,7 @@ function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
   // Duration pricing flows through rate schedules. The schedule defines tiers
   // for the duration units (DAY/WEEK/MONTH) and the line item populates
   // `tierUnits` keyed by tier id. No legacy fallback path.
-  const rsResult = calcRateSchedule(item, ctx);
+  const rsResult = calcRateSchedule(item, undefined, ctx);
   if (rsResult) return rsResult;
   return {};
 }
@@ -255,6 +243,9 @@ export function calculateItem(
   category: EntityCategory | undefined,
   ctx: CalcContext = {},
 ): CalcResult {
+  const rateBookOverride = calcRateSchedule(item, category, ctx);
+  if (rateBookOverride) return rateBookOverride;
+
   const calcType = normalizeCalculationType(category?.calculationType);
 
   switch (calcType) {
@@ -290,6 +281,7 @@ export function applyCalculation(
   if (result.cost !== undefined) patch.cost = result.cost;
   if (result.price !== undefined) patch.price = result.price;
   if (result.markup !== undefined) patch.markup = result.markup;
+  if (result.rateResolution !== undefined) patch.rateResolution = result.rateResolution;
 
   return patch;
 }

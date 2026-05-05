@@ -18,6 +18,7 @@ import {
   Plus,
   Save,
   SaveAll,
+  Search,
   SlidersHorizontal,
   Store,
   Trash2,
@@ -67,7 +68,6 @@ import {
   EmptyState,
   Input,
   Label,
-  Separator,
   Textarea,
   Toggle,
 } from "@/components/ui";
@@ -130,6 +130,9 @@ const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
   "external_action",
 ];
 
+const CATALOG_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = ["catalog_item", "cost_resource"];
+const LABOR_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = ["labor_unit"];
+
 const ESTIMATE_SEARCH_SOURCE_CONTROLS: Array<{
   label: string;
   detail: string;
@@ -145,7 +148,7 @@ const ESTIMATE_SEARCH_SOURCE_CONTROLS: Array<{
     accent: "border-accent/25 bg-accent/8 text-accent",
   },
   {
-    label: "Catalogues",
+    label: "Catalogs",
     detail: "Catalog items and reusable cost resources.",
     sourceTypes: ["catalog_item", "cost_resource"],
     Icon: Boxes,
@@ -239,18 +242,10 @@ function cleanEstimateSearchSettings(settings: EstimateSearchSettings): Estimate
   };
 }
 
-function laborLibraryMatches(library: LaborUnitLibraryRecord, token: string) {
-  const needle = token.trim().toLowerCase();
-  if (!needle) return false;
-  const haystack = [
-    library.name,
-    library.description,
-    library.provider,
-    library.discipline,
-    library.sourceDescription,
-    ...(library.tags ?? []),
-  ].join(" ").toLowerCase();
-  return haystack.includes(needle);
+function searchFieldsMatch(query: string, fields: Array<string | null | undefined>) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return fields.filter(Boolean).join(" ").toLowerCase().includes(needle);
 }
 
 function formatScheduleDate(value: string | null | undefined) {
@@ -916,7 +911,7 @@ function NotesSubTab({
             <RichTextEditor
               value={revDraft.notes}
               onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
-              placeholder="General notes..."
+              placeholder="Customer-facing estimate notes..."
               className="flex-1 flex flex-col"
               minHeight="100%"
             />
@@ -1505,6 +1500,8 @@ function EstimateSearchSubTab({
   const [libraries, setLibraries] = useState<LaborUnitLibraryRecord[]>([]);
   const [librariesLoading, setLibrariesLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [catalogQuery, setCatalogQuery] = useState("");
+  const [libraryQuery, setLibraryQuery] = useState("");
 
   useEffect(() => {
     setSettings(serverSettings);
@@ -1539,21 +1536,39 @@ function EstimateSearchSubTab({
   );
   const disabledCatalogIds = useMemo(() => new Set(settings.disabledCatalogIds), [settings.disabledCatalogIds]);
   const enabledSourceTypeCount = LINE_ITEM_SEARCH_SOURCE_TYPES.filter((sourceType) => !disabledSourceTypes.has(sourceType)).length;
-  const labourLibrariesEnabled = !disabledSourceTypes.has("labor_unit");
+  const labourLibrariesEnabled = LABOR_SEARCH_SOURCE_TYPES.every((sourceType) => !disabledSourceTypes.has(sourceType));
   const disabledLibraryCount = libraries.filter((library) => disabledLaborLibraryIds.has(library.id)).length;
-  const cataloguesEnabled = !disabledSourceTypes.has("catalog_item");
+  const enabledLibraryCount = Math.max(0, libraries.length - disabledLibraryCount);
+  const cataloguesEnabled = CATALOG_SEARCH_SOURCE_TYPES.every((sourceType) => !disabledSourceTypes.has(sourceType));
   const disabledCatalogCount = workspace.catalogs.filter((catalog) => disabledCatalogIds.has(catalog.id)).length;
-  const mechanicalLibraryIds = useMemo(
-    () => libraries.filter((library) => laborLibraryMatches(library, "mechanical")).map((library) => library.id),
-    [libraries],
+  const enabledCatalogCount = Math.max(0, workspace.catalogs.length - disabledCatalogCount);
+  const filteredLibraries = useMemo(
+    () => libraries.filter((library) => searchFieldsMatch(libraryQuery, [
+      library.name,
+      library.description,
+      library.provider,
+      library.discipline,
+      library.sourceDescription,
+      ...(library.tags ?? []),
+    ])),
+    [libraries, libraryQuery],
   );
-  const electricalLibraryIds = useMemo(
-    () => libraries.filter((library) => laborLibraryMatches(library, "electrical")).map((library) => library.id),
-    [libraries],
+  const filteredCatalogs = useMemo(
+    () => workspace.catalogs.filter((catalog) => searchFieldsMatch(catalogQuery, [
+      catalog.name,
+      catalog.kind,
+      catalog.scope,
+      catalog.description,
+      catalog.source,
+      catalog.sourceDescription,
+    ])),
+    [catalogQuery, workspace.catalogs],
   );
+  const filteredLibraryIds = useMemo(() => filteredLibraries.map((library) => library.id), [filteredLibraries]);
+  const filteredCatalogIds = useMemo(() => filteredCatalogs.map((catalog) => catalog.id), [filteredCatalogs]);
   const libraryGroups = useMemo(() => {
     const grouped = new Map<string, LaborUnitLibraryRecord[]>();
-    for (const library of libraries) {
+    for (const library of filteredLibraries) {
       const key = library.discipline?.trim() || library.provider?.trim() || "General";
       const items = grouped.get(key) ?? [];
       items.push(library);
@@ -1565,11 +1580,11 @@ function EstimateSearchSubTab({
         items: items.sort((a, b) => a.name.localeCompare(b.name)),
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [libraries]);
+  }, [filteredLibraries]);
   const catalogGroups = useMemo(() => {
     const grouped = new Map<string, typeof workspace.catalogs>();
-    for (const catalog of workspace.catalogs) {
-      const key = catalog.kind?.trim() || catalog.scope?.trim() || "Catalogues";
+    for (const catalog of filteredCatalogs) {
+      const key = catalog.kind?.trim() || catalog.scope?.trim() || "Catalogs";
       const items = grouped.get(key) ?? [];
       items.push(catalog);
       grouped.set(key, items);
@@ -1580,7 +1595,7 @@ function EstimateSearchSubTab({
         items: items.sort((a, b) => a.name.localeCompare(b.name)),
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [workspace.catalogs]);
+  }, [filteredCatalogs]);
 
   const saveSettings = useCallback((nextSettings: EstimateSearchSettings) => {
     const clean = cleanEstimateSearchSettings(nextSettings);
@@ -1635,22 +1650,40 @@ function EstimateSearchSubTab({
   return (
     <div data-field="estimateSearch" className="flex-1 min-h-0 overflow-y-auto">
       <Card className="min-h-full">
-        <CardHeader className="flex items-start justify-between gap-3">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <SlidersHorizontal className="h-4 w-4 text-accent" />
-              Estimate Search
-            </CardTitle>
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-fg/45">
-              New estimates start with every source enabled. Tune this quote's Line Item Name search so fast-moving estimators only see relevant libraries, catalogs, actions, and tools.
-            </p>
+        <CardHeader className="space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-accent" />
+                Estimate Search
+              </CardTitle>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-fg/45">
+                Quote-level controls for line item search sources, catalog visibility, and labour unit libraries.
+              </p>
+            </div>
+            <span className="shrink-0 rounded-lg border border-line bg-bg/55 px-2.5 py-1 text-[11px] font-medium text-fg/55">
+              {enabledSourceTypeCount}/{LINE_ITEM_SEARCH_SOURCE_TYPES.length} source types on
+            </span>
           </div>
-          <span className="shrink-0 rounded-lg border border-line bg-bg/55 px-2.5 py-1 text-[11px] font-medium text-fg/55">
-            {enabledSourceTypeCount}/{LINE_ITEM_SEARCH_SOURCE_TYPES.length} source types on
-          </span>
+          <div className="grid gap-2 md:grid-cols-3">
+            <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-normal text-fg/35">Sources</div>
+              <div className="mt-1 text-sm font-semibold text-fg">{enabledSourceTypeCount}/{LINE_ITEM_SEARCH_SOURCE_TYPES.length} enabled</div>
+            </div>
+            <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-normal text-fg/35">Catalogs</div>
+              <div className="mt-1 text-sm font-semibold text-fg">{enabledCatalogCount}/{workspace.catalogs.length} visible</div>
+            </div>
+            <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
+              <div className="text-[10px] font-semibold uppercase tracking-normal text-fg/35">Labour units</div>
+              <div className="mt-1 text-sm font-semibold text-fg">
+                {librariesLoading ? "Loading" : `${enabledLibraryCount}/${libraries.length} visible`}
+              </div>
+            </div>
+          </div>
         </CardHeader>
-        <CardBody className="space-y-5">
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+        <CardBody className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-4">
             {ESTIMATE_SEARCH_SOURCE_CONTROLS.map((control) => {
               const enabled = control.sourceTypes.every((sourceType) => !disabledSourceTypes.has(sourceType));
               const ControlIcon = control.Icon;
@@ -1658,8 +1691,8 @@ function EstimateSearchSubTab({
                 <div
                   key={control.label}
                   className={cn(
-                    "flex items-start gap-3 rounded-lg border px-3 py-3 transition-colors",
-                    enabled ? "border-line bg-bg/45" : "border-line/70 bg-bg/20 opacity-70",
+                    "flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors",
+                    enabled ? "border-line bg-bg/45" : "border-line/70 bg-bg/20 opacity-65",
                   )}
                 >
                   <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", control.accent)}>
@@ -1668,15 +1701,15 @@ function EstimateSearchSubTab({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-fg">{control.label}</div>
-                        <div className="mt-0.5 text-[11px] leading-4 text-fg/42">{control.detail}</div>
+                        <div className="truncate text-xs font-semibold text-fg">{control.label}</div>
+                        <div className="mt-0.5 truncate text-[10px] leading-4 text-fg/42">{control.detail}</div>
                       </div>
                       <Toggle
                         checked={enabled}
                         onChange={(checked) => setSourceTypesEnabled(control.sourceTypes, checked)}
                       />
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-1">
+                    <div className="mt-1.5 flex flex-wrap gap-1">
                       {control.sourceTypes.map((sourceType) => (
                         <span
                           key={sourceType}
@@ -1695,150 +1728,162 @@ function EstimateSearchSubTab({
                 </div>
               );
             })}
-	          </div>
+          </div>
 
-	          <Separator />
-
-            {workspace.catalogs.length > 0 && (
-              <>
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
-                        <BookOpen className="h-4 w-4 text-fg/55" />
-                        Catalogues
-                      </h4>
-                      <p className="mt-0.5 text-xs text-fg/42">
-                        Turn off quote-irrelevant catalogs while keeping catalog search available globally.
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => setCatalogsEnabled(workspace.catalogs.map((catalog) => catalog.id), true)}
-                    >
-                      Enable All
-                    </Button>
-                  </div>
-                  <div className="rounded-lg border border-line bg-bg/35">
-                    <div className="flex items-center justify-between border-b border-line bg-panel2/25 px-3 py-2 text-[11px] text-fg/45">
-                      <span>{cataloguesEnabled ? "Catalogue source enabled" : "Catalogue source disabled"}</span>
-                      <span>{Math.max(0, workspace.catalogs.length - disabledCatalogCount)}/{workspace.catalogs.length} catalogues visible</span>
-                    </div>
-                    <div className={cn("max-h-[300px] overflow-y-auto", !cataloguesEnabled && "opacity-55")}>
-                      {catalogGroups.map((group) => (
-                        <div key={group.label}>
-                          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-panel px-3 py-1.5 text-[10px] font-semibold uppercase tracking-normal text-fg/42">
-                            <span>{group.label}</span>
-                            <span>{group.items.length}</span>
-                          </div>
-                          {group.items.map((catalog) => {
-                            const enabled = !disabledCatalogIds.has(catalog.id);
-                            return (
-                              <div
-                                key={catalog.id}
-                                className={cn(
-                                  "flex items-center gap-3 border-b border-line/50 px-3 py-2 last:border-b-0",
-                                  enabled ? "bg-bg/25" : "bg-bg/10 opacity-65",
-                                )}
-                              >
-                                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-fg/10 bg-panel text-fg/55">
-                                  <BookOpen className="h-3.5 w-3.5" />
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    <span className="truncate text-xs font-semibold text-fg">{catalog.name}</span>
-                                    {catalog.scope && (
-                                      <span className="shrink-0 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] leading-3 text-fg/45">
-                                        {catalog.scope}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg/40">
-                                    {catalog.sourceDescription && <span className="truncate">{catalog.sourceDescription}</span>}
-                                    {catalog.itemCount != null && <span className="shrink-0">{catalog.itemCount.toLocaleString()} items</span>}
-                                  </div>
-                                </div>
-                                <Toggle
-                                  checked={enabled}
-                                  onChange={(checked) => setCatalogsEnabled([catalog.id], checked)}
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-lg border border-line bg-bg/35">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-panel2/25 px-3 py-3">
+                <div className="min-w-0">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
+                    <BookOpen className="h-4 w-4 text-fg/55" />
+                    Catalogs
+                  </h4>
+                  <p className="mt-0.5 text-[11px] text-fg/42">
+                    {cataloguesEnabled ? `${enabledCatalogCount}/${workspace.catalogs.length} visible` : "Source disabled"}
+                  </p>
                 </div>
-                <Separator />
-              </>
-            )}
-
-	          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
-                  <Hammer className="h-4 w-4 text-warning" />
-                  Labour Unit Libraries
-                </h4>
-                <p className="mt-0.5 text-xs text-fg/42">
-                  Hide whole labour libraries for this quote without deleting or changing the organization catalog.
-                </p>
+                <Toggle
+                  checked={cataloguesEnabled}
+                  onChange={(checked) => setSourceTypesEnabled(CATALOG_SEARCH_SOURCE_TYPES, checked)}
+                />
               </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {mechanicalLibraryIds.length > 0 && (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => setLaborLibrariesEnabled(mechanicalLibraryIds, false)}
-                  >
-                    Disable Mechanical
-                  </Button>
-                )}
-                {electricalLibraryIds.length > 0 && (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      const electrical = new Set(electricalLibraryIds);
-                      saveSettings({
-                        ...settings,
-                        disabledLaborLibraryIds: libraries
-                          .filter((library) => !electrical.has(library.id))
-                          .map((library) => library.id),
-                      });
-                    }}
-                  >
-                    Electrical Focus
-                  </Button>
-                )}
+              <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+                <div className="relative min-w-[180px] flex-1">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
+                  <Input
+                    className="h-8 pl-8 text-xs"
+                    value={catalogQuery}
+                    onChange={(event) => setCatalogQuery(event.target.value)}
+                    placeholder="Filter catalogs..."
+                  />
+                </div>
                 <Button
                   type="button"
                   size="xs"
                   variant="ghost"
-                  disabled={busy || libraries.length === 0}
-                  onClick={() => setLaborLibrariesEnabled(libraries.map((library) => library.id), true)}
+                  disabled={busy || filteredCatalogIds.length === 0}
+                  onClick={() => setCatalogsEnabled(filteredCatalogIds, true)}
                 >
-                  Enable All
+                  Enable visible
                 </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={busy || filteredCatalogIds.length === 0}
+                  onClick={() => setCatalogsEnabled(filteredCatalogIds, false)}
+                >
+                  Disable visible
+                </Button>
+              </div>
+              <div className={cn("max-h-[420px] overflow-y-auto", !cataloguesEnabled && "opacity-55")}>
+                {workspace.catalogs.length === 0 ? (
+                  <div className="px-3 py-8 text-center text-xs text-fg/42">No catalogs available.</div>
+                ) : filteredCatalogs.length === 0 ? (
+                  <div className="px-3 py-8 text-center text-xs text-fg/42">No catalogs match this filter.</div>
+                ) : (
+                  catalogGroups.map((group) => {
+                    const groupIds = group.items.map((catalog) => catalog.id);
+                    const enabledInGroup = group.items.filter((catalog) => !disabledCatalogIds.has(catalog.id)).length;
+                    const groupEnabled = enabledInGroup === group.items.length;
+                    return (
+                      <div key={group.label}>
+                        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-line bg-panel px-3 py-1.5">
+                          <div className="min-w-0">
+                            <span className="block truncate text-[10px] font-semibold uppercase tracking-normal text-fg/42">{group.label}</span>
+                            <span className="text-[10px] text-fg/32">{enabledInGroup}/{group.items.length} visible</span>
+                          </div>
+                          <Toggle
+                            checked={groupEnabled}
+                            onChange={(checked) => setCatalogsEnabled(groupIds, checked)}
+                          />
+                        </div>
+                        {group.items.map((catalog) => {
+                          const enabled = !disabledCatalogIds.has(catalog.id);
+                          const detail = catalog.sourceDescription || catalog.description || catalog.source;
+                          return (
+                            <div
+                              key={catalog.id}
+                              className={cn(
+                                "flex items-center gap-3 border-b border-line/50 px-3 py-2 last:border-b-0",
+                                enabled ? "bg-bg/25" : "bg-bg/10 opacity-65",
+                              )}
+                            >
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-fg/10 bg-panel text-fg/55">
+                                <BookOpen className="h-3.5 w-3.5" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate text-xs font-semibold text-fg">{catalog.name}</span>
+                                  {catalog.scope && (
+                                    <span className="shrink-0 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] leading-3 text-fg/45">
+                                      {catalog.scope}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg/40">
+                                  {detail && <span className="truncate">{detail}</span>}
+                                  {catalog.itemCount != null && <span className="shrink-0">{catalog.itemCount.toLocaleString()} items</span>}
+                                </div>
+                              </div>
+                              <Toggle
+                                checked={enabled}
+                                onChange={(checked) => setCatalogsEnabled([catalog.id], checked)}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 
             <div className="rounded-lg border border-line bg-bg/35">
-              <div className="flex items-center justify-between border-b border-line bg-panel2/25 px-3 py-2 text-[11px] text-fg/45">
-                <span>
-                  {labourLibrariesEnabled ? "Labour unit source enabled" : "Labour unit source disabled"}
-                </span>
-                <span>
-                  {Math.max(0, libraries.length - disabledLibraryCount)}/{libraries.length} libraries visible
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-panel2/25 px-3 py-3">
+                <div className="min-w-0">
+                  <h4 className="flex items-center gap-2 text-sm font-semibold text-fg">
+                    <Hammer className="h-4 w-4 text-warning" />
+                    Labour Unit Libraries
+                  </h4>
+                  <p className="mt-0.5 text-[11px] text-fg/42">
+                    {labourLibrariesEnabled ? `${enabledLibraryCount}/${libraries.length} visible` : "Source disabled"}
+                  </p>
+                </div>
+                <Toggle
+                  checked={labourLibrariesEnabled}
+                  onChange={(checked) => setSourceTypesEnabled(LABOR_SEARCH_SOURCE_TYPES, checked)}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
+                <div className="relative min-w-[180px] flex-1">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
+                  <Input
+                    className="h-8 pl-8 text-xs"
+                    value={libraryQuery}
+                    onChange={(event) => setLibraryQuery(event.target.value)}
+                    placeholder="Filter libraries..."
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={busy || filteredLibraryIds.length === 0}
+                  onClick={() => setLaborLibrariesEnabled(filteredLibraryIds, true)}
+                >
+                  Enable visible
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  disabled={busy || filteredLibraryIds.length === 0}
+                  onClick={() => setLaborLibrariesEnabled(filteredLibraryIds, false)}
+                >
+                  Disable visible
+                </Button>
               </div>
               {librariesLoading ? (
                 <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
@@ -1846,53 +1891,67 @@ function EstimateSearchSubTab({
                   Loading labour libraries...
                 </div>
               ) : libraryError ? (
-                <div className="px-3 py-6 text-center text-xs text-danger">{libraryError}</div>
+                <div className="px-3 py-8 text-center text-xs text-danger">{libraryError}</div>
               ) : libraries.length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs text-fg/42">No labour unit libraries available.</div>
+                <div className="px-3 py-8 text-center text-xs text-fg/42">No labour unit libraries available.</div>
+              ) : filteredLibraries.length === 0 ? (
+                <div className="px-3 py-8 text-center text-xs text-fg/42">No libraries match this filter.</div>
               ) : (
                 <div className={cn("max-h-[420px] overflow-y-auto", !labourLibrariesEnabled && "opacity-55")}>
-                  {libraryGroups.map((group) => (
-                    <div key={group.label}>
-                      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-panel px-3 py-1.5 text-[10px] font-semibold uppercase tracking-normal text-fg/42">
-                        <span>{group.label}</span>
-                        <span>{group.items.length}</span>
-                      </div>
-                      {group.items.map((library) => {
-                        const enabled = !disabledLaborLibraryIds.has(library.id);
-                        return (
-                          <div
-                            key={library.id}
-                            className={cn(
-                              "flex items-center gap-3 border-b border-line/50 px-3 py-2 last:border-b-0",
-                              enabled ? "bg-bg/25" : "bg-bg/10 opacity-65",
-                            )}
-                          >
-                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-warning/20 bg-warning/8 text-warning">
-                              <Hammer className="h-3.5 w-3.5" />
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <span className="truncate text-xs font-semibold text-fg">{library.name}</span>
-                                {library.provider && (
-                                  <span className="shrink-0 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] leading-3 text-fg/45">
-                                    {library.provider}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg/40">
-                                {library.sourceDescription && <span className="truncate">{library.sourceDescription}</span>}
-                                {library.unitCount != null && <span className="shrink-0">{library.unitCount.toLocaleString()} units</span>}
-                              </div>
-                            </div>
-                            <Toggle
-                              checked={enabled}
-                              onChange={(checked) => setLaborLibrariesEnabled([library.id], checked)}
-                            />
+                  {libraryGroups.map((group) => {
+                    const groupIds = group.items.map((library) => library.id);
+                    const enabledInGroup = group.items.filter((library) => !disabledLaborLibraryIds.has(library.id)).length;
+                    const groupEnabled = enabledInGroup === group.items.length;
+                    return (
+                      <div key={group.label}>
+                        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-line bg-panel px-3 py-1.5">
+                          <div className="min-w-0">
+                            <span className="block truncate text-[10px] font-semibold uppercase tracking-normal text-fg/42">{group.label}</span>
+                            <span className="text-[10px] text-fg/32">{enabledInGroup}/{group.items.length} visible</span>
                           </div>
-                        );
-                      })}
-                    </div>
-                  ))}
+                          <Toggle
+                            checked={groupEnabled}
+                            onChange={(checked) => setLaborLibrariesEnabled(groupIds, checked)}
+                          />
+                        </div>
+                        {group.items.map((library) => {
+                          const enabled = !disabledLaborLibraryIds.has(library.id);
+                          const detail = library.sourceDescription || library.description || library.source;
+                          return (
+                            <div
+                              key={library.id}
+                              className={cn(
+                                "flex items-center gap-3 border-b border-line/50 px-3 py-2 last:border-b-0",
+                                enabled ? "bg-bg/25" : "bg-bg/10 opacity-65",
+                              )}
+                            >
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-warning/20 bg-warning/8 text-warning">
+                                <Hammer className="h-3.5 w-3.5" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className="truncate text-xs font-semibold text-fg">{library.name}</span>
+                                  {library.provider && (
+                                    <span className="shrink-0 rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] leading-3 text-fg/45">
+                                      {library.provider}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] leading-3 text-fg/40">
+                                  {detail && <span className="truncate">{detail}</span>}
+                                  {library.unitCount != null && <span className="shrink-0">{library.unitCount.toLocaleString()} units</span>}
+                                </div>
+                              </div>
+                              <Toggle
+                                checked={enabled}
+                                onChange={(checked) => setLaborLibrariesEnabled([library.id], checked)}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1931,18 +1990,31 @@ function OtherSubTab({
   const [followUpNote, setFollowUpNote] = useState(rev.followUpNote ?? "");
   const [userId, setUserId] = useState(quote.userId ?? "");
   const [orgUsers, setOrgUsers] = useState<AuthUser[]>([]);
+  const saveQuoteRef = useRef(saveQuote);
+  saveQuoteRef.current = saveQuote;
+  const currentUserEmail = currentUser?.email.trim().toLowerCase() ?? "";
+  const currentOrgUser = useMemo(() => {
+    if (!currentUser) return null;
+    return orgUsers.find((u) => u.id === currentUser.id)
+      ?? orgUsers.find((u) => currentUserEmail && u.email.trim().toLowerCase() === currentUserEmail)
+      ?? null;
+  }, [currentUser, currentUserEmail, orgUsers]);
 
-  // Load org users and auto-fill with current user if not yet assigned
+  // Load org users. The authenticated identity can be a super admin while
+  // impersonating, so quote.userId must come from the organization users list.
   useEffect(() => {
+    let cancelled = false;
     listUsers().then((users) => {
-      setOrgUsers(users.filter((u) => u.active));
-      // Auto-fill with current user if userId is empty
-      if (!quote.userId && currentUser?.id) {
-        setUserId(currentUser.id);
-        saveQuote({ userId: currentUser.id });
-      }
+      if (!cancelled) setOrgUsers(users.filter((u) => u.active));
     }).catch(() => {});
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (quote.userId || !currentOrgUser) return;
+    setUserId(currentOrgUser.id);
+    saveQuoteRef.current({ userId: currentOrgUser.id });
+  }, [currentOrgUser, quote.userId]);
 
   const otherStateRef = useRef({ dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote });
   otherStateRef.current = { dateEstimatedShip, shippingMethod, freightOnBoard, dateWalkdown, dateWorkStart, dateWorkEnd, followUpNote };
@@ -2090,7 +2162,7 @@ function OtherSubTab({
                             <Check className="h-3 w-3" />
                           </RadixSelect.ItemIndicator>
                           <RadixSelect.ItemText>
-                            {u.name}{u.id === currentUser?.id ? " (you)" : ""}
+                            {u.name}{u.id === currentOrgUser?.id ? " (you)" : ""}
                           </RadixSelect.ItemText>
                           <span className="ml-auto text-[10px] text-fg/30">{u.role}</span>
                         </RadixSelect.Item>

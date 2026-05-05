@@ -50,7 +50,13 @@ import {
   SearchableModelSelect,
   TagInput,
 } from "@/components/settings-page-helpers";
+import { OrganizationImportExportPage } from "@/components/organization-import-export-page";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
+import {
+  CALCULATION_TYPE_OPTIONS,
+  getCalculationPreset,
+  getCalculationTypeOption,
+} from "@/lib/entity-category-calculation";
 import {
   CURRENCIES,
   DATA_SUBTABS,
@@ -88,12 +94,17 @@ import {
   updateBrand as apiUpdateBrand,
   captureBrand as apiCaptureBrand,
   getEntityCategories as apiGetCategories,
+  createEntityCategory as apiCreateCategory,
+  updateEntityCategory as apiUpdateCategory,
+  deleteEntityCategory as apiDeleteCategory,
+  reorderEntityCategories as apiReorderCategories,
   getDepartments as apiGetDepartments,
   createDepartment as apiCreateDepartment,
   updateDepartment as apiUpdateDepartment,
   deleteDepartment as apiDeleteDepartment,
   type AppSettingsRecord,
   type BrandProfile,
+  type CalculationType,
   type EntityCategory,
   type Department,
   testProviderKey as apiTestProviderKey,
@@ -144,14 +155,15 @@ import { setCachedUoms } from "@/components/shared/uom-select";
 // ── Main Component ───────────────────────────────────────────────────────────
 
 function resolveSettingsNavigation(tabParam: string | null, groupParam: string | null) {
-  const validGroups: SettingsGroup[] = ["organization", "data", "integrations", "users"];
+  const validGroups: SettingsGroup[] = ["organization", "data", "importExport", "integrations", "users"];
   const dataTabAliases: Record<string, DataSubTab> = {
+    categories: "categories",
     units: "uoms",
     uoms: "uoms",
     conditions: "conditions",
     factors: "factors",
   };
-  const removedLibraryTabs = new Set(["categories", "items", "catalogs", "assemblies", "rates", "resource-catalog", "cost-database"]);
+  const removedLibraryTabs = new Set(["items", "catalogs", "assemblies", "rates", "resource-catalog", "cost-database"]);
 
   const orgTabs = new Set<OrgSubTab>(ORG_SUBTABS.map((tab) => tab.id));
   const integrationTabs = new Set<IntegrationsSubTab>(INTEGRATIONS_SUBTABS.map((tab) => tab.id));
@@ -161,13 +173,18 @@ function resolveSettingsNavigation(tabParam: string | null, groupParam: string |
   const removedLibraryTab = tabParam ? removedLibraryTabs.has(tabParam) : false;
 
   const groupFromParam = validGroups.includes(groupParam as SettingsGroup) ? (groupParam as SettingsGroup) : undefined;
-  const groupFromTabParam = validGroups.includes(tabParam as SettingsGroup) ? (tabParam as SettingsGroup) : undefined;
+  const importExportAliases = new Set(["import-export", "import_export", "importExport", "import", "export", "migration"]);
+  const groupFromTabParam = validGroups.includes(tabParam as SettingsGroup)
+    ? (tabParam as SettingsGroup)
+    : tabParam && importExportAliases.has(tabParam)
+      ? "importExport"
+      : undefined;
   const group: SettingsGroup = groupFromParam ?? (dataTab || removedLibraryTab ? "data" : orgTab ? "organization" : integrationTab ? "integrations" : groupFromTabParam ?? "organization");
 
   return {
     group,
     orgSubTab: orgTab ?? "general",
-    dataSubTab: dataTab ?? "uoms",
+    dataSubTab: dataTab ?? "categories",
     integrationsSubTab: integrationTab ?? "email",
   };
 }
@@ -348,6 +365,8 @@ export function SettingsPage({
             llmModel: apiSettings.integrations.llmModel || prev.integrations.llmModel,
             azureDiEndpoint: (apiSettings.integrations as any).azureDiEndpoint || prev.integrations.azureDiEndpoint,
             azureDiKey: (apiSettings.integrations as any).azureDiKey || prev.integrations.azureDiKey,
+            documentExtractionProvider: (apiSettings.integrations as any).documentExtractionProvider || prev.integrations.documentExtractionProvider,
+            azureDiModel: (apiSettings.integrations as any).azureDiModel || prev.integrations.azureDiModel,
             agentRuntime: (apiSettings.integrations as any).agentRuntime || prev.integrations.agentRuntime,
             agentModel: (apiSettings.integrations as any).agentModel || prev.integrations.agentModel,
             agentReasoningEffort: (apiSettings.integrations as any).agentReasoningEffort || prev.integrations.agentReasoningEffort,
@@ -403,7 +422,7 @@ export function SettingsPage({
       .catch(() => {});
   }, []);
 
-  // Load entity categories for plugin authoring only. The management surface now lives in Library.
+  // Keep plugin authoring supplied with the org category schema.
   useEffect(() => {
     apiGetCategories().then(setPluginEntityCategories).catch(() => {});
   }, []);
@@ -617,6 +636,8 @@ export function SettingsPage({
         llmModel: settings.integrations.llmModel,
         azureDiEndpoint: settings.integrations.azureDiEndpoint,
         azureDiKey: settings.integrations.azureDiKey,
+        documentExtractionProvider: settings.integrations.documentExtractionProvider,
+        azureDiModel: settings.integrations.azureDiModel,
         agentRuntime: (settings.integrations as any).agentRuntime ?? null,
         agentModel: (settings.integrations as any).agentModel ?? null,
         agentReasoningEffort: (settings.integrations as any).agentReasoningEffort ?? "extra_high",
@@ -1456,8 +1477,35 @@ export function SettingsPage({
                   {/* Azure Document Intelligence */}
                   <div>
                     <p className="text-xs font-medium text-fg/60 mb-2">Azure Document Intelligence</p>
-                    <p className="text-[10px] text-fg/40 mb-3">Used for OCR extraction from scanned PDFs, structured table extraction, and form key-value pair detection.</p>
+                    <p className="text-[10px] text-fg/40 mb-3">Primary extraction for PDFs, Office files, images, HTML, structured tables, and form key-value pairs.</p>
                     <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <Label>Document extraction</Label>
+                          <Select
+                            value={settings.integrations.documentExtractionProvider}
+                            onValueChange={(value) => updateIntegrations({ documentExtractionProvider: value as IntegrationSettings["documentExtractionProvider"] })}
+                            options={[
+                              { value: "azure", label: "Azure first" },
+                              { value: "auto", label: "Auto fallback" },
+                              { value: "local", label: "Local only" },
+                            ]}
+                          />
+                        </div>
+                        <div>
+                          <Label>Azure model</Label>
+                          <Select
+                            value={settings.integrations.azureDiModel}
+                            onValueChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
+                            options={[
+                              { value: "prebuilt-layout", label: "Layout" },
+                              { value: "prebuilt-read", label: "Read" },
+                              { value: "prebuilt-document", label: "Document" },
+                              { value: "prebuilt-invoice", label: "Invoice" },
+                            ]}
+                          />
+                        </div>
+                      </div>
                       <div>
                         <Label>Endpoint</Label>
                         <Input
@@ -1509,6 +1557,23 @@ export function SettingsPage({
           {activeGroup === "data" && dataSubTab === "uoms" && (
             <UomSettingsPanel uoms={uomLibrary} onChange={updateUomLibrary} />
           )}
+          {activeGroup === "data" && dataSubTab === "categories" && (
+            <EntityCategorySettingsPanel
+              uoms={uomLibrary}
+              onCategoriesChange={setPluginEntityCategories}
+            />
+          )}
+
+          {activeGroup === "importExport" && (
+            <OrganizationImportExportPage
+              organizationName={currentOrganization?.name}
+              settings={settings}
+              brand={brand}
+              users={settings.users}
+              datasets={initialDatasets}
+            />
+          )}
+
           {/* ── Departments Tab ──────────────────────────────────────── */}
           {activeGroup === "organization" && orgSubTab === "departments" && (
             <Card>
@@ -2271,6 +2336,538 @@ export function SettingsPage({
       )}
 
     </div>
+  );
+}
+
+const ENTITY_CATEGORY_CALCULATION_OPTIONS = CALCULATION_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }));
+
+const ENTITY_CATEGORY_ITEM_SOURCE_OPTIONS: Array<{ value: EntityCategory["itemSource"]; label: string; description: string }> = [
+  { value: "freeform", label: "Freeform", description: "Estimator-entered rows that are not forced through a library source." },
+  { value: "rate_schedule", label: "Ratebook", description: "Rows are selected from rate schedules and priced from tiers." },
+  { value: "catalog", label: "Catalog", description: "Rows are selected from catalog resources and priced from catalog data." },
+];
+
+const ENTITY_CATEGORY_ANALYTICS_BUCKET_OPTIONS = [
+  { value: "", label: "No roll-up bucket" },
+  { value: "labour", label: "Labour" },
+  { value: "material", label: "Material" },
+  { value: "equipment", label: "Equipment" },
+  { value: "subcontractor", label: "Subcontractor" },
+  { value: "allowance", label: "Allowance" },
+];
+
+const ENTITY_CATEGORY_EDITABLE_FIELDS: Array<{ key: keyof EntityCategory["editableFields"]; label: string }> = [
+  { key: "quantity", label: "Quantity" },
+  { key: "cost", label: "Cost" },
+  { key: "markup", label: "Markup" },
+  { key: "price", label: "Price" },
+  { key: "tierUnits", label: "Tier units" },
+];
+
+const NEW_ENTITY_CATEGORY_TEMPLATE: Omit<EntityCategory, "id"> = {
+  name: "",
+  entityType: "",
+  shortform: "",
+  defaultUom: "EA",
+  validUoms: ["EA"],
+  editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: false },
+  unitLabels: {},
+  calculationType: "manual",
+  calcFormula: "",
+  itemSource: "freeform",
+  catalogId: null,
+  analyticsBucket: null,
+  color: "#6366f1",
+  order: 999,
+  isBuiltIn: false,
+  enabled: true,
+};
+
+type EntityCategoryDrawer =
+  | { mode: "create"; category: EntityCategory }
+  | { mode: "edit"; category: EntityCategory };
+
+function sortEntityCategories(categories: EntityCategory[]) {
+  return [...categories].sort((a, b) => {
+    const order = (a.order ?? 0) - (b.order ?? 0);
+    return order !== 0 ? order : a.name.localeCompare(b.name);
+  });
+}
+
+function cloneEntityCategory(category: EntityCategory): EntityCategory {
+  return {
+    ...category,
+    validUoms: [...(category.validUoms ?? [])],
+    editableFields: { ...category.editableFields },
+    unitLabels: { ...(category.unitLabels ?? {}) },
+  };
+}
+
+function buildNewEntityCategory(order: number): EntityCategory {
+  return {
+    ...cloneEntityCategory({ ...NEW_ENTITY_CATEGORY_TEMPLATE, id: `new-${Date.now()}`, order }),
+    validUoms: [...NEW_ENTITY_CATEGORY_TEMPLATE.validUoms],
+    editableFields: { ...NEW_ENTITY_CATEGORY_TEMPLATE.editableFields },
+    unitLabels: { ...NEW_ENTITY_CATEGORY_TEMPLATE.unitLabels },
+  };
+}
+
+function normalizeCategoryForSave(category: EntityCategory): EntityCategory {
+  const defaultUom = normalizeUomCode(category.defaultUom) || "EA";
+  const validUoms = Array.from(
+    new Set([defaultUom, ...(category.validUoms ?? []).map(normalizeUomCode)].filter(Boolean)),
+  );
+  const itemSource = category.itemSource ?? "freeform";
+  return {
+    ...category,
+    name: category.name.trim(),
+    entityType: category.entityType.trim(),
+    shortform: category.shortform.trim().slice(0, 4).toUpperCase(),
+    defaultUom,
+    validUoms,
+    editableFields: {
+      quantity: Boolean(category.editableFields?.quantity),
+      cost: Boolean(category.editableFields?.cost),
+      markup: Boolean(category.editableFields?.markup),
+      price: Boolean(category.editableFields?.price),
+      tierUnits: Boolean(category.editableFields?.tierUnits),
+    },
+    unitLabels: { ...(category.unitLabels ?? {}) },
+    calculationType: category.calculationType,
+    calcFormula: category.calcFormula.trim(),
+    itemSource,
+    catalogId: itemSource === "catalog" ? category.catalogId ?? null : null,
+    analyticsBucket: category.analyticsBucket?.trim() || null,
+    color: category.color.trim() || "#6b7280",
+  };
+}
+
+function EntityCategorySettingsPanel({
+  uoms,
+  onCategoriesChange,
+}: {
+  uoms: UnitOfMeasure[];
+  onCategoriesChange?: (categories: EntityCategory[]) => void;
+}) {
+  const [categories, setCategories] = useState<EntityCategory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<EntityCategoryDrawer | null>(null);
+  const [draft, setDraft] = useState<EntityCategory | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  const uomOptions = useMemo<MultiSelectOption[]>(() => {
+    const normalized = normalizeUomLibrary(uoms).filter((unit) => unit.active);
+    return normalized.map((unit) => ({
+      value: unit.code,
+      label: unit.label ? `${unit.code} · ${unit.label}` : unit.code,
+      description: unit.description,
+    }));
+  }, [uoms]);
+
+  const publishCategories = useCallback((nextCategories: EntityCategory[]) => {
+    const sorted = sortEntityCategories(nextCategories);
+    setCategories(sorted);
+    onCategoriesChange?.(sorted);
+  }, [onCategoriesChange]);
+
+  const loadCategories = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const rows = await apiGetCategories();
+      publishCategories(rows);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to load categories");
+    } finally {
+      setLoading(false);
+    }
+  }, [publishCategories]);
+
+  useEffect(() => {
+    void loadCategories();
+  }, [loadCategories]);
+
+  const openCreateDrawer = () => {
+    const category = buildNewEntityCategory(categories.length);
+    setDrawer({ mode: "create", category });
+    setDraft(category);
+    setDeleteConfirmId(null);
+    setError(null);
+  };
+
+  const openEditDrawer = (category: EntityCategory) => {
+    const copy = cloneEntityCategory(category);
+    setDrawer({ mode: "edit", category });
+    setDraft(copy);
+    setDeleteConfirmId(null);
+    setError(null);
+  };
+
+  const updateDraft = (patch: Partial<EntityCategory>) => {
+    setDraft((current) => (current ? { ...current, ...patch } : current));
+  };
+
+  const updateEditableField = (key: keyof EntityCategory["editableFields"], value: boolean) => {
+    setDraft((current) => current ? {
+      ...current,
+      editableFields: { ...current.editableFields, [key]: value },
+    } : current);
+  };
+
+  const applyCalculationPreset = () => {
+    setDraft((current) => {
+      if (!current) return current;
+      const preset = getCalculationPreset(current.calculationType);
+      return {
+        ...current,
+        editableFields: { ...current.editableFields, ...preset.editableFields },
+        unitLabels: { ...current.unitLabels, ...preset.unitLabels },
+      };
+    });
+  };
+
+  const saveCategory = async () => {
+    if (!drawer || !draft) return;
+    const payload = normalizeCategoryForSave(draft);
+    if (!payload.name || !payload.entityType) {
+      setError("Name and entity type are required.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = drawer.mode === "create"
+        ? await apiCreateCategory(payload)
+        : await apiUpdateCategory(drawer.category.id, payload);
+      publishCategories([saved, ...categories.filter((category) => category.id !== drawer.category.id && category.id !== saved.id)]);
+      setDrawer(null);
+      setDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to save category");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleCategoryEnabled = async (category: EntityCategory, enabled: boolean) => {
+    const previous = categories;
+    publishCategories(categories.map((candidate) => candidate.id === category.id ? { ...candidate, enabled } : candidate));
+    setError(null);
+    try {
+      const saved = await apiUpdateCategory(category.id, { enabled });
+      publishCategories(categories.map((candidate) => candidate.id === category.id ? saved : candidate));
+    } catch (cause) {
+      publishCategories(previous);
+      setError(cause instanceof Error ? cause.message : "Failed to update category");
+    }
+  };
+
+  const moveCategory = async (category: EntityCategory, direction: -1 | 1) => {
+    const sorted = sortEntityCategories(categories);
+    const index = sorted.findIndex((candidate) => candidate.id === category.id);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= sorted.length) return;
+    const next = [...sorted];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    const reordered = next.map((candidate, order) => ({ ...candidate, order }));
+    const previous = categories;
+    publishCategories(reordered);
+    setError(null);
+    try {
+      await apiReorderCategories(reordered.map((candidate) => candidate.id));
+    } catch (cause) {
+      publishCategories(previous);
+      setError(cause instanceof Error ? cause.message : "Failed to reorder categories");
+    }
+  };
+
+  const deleteCategory = async (category: EntityCategory) => {
+    if (deleteConfirmId !== category.id) {
+      setDeleteConfirmId(category.id);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await apiDeleteCategory(category.id);
+      publishCategories(categories.filter((candidate) => candidate.id !== category.id));
+      setDrawer(null);
+      setDraft(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to delete category");
+    } finally {
+      setSaving(false);
+      setDeleteConfirmId(null);
+    }
+  };
+
+  const enabledCount = categories.filter((category) => category.enabled).length;
+  const disabledCount = categories.length - enabledCount;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-4">
+        <div>
+          <CardTitle>Entity Categories</CardTitle>
+          <p className="mt-1 text-xs text-fg/45">
+            Organization-level estimate schema for row behavior, pricing mode, units, and analytics roll-ups.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge tone="info" className="text-[10px]">{enabledCount} enabled</Badge>
+          {disabledCount > 0 ? <Badge tone="default" className="text-[10px]">{disabledCount} disabled</Badge> : null}
+          <Button variant="accent" size="xs" onClick={openCreateDrawer}>
+            <Plus className="h-3.5 w-3.5" />
+            Add Category
+          </Button>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-3">
+        {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div> : null}
+        {loading ? (
+          <div className="flex items-center gap-2 py-8 text-xs text-fg/45">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading categories...
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-line">
+            <div className="grid grid-cols-[minmax(190px,1.2fr)_130px_150px_130px_120px_86px_92px] gap-2 bg-panel2/60 px-3 py-2 text-[10px] font-medium uppercase text-fg/35">
+              <div>Category</div>
+              <div>Source</div>
+              <div>Calculation</div>
+              <div>Bucket</div>
+              <div>Default UOM</div>
+              <div>Status</div>
+              <div />
+            </div>
+            {categories.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-fg/40">
+                No categories configured. Add one to define how estimate rows behave.
+              </div>
+            ) : categories.map((category, index) => {
+              const calculation = getCalculationTypeOption(category.calculationType);
+              const source = ENTITY_CATEGORY_ITEM_SOURCE_OPTIONS.find((option) => option.value === category.itemSource);
+              return (
+                <div
+                  key={category.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openEditDrawer(category)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openEditDrawer(category);
+                    }
+                  }}
+                  className="grid cursor-pointer grid-cols-[minmax(190px,1.2fr)_130px_150px_130px_120px_86px_92px] items-center gap-2 border-t border-line px-3 py-2 text-xs transition-colors hover:bg-panel2/40"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: category.color || "#6b7280" }} />
+                      <span className="truncate font-medium text-fg">{category.name || "Untitled"}</span>
+                      {category.shortform ? <Badge className="shrink-0 text-[10px]">{category.shortform}</Badge> : null}
+                    </div>
+                    <div className="mt-1 truncate text-[10px] text-fg/40">{category.entityType || "No entity type"}</div>
+                  </div>
+                  <div className="truncate text-fg/55">{source?.label ?? category.itemSource}</div>
+                  <div className="truncate text-fg/55">{calculation.label}</div>
+                  <div className="truncate text-fg/55">{category.analyticsBucket || "-"}</div>
+                  <div className="font-mono text-[11px] text-fg/55">{category.defaultUom}</div>
+                  <div onClick={(event) => event.stopPropagation()}>
+                    <Toggle checked={category.enabled} onChange={(checked) => toggleCategoryEnabled(category, checked)} />
+                  </div>
+                  <div className="flex items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
+                    <Button variant="ghost" size="xs" className="h-7 px-2" disabled={index === 0 || saving} onClick={() => moveCategory(category, -1)} title="Move up">
+                      <ChevronDown className="h-3.5 w-3.5 rotate-180" />
+                    </Button>
+                    <Button variant="ghost" size="xs" className="h-7 px-2" disabled={index === categories.length - 1 || saving} onClick={() => moveCategory(category, 1)} title="Move down">
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardBody>
+
+      {drawer && draft && typeof document !== "undefined" && createPortal(
+        <AnimatePresence>
+          <motion.div
+            key="entity-category-drawer-backdrop"
+            className="fixed inset-0 z-40 bg-black/25"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setDrawer(null)}
+          />
+          <motion.aside
+            key="entity-category-drawer-panel"
+            className="fixed bottom-0 right-0 top-0 z-50 flex w-full max-w-[560px] flex-col border-l border-line bg-panel shadow-2xl"
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+          >
+            <div className="flex items-center justify-between border-b border-line px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: draft.color || "#6b7280" }} />
+                  <div className="truncate text-sm font-semibold text-fg">{drawer.mode === "edit" ? draft.name || "Edit Category" : "Create Category"}</div>
+                </div>
+                <div className="mt-1 truncate text-[11px] text-fg/45">{draft.entityType || "Organization estimate schema"}</div>
+              </div>
+              <button className="rounded p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg" onClick={() => setDrawer(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-5 overflow-auto p-5">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Name</Label>
+                  <Input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} placeholder="Labour" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Shortform</Label>
+                  <Input
+                    value={draft.shortform}
+                    onChange={(event) => updateDraft({ shortform: event.target.value.slice(0, 4).toUpperCase() })}
+                    placeholder="LAB"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Entity Type</Label>
+                  <Input value={draft.entityType} onChange={(event) => updateDraft({ entityType: event.target.value })} placeholder="Labour" />
+                </div>
+                <ColorField label="Color" value={draft.color} onChange={(color) => updateDraft({ color })} />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label>Item Source</Label>
+                    <Select
+                      value={draft.itemSource}
+                      onValueChange={(itemSource) => updateDraft({ itemSource: itemSource as EntityCategory["itemSource"] })}
+                      options={ENTITY_CATEGORY_ITEM_SOURCE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+                    />
+                    <p className="text-[11px] text-fg/40">
+                      {ENTITY_CATEGORY_ITEM_SOURCE_OPTIONS.find((option) => option.value === draft.itemSource)?.description}
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Analytics Bucket</Label>
+                    <Select
+                      value={draft.analyticsBucket ?? ""}
+                      onValueChange={(analyticsBucket) => updateDraft({ analyticsBucket: analyticsBucket || null })}
+                      options={ENTITY_CATEGORY_ANALYTICS_BUCKET_OPTIONS}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
+                  <div className="space-y-1.5">
+                    <Label>Default UOM</Label>
+                    <Select
+                      value={draft.defaultUom}
+                      onValueChange={(defaultUom) => updateDraft({ defaultUom, validUoms: Array.from(new Set([defaultUom, ...(draft.validUoms ?? [])])) })}
+                      options={uomOptions.map((option) => ({ value: option.value, label: option.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Valid UOMs</Label>
+                    <MultiSelect
+                      options={uomOptions}
+                      selected={draft.validUoms ?? []}
+                      onChange={(validUoms) => updateDraft({ validUoms: Array.from(new Set([draft.defaultUom, ...validUoms])) })}
+                      placeholder="Select valid units"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase text-fg/60">Calculation</p>
+                    <p className="mt-1 text-[11px] text-fg/40">{getCalculationTypeOption(draft.calculationType).description}</p>
+                  </div>
+                  <Button variant="secondary" size="xs" onClick={applyCalculationPreset}>Apply Preset</Button>
+                </div>
+                <Select
+                  value={draft.calculationType}
+                  onValueChange={(calculationType) => updateDraft({ calculationType: calculationType as CalculationType })}
+                  options={ENTITY_CATEGORY_CALCULATION_OPTIONS}
+                />
+                {draft.calculationType === "formula" ? (
+                  <div className="space-y-1.5">
+                    <Label>Formula</Label>
+                    <Input value={draft.calcFormula} onChange={(event) => updateDraft({ calcFormula: event.target.value })} placeholder="quantity * cost * (1 + markup)" />
+                  </div>
+                ) : null}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs font-medium uppercase text-fg/60">Editable Fields</p>
+                  <p className="mt-1 text-[11px] text-fg/40">Controls which columns estimators can edit for rows in this category.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {ENTITY_CATEGORY_EDITABLE_FIELDS.map((field) => (
+                    <label key={field.key} className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg/35 px-3 py-2 text-xs text-fg/75">
+                      <span>{field.label}</span>
+                      <Toggle checked={Boolean(draft.editableFields?.[field.key])} onChange={(checked) => updateEditableField(field.key, checked)} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-panel2/35 px-3 py-2">
+                <div>
+                  <div className="text-xs font-medium text-fg">Enabled</div>
+                  <div className="mt-0.5 text-[11px] text-fg/40">Disabled categories remain preserved but stop appearing as active estimate choices.</div>
+                </div>
+                <Toggle checked={draft.enabled} onChange={(enabled) => updateDraft({ enabled })} />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-4">
+              <div>
+                {drawer.mode === "edit" && !draft.isBuiltIn ? (
+                  <Button variant={deleteConfirmId === drawer.category.id ? "danger" : "ghost"} size="sm" onClick={() => deleteCategory(drawer.category)} disabled={saving}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {deleteConfirmId === drawer.category.id ? "Confirm Delete" : "Delete"}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
+                <Button variant="accent" size="sm" onClick={saveCategory} disabled={saving || !draft.name.trim() || !draft.entityType.trim()}>
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save
+                </Button>
+              </div>
+            </div>
+          </motion.aside>
+        </AnimatePresence>,
+        document.body,
+      )}
+    </Card>
   );
 }
 

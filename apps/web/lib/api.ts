@@ -138,9 +138,59 @@ export interface WorkspaceWorksheetItem {
   sourceAssemblyId?: string | null;
   assemblyInstanceId?: string | null;
   tierUnits?: Record<string, number>;
+  rateResolution?: RateResolutionSnapshot | null;
   sourceNotes?: string;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: Record<string, unknown>;
+}
+
+export interface RateResolutionComponent {
+  id: string;
+  code: string;
+  label: string;
+  kind: string;
+  source: "rate_book" | "manual" | "catalog" | "system";
+  target: "cost" | "price" | "both";
+  basis: string;
+  quantity: number;
+  rate: number;
+  amount: number;
+  rateBookId?: string | null;
+  rateBookItemId?: string | null;
+  tierId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface RateResolutionSnapshot {
+  source: "rate_book" | "manual";
+  engineVersion: number;
+  resolvedAt: string;
+  projectId?: string | null;
+  revisionId?: string | null;
+  customerId?: string | null;
+  customerName?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
+  entityType?: string | null;
+  rateBookId?: string | null;
+  rateBookName?: string | null;
+  rateBookItemId?: string | null;
+  rateBookItemName?: string | null;
+  resourceId?: string | null;
+  catalogItemId?: string | null;
+  currency?: string;
+  region?: string;
+  quantity: number;
+  uom: string;
+  tierUnits: Record<string, number>;
+  components: RateResolutionComponent[];
+  baseCost: number;
+  basePrice: number;
+  totalCost: number;
+  unitCost: number;
+  totalPrice: number;
+  markup: number;
+  warnings: string[];
 }
 
 export interface WorkspaceWorksheet {
@@ -1552,6 +1602,7 @@ export interface WorksheetItemPatchInput {
   effectiveCostId?: string | null;
   laborUnitId?: string | null;
   tierUnits?: Record<string, number>;
+  rateResolution?: RateResolutionSnapshot | null;
   sourceNotes?: string;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: Record<string, unknown>;
@@ -1579,6 +1630,7 @@ export interface CreateWorksheetItemInput {
   effectiveCostId?: string | null;
   laborUnitId?: string | null;
   tierUnits?: Record<string, number>;
+  rateResolution?: RateResolutionSnapshot | null;
   sourceNotes?: string;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: Record<string, unknown>;
@@ -2455,6 +2507,7 @@ export interface RateScheduleItem {
   id: string;
   scheduleId: string;
   catalogItemId: string | null;
+  resourceId?: string | null;
   code: string;
   name: string;
   unit: string;
@@ -2485,6 +2538,75 @@ export interface RateSchedule {
   updatedAt: string;
   tiers: RateScheduleTier[];
   items: RateScheduleItem[];
+}
+
+export interface RateBookAssignment {
+  id: string;
+  organizationId: string;
+  rateScheduleId: string;
+  customerId: string | null;
+  projectId: string | null;
+  category: string;
+  priority: number;
+  active: boolean;
+  effectiveDate: string | null;
+  expiryDate: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listRateBookAssignments(filters: {
+  customerId?: string | null;
+  projectId?: string | null;
+  category?: string | null;
+  active?: boolean;
+} = {}): Promise<RateBookAssignment[]> {
+  const params = new URLSearchParams();
+  if (filters.customerId) params.set("customerId", filters.customerId);
+  if (filters.projectId) params.set("projectId", filters.projectId);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.active !== undefined) params.set("active", String(filters.active));
+  const query = params.toString();
+  return apiRequest<RateBookAssignment[]>(`/api/rate-book-assignments${query ? `?${query}` : ""}`);
+}
+
+export async function createRateBookAssignment(input: {
+  rateScheduleId: string;
+  customerId?: string | null;
+  projectId?: string | null;
+  category?: string | null;
+  priority?: number;
+  active?: boolean;
+  effectiveDate?: string | null;
+  expiryDate?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<RateBookAssignment> {
+  return apiRequest<RateBookAssignment>("/api/rate-book-assignments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateRateBookAssignment(id: string, patch: Partial<RateBookAssignment>): Promise<RateBookAssignment> {
+  return apiRequest<RateBookAssignment>(`/api/rate-book-assignments/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteRateBookAssignment(id: string): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/api/rate-book-assignments/${id}`, { method: "DELETE" });
+}
+
+export async function importAssignedRateSchedules(projectId: string): Promise<WorkspaceResponse> {
+  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/import-assigned`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
 }
 
 // Org-level (master library)
@@ -2547,9 +2669,11 @@ export async function deleteRateScheduleTier(scheduleId: string, tierId: string)
 }
 
 export async function addRateScheduleItem(scheduleId: string, input: {
-  catalogItemId: string;
+  resourceId?: string | null;
+  catalogItemId?: string | null;
   rates?: Record<string, number>;
   costRates?: Record<string, number>;
+  metadata?: Record<string, unknown>;
   sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items`, {
@@ -2561,6 +2685,10 @@ export async function addRateScheduleItem(scheduleId: string, input: {
 
 export async function updateRateScheduleItem(scheduleId: string, itemId: string, patch: {
   rates?: Record<string, number>;
+  costRates?: Record<string, number>;
+  burden?: number;
+  perDiem?: number;
+  metadata?: Record<string, unknown>;
   sortOrder?: number;
 }): Promise<RateSchedule> {
   return apiRequest<RateSchedule>(`/api/rate-schedules/${scheduleId}/items/${itemId}`, {
@@ -5639,6 +5767,8 @@ export interface CostResourceRecord {
   updatedAt: string;
 }
 
+export type ResourceCatalogRecord = CostResourceRecord;
+
 export interface CostObservationRecord {
   id: string;
   organizationId: string;
@@ -6062,6 +6192,21 @@ export async function listCostResources(input: { q?: string; limit?: number } = 
   if (input.limit) params.set("limit", String(input.limit));
   const query = params.toString();
   return apiRequest<CostResourceRecord[]>(`/api/cost-intelligence/resources${query ? `?${query}` : ""}`);
+}
+
+export async function listResources(input: {
+  q?: string;
+  resourceType?: string;
+  category?: string;
+  active?: boolean;
+  limit?: number;
+} = {}): Promise<ResourceCatalogRecord[]> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && value !== "") params.set(key, String(value));
+  }
+  const query = params.toString();
+  return apiRequest<ResourceCatalogRecord[]>(`/api/resources${query ? `?${query}` : ""}`);
 }
 
 export async function getCostIntelligenceSummary(): Promise<CostIntelligenceSummaryRecord> {
