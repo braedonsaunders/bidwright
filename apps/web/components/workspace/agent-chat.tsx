@@ -1778,6 +1778,20 @@ function IngestionGate({
   );
 }
 
+function AgentDrawerLoading() {
+  return (
+    <div className="flex h-full min-h-[240px] items-center justify-center">
+      <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-panel px-5 py-4 shadow-sm">
+        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        <div className="text-center">
+          <div className="text-xs font-medium text-fg/70">Loading agent context</div>
+          <div className="mt-0.5 text-[10px] text-fg/35">Checking quote history and document status</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function formatMoney(value: unknown) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -3260,8 +3274,12 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const isIntakeFailed = intakeStatus?.status === "failed";
   const isWaitingForUser = intakeStatus?.status === "waiting_for_user";
   const isRunStarting = intakeLoading && ingestionReady && !isIntakeRunning;
-  const showIngestionGate = !ingestionReady && !isIntakeRunning;
   const timelineEvents: any[] = (intakeStatus as any)?.events ?? [];
+  const ingestionStatusLoading = open && ingestionStatus === null;
+  const hasRestoredAgentHistory = Boolean(intakeStatus) || messages.length > 0 || timelineEvents.length > 0;
+  const showAgentLoading = ingestionStatusLoading && !isIntakeRunning && !hasRestoredAgentHistory;
+  const showIngestionGate = !ingestionStatusLoading && !ingestionReady && !isIntakeRunning;
+  const showBlockingAgentPanel = showAgentLoading || showIngestionGate;
   const pairedToolCalls = useMemo(() => pairToolEvents(timelineEvents), [timelineEvents]);
   const activityToolsSource = liveToolCalls.length >= pairedToolCalls.length ? liveToolCalls : pairedToolCalls;
   const activityTools = useMemo(() => {
@@ -3375,14 +3393,14 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
 
   useEffect(() => {
     const previous = streamRevisionRef.current;
-    if (streamRevision !== previous && previous && isUserScrolledUp && !showIngestionGate) {
+    if (streamRevision !== previous && previous && isUserScrolledUp && !showBlockingAgentPanel) {
       setHasUnseenMessages(true);
     }
-    if (!isUserScrolledUp || showIngestionGate) {
+    if (!isUserScrolledUp || showBlockingAgentPanel) {
       setHasUnseenMessages(false);
     }
     streamRevisionRef.current = streamRevision;
-  }, [isUserScrolledUp, showIngestionGate, streamRevision]);
+  }, [isUserScrolledUp, showBlockingAgentPanel, streamRevision]);
 
   const dockedClassName = cn(
     "fixed z-50 flex w-full max-w-[100vw] flex-col bg-panel shadow-2xl",
@@ -3519,11 +3537,13 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           <div
             className={cn(
               "h-full p-4",
-              showIngestionGate ? "overflow-hidden" : "space-y-2 overflow-y-auto",
+              showBlockingAgentPanel ? "overflow-hidden" : "space-y-2 overflow-y-auto",
             )}
             ref={scrollContainerRef}
             onScroll={handleScroll}
           >
+            {showAgentLoading && <AgentDrawerLoading />}
+
             {showIngestionGate && (
               <IngestionGate
                 docs={ingestionDocs}
@@ -3590,7 +3610,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
 
             {/* Unified chronological stream - all events from DB in order */}
             {(() => {
-              if (showIngestionGate) return null;
+              if (showBlockingAgentPanel) return null;
               return timelineItems.map((item) => {
                 if (item.type === "tool_group") {
                   return (
@@ -3723,7 +3743,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               }).filter(Boolean);
             })()}
 
-            {!showIngestionGate && timelineEvents.length === 0 && messages.map((message) => (
+            {!showBlockingAgentPanel && timelineEvents.length === 0 && messages.map((message) => (
               <div key={message.id} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                 <div className={cn(
                   "text-sm leading-relaxed",
@@ -3735,7 +3755,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             ))}
 
             {/* Loading indicator */}
-            {!showIngestionGate && (isLoading || isRunStarting || isIntakeRunning) && (
+            {!showBlockingAgentPanel && (isLoading || isRunStarting || isIntakeRunning) && (
               <div className="flex items-center gap-1.5 text-[10px] text-fg/30 py-1">
                 <Loader2 className="h-3 w-3 animate-spin" />
                 {isRunStarting ? "Starting estimator..." : isIntakeRunning ? (sseConnected ? "Agent working (live)..." : "Agent working...") : "Thinking..."}
@@ -3743,7 +3763,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             )}
 
             {/* Pending question from CLI agent (askUser MCP tool) - rendered at bottom so auto-scroll keeps it visible */}
-            {!showIngestionGate && cliRuntime && cliPendingQuestion && !hasInlineCliPendingQuestion && (
+            {!showBlockingAgentPanel && cliRuntime && cliPendingQuestion && !hasInlineCliPendingQuestion && (
               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <PendingQuestionCard
                   prompt={cliPendingQuestion}
@@ -3767,7 +3787,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           </div>
 
           <AnimatePresence>
-            {isUserScrolledUp && !showIngestionGate && (
+            {isUserScrolledUp && !showBlockingAgentPanel && (
               <div key="scroll-to-latest" className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
                 <motion.button
                   initial={{ opacity: 0, y: 8, scale: 0.92 }}
@@ -3792,7 +3812,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           </div>
 
           {/* Input */}
-          {!showIngestionGate && <div className="border-t border-line p-3">
+          {!showBlockingAgentPanel && <div className="border-t border-line p-3">
             <div className="flex items-center gap-2">
               <input
                 ref={inputRef}
