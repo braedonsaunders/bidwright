@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import type { UnitOfMeasure } from "@bidwright/domain";
+import type { SupportedLocale } from "@/lib/i18n";
 
 export interface BrandProfile {
   companyName: string;
@@ -17,7 +18,7 @@ export interface BrandProfile {
 }
 
 export interface AppSettingsRecord {
-  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
+  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string; language: SupportedLocale };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string; authMethod?: "smtp" | "oauth2"; oauth2TenantId?: string; oauth2ClientId?: string; oauth2ClientSecret?: string };
   defaults: {
     defaultMarkup: number;
@@ -46,7 +47,10 @@ export interface AppSettingsRecord {
     azureDiEndpoint?: string;
     azureDiKey?: string;
     documentExtractionProvider?: "azure" | "local" | "auto";
-    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
+    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-contract";
+    azureDiFeatures?: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
+    azureDiQueryFields?: string;
+    azureDiOutputFormat?: "text" | "markdown";
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

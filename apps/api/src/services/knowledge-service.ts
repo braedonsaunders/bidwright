@@ -1,6 +1,13 @@
 import type { PrismaApiStore } from "../prisma-store.js";
 import { createLLMAdapter } from "@bidwright/agent";
-import { createPdfParser, parseFile } from "@bidwright/ingestion";
+import {
+  DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  createPdfParser,
+  normalizeAzureDocumentIntelligenceFeatures,
+  parseAzureDocumentIntelligenceQueryFields,
+  parseFile,
+  type AzureDocumentIntelligenceFeature,
+} from "@bidwright/ingestion";
 import { createEmbedder, PgVectorStore, type VectorRecord } from "@bidwright/vector";
 import { prisma } from "@bidwright/db";
 import type { KnowledgeBook, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentPage, SourceDocument } from "@bidwright/domain";
@@ -293,7 +300,7 @@ async function extractText(
   buffer: Buffer,
   mimeType: string,
   filename: string,
-  azureConfig?: { endpoint?: string; key?: string },
+  azureConfig?: { endpoint?: string; key?: string; features?: AzureDocumentIntelligenceFeature[]; queryFields?: string[]; outputContentFormat?: "text" | "markdown" },
 ): Promise<{ text: string; pageCount: number }> {
   // PDF: use Azure DI layout model for table extraction when available,
   // otherwise fall back to local parser
@@ -310,7 +317,9 @@ async function extractText(
       azureEndpoint: azureConfig?.endpoint,
       azureKey: azureConfig?.key,
       azureModel: "prebuilt-layout",
-      options: { tableExtractionEnabled: true },
+      azureFeatures: azureConfig?.features,
+      azureQueryFields: azureConfig?.queryFields,
+      options: { tableExtractionEnabled: true, outputFormat: azureConfig?.outputContentFormat },
     });
     const doc = await parser.parse(buffer, filename);
 
@@ -507,12 +516,21 @@ export class KnowledgeService {
   async processBookBackground(bookId: string, request: IngestionRequest, store: PrismaApiStore): Promise<void> {
     try {
       // ── Text extraction ──
-      let azureConfig: { endpoint?: string; key?: string } | undefined;
+      let azureConfig: { endpoint?: string; key?: string; features?: AzureDocumentIntelligenceFeature[]; queryFields?: string[]; outputContentFormat?: "text" | "markdown" } | undefined;
       try {
         const settings = await store.getSettings();
         const integrations = settings.integrations ?? {} as any;
         if (integrations.azureDiEndpoint || integrations.azureDiKey) {
-          azureConfig = { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey };
+          azureConfig = {
+            endpoint: integrations.azureDiEndpoint,
+            key: integrations.azureDiKey,
+            features: normalizeAzureDocumentIntelligenceFeatures(
+              integrations.azureDiFeatures,
+              DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+            ),
+            queryFields: parseAzureDocumentIntelligenceQueryFields(integrations.azureDiQueryFields),
+            outputContentFormat: integrations.azureDiOutputFormat === "markdown" ? "markdown" : "text",
+          };
         }
       } catch { /* ignore — env vars will be used as fallback */ }
 

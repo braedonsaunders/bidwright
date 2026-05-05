@@ -28,6 +28,7 @@ const elementQuerySchema = z.object({
   material: z.string().optional(),
   name: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
 });
 
 const createModelTakeoffLinkSchema = z.object({
@@ -93,7 +94,7 @@ export async function modelRoutes(app: FastifyInstance) {
         elementType: parsed.data.elementType ?? parsed.data.type,
       };
       const elements = await queryModelElements(projectId, modelId, filters);
-      return { elements, count: elements.length };
+      return elements;
     } catch (error) {
       return routeError(reply, error);
     }

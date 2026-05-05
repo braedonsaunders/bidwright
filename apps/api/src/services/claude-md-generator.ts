@@ -449,14 +449,16 @@ ${benchmarkToolLine}
 - **createWorksheet** â€” Create a worksheet (cost section) in the quote
 - **createWorksheetItem** â€” Add a line item to a worksheet. Set phaseId to assign to a phase.
 - **updateQuote** â€” Update quote metadata (description, customer-facing estimate notes, scope summary)
-- **listRateSchedules** â€” List available org-level rate schedules. Returns schedule names and IDs. Use to find the right schedule to import.
+- **listRateSchedules** â€” Compact, paginated org-level rate schedule index. Use q/category filters to find the right schedule to import without dumping every item.
+- **getRateSchedule** â€” Focused, paginated read of one org-level rate schedule's items after listRateSchedules identifies a likely schedule.
 - **importRateSchedule** â€” Import an org rate schedule into the current quote revision
+- **listRateScheduleItems** â€” Compact, paginated search of imported revision rate items; use q/category/scheduleId to get exact rateScheduleItemId values.
 - **queryKnowledge** â€” Search the knowledge base for man-hour data, pricing references, standards
 - **queryGlobalLibrary** â€” Search global knowledge books (estimating manuals, productivity data)
 - **listKnowledgeBooks** â€” List available knowledge books and their IDs
-- **readDocumentText** â€” Read extracted text for project documents and knowledge books by ID
-- **queryDatasets / listDatasets** â€” Search structured datasets (rate tables, historical data)
-- **searchCatalogs** â€” Search equipment/material catalogs for items with pricing
+- **readDocumentText** â€” Read extracted text for project documents and knowledge books by ID; use pages/maxChars/offset for large docs.
+- **queryDatasets / listDatasets** â€” Compact structured dataset search; use datasetId plus rowLimit/offset for row-level evidence.
+- **searchCatalogs** â€” Compact, paginated equipment/material catalog pricing search.
 - **askUser** â€” **MANDATORY** Ask the user a clarifying question and WAIT for their response. Blocks execution until they answer. Use this in Steps 1 and 2 of the Estimation Protocol. Do NOT skip this tool. Do NOT output questions as plain text instead.
 - **readMemory / writeMemory** â€” Persistent project memory (persists across sessions)
 - **getProjectSummary** â€” Current project context and totals
@@ -468,6 +470,10 @@ ${benchmarkToolLine}
 - **recalculateTotals** â€” Recalculate financial totals
 
 - **applySummaryPreset** - Configure the quote summary breakout so the finalized quote has an appropriate line-item rollup
+
+### Tool Output Discipline
+
+Large library tools are intentionally compact and paginated. Treat list tools as indexes, then narrow with q/category/documentId/scheduleId/datasetId and limit/offset. Never call a broad list/read tool expecting it to return an entire rate book, dataset, spreadsheet, model manifest, or document in one response. Continue with offset only for the specific source you have already decided matters.
 
 ### Vision & Drawing Takeoff Tools (PRIMARY FOR DRAWING-DRIVEN QUANTITIES)
 
@@ -570,14 +576,15 @@ ${benchmarkGateNarrative}
 
 4b. **Follow the Estimation Protocol** â€” Steps 1-10 below are MANDATORY for all labour hour estimates. Do not skip any step.
 5. **IMPORT RATE SCHEDULES** â€” If getItemConfig shows categories with itemSource="rate_schedule":
-   a. Call \`listRateSchedules\` to see all available org schedules
-   b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed.
+   a. Call \`listRateSchedules\` with q/category filters to search the compact org schedule index.
+   b. The project client is **"${params.clientName}"** and location is **"${params.location}"**. Look for a schedule name containing the client name first. If none, look for one matching the location/area. Pick the best match for each trade category needed. Use \`getRateSchedule\` only for a focused paginated item preview when the schedule choice is unclear.
    c. Call \`importRateSchedule\` for each selected schedule
-   d. Every item in a rate_schedule category MUST have:
+   d. Call \`listRateScheduleItems\` with q/category/scheduleId to get the exact imported rate item IDs you need.
+   e. Every item in a rate_schedule category MUST have:
       - \`rateScheduleItemId\` â€” the rate item ID
       - \`tierUnits\` â€” hours mapped to tier NAMES, e.g. \`{"Regular": 40, "Overtime": 8}\` for 40 regular + 8 OT hours. Use the tier NAME (not ID). The server resolves names to IDs automatically. Get tier names from getItemConfig (each rate item has a \`tiers\` array).
       - \`entityName\` â€” just the rate item name (e.g. "Trade Labour"). Put task details in \`description\`.
-   e. If no suitable schedule exists, note "NO RATE SCHEDULE â€” needs setup" and set estimated costs
+   f. If no suitable schedule exists, note "NO RATE SCHEDULE â€” needs setup" and set estimated costs
 6. **Create phases** â€” create project phases if the spec defines a sequence of work (skip if phases already exist from prior session). After creating phases, call \`getWorkspace\` to retrieve the phase IDs â€” you need these to assign line items to phases via phaseId.
 7. **Create worksheets** â€” one per major system/trade/division (skip if worksheets already exist from prior session)
 9. **Populate items** â€” read relevant docs, create line items with descriptions citing sources. Set \`phaseId\` on items when applicable. For EVERY labour item, query the knowledge base for production rates and man-hours â€” do NOT guess.
@@ -665,9 +672,9 @@ You have **WebSearch** and **WebFetch** tools built in. USE THEM actively for pr
   - **Violation of itemSource rules will produce $0 items because the calc engine cannot price them without proper linkage.**
 - Each category has an \`itemSource\` field that tells you where items come from:
   - **rate_schedule**: Items MUST link to imported rate schedule items. The server VALIDATES and REJECTS items without a valid rateScheduleItemId. Steps:
-    1. Call \`listRateSchedules\` to see available org schedules
+    1. Call \`listRateSchedules\` with q/category filters to see matching org schedules
     2. Call \`importRateSchedule\` to import relevant schedules to this quote
-    3. Use getItemConfig to see the imported rate items with their tier IDs
+    3. Use \`listRateScheduleItems\` with q/category/scheduleId to find exact imported rate items and their tier IDs
     4. When creating items, set:
        - \`rateScheduleItemId\` â€” the rate item ID
        - \`tierUnits\` â€” a JSON object mapping tier NAMES to hours, e.g. \`{"Regular": 40, "Overtime": 8}\`. Use the tier NAME from the \`tiers\` array. The server resolves names to IDs automatically. Without tierUnits, cost/price will be $0.
@@ -1146,6 +1153,8 @@ You have access to Bidwright tools via MCP. For this review, use:
 - **getDocumentStructured** â€” Get structured document data
 - **readSpreadsheet** â€” Read Excel/CSV files
 - **readMemory** â€” Read project memory from prior sessions
+
+Large read-only tools are compact and paginated. Use q/category/documentId/scheduleId/datasetId plus limit/offset instead of broad reads when checking rate books, datasets, spreadsheets, model manifests, and document text.
 
 ### Drawing / Vision Tools
 - **listDrawingPages** - List drawing PDFs and page counts before any drawing CV workflow

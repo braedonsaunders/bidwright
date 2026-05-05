@@ -7,6 +7,7 @@ import {
 } from "../services/auth-service.js";
 import { catalogLibrary } from "../prisma-store.js";
 import { getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
+import { organizationInfo, organizationInfoSelect } from "../organization-info.js";
 
 // ---------------------------------------------------------------------------
 // Guard: require super admin
@@ -88,7 +89,7 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       await tx.organizationSettings.create({
         data: {
           organizationId: org.id,
-          general: { companyName: name },
+          general: { companyName: name, language: "en" },
         },
       });
 
@@ -386,7 +387,10 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
     const { organizationId } = request.body as { organizationId: string };
     if (!organizationId) return reply.code(400).send({ error: "organizationId is required" });
 
-    const org = await prisma.organization.findUnique({ where: { id: organizationId } });
+    const org = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: organizationInfoSelect,
+    });
     if (!org) return reply.code(404).send({ error: "Organization not found" });
 
     const token = await createSuperAdminSession(prisma, {
@@ -398,7 +402,7 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
 
     return {
       token,
-      organization: { id: org.id, name: org.name, slug: org.slug },
+      organization: organizationInfo(org),
     };
   });
 

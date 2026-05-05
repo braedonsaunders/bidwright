@@ -1,4 +1,5 @@
 import { apiRequest } from "./client";
+import type { SupportedLocale } from "@/lib/i18n";
 
 export interface AuthUser {
   id: string;
@@ -16,6 +17,7 @@ export interface OrgInfo {
   id: string;
   name: string;
   slug: string;
+  language?: SupportedLocale;
 }
 
 export interface LoginResponse {

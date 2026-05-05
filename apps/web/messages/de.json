@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "Dashboard",
+      "intake": "Erfassung",
+      "quotes": "Angebote",
+      "clients": "Kunden",
+      "library": "Bibliothek",
+      "performance": "Leistung",
+      "settings": "Einstellungen"
+    },
+    "theme": {
+      "light": "Hell",
+      "dark": "Dunkel",
+      "system": "System",
+      "label": "Design: {theme}",
+      "labelWithResolved": "Design: {theme} ({resolved})"
+    },
+    "switchOrganization": "Organisation wechseln",
+    "organizations": "Organisationen",
+    "noOtherOrganizations": "Keine weiteren Organisationen",
+    "superAdmin": "Superadmin",
+    "personal": "Persönlich",
+    "adminPanel": "Adminbereich",
+    "searchTools": "Tools suchen",
+    "searchPlaceholder": "Suchen...",
+    "toolsCount": "Tools ({count})",
+    "noToolsFound": "Keine Tools für \"{query}\" gefunden",
+    "quotes": "Angebote",
+    "quotesCount": "Angebote ({count})",
+    "activeProject": "Aktives Projekt",
+    "activeProjectLabel": "Aktives Projekt: {name}",
+    "switchProject": "Projekt wechseln",
+    "loading": "Wird geladen...",
+    "notSignedIn": "Nicht angemeldet",
+    "profile": "Profil",
+    "signOut": "Abmelden",
+    "expandSidebar": "Seitenleiste erweitern",
+    "collapseSidebar": "Seitenleiste einklappen"
+  },
+  "Settings": {
+    "title": "Einstellungen",
+    "subtitle": "Konfiguriere deinen Bidwright-Arbeitsbereich",
+    "groups": {
+      "organization": "Organisation",
+      "data": "Datenverwaltung",
+      "importExport": "Import / Export",
+      "integrations": "Integrationen",
+      "users": "Benutzer und Zugriff"
+    },
+    "orgTabs": {
+      "general": "Allgemein",
+      "brand": "Marke",
+      "departments": "Abteilungen",
+      "defaults": "Standardwerte",
+      "terms": "Geschäftsbedingungen",
+      "personas": "Personas"
+    },
+    "generalTitle": "Allgemeine Einstellungen",
+    "language": "Sprache",
+    "timezone": "Zeitzone",
+    "currency": "Währung",
+    "dateFormat": "Datumsformat",
+    "fiscalYearStart": "Beginn des Geschäftsjahres",
+    "generalDescription": "Lege Organisationssprache, regionale Formate und Berichtskalender fest.",
+    "localizationTitle": "Lokalisierung",
+    "localizationDescription": "Die Sprache gilt für die ganze Organisation und aktualisiert die App-Oberfläche sofort.",
+    "regionalTitle": "Regionale Formate",
+    "regionalDescription": "Diese Einstellungen steuern Währung, Datumsangaben und Standardzeiten.",
+    "fiscalTitle": "Geschäftsjahr",
+    "fiscalDescription": "Wähle den Monat für Jahresauswertungen und Standardberichte."
+  },
+  "Common": {
+    "loading": "Wird geladen..."
+  },
+  "Auth": {
+    "login": {
+      "title": "Anmelden",
+      "email": "E-Mail",
+      "emailPlaceholder": "du@firma.com",
+      "password": "Passwort",
+      "passwordPlaceholder": "Passwort eingeben",
+      "hidePassword": "Passwort ausblenden",
+      "showPassword": "Passwort anzeigen",
+      "submit": "Weiter",
+      "submitting": "Anmeldung läuft",
+      "error": "Anmeldung fehlgeschlagen. Bitte versuche es erneut.",
+      "noAccount": "Noch kein Konto?",
+      "createAccount": "Konto erstellen"
+    },
+    "signup": {
+      "eyebrow": "Organisation erstellen",
+      "title": "Registrieren",
+      "organizationName": "Organisationsname",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "URL-Slug",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "Dein Name",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "E-Mail",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "Passwort",
+      "passwordPlaceholder": "Mindestens 8 Zeichen",
+      "confirmPassword": "Passwort bestätigen",
+      "confirmPasswordPlaceholder": "Bestätigen",
+      "passwordMismatch": "Passwörter stimmen nicht überein",
+      "passwordTooShort": "Das Passwort muss mindestens 8 Zeichen lang sein",
+      "error": "Registrierung fehlgeschlagen",
+      "submit": "Konto erstellen",
+      "submitting": "Konto wird erstellt...",
+      "signInLink": "Du hast bereits ein Konto? Anmelden"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "Aktiv",
+      "won": "Gewonnen",
+      "lost": "Verloren",
+      "other": "Andere"
+    },
+    "greeting": {
+      "late": "Späte Schicht",
+      "morning": "Guten Morgen",
+      "afternoon": "Guten Tag",
+      "evening": "Guten Abend"
+    },
+    "newIntake": "Neue Erfassung",
+    "activeValue": "Aktiver Wert",
+    "activeQuoteCount": "{count} aktive Angebote",
+    "averageMargin": "Durchschnittsmarge",
+    "projectedProfit": "{profit} erwarteter Gewinn",
+    "winRate": "Gewinnquote",
+    "decidedQuotes": "{count} entschiedene Angebote",
+    "noDecisionsYet": "Noch keine Entscheidungen",
+    "exceptions": "Ausnahmen",
+    "exceptionSummary": "{aging} überfällig, {margin} Margenprüfung",
+    "pipelineTitle": "Pipeline-Übersicht",
+    "trackedValue": "{value} verfolgter Gesamtwert",
+    "quotes": "Angebote",
+    "noPipeline": "Noch keine Angebots-Pipeline.",
+    "noQuotes": "Keine Angebote",
+    "bidQuality": "Angebotsqualität",
+    "watch": "Beobachten",
+    "clear": "Klar",
+    "margin": "Marge",
+    "win": "Gewinn",
+    "operatingSignal": "Betriebssignal",
+    "active": "Aktiv",
+    "aging": "Überfällig",
+    "won30d": "Gewonnen 30 T",
+    "attention": "Aufmerksamkeit",
+    "agingActiveWork": "Überfällige aktive Arbeit",
+    "oldestDays": "Älteste {days} T",
+    "marginUnder": "Marge unter 12 %",
+    "needsPricingReview": "Preisprüfung erforderlich",
+    "wonThisMonth": "Diesen Monat gewonnen",
+    "recentDecisions": "Aktuelle Entscheidungen",
+    "noUrgentExceptions": "Keine dringenden Ausnahmen",
+    "quotePulse": "Angebotspuls",
+    "all": "Alle",
+    "noRecentQuotes": "Keine aktuellen Angebote"
+  },
+  "Clients": {
+    "title": "Kunden",
+    "subtitle": "Konten, Angebotshistorie, Pipeline-Zustand und Kundenwert.",
+    "newClient": "Neuer Kunde",
+    "searchPlaceholder": "Kunden, Kontakte, Angebotstitel, Städte suchen...",
+    "resultCount": "{count} Kunden",
+    "filteredResultCount": "{filtered} von {total} Kunden",
+    "noMatches": "Keine Kunden passen zu dieser Ansicht.",
+    "inactive": "Inaktiv",
+    "noLocation": "Kein Standort",
+    "noEmail": "Keine E-Mail",
+    "noPhone": "Kein Telefon",
+    "filters": {
+      "all": "Alle",
+      "active": "Aktive Pipeline",
+      "quoted": "Angeboten",
+      "prospects": "Interessenten",
+      "inactive": "Inaktiv"
+    },
+    "table": {
+      "client": "Kunde",
+      "contact": "Kontakt",
+      "quotes": "Angebote",
+      "active": "Aktiv",
+      "awarded": "Beauftragt",
+      "win": "Gewinn",
+      "margin": "Marge",
+      "updated": "Aktualisiert"
+    },
+    "modal": {
+      "title": "Neuer Kunde",
+      "description": "Lege den Kundendatensatz an, bevor du die Arbeit anbietest.",
+      "close": "Dialog Neuer Kunde schließen",
+      "name": "Name",
+      "namePlaceholder": "Kundenname",
+      "shortName": "Kurzname",
+      "website": "Website",
+      "email": "E-Mail",
+      "phone": "Telefon",
+      "city": "Stadt",
+      "provinceState": "Bundesland / Staat",
+      "cancel": "Abbrechen",
+      "create": "Kunde erstellen",
+      "nameRequired": "Kundenname ist erforderlich.",
+      "createError": "Kunde konnte nicht erstellt werden."
+    }
+  },
+  "Quotes": {
+    "title": "Angebote",
+    "subtitle": "Alle Angebote verwalten und verfolgen",
+    "newQuoteButton": "Neues Angebot",
+    "menu": {
+      "aiIntake": "KI-Erfassung",
+      "aiIntakeDescription": "Ausschreibungspaket hochladen",
+      "newQuote": "Neues Angebot",
+      "newQuoteDescription": "Mit leerem Angebot starten",
+      "newSnap": "Neuer Snap",
+      "newSnapDescription": "Schnelles einseitiges Angebot"
+    },
+    "manual": {
+      "snapTitle": "Neuer Snap",
+      "quoteTitle": "Neues Angebot",
+      "snapDescription": "Erstelle ein schnelles einseitiges Angebot mit einem Zehn-Zeilen-Schätzraster.",
+      "quoteDescription": "Erstelle einen leeren Schätzarbeitsbereich ohne KI-Erfassung.",
+      "close": "Dialog fuer manuelles Angebot schliessen",
+      "snapTitleLabel": "Snap-Titel",
+      "quoteTitleLabel": "Angebotstitel",
+      "snapTitlePlaceholder": "z. B. Serviceeinsatz Pumpenraum",
+      "quoteTitlePlaceholder": "z. B. Dämmung Rohrbrücke BHKW",
+      "client": "Kunde",
+      "newClientName": "Name des neuen Kunden",
+      "selectClient": "Kunden auswählen...",
+      "searchClients": "Kunden suchen...",
+      "addClient": "Neuen Kunden hinzufügen",
+      "location": "Standort",
+      "locationPlaceholder": "Noch offen",
+      "cancel": "Abbrechen",
+      "createSnap": "Snap erstellen",
+      "createQuote": "Angebot erstellen",
+      "failedClient": "Kunde konnte nicht erstellt werden.",
+      "titleRequired": "Angebotstitel ist erforderlich.",
+      "unassignedClient": "Nicht zugewiesener Kunde",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} Manuelles Angebot",
+      "snapSummary": "Snap-Angebot fuer schnelle Preise kleiner Arbeiten erstellt.",
+      "createError": "Angebot konnte nicht erstellt werden."
+    },
+    "filters": {
+      "searchPlaceholder": "Nach Angebotsnr., Titel, Kunde, Projekt, Standort suchen...",
+      "status": "Status",
+      "client": "Kunde",
+      "estimator": "Kalkulator",
+      "department": "Abteilung",
+      "clear": "Leeren",
+      "clearAll": "Alle leeren",
+      "resultCount": "{count} {count, plural, one {Angebot} other {Angebote}}",
+      "filteredResultCount": "{filtered} von {total} Angeboten"
+    },
+    "table": {
+      "quoteNumber": "Angebot #",
+      "kind": "Typ",
+      "title": "Titel",
+      "client": "Kunde",
+      "estimator": "Kalkulator",
+      "status": "Status",
+      "subtotal": "Zwischensumme",
+      "margin": "Marge",
+      "updated": "Aktualisiert"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "Voll"
+    },
+    "status": {
+      "Open": "Offen",
+      "Pending": "Ausstehend",
+      "Awarded": "Vergeben",
+      "DidNotGet": "Nicht erhalten",
+      "Declined": "Abgelehnt",
+      "Cancelled": "Storniert",
+      "Closed": "Geschlossen",
+      "Other": "Sonstige"
+    },
+    "unassigned": "Nicht zugewiesen",
+    "emptyFiltered": "Keine Angebote entsprechen deinen Filtern",
+    "empty": "Keine Angebote gefunden"
+  },
+  "Performance": {
+    "eyebrow": "Leistung",
+    "title": "Pipeline- und Angebotsintelligenz",
+    "subtitle": "Live-Signal über {count} Projekte",
+    "subtitleFiltered": "Live-Signal über {count} Projekte · gefilterte Ansicht",
+    "filteredQuoteCount": "{filtered} von {total} Angeboten",
+    "winRateBadge": "{rate} Gewinnrate",
+    "quoteCount": "{count} {count, plural, one {Angebot} other {Angebote}}",
+    "total": "Gesamt",
+    "unknownClient": "Unbekannt",
+    "emptyDistribution": "Keine Daten für die Verteilung.",
+    "emptyClientData": "Noch keine Kundendaten.",
+    "emptyTimeSeries": "Noch keine Zeitverlaufsdaten.",
+    "pipelineFunnel": "Pipeline-Trichter",
+    "statusMix": "Statusmix",
+    "pipelineOverTime": "Pipeline im Zeitverlauf",
+    "last12Months": "letzte 12 Monate",
+    "marginDistribution": "Margenverteilung",
+    "topClientsByProfit": "Top-Kunden nach Gewinn",
+    "top8": "Top 8",
+    "stages": {
+      "active": "Aktiv",
+      "won": "Gewonnen",
+      "lost": "Verloren",
+      "other": "Sonstige"
+    },
+    "status": {
+      "Open": "Offen",
+      "Pending": "Ausstehend",
+      "Awarded": "Vergeben",
+      "DidNotGet": "Nicht erhalten",
+      "Declined": "Abgelehnt",
+      "Cancelled": "Storniert",
+      "Closed": "Geschlossen",
+      "Other": "Sonstige"
+    },
+    "filters": {
+      "title": "Filter",
+      "from": "Von",
+      "to": "Bis",
+      "fromDate": "Von Datum",
+      "toDate": "Bis Datum",
+      "stage": "Phase",
+      "status": "Status",
+      "client": "Kunde",
+      "allStages": "Alle Phasen",
+      "allStatuses": "Alle Status",
+      "allClients": "Alle Kunden",
+      "clear": "Leeren"
+    },
+    "chips": {
+      "from": "Von {date}",
+      "to": "Bis {date}",
+      "status": "Status: {status}",
+      "client": "Kunde: {client}",
+      "stage": "Phase: {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "Pipeline-Wert",
+      "estimatedProfit": "Geschätzter Gewinn",
+      "averageMargin": "Durchschnittsmarge",
+      "winRate": "Gewinnrate",
+      "decided": "{won}/{decided} entschieden"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "Wird hochgeladen",
+      "loaded": "Paket geladen",
+      "release": "Loslassen",
+      "waiting": "Warten"
+    },
+    "package": {
+      "title": "Erfassungspaket",
+      "loadedSize": "{size} geladen"
+    },
+    "selected": {
+      "multipleFiles": "{count} Paketdateien erfasst",
+      "totalSize": "{size} gesamt",
+      "more": "+{count} weitere",
+      "clearPackage": "Paket leeren"
+    },
+    "drop": {
+      "releaseTitle": "Loslassen, um Paket anzuhängen",
+      "title": "Dateien oder Ordner ablegen",
+      "description": "Lade Zeichnungen, Spezifikationen, Tabellen, Nachträge, Bilder, ZIP-Archive und Outlook-Nachrichten hoch.",
+      "selectFiles": "Dateien auswählen",
+      "selectFolder": "Ordner auswählen",
+      "emailFormats": ".msg und .eml"
+    },
+    "context": {
+      "title": "Projektkontext",
+      "description": "Erfasse den Mindestkontext, der zum Erstellen des Schätzarbeitsbereichs nötig ist."
+    },
+    "fields": {
+      "destination": "Ziel",
+      "newProject": "Neues Projekt",
+      "projectName": "Projektname",
+      "projectNamePlaceholder": "z. B. Kesselerneuerung Nordcampus",
+      "client": "Kunde",
+      "newClientName": "Name des neuen Kunden",
+      "selectClient": "Kunden auswählen...",
+      "searchClients": "Kunden suchen...",
+      "addClient": "Neuen Kunden hinzufügen",
+      "location": "Standort",
+      "locationPlaceholder": "Stadt, Bundesland",
+      "bidDue": "Angebotsfrist",
+      "scope": "Umfang",
+      "scopePlaceholder": "Gesamtpaket, Gewerketeilung, Gebäudebereich, Alternative oder Disziplin.",
+      "playbook": "Kalkulations-Playbook",
+      "autoDetect": "Automatisch erkennen",
+      "notes": "Notizen",
+      "notesPlaceholder": "Optionale Notizen"
+    },
+    "actions": {
+      "uploading": "Wird hochgeladen...",
+      "createWorkspace": "Erfassungsarbeitsbereich erstellen"
+    },
+    "status": {
+      "uploadSuccessSingle": "Paket erfolgreich hochgeladen.",
+      "uploadSuccessMultiple": "{count} Dateien erfolgreich hochgeladen."
+    },
+    "errors": {
+      "noReadableFiles": "Das abgelegte Element stellte keine lesbaren Dateien bereit.",
+      "outlookRowOnly": "Drag-and-drop aus der Nachrichtenliste von New Outlook nutzt Outlook-eigene Nutzdaten ({payloadLabel}) und stellt normalen Websites keine E-Mail-Datei bereit. Ziehe den Anhang selbst, versuche es aus einer geöffneten Nachricht, speichere als .eml oder nutze klassisches Outlook.",
+      "outlookWebLink": "New Outlook lieferte Weblink-Daten ({payloadLabel}), aber der Browser konnte daraus keine herunterladbare E-Mail-Datei erstellen. Speichere die Nachricht als .eml und lade sie hoch, ziehe den Anhang selbst oder nutze klassisches Outlook.",
+      "outlookNonFile": "New Outlook lieferte Nicht-Datei-Daten ({payloadLabel}), keine echte E-Mail-Datei. Speichere die Nachricht als .eml und lade sie hoch, ziehe den Anhang selbst oder nutze klassisches Outlook.",
+      "failedClient": "Kunde konnte nicht erstellt werden.",
+      "selectFile": "Wähle mindestens eine Paketdatei aus.",
+      "uploadFailed": "Upload fehlgeschlagen."
+    }
+  },
+  "NotFound": {
+    "title": "Seite nicht gefunden",
+    "back": "Zurück zum Dashboard"
+  },
+  "Profile": {
+    "title": "Profil",
+    "account": {
+      "title": "Konto",
+      "email": "E-Mail",
+      "role": "Rolle",
+      "organization": "Organisation",
+      "access": "Zugriff",
+      "superAdmin": "Superadmin"
+    },
+    "displayName": {
+      "title": "Anzeigename",
+      "name": "Name",
+      "placeholder": "Dein Name"
+    },
+    "password": {
+      "title": "Passwort ändern",
+      "current": "Aktuelles Passwort",
+      "currentPlaceholder": "Aktuelles Passwort eingeben",
+      "new": "Neues Passwort",
+      "newPlaceholder": "Mindestens 8 Zeichen",
+      "confirm": "Bestätigen",
+      "confirmPlaceholder": "Bestätigen"
+    },
+    "actions": {
+      "saving": "Speichern...",
+      "save": "Speichern",
+      "changing": "Ändern...",
+      "changePassword": "Passwort ändern"
+    },
+    "messages": {
+      "nameUpdated": "Name aktualisiert.",
+      "passwordChanged": "Passwort geändert.",
+      "updateFailed": "Aktualisierung fehlgeschlagen",
+      "passwordMismatch": "Passwörter stimmen nicht überein.",
+      "passwordTooShort": "Das Passwort muss mindestens 8 Zeichen lang sein."
+    }
+  },
+  "Library": {
+    "title": "Bibliothek",
+    "searchPlaceholder": "Bibliotheksbereiche suchen",
+    "refresh": "Aktualisieren",
+    "loadingKnowledge": "Wissen wird geladen...",
+    "surfaces": {
+      "overview": {
+        "label": "Start",
+        "description": "Startbereich für Bibliotheksarbeit und Live-Abdeckung."
+      },
+      "resources": {
+        "label": "Ressourcen",
+        "description": "Katalogisierte Ressourcen für Material, Service, Ausrüstung, Nachunternehmer, Verbrauchsmaterial und Zulagen."
+      },
+      "rates": {
+        "label": "Tarifbücher",
+        "description": "Kosten- und Verkaufspreisüberschreibungen für Kunden/Ressourcen, Stufen, Reisen, Zulagen und Preisregeln."
+      },
+      "assemblies": {
+        "label": "Baugruppen",
+        "description": "Parametrisierte Kalkulationsrezepte, die in bepreiste Ressourcenzeilen expandieren."
+      },
+      "labor_units": {
+        "label": "Arbeitseinheiten",
+        "description": "Produktionsstandards für Stunden je installierter Einheit, verknüpft mit Ressourcenzeilen und Tarifbüchern."
+      },
+      "cost": {
+        "label": "Kostenintelligenz",
+        "description": "Lieferantenrechnungsbelege, Beobachtungen, Produkte und aktuelle Kostenbasiszeilen."
+      },
+      "playbooks": {
+        "label": "Kalkulatoren",
+        "description": "Kalkulatorverhalten, Methodik, Quellenbindungen und kaufmännische Richtlinien."
+      },
+      "knowledge": {
+        "label": "Wissen",
+        "description": "Referenzbücher, Datensätze, extrahierte Belege und Abrufmaterial für Agenten."
+      }
+    },
+    "common": {
+      "close": "Schließen",
+      "delete": "Löschen",
+      "cancel": "Abbrechen",
+      "saving": "Speichern",
+      "prev": "Zurück",
+      "next": "Weiter"
+    },
+    "overview": {
+      "title": "Bibliotheksbereiche",
+      "subtitle": "Einen Bereich aus der aktuellen Bibliotheksabdeckung öffnen",
+      "groupCount": "{count} {count, plural, one {Gruppe} other {Gruppen}}",
+      "noData": "Keine Daten",
+      "unassigned": "Nicht zugewiesen",
+      "other": "Sonstige",
+      "breakdowns": {
+        "resourceRows": "Zeilen nach Ressourcenkatalogtyp",
+        "rateRows": "Zeilen nach Tarifbuchkategorie",
+        "rateBooks": "Tarifbücher nach Kategorie",
+        "assemblyComponents": "Komponenten nach Baugruppenkategorie",
+        "assemblyCategories": "Baugruppen nach Kategorie",
+        "laborRows": "Zeilen nach Arbeitseinheitenkatalog",
+        "costBasis": "Kostenbasis nach Ressourcentyp",
+        "resourceTypes": "Ressourcen nach Typ",
+        "sourceBindings": "Quellenbindungen nach Typ",
+        "estimatorStatus": "Kalkulatoren nach Status",
+        "references": "Referenzen nach Quellentyp",
+        "datasetRows": "Zeilen nach Datensatzkategorie"
+      },
+      "fallbacks": {
+        "catalog": "Katalog",
+        "uncategorized": "Ohne Kategorie",
+        "general": "Allgemein",
+        "unclassified": "Nicht klassifiziert",
+        "books": "Bücher",
+        "notes": "Notizen",
+        "datasetTags": "Datensatz-Tags",
+        "active": "Aktiv",
+        "paused": "Pausiert"
+      },
+      "cards": {
+        "resources": {
+          "title": "Ressourcen",
+          "body": "Basisressourcen für Kalkulationen in Arbeitsblättern, Tarifbüchern und Baugruppen.",
+          "metricLabel": "Katalogpositionen"
+        },
+        "rates": {
+          "title": "Tarifbücher",
+          "body": "Kosten- und Verkaufspreise für Kunden/Ressourcen mit Stufen, Reisen, Zulagen und Preisregeln.",
+          "metricLabel": "Ressourcenzeilen"
+        },
+        "assemblies": {
+          "title": "Baugruppen",
+          "body": "Wiederverwendbare Kalkulationsrezepte für Ressourcen, Ausrüstung, verschachtelte Leistungsbereiche und parametrisches Aufmaß.",
+          "metricLabel": "Baugruppen"
+        },
+        "laborUnits": {
+          "title": "Arbeitseinheiten",
+          "body": "Eigene Produktionsstandards wandeln installierte Mengen in Stunden um und bepreisen diese Stunden über Tarifbücher.",
+          "metricLabel": "Produktionszeilen"
+        },
+        "cost": {
+          "title": "Kostenintelligenz",
+          "body": "Lieferantenrechnungsbelege, beobachtete Preise, aktuelle Kostenbasiszeilen und die zugehörige Nachweiskette.",
+          "metricLabel": "Kostenbasiszeilen"
+        },
+        "playbooks": {
+          "title": "Kalkulatoren",
+          "body": "Wiederverwendbares Kalkulationsverhalten mit Methodik, Quellenpriorität, kaufmännischen Regeln und Prüfhinweisen.",
+          "metricLabel": "Aktive Kalkulatoren"
+        },
+        "books": {
+          "title": "Bücher und Notizen",
+          "body": "Referenzbücher, Kalkulatornotizen, extrahierte Belege und Abrufmaterial für Agenten.",
+          "metricLabel": "Referenzen"
+        },
+        "datasets": {
+          "title": "Datensätze",
+          "body": "Strukturierte Tabellen und importierte Zeilen für Agenten, Kalkulatoren und Preisworkflows.",
+          "metricLabel": "Datensätze"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "Zulage",
+        "allowances": "Zulagen",
+        "consumable": "Verbrauchsmaterial",
+        "consumables": "Verbrauchsmaterialien",
+        "dataset": "Datensatz",
+        "datasets": "Datensätze",
+        "equipment": "Ausrüstung",
+        "knowledge": "Wissen",
+        "knowledgeLibrary": "Wissensbibliothek",
+        "labor": "Arbeit",
+        "manual": "Handbuch",
+        "material": "Werkstoff",
+        "materials": "Materialien",
+        "rateBook": "Tarifbuch",
+        "service": "Dienstleistung",
+        "services": "Dienstleistungen",
+        "subcontract": "Nachunternehmer",
+        "subcontracts": "Nachunternehmer"
+      }
+    },
+    "labor": {
+      "title": "Arbeitseinheiten",
+      "subtitle": "{catalog} / {count} Produktionsstandards",
+      "allCatalogs": "Alle Kataloge",
+      "allCatalogsWithCount": "Alle Kataloge ({count})",
+      "unitsCount": "{count} Einheiten",
+      "catalogAria": "Arbeitseinheitenkatalog",
+      "searchPlaceholder": "Code, Klasse, Kategorie oder Beschreibung suchen",
+      "confirmDeleteUnit": "{name} löschen?",
+      "confirmDeleteCatalog": "{name} und seine Arbeitseinheiten löschen?",
+      "groupRowCount": "{count} {count, plural, one {Zeile} other {Zeilen}}",
+      "avgHours": "Ø {value} Std.",
+      "items": "Positionen",
+      "sections": "Abschnitte",
+      "groupLevels": {
+        "catalog": "Katalog",
+        "category": "Kategorie",
+        "class": "Klasse",
+        "subclass": "Unterklasse"
+      },
+      "view": {
+        "groups": "Gruppen",
+        "rows": "Zeilen"
+      },
+      "actions": {
+        "collapse": "Einklappen",
+        "expand": "Ausklappen",
+        "manageCatalogs": "Kataloge verwalten",
+        "newUnit": "Neue Arbeitseinheit"
+      },
+      "stats": {
+        "rows": "Zeilen",
+        "catalogs": "Kataloge",
+        "providers": "Anbieter",
+        "categories": "Kategorien",
+        "avgHrs": "Ø Std."
+      },
+      "table": {
+        "code": "Kennung",
+        "laborUnit": "Arbeitseinheit",
+        "catalog": "Katalog",
+        "category": "Kategorie",
+        "class": "Klasse",
+        "normal": "Standard",
+        "difficult": "Schwer",
+        "veryDifficult": "Sehr schwer",
+        "uom": "Einheit"
+      },
+      "branchLoading": "Zweig wird geladen...",
+      "branchEmpty": "Keine Zeilen in diesem Zweig.",
+      "empty": "Keine Arbeitseinheiten entsprechen dieser Ansicht.",
+      "loading": "Arbeitseinheiten werden geladen...",
+      "unitDrawer": {
+        "createTitle": "Arbeitseinheit erstellen",
+        "fallbackTitle": "Arbeitseinheit",
+        "subtitle": "Produktionsstandard bearbeiten, der von Baugruppen und Arbeitsblättern verwendet wird.",
+        "save": "Arbeitseinheit speichern"
+      },
+      "catalogDrawer": {
+        "title": "Arbeitseinheitenkataloge",
+        "subtitle": "Quellbereiche für Produktionsstandardzeilen verwalten.",
+        "newCatalog": "Neuer Katalog",
+        "org": "Org.",
+        "firstParty": "Eigen",
+        "save": "Katalog speichern",
+        "create": "Katalog erstellen"
+      },
+      "fields": {
+        "catalog": "Katalog",
+        "chooseCatalog": "Katalog wählen",
+        "name": "Bezeichnung",
+        "code": "Kennung",
+        "discipline": "Fachbereich",
+        "outputUom": "Ausgabeeinheit",
+        "description": "Beschreibung",
+        "category": "Kategorie",
+        "class": "Klasse",
+        "subclass": "Unterklasse",
+        "normalHours": "Normale Std.",
+        "difficultHours": "Schwere Std.",
+        "veryDifficultHours": "Sehr schwere Std.",
+        "default": "Standard",
+        "tags": "Schlagwörter",
+        "tagsPlaceholder": "durch Kommas getrennt",
+        "provider": "Anbieter",
+        "sourceNote": "Quellnotiz"
+      },
+      "difficulty": {
+        "normal": "Standard",
+        "difficult": "Schwer",
+        "veryDifficult": "Sehr schwer"
+      },
+      "fallbacks": {
+        "internal": "Intern",
+        "general": "Allgemein",
+        "manual": "manuell",
+        "unknown": "Unbekannt"
+      },
+      "errors": {
+        "chooseCatalog": "Wählen Sie vor dem Speichern einen Arbeitseinheitenkatalog.",
+        "unitNameRequired": "Der Name der Arbeitseinheit ist erforderlich.",
+        "normalHours": "Normale Stunden müssen eine nicht negative Zahl sein.",
+        "difficultyHours": "Schwierigkeitsstunden müssen leer oder eine nicht negative Zahl sein.",
+        "saveUnit": "Arbeitseinheit konnte nicht gespeichert werden.",
+        "deleteUnit": "Arbeitseinheit konnte nicht gelöscht werden.",
+        "catalogNameRequired": "Katalogname ist erforderlich.",
+        "saveCatalog": "Katalog konnte nicht gespeichert werden.",
+        "deleteCatalog": "Katalog konnte nicht gelöscht werden."
+      },
+      "footer": {
+        "grouped": "Zeige {start}-{end} von {visible} sichtbaren Baumzeilen / {total} Arbeitszeilen",
+        "rows": "Zeige {start}-{end} von {total} Zeilen / {indexed} indexiert in {catalogs} Katalogen",
+        "firstParty": "{count} eigene",
+        "topLevelGroups": "{count} Hauptgruppen",
+        "page": "Seite {page} / {total}"
+      },
+      "pageSize": {
+        "visible": "{count} sichtbar",
+        "rows": "{count} Zeilen",
+        "aria": "Seitengröße für Arbeitseinheiten"
+      }
+    }
+  }
+}

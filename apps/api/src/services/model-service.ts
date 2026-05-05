@@ -1220,16 +1220,22 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   }
 
   const limit = Math.max(1, Math.min(1000, Number(filters.limit) || 100));
-  return prisma.modelElement.findMany({
-    where,
-    take: limit,
-    orderBy: [{ elementClass: "asc" }, { name: "asc" }],
-    include: {
-      quantities: {
-        orderBy: [{ quantityType: "asc" }, { createdAt: "asc" }],
+  const offset = Math.max(0, Number(filters.offset) || 0);
+  const [count, elements] = await Promise.all([
+    prisma.modelElement.count({ where }),
+    prisma.modelElement.findMany({
+      where,
+      skip: offset,
+      take: limit,
+      orderBy: [{ elementClass: "asc" }, { name: "asc" }],
+      include: {
+        quantities: {
+          orderBy: [{ quantityType: "asc" }, { createdAt: "asc" }],
+        },
       },
-    },
-  });
+    }),
+  ]);
+  return { elements, count, offset, limit };
 }
 
 export async function getModelBom(projectId: string, modelId: string) {

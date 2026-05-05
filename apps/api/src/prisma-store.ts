@@ -106,7 +106,14 @@ import type {
   IngestionReport,
   PackageSourceKind,
 } from "@bidwright/ingestion";
-import { ingestCustomerPackage, extractArchiveEntries } from "@bidwright/ingestion";
+import {
+  DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  extractArchiveEntries,
+  ingestCustomerPackage,
+  isAzureDocumentIntelligenceModel,
+  normalizeAzureDocumentIntelligenceFeatures,
+  parseAzureDocumentIntelligenceQueryFields,
+} from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma } from "@bidwright/db";
 import { decodeHtmlEntities } from "./text-utils.js";
@@ -571,7 +578,7 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
-  creationMode?: "manual" | "intake";
+  creationMode?: "manual" | "intake" | "snap";
   summary?: string;
 }
 
@@ -1076,7 +1083,6 @@ export type LineItemSearchSourceType =
   | "catalog_item"
   | "rate_schedule_item"
   | "labor_unit"
-  | "cost_resource"
   | "effective_cost"
   | "assembly"
   | "plugin_tool"
@@ -2006,77 +2012,6 @@ export class PrismaApiStore {
           "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
         )
         SELECT
-          'lis_' || md5(concat_ws('|', $1::text, '', 'cost_resource', r."id")),
-          $1::text,
-          NULL,
-          'cost_resource',
-          r."id",
-          'select',
-          r."category",
-          r."resourceType",
-          r."name",
-          concat_ws(' ', r."manufacturer", r."manufacturerPartNumber"),
-          r."code",
-          r."manufacturer",
-          COALESCE(NULLIF(r."defaultUom", ''), 'EA'),
-          NULL,
-          NULL,
-          concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", array_to_string(r."aliases", ' '), array_to_string(r."tags", ' '), r."metadata"::text),
-          to_tsvector('english', concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", array_to_string(r."aliases", ' '), array_to_string(r."tags", ' '), r."metadata"::text)),
-          jsonb_build_object(
-            'source', 'cost_resource',
-            'costResourceId', r."id",
-            'itemId', r."catalogItemId",
-            'resourceCategory', r."category",
-            'resourceType', r."resourceType",
-            'manufacturer', r."manufacturer",
-            'manufacturerPartNumber', r."manufacturerPartNumber",
-            'description', r."description",
-            'resourceComposition', jsonb_build_object(
-              'source', 'cost_resource',
-              'resources', jsonb_build_array(jsonb_build_object(
-                'componentType', 'cost_resource',
-                'costResourceId', r."id",
-                'itemId', r."catalogItemId",
-                'uom', r."defaultUom"
-              ))
-            ),
-            'sourceEvidence', jsonb_build_object(
-              'source', 'cost_resource',
-              'costResourceId', r."id",
-              'itemId', r."catalogItemId",
-              'updatedAt', r."updatedAt"
-            )
-          ),
-          CURRENT_TIMESTAMP,
-          CURRENT_TIMESTAMP
-        FROM "ResourceCatalogItem" r
-        WHERE r."organizationId" = $1::text
-          AND r."active" = true
-        ON CONFLICT ("id") DO UPDATE SET
-          "category" = EXCLUDED."category",
-          "entityType" = EXCLUDED."entityType",
-          "title" = EXCLUDED."title",
-          "subtitle" = EXCLUDED."subtitle",
-          "code" = EXCLUDED."code",
-          "vendor" = EXCLUDED."vendor",
-          "uom" = EXCLUDED."uom",
-          "searchText" = EXCLUDED."searchText",
-          "searchVector" = EXCLUDED."searchVector",
-          "payload" = EXCLUDED."payload",
-          "updatedAt" = CURRENT_TIMESTAMP
-      `,
-      this.organizationId,
-    );
-
-    await this.db.$executeRawUnsafe(
-      `
-        INSERT INTO "LineItemSearchDocument" (
-          "id", "organizationId", "projectId", "sourceType", "sourceId", "actionType",
-          "category", "entityType", "title", "subtitle", "code", "vendor", "uom",
-          "unitCost", "unitPrice", "searchText", "searchVector", "payload", "createdAt", "updatedAt"
-        )
-        SELECT
           'lis_' || md5(concat_ws('|', $1::text, COALESCE(ec."projectId", ''), 'effective_cost', ec."id")),
           $1::text,
           ec."projectId",
@@ -2390,8 +2325,8 @@ export class PrismaApiStore {
               WHEN 'catalog_item' THEN 1.5
               WHEN 'rate_schedule_item' THEN 1.4
               WHEN 'effective_cost' THEN 1.3
-              WHEN 'labor_unit' THEN 1.2
-              WHEN 'assembly' THEN 0.8
+              WHEN 'assembly' THEN 1.15
+              WHEN 'labor_unit' THEN 0.85
               WHEN 'external_action' THEN 0.35
               WHEN 'plugin_tool' THEN 0.25
               ELSE 0
@@ -2425,6 +2360,7 @@ export class PrismaApiStore {
         FROM "LineItemSearchDocument"
         WHERE "organizationId" = $1::text
           AND ("projectId" IS NULL OR "projectId" = $2::text)
+          AND "sourceType" <> 'cost_resource'
           AND ("sourceType" <> 'rate_schedule_item' OR "projectId" = $2::text)
           AND (cardinality($4::text[]) = 0 OR "sourceType" = ANY($4::text[]))
           AND (cardinality($9::text[]) = 0 OR "sourceType" <> ALL($9::text[]))
@@ -4354,6 +4290,7 @@ export class PrismaApiStore {
         status: "draft",
         currentRevisionId: revisionId,
         customerExistingNew: "New",
+        userId: this._userId,
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -4415,7 +4352,7 @@ export class PrismaApiStore {
     });
 
     const projectIds = projects.map((p) => p.id);
-    const [packages, jobs, workspaceStates, quotes, revisions, users] = await Promise.all([
+    const [packages, jobs, workspaceStates, quotes, revisions, quoteUsers, quoteSuperAdmins] = await Promise.all([
       this.db.storedPackage.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.ingestionJob.findMany({ where: { projectId: { in: projectIds } } }),
       this.db.workspaceState.findMany({ where: { projectId: { in: projectIds } } }),
@@ -4426,8 +4363,11 @@ export class PrismaApiStore {
       this.db.quoteRevision.findMany({
         where: { quote: { projectId: { in: projectIds } } },
       }),
-      this.db.user.findMany({ where: { organizationId: this.organizationId, active: true }, select: { id: true, name: true, email: true } }),
+      this.db.user.findMany({ where: { organizationId: this.organizationId }, select: { id: true, name: true, email: true } }),
+      this.db.superAdmin.findMany({ select: { id: true, name: true, email: true } }),
     ]);
+    const quoteUserMap = new Map(quoteUsers.map((user) => [user.id, user]));
+    const quoteSuperAdminMap = new Map(quoteSuperAdmins.map((user) => [user.id, user]));
 
     return projects.map((p) => {
       const mapped = mapProject(p);
@@ -4454,7 +4394,9 @@ export class PrismaApiStore {
           customerName: (quote as any).customer?.name || null,
           customerString: quote.customerString || "",
           userId: quote.userId || null,
-          userName: quote.userId ? users.find((u) => u.id === quote.userId)?.name || null : null,
+          userName: quote.userId
+            ? quoteUserMap.get(quote.userId)?.name || quoteSuperAdminMap.get(quote.userId)?.name || null
+            : null,
           departmentId: quote.departmentId || null,
           departmentName: (quote as any).department?.name || null,
         } : null,
@@ -7115,6 +7057,8 @@ export class PrismaApiStore {
     const nowISO = now.toISOString();
     const projectId = createId("project");
     const isManualProject = input.creationMode === "manual";
+    const isSnapProject = input.creationMode === "snap";
+    const isBlankProject = isManualProject || isSnapProject;
     const packageName = input.packageName ?? input.name;
 
     // Fetch org settings to inherit defaultMarkup
@@ -7139,9 +7083,13 @@ export class PrismaApiStore {
           location: input.location,
           packageName,
           packageUploadedAt: nowISO,
-          ingestionStatus: isManualProject ? "review" : "queued",
+          ingestionStatus: isBlankProject ? "review" : "queued",
           scope: input.scope ?? "",
-          summary: input.summary ?? (isManualProject ? "Manual quote created from scratch." : defaultProjectSummary(packageName, customerSelection.clientName)),
+          summary: input.summary ?? (isSnapProject
+            ? "Snap quote created for quick small-work pricing."
+            : isManualProject
+              ? "Manual quote created from scratch."
+              : defaultProjectSummary(packageName, customerSelection.clientName)),
           createdAt: now,
           updatedAt: now,
         },
@@ -7174,9 +7122,13 @@ export class PrismaApiStore {
           quoteId,
           revisionNumber: 0,
           title: input.name,
-          description: `Estimate for ${input.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
-          notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
-          breakoutStyle: "phase_detail",
+          description: isSnapProject
+            ? `Quick scope for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`
+            : `Estimate for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
+          notes: isSnapProject
+            ? "Small quick quote. Keep it to ten lines or upgrade to a full quote if the scope grows."
+            : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
+          breakoutStyle: isSnapProject ? "grand_total" : "phase_detail",
           type: "Firm",
           status: "Open",
           defaultMarkup,
@@ -7186,17 +7138,33 @@ export class PrismaApiStore {
         },
       });
 
-      // No default worksheet — the agent or user creates worksheets as needed
+      if (isSnapProject) {
+        await tx.worksheet.create({
+          data: {
+            id: worksheetId,
+            revisionId,
+            name: "Snap",
+            order: 1,
+          },
+        });
+      }
 
       const wsState = {
-        activeTab: isManualProject ? "estimate" : "overview",
+        activeTab: isBlankProject ? "estimate" : "overview",
         selectedQuoteId: quoteId,
         selectedRevisionId: revisionId,
-        selectedWorksheetId: null,
+        selectedWorksheetId: isSnapProject ? worksheetId : null,
         selectedDocumentId: null,
         openDocumentIds: [],
         filters: { documentKinds: [], search: "" },
         panels: { documents: true, estimate: true, ai: true },
+        ...(isSnapProject
+          ? {
+              quoteMode: "snap",
+              snapLineLimit: 10,
+              snapUpgraded: false,
+            }
+          : {}),
       };
 
       await tx.workspaceState.create({
@@ -7399,11 +7367,24 @@ export class PrismaApiStore {
         ? documentExtractionProviderRaw as DocumentExtractionProvider
         : "azure";
       const azureModelRaw = integrations.azureDiModel;
-      const azureModel = typeof azureModelRaw === "string" && ["prebuilt-layout", "prebuilt-read", "prebuilt-document", "prebuilt-invoice"].includes(azureModelRaw)
+      const azureModel = isAzureDocumentIntelligenceModel(azureModelRaw)
         ? azureModelRaw as AzureDocumentIntelligenceModel
         : "prebuilt-layout";
+      const azureFeatures = normalizeAzureDocumentIntelligenceFeatures(
+        integrations.azureDiFeatures,
+        DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+      );
+      const azureQueryFields = parseAzureDocumentIntelligenceQueryFields(integrations.azureDiQueryFields);
+      const azureOutputContentFormat: "markdown" | "text" = integrations.azureDiOutputFormat === "markdown" ? "markdown" : "text";
       const azureConfig = (integrations.azureDiEndpoint || integrations.azureDiKey)
-        ? { endpoint: integrations.azureDiEndpoint, key: integrations.azureDiKey, model: azureModel }
+        ? {
+            endpoint: integrations.azureDiEndpoint,
+            key: integrations.azureDiKey,
+            model: azureModel,
+            features: azureFeatures,
+            queryFields: azureQueryFields,
+            outputContentFormat: azureOutputContentFormat,
+          }
         : undefined;
 
       let latestDocumentProgress: any[] = [];
@@ -9131,7 +9112,13 @@ export class PrismaApiStore {
     active?: boolean;
     limit?: number;
   } = {}): Promise<ResourceCatalogItem[]> {
-    const where: any = { organizationId: this.organizationId };
+    const where: any = {
+      organizationId: this.organizationId,
+      NOT: [
+        { metadata: { path: ["source"], equals: "vendor_pdf_review" } },
+        { metadata: { path: ["source"], equals: "vendor_pdf_ingestion" } },
+      ],
+    };
     const q = filters.q?.trim();
     if (filters.resourceType) where.resourceType = filters.resourceType;
     if (filters.category) where.category = filters.category;

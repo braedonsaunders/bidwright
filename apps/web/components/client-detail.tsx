@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion } from "motion/react";
 import {
   ArrowLeft,
+  BookOpen,
   Building2,
   CalendarClock,
   CheckCircle2,
@@ -19,6 +20,7 @@ import {
   PencilLine,
   Phone,
   Plus,
+  Trash2,
   TrendingUp,
   UserRound,
   X,
@@ -34,14 +36,22 @@ import {
   type QuotedProject,
 } from "@/lib/client-analytics";
 import {
+  createRateBookAssignment,
+  deleteRateBookAssignment,
+  listRateBookAssignments,
+  listRateSchedules,
   updateCustomer,
+  updateRateBookAssignment,
   type Customer,
   type CustomerWithContacts,
   type OrgDepartment,
   type OrgUser,
   type ProjectListItem,
+  type RateBookAssignment,
+  type RateSchedule,
 } from "@/lib/api";
 import { formatCompactMoney, formatDate, formatMoney, formatPercent } from "@/lib/format";
+import { SearchablePicker } from "@/components/shared/searchable-picker";
 import { Badge, Button, Card, EmptyState, Input, Label, ModalBackdrop } from "@/components/ui";
 
 type EditableCustomerFields = Pick<
@@ -59,12 +69,13 @@ type EditableCustomerFields = Pick<
   | "notes"
 >;
 
-type ClientTab = "overview" | "quotes" | "profile";
+type ClientTab = "overview" | "quotes" | "profile" | "ratebooks";
 
 const CLIENT_TABS: Array<{ id: ClientTab; label: string }> = [
   { id: "overview", label: "Overview" },
   { id: "quotes", label: "Quotes" },
   { id: "profile", label: "Profile" },
+  { id: "ratebooks", label: "Ratebooks" },
 ];
 
 const STAGE_LABEL: Record<ClientStage, string> = {
@@ -469,6 +480,204 @@ function ContactsPanel({ customer, className }: { customer: CustomerWithContacts
   );
 }
 
+function scheduleDateRange(schedule: RateSchedule) {
+  if (schedule.effectiveDate && schedule.expiryDate) return `${formatDate(schedule.effectiveDate)} - ${formatDate(schedule.expiryDate)}`;
+  if (schedule.effectiveDate) return `From ${formatDate(schedule.effectiveDate)}`;
+  if (schedule.expiryDate) return `Until ${formatDate(schedule.expiryDate)}`;
+  return "";
+}
+
+function ClientRatebooksPanel({ customer }: { customer: CustomerWithContacts }) {
+  const [schedules, setSchedules] = useState<RateSchedule[]>([]);
+  const [assignments, setAssignments] = useState<RateBookAssignment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    Promise.all([
+      listRateSchedules(),
+      listRateBookAssignments({ customerId: customer.id }),
+    ])
+      .then(([nextSchedules, nextAssignments]) => {
+        if (cancelled) return;
+        setSchedules(nextSchedules);
+        setAssignments(nextAssignments);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load ratebooks.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customer.id]);
+
+  const scheduleById = useMemo(() => new Map(schedules.map((schedule) => [schedule.id, schedule])), [schedules]);
+  const activeAssignments = useMemo(
+    () => assignments
+      .filter((assignment) => assignment.active)
+      .slice()
+      .sort((left, right) => {
+        if (left.priority !== right.priority) return right.priority - left.priority;
+        return (scheduleById.get(left.rateScheduleId)?.name ?? "").localeCompare(scheduleById.get(right.rateScheduleId)?.name ?? "");
+      }),
+    [assignments, scheduleById],
+  );
+  const assignedScheduleIds = useMemo(
+    () => new Set(activeAssignments.map((assignment) => assignment.rateScheduleId)),
+    [activeAssignments],
+  );
+  const pickerOptions = useMemo(
+    () => schedules
+      .filter((schedule) => !assignedScheduleIds.has(schedule.id))
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((schedule) => ({
+        id: schedule.id,
+        label: schedule.name,
+        secondary: schedule.category || undefined,
+      })),
+    [assignedScheduleIds, schedules],
+  );
+
+  async function addRatebook(scheduleId: string) {
+    const schedule = scheduleById.get(scheduleId);
+    if (!schedule || saving) return;
+
+    setSaving(true);
+    setError("");
+    try {
+      const existing = assignments.find((assignment) => assignment.rateScheduleId === scheduleId);
+      const saved = existing
+        ? await updateRateBookAssignment(existing.id, {
+            active: true,
+            category: schedule.category,
+            priority: Math.max(0, activeAssignments.length),
+          })
+        : await createRateBookAssignment({
+            rateScheduleId: schedule.id,
+            customerId: customer.id,
+            category: schedule.category,
+            priority: Math.max(0, activeAssignments.length),
+            active: true,
+          });
+      setAssignments((prev) => {
+        const withoutExisting = prev.filter((assignment) => assignment.id !== saved.id);
+        return [...withoutExisting, saved];
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not add ratebook.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeRatebook(assignmentId: string) {
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await deleteRateBookAssignment(assignmentId);
+      setAssignments((prev) => prev.filter((assignment) => assignment.id !== assignmentId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not remove ratebook.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="flex h-full min-h-0 flex-col rounded-lg">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold text-fg">Default ratebooks</h2>
+          <p className="mt-0.5 text-xs text-fg/45">Applied to new Snap quotes for this client.</p>
+        </div>
+        <Badge tone={activeAssignments.length > 0 ? "info" : "default"}>
+          {activeAssignments.length} default{activeAssignments.length === 1 ? "" : "s"}
+        </Badge>
+      </div>
+
+      <div className="shrink-0 border-b border-line px-4 py-3">
+        <SearchablePicker
+          value={null}
+          onSelect={addRatebook}
+          options={pickerOptions}
+          placeholder={loading ? "Loading ratebooks..." : "Add default ratebook..."}
+          searchPlaceholder="Search ratebooks..."
+          emptyMessage="No more ratebooks available"
+          disabled={loading || saving || pickerOptions.length === 0}
+          triggerClassName="h-9 rounded-lg bg-bg/50 px-3 text-sm"
+          width={420}
+        />
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-xs text-fg/40">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading ratebooks...
+          </div>
+        ) : activeAssignments.length === 0 ? (
+          <div className="px-4 py-8">
+            <EmptyState className="py-8">
+              <BookOpen className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+              No default ratebooks on this client.
+            </EmptyState>
+          </div>
+        ) : (
+          <div className="divide-y divide-line">
+            {activeAssignments.map((assignment) => {
+              const schedule = scheduleById.get(assignment.rateScheduleId);
+              const range = schedule ? scheduleDateRange(schedule) : "";
+              return (
+                <div key={assignment.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/8 text-accent">
+                    <BookOpen className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-fg">{schedule?.name ?? "Missing ratebook"}</span>
+                      {schedule?.category && <Badge className="shrink-0 text-[10px]">{schedule.category}</Badge>}
+                    </div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fg/40">
+                      <span>{schedule?.items?.length ?? 0} items</span>
+                      <span>{schedule?.tiers?.length ?? 0} tiers</span>
+                      {range && <span>{range}</span>}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => removeRatebook(assignment.id)}
+                    disabled={saving}
+                    title="Remove default ratebook"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <div className="border-t border-danger/20 bg-danger/8 px-4 py-2 text-xs text-danger">
+          {error}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function ClientDetail({
   customer: initialCustomer,
   projects,
@@ -668,6 +877,10 @@ export function ClientDetail({
               <ContactsPanel className="min-h-[320px] xl:min-h-0" customer={customer} />
             </div>
           </div>
+        )}
+
+        {activeTab === "ratebooks" && (
+          <ClientRatebooksPanel customer={customer} />
         )}
       </div>
 

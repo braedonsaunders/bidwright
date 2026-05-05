@@ -92,7 +92,7 @@ import { settingsRoutes } from "./routes/settings-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
-import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
+import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, generateSnapPdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { parseImportFile } from "./services/catalog-import-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
@@ -112,7 +112,7 @@ const createProjectSchema = z.object({
   location: z.string().min(1),
   packageName: z.string().min(1).optional(),
   scope: z.string().optional(),
-  creationMode: z.enum(["manual", "intake"]).optional(),
+  creationMode: z.enum(["manual", "intake", "snap"]).optional(),
   summary: z.string().optional()
 });
 
@@ -1467,6 +1467,13 @@ async function captureHumanEstimateFeedback(
   }).catch(() => null);
 }
 
+function snapLineLimitFromState(state: Record<string, unknown> | undefined): number | null {
+  if (!state || state.quoteMode !== "snap" || state.snapUpgraded === true) return null;
+  return typeof state.snapLineLimit === "number"
+    ? Math.max(1, Math.floor(state.snapLineLimit))
+    : 10;
+}
+
 async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
   const multipartUpload = await saveMultipartPackageUpload(request);
   const sourceKind = multipartUpload.fields.sourceKind ?? "project";
@@ -2423,6 +2430,20 @@ export function buildServer() {
       }
     }
 
+    const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
+    const snapLineLimit = snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined);
+    if (snapLineLimit !== null) {
+      const workspace = await request.store!.getWorkspace(projectId);
+      const lineCount = workspace?.worksheets
+        .find((worksheet) => worksheet.id === worksheetId)
+        ?.items.length ?? 0;
+      if (lineCount >= snapLineLimit) {
+        return reply.code(400).send({
+          message: `Snaps are capped at ${snapLineLimit} line items. Upgrade this Snap to a quote before adding more lines.`,
+        });
+      }
+    }
+
     const createResult = deltaResponse
       ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput)
       : null;
@@ -2511,6 +2532,13 @@ export function buildServer() {
       return reply.code(400).send({
         message: "Invalid worksheet payload",
         issues: parsed.error.flatten()
+      });
+    }
+
+    const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
+    if (snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined) !== null) {
+      return reply.code(400).send({
+        message: "Snaps use a single worksheet. Upgrade this Snap to a quote before adding worksheets.",
       });
     }
 
@@ -4513,7 +4541,7 @@ export function buildServer() {
       projectId: string;
       templateType: string;
     };
-    const validTypes = ["main", "backup", "sitecopy", "closeout", "schedule"];
+    const validTypes = ["main", "backup", "sitecopy", "closeout", "schedule", "snap"];
     if (!validTypes.includes(templateType)) {
       return reply
         .code(400)
@@ -4563,7 +4591,9 @@ export function buildServer() {
       try { layoutOptions = JSON.parse(decodeURIComponent(layoutParam)); } catch { /* ignore */ }
     }
 
-    const html = generatePdfHtml(pdfData, templateType, layoutOptions);
+    const html = templateType === "snap"
+      ? generateSnapPdfHtml(pdfData)
+      : generatePdfHtml(pdfData, templateType, layoutOptions);
     const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
     return reply.type(contentType).send(buffer);
   });

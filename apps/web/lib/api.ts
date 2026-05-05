@@ -38,6 +38,7 @@ export interface ProjectListItem {
     estimatedProfit: number;
     estimatedMargin: number;
   } | null;
+  workspaceState?: WorkspaceStateRecord | null;
 }
 
 export interface SourceDocumentStructuredData {
@@ -1048,7 +1049,6 @@ export type LineItemSearchSourceType =
   | "catalog_item"
   | "rate_schedule_item"
   | "labor_unit"
-  | "cost_resource"
   | "effective_cost"
   | "assembly"
   | "plugin_tool"
@@ -1339,7 +1339,7 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
-  creationMode?: "manual" | "intake";
+  creationMode?: "manual" | "intake" | "snap";
   summary?: string;
 }
 
@@ -1356,6 +1356,26 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export interface ProjectPatchInput {
+  name?: string;
+  projectName?: string;
+  clientName?: string;
+  location?: string;
+  scope?: string;
+  summary?: string;
+  description?: string;
+  notes?: string;
+}
+
+export async function updateProject(projectId: string, patch: ProjectPatchInput) {
+  await apiRequest<{ ok: boolean; updated: Record<string, unknown> }>(`/projects/${projectId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return getProjectWorkspace(projectId);
 }
 
 export async function getProjects(): Promise<ProjectListItem[]> {

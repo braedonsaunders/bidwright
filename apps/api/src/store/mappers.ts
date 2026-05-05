@@ -70,7 +70,7 @@ export const DEFAULT_BRAND: AppSettings["brand"] = {
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  general: { orgName: "", address: "", phone: "", website: "", logoUrl: "" },
+  general: { orgName: "", address: "", phone: "", website: "", logoUrl: "", language: "en" },
   email: { host: "", port: 587, username: "", password: "", fromAddress: "", fromName: "", authMethod: "smtp", oauth2TenantId: "", oauth2ClientId: "", oauth2ClientSecret: "" },
   defaults: {
     defaultMarkup: 15,
@@ -100,6 +100,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     azureDiKey: "",
     documentExtractionProvider: "azure",
     azureDiModel: "prebuilt-layout",
+    azureDiFeatures: ["keyValuePairs"],
+    azureDiQueryFields: "",
+    azureDiOutputFormat: "text",
     agentRuntime: undefined,
     agentModel: undefined,
     agentReasoningEffort: "extra_high",

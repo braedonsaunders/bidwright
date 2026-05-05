@@ -33,6 +33,14 @@ export interface CreateResourceCatalogItemInput {
   active?: boolean;
 }
 
+const HIDDEN_RESOURCE_METADATA_SOURCES = ["vendor_pdf_review", "vendor_pdf_ingestion"] as const;
+
+function hiddenResourceSourceFilters() {
+  return HIDDEN_RESOURCE_METADATA_SOURCES.map((source) => ({
+    metadata: { path: ["source"], equals: source },
+  }));
+}
+
 export interface CreateCostObservationInput {
   resourceId?: string | null;
   vendorId?: string | null;
@@ -2772,7 +2780,10 @@ export class CostIntelligenceService {
   }
 
   async listResources(organizationId: string, filters: CostIntelligenceListFilters = {}) {
-    const where: any = { organizationId };
+    const where: any = {
+      organizationId,
+      NOT: hiddenResourceSourceFilters(),
+    };
     const query = filters.query?.trim();
     if (query) {
       where.OR = [
@@ -2802,7 +2813,12 @@ export class CostIntelligenceService {
       persistedVendorCount,
       observedVendors,
     ] = await Promise.all([
-      db.resourceCatalogItem.count({ where: { organizationId } }),
+      db.resourceCatalogItem.count({
+        where: {
+          organizationId,
+          NOT: hiddenResourceSourceFilters(),
+        },
+      }),
       db.priceObservation.count({ where: { organizationId } }),
       db.effectiveCost.count({ where: { organizationId, vendorName: "", vendorProductId: null } }),
       db.costVendor?.count ? db.costVendor.count({ where: { organizationId } }) : Promise.resolve(0),

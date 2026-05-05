@@ -3,6 +3,7 @@
 import type { FormEvent } from "react";
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
@@ -28,6 +29,7 @@ const nodePoints = [
 ];
 
 export default function LoginPage() {
+  const t = useTranslations("Auth.login");
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -43,7 +45,7 @@ export default function LoginPage() {
     try {
       await login(email.trim(), password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed. Please try again.");
+      setError(err instanceof Error ? err.message : t("error"));
     } finally {
       setLoading(false);
     }
@@ -135,7 +137,7 @@ export default function LoginPage() {
 
           <div className="rounded-lg border border-white/14 bg-[#eef0e8]/95 p-5 text-[#101514] shadow-2xl shadow-black/45 backdrop-blur-xl sm:p-7">
             <div className="mb-7">
-              <h2 className="text-3xl font-semibold leading-tight">Sign in</h2>
+              <h2 className="text-3xl font-semibold leading-tight">{t("title")}</h2>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -156,7 +158,7 @@ export default function LoginPage() {
 
               <div>
                 <Label htmlFor="email" className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4b5651]">
-                  Email
+                  {t("email")}
                 </Label>
                 <div className="relative mt-2">
                   <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#78837d]" />
@@ -165,7 +167,7 @@ export default function LoginPage() {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@company.com"
+                    placeholder={t("emailPlaceholder")}
                     required
                     autoFocus
                     autoComplete="email"
@@ -176,7 +178,7 @@ export default function LoginPage() {
 
               <div>
                 <Label htmlFor="password" className="text-xs font-semibold uppercase tracking-[0.12em] text-[#4b5651]">
-                  Password
+                  {t("password")}
                 </Label>
                 <div className="relative mt-2">
                   <LockKeyhole className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#78837d]" />
@@ -185,15 +187,15 @@ export default function LoginPage() {
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter your password"
+                    placeholder={t("passwordPlaceholder")}
                     required
                     autoComplete="current-password"
                     className="h-12 rounded-lg border-[#cbd3c8] bg-white pl-10 pr-11 text-[15px] text-[#101514] shadow-inner shadow-[#e4e8df] placeholder:text-[#5f6b64] focus:border-[#1b7766]/65 focus:ring-[#1b7766]/20"
                   />
                   <button
                     type="button"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                    title={showPassword ? "Hide password" : "Show password"}
+                    aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+                    title={showPassword ? t("hidePassword") : t("showPassword")}
                     onClick={() => setShowPassword((visible) => !visible)}
                     className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-[#68736d] transition-colors hover:bg-[#e4e8df] hover:text-[#101514] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1b7766]/30"
                   >
@@ -211,11 +213,11 @@ export default function LoginPage() {
                 {loading ? (
                   <>
                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/25 border-t-white" />
-                    Signing in
+                    {t("submitting")}
                   </>
                 ) : (
                   <>
-                    Continue
+                    {t("submit")}
                     <ArrowRight className="h-4 w-4" />
                   </>
                 )}
@@ -223,12 +225,12 @@ export default function LoginPage() {
             </form>
 
             <div className="mt-6 flex items-center justify-between border-t border-[#d9ded3] pt-5 text-sm">
-              <span className="text-[#66716a]">No account?</span>
+              <span className="text-[#66716a]">{t("noAccount")}</span>
               <Link
                 href="/signup"
                 className="font-semibold text-[#1b7766] transition-colors hover:text-[#13584c] hover:underline"
               >
-                Create account
+                {t("createAccount")}
               </Link>
             </div>
           </div>

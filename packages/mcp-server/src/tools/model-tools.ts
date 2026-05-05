@@ -59,6 +59,13 @@ function previewRows(rows: any[], limit = 8) {
   });
 }
 
+function paginate<T>(rows: T[], input: { limit?: number; offset?: number }, defaultLimit = 100, maxLimit = 500) {
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(1, Math.min(input.limit ?? defaultLimit, maxLimit));
+  const page = rows.slice(offset, offset + limit);
+  return { rows: page, offset, limit, total: rows.length, hasMore: offset + page.length < rows.length };
+}
+
 function issuePreview(issues: any[], limit = 6) {
   return issues.slice(0, limit).map((issue) => {
     const record = asRecord(issue);
@@ -167,11 +174,18 @@ Use this before model takeoff, model QA, model/BOM inspection, or when choosing 
 The manifest includes parser status, source lineage, native file metadata, element/quantity counts, model issues, and any extracted model tree data.`,
     {
       modelId: z.string().describe("Model asset id returned by listModels"),
+      includeRaw: z.boolean().default(false).describe("Include raw manifest arrays. Default false returns compact previews only."),
+      limit: z.number().int().positive().max(200).default(50).describe("Rows per raw array when includeRaw=true."),
+      offset: z.number().int().min(0).default(0).describe("Offset for raw arrays when includeRaw=true."),
     },
-    async ({ modelId }) => {
+    async ({ modelId, includeRaw, limit, offset }) => {
       const projectId = getProjectId();
       const result = await apiGet<any>(`/api/models/${projectId}/assets/${modelId}`);
       const asset = result.asset;
+      const elementsPage = paginate(asArray(asset.elements), { limit, offset }, 50, 200);
+      const quantitiesPage = paginate(asArray(asset.quantities), { limit, offset }, 50, 200);
+      const bomPage = paginate(asArray(asset.bom), { limit, offset }, 50, 200);
+      const issuesPage = paginate(asArray(asset.issues), { limit, offset }, 50, 200);
       return {
         content: [
           {
@@ -180,12 +194,17 @@ The manifest includes parser status, source lineage, native file metadata, eleme
               {
                 model: normalizedAsset(asset),
                 agentSummary: summarizeModelAsset(asset),
-                manifest: asset.manifest,
-                elementStats: asset.elementStats,
-                bom: asset.bom,
-                elements: asset.elements ?? [],
-                quantities: asset.quantities ?? [],
-                issues: asset.issues ?? [],
+                raw: includeRaw ? {
+                  manifest: asset.manifest,
+                  elementStats: asset.elementStats,
+                  bom: { ...bomPage, rows: bomPage.rows },
+                  elements: { ...elementsPage, rows: elementsPage.rows },
+                  quantities: { ...quantitiesPage, rows: quantitiesPage.rows },
+                  issues: { ...issuesPage, rows: issuesPage.rows },
+                } : undefined,
+                note: includeRaw
+                  ? "Raw arrays are paginated with the same limit/offset. Use queryModelElements or extractModelBom for focused data."
+                  : "Compact manifest only. Set includeRaw=true with limit/offset, or use queryModelElements/extractModelBom for focused data.",
               },
               null,
               2,
@@ -212,7 +231,8 @@ This tool returns only extracted data. It does not infer or fabricate model elem
           level: z.string().optional(),
           system: z.string().optional(),
           name: z.string().optional(),
-          limit: z.number().min(1).max(1000).default(100),
+          limit: z.number().min(1).max(500).default(100),
+          offset: z.number().min(0).default(0),
         })
         .default({ limit: 100 }),
     },
@@ -223,6 +243,7 @@ This tool returns only extracted data. It does not infer or fabricate model elem
         if (value !== undefined && value !== "") params.set(key, String(value));
       }
       const result = await apiGet<any>(`/api/models/${projectId}/assets/${modelId}/elements?${params.toString()}`);
+      const elements = result.elements ?? [];
       return {
         content: [
           {
@@ -230,8 +251,11 @@ This tool returns only extracted data. It does not infer or fabricate model elem
             text: JSON.stringify(
               {
                 modelId,
-                count: result.count ?? result.elements?.length ?? 0,
-                elements: result.elements ?? [],
+                total: result.count ?? elements.length ?? 0,
+                offset: query.offset ?? 0,
+                limit: query.limit ?? 100,
+                hasMore: (query.offset ?? 0) + elements.length < (result.count ?? elements.length ?? 0),
+                elements,
               },
               null,
               2,
@@ -250,11 +274,14 @@ The BOM is conservative: unsupported formats return a clear status and empty row
     {
       modelId: z.string().describe("Model asset id returned by listModels"),
       grouping: z.string().optional().describe("Requested grouping note, such as material, class, system, level, or assembly"),
+      limit: z.number().int().positive().max(500).default(100),
+      offset: z.number().int().min(0).default(0),
     },
-    async ({ modelId, grouping }) => {
+    async ({ modelId, grouping, limit, offset }) => {
       const projectId = getProjectId();
       const result = await apiGet<any>(`/api/models/${projectId}/assets/${modelId}/bom`);
       const rows = result.rows ?? [];
+      const page = paginate(rows, { limit, offset }, 100, 500);
       return {
         content: [
           {
@@ -264,8 +291,11 @@ The BOM is conservative: unsupported formats return a clear status and empty row
                 model: normalizedAsset(result.model),
                 grouping: grouping ?? "native",
                 status: rows.length > 0 ? "bom_available" : "no_bom_rows_available",
-                rows,
                 rowCount: result.rowCount ?? rows.length,
+                offset: page.offset,
+                limit: page.limit,
+                hasMore: page.hasMore,
+                rows: page.rows,
               },
               null,
               2,

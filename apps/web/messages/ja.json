@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "ダッシュボード",
+      "intake": "取り込み",
+      "quotes": "見積",
+      "clients": "顧客",
+      "library": "ライブラリ",
+      "performance": "実績",
+      "settings": "設定"
+    },
+    "theme": {
+      "light": "ライト",
+      "dark": "ダーク",
+      "system": "システム",
+      "label": "テーマ: {theme}",
+      "labelWithResolved": "テーマ: {theme}（{resolved}）"
+    },
+    "switchOrganization": "組織を切り替え",
+    "organizations": "組織",
+    "noOtherOrganizations": "他の組織はありません",
+    "superAdmin": "スーパー管理者",
+    "personal": "個人",
+    "adminPanel": "管理パネル",
+    "searchTools": "ツールを検索",
+    "searchPlaceholder": "検索...",
+    "toolsCount": "ツール（{count}）",
+    "noToolsFound": "「{query}」に一致するツールはありません",
+    "quotes": "見積",
+    "quotesCount": "見積（{count}）",
+    "activeProject": "アクティブなプロジェクト",
+    "activeProjectLabel": "アクティブなプロジェクト: {name}",
+    "switchProject": "プロジェクトを切り替え",
+    "loading": "読み込み中...",
+    "notSignedIn": "サインインしていません",
+    "profile": "プロフィール",
+    "signOut": "サインアウト",
+    "expandSidebar": "サイドバーを展開",
+    "collapseSidebar": "サイドバーを折りたたむ"
+  },
+  "Settings": {
+    "title": "設定",
+    "subtitle": "Bidwright ワークスペースを設定します",
+    "groups": {
+      "organization": "組織",
+      "data": "データ管理",
+      "importExport": "インポート / エクスポート",
+      "integrations": "連携",
+      "users": "ユーザーとアクセス"
+    },
+    "orgTabs": {
+      "general": "一般",
+      "brand": "ブランド",
+      "departments": "部門",
+      "defaults": "既定値",
+      "terms": "利用規約",
+      "personas": "ペルソナ"
+    },
+    "generalTitle": "一般設定",
+    "language": "言語",
+    "timezone": "タイムゾーン",
+    "currency": "通貨",
+    "dateFormat": "日付形式",
+    "fiscalYearStart": "会計年度開始",
+    "generalDescription": "組織の言語、地域形式、レポートカレンダーを設定します。",
+    "localizationTitle": "ローカライズ",
+    "localizationDescription": "言語は組織全体で共有され、アプリの主要 UI にすぐ反映されます。",
+    "regionalTitle": "地域形式",
+    "regionalDescription": "通貨、日付、既定の時刻表示に使用されます。",
+    "fiscalTitle": "会計カレンダー",
+    "fiscalDescription": "年次集計と既定レポートに使う月を選択します。"
+  },
+  "Common": {
+    "loading": "読み込み中..."
+  },
+  "Auth": {
+    "login": {
+      "title": "サインイン",
+      "email": "メール",
+      "emailPlaceholder": "you@company.com",
+      "password": "パスワード",
+      "passwordPlaceholder": "パスワードを入力",
+      "hidePassword": "パスワードを非表示",
+      "showPassword": "パスワードを表示",
+      "submit": "続行",
+      "submitting": "サインイン中",
+      "error": "サインインに失敗しました。もう一度お試しください。",
+      "noAccount": "アカウントがありませんか？",
+      "createAccount": "アカウントを作成"
+    },
+    "signup": {
+      "eyebrow": "組織を作成",
+      "title": "サインアップ",
+      "organizationName": "組織名",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "URL スラッグ",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "氏名",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "メール",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "パスワード",
+      "passwordPlaceholder": "8 文字以上",
+      "confirmPassword": "パスワード確認",
+      "confirmPasswordPlaceholder": "確認",
+      "passwordMismatch": "パスワードが一致しません",
+      "passwordTooShort": "パスワードは 8 文字以上にしてください",
+      "error": "登録に失敗しました",
+      "submit": "アカウントを作成",
+      "submitting": "アカウントを作成中...",
+      "signInLink": "すでにアカウントをお持ちですか？サインイン"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "進行中",
+      "won": "受注",
+      "lost": "失注",
+      "other": "その他"
+    },
+    "greeting": {
+      "late": "遅くまで作業中",
+      "morning": "おはようございます",
+      "afternoon": "こんにちは",
+      "evening": "こんばんは"
+    },
+    "newIntake": "新規取り込み",
+    "activeValue": "進行中の金額",
+    "activeQuoteCount": "進行中の見積 {count} 件",
+    "averageMargin": "平均利益率",
+    "projectedProfit": "予測利益 {profit}",
+    "winRate": "受注率",
+    "decidedQuotes": "決定済み見積 {count} 件",
+    "noDecisionsYet": "まだ決定はありません",
+    "exceptions": "例外",
+    "exceptionSummary": "期限超過 {aging}、利益率監視 {margin}",
+    "pipelineTitle": "パイプラインマップ",
+    "trackedValue": "追跡中の総額 {value}",
+    "quotes": "見積",
+    "noPipeline": "まだ入札パイプラインはありません。",
+    "noQuotes": "見積なし",
+    "bidQuality": "入札品質",
+    "watch": "監視",
+    "clear": "問題なし",
+    "margin": "利益率",
+    "win": "受注",
+    "operatingSignal": "運用シグナル",
+    "active": "進行中",
+    "aging": "期限超過",
+    "won30d": "30日受注",
+    "attention": "注意",
+    "agingActiveWork": "期限超過の進行中作業",
+    "oldestDays": "最古 {days}日",
+    "marginUnder": "利益率 12% 未満",
+    "needsPricingReview": "価格レビューが必要",
+    "wonThisMonth": "今月の受注",
+    "recentDecisions": "最近の決定",
+    "noUrgentExceptions": "緊急の例外はありません",
+    "quotePulse": "見積の動き",
+    "all": "すべて",
+    "noRecentQuotes": "最近の見積はありません"
+  },
+  "Clients": {
+    "title": "顧客",
+    "subtitle": "アカウント、見積履歴、パイプライン状態、顧客価値。",
+    "newClient": "新規顧客",
+    "searchPlaceholder": "顧客、連絡先、見積タイトル、都市を検索...",
+    "resultCount": "顧客 {count} 件",
+    "filteredResultCount": "{total} 件中 {filtered} 件",
+    "noMatches": "この表示に一致する顧客はありません。",
+    "inactive": "非アクティブ",
+    "noLocation": "所在地なし",
+    "noEmail": "メールなし",
+    "noPhone": "電話なし",
+    "filters": {
+      "all": "すべて",
+      "active": "進行中パイプライン",
+      "quoted": "見積済み",
+      "prospects": "見込み客",
+      "inactive": "非アクティブ"
+    },
+    "table": {
+      "client": "顧客",
+      "contact": "連絡先",
+      "quotes": "見積",
+      "active": "進行中",
+      "awarded": "受注",
+      "win": "受注",
+      "margin": "利益率",
+      "updated": "更新"
+    },
+    "modal": {
+      "title": "新規顧客",
+      "description": "見積作成前にアカウントレコードを作成します。",
+      "close": "新規顧客ダイアログを閉じる",
+      "name": "名前",
+      "namePlaceholder": "顧客名",
+      "shortName": "短縮名",
+      "website": "Webサイト",
+      "email": "メール",
+      "phone": "電話",
+      "city": "都市",
+      "provinceState": "都道府県 / 州",
+      "cancel": "キャンセル",
+      "create": "顧客を作成",
+      "nameRequired": "顧客名は必須です。",
+      "createError": "顧客を作成できませんでした。"
+    }
+  },
+  "Quotes": {
+    "title": "見積",
+    "subtitle": "すべての見積を管理して追跡します",
+    "newQuoteButton": "新規見積",
+    "menu": {
+      "aiIntake": "AI 取込",
+      "aiIntakeDescription": "入札パッケージをアップロード",
+      "newQuote": "新規見積",
+      "newQuoteDescription": "空の見積から開始",
+      "newSnap": "新規 Snap",
+      "newSnapDescription": "1ページのクイック見積"
+    },
+    "manual": {
+      "snapTitle": "新規 Snap",
+      "quoteTitle": "新規見積",
+      "snapDescription": "10行の見積グリッドで、1ページのクイック見積を作成します。",
+      "quoteDescription": "AI 取込を実行せず、空の見積ワークスペースを作成します。",
+      "close": "手動見積ダイアログを閉じる",
+      "snapTitleLabel": "Snap タイトル",
+      "quoteTitleLabel": "見積タイトル",
+      "snapTitlePlaceholder": "例: ポンプ室のサービスコール",
+      "quoteTitlePlaceholder": "例: コージェネ配管ラック断熱",
+      "client": "顧客",
+      "newClientName": "新規顧客名",
+      "selectClient": "顧客を選択...",
+      "searchClients": "顧客を検索...",
+      "addClient": "新規顧客を追加",
+      "location": "場所",
+      "locationPlaceholder": "未定",
+      "cancel": "キャンセル",
+      "createSnap": "Snap を作成",
+      "createQuote": "見積を作成",
+      "failedClient": "顧客を作成できませんでした。",
+      "titleRequired": "見積タイトルは必須です。",
+      "unassignedClient": "未割り当ての顧客",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} 手動見積",
+      "snapSummary": "小規模作業の迅速な価格設定用に Snap 見積を作成しました。",
+      "createError": "見積を作成できませんでした。"
+    },
+    "filters": {
+      "searchPlaceholder": "見積番号、タイトル、顧客、プロジェクト、場所で検索...",
+      "status": "ステータス",
+      "client": "顧客",
+      "estimator": "見積担当",
+      "department": "部門",
+      "clear": "クリア",
+      "clearAll": "すべてクリア",
+      "resultCount": "{count} 件の見積",
+      "filteredResultCount": "{total} 件中 {filtered} 件の見積"
+    },
+    "table": {
+      "quoteNumber": "見積 #",
+      "kind": "種類",
+      "title": "タイトル",
+      "client": "顧客",
+      "estimator": "見積担当",
+      "status": "ステータス",
+      "subtotal": "小計",
+      "margin": "利益率",
+      "updated": "更新日"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "通常"
+    },
+    "status": {
+      "Open": "オープン",
+      "Pending": "保留中",
+      "Awarded": "受注",
+      "DidNotGet": "失注",
+      "Declined": "辞退",
+      "Cancelled": "キャンセル",
+      "Closed": "クローズ",
+      "Other": "その他"
+    },
+    "unassigned": "未割り当て",
+    "emptyFiltered": "フィルターに一致する見積はありません",
+    "empty": "見積が見つかりません"
+  },
+  "Performance": {
+    "eyebrow": "パフォーマンス",
+    "title": "パイプラインと見積インテリジェンス",
+    "subtitle": "{count} 件のプロジェクト全体のライブシグナル",
+    "subtitleFiltered": "{count} 件のプロジェクト全体のライブシグナル · フィルター済み",
+    "filteredQuoteCount": "{total} 件中 {filtered} 件の見積",
+    "winRateBadge": "勝率 {rate}",
+    "quoteCount": "{count} 件の見積",
+    "total": "合計",
+    "unknownClient": "不明",
+    "emptyDistribution": "分布データがありません。",
+    "emptyClientData": "顧客データはまだありません。",
+    "emptyTimeSeries": "時系列データはまだありません。",
+    "pipelineFunnel": "パイプラインファネル",
+    "statusMix": "ステータス構成",
+    "pipelineOverTime": "パイプライン推移",
+    "last12Months": "直近 12 か月",
+    "marginDistribution": "利益率分布",
+    "topClientsByProfit": "利益上位の顧客",
+    "top8": "上位 8",
+    "stages": {
+      "active": "アクティブ",
+      "won": "受注",
+      "lost": "失注",
+      "other": "その他"
+    },
+    "status": {
+      "Open": "オープン",
+      "Pending": "保留中",
+      "Awarded": "受注",
+      "DidNotGet": "失注",
+      "Declined": "辞退",
+      "Cancelled": "キャンセル",
+      "Closed": "クローズ",
+      "Other": "その他"
+    },
+    "filters": {
+      "title": "フィルター",
+      "from": "開始",
+      "to": "終了",
+      "fromDate": "開始日",
+      "toDate": "終了日",
+      "stage": "ステージ",
+      "status": "ステータス",
+      "client": "顧客",
+      "allStages": "すべてのステージ",
+      "allStatuses": "すべてのステータス",
+      "allClients": "すべての顧客",
+      "clear": "クリア"
+    },
+    "chips": {
+      "from": "{date} から",
+      "to": "{date} まで",
+      "status": "ステータス: {status}",
+      "client": "顧客: {client}",
+      "stage": "ステージ: {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "パイプライン価値",
+      "estimatedProfit": "推定利益",
+      "averageMargin": "平均利益率",
+      "winRate": "勝率",
+      "decided": "{won}/{decided} 確定"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "アップロード中",
+      "loaded": "パッケージ読み込み済み",
+      "release": "放す",
+      "waiting": "待機中"
+    },
+    "package": {
+      "title": "取込パッケージ",
+      "loadedSize": "{size} 読み込み済み"
+    },
+    "selected": {
+      "multipleFiles": "{count} 件のパッケージファイルを取得",
+      "totalSize": "合計 {size}",
+      "more": "+{count} 件",
+      "clearPackage": "パッケージをクリア"
+    },
+    "drop": {
+      "releaseTitle": "放してパッケージを添付",
+      "title": "ファイルまたはフォルダーをドロップ",
+      "description": "図面、仕様書、スプレッドシート、補遺、画像、ZIP アーカイブ、Outlook メッセージをアップロードします。",
+      "selectFiles": "ファイルを選択",
+      "selectFolder": "フォルダーを選択",
+      "emailFormats": ".msg と .eml"
+    },
+    "context": {
+      "title": "プロジェクト情報",
+      "description": "見積ワークスペース作成に必要な最小限の情報を入力します。"
+    },
+    "fields": {
+      "destination": "保存先",
+      "newProject": "新規プロジェクト",
+      "projectName": "プロジェクト名",
+      "projectNamePlaceholder": "例: 北キャンパス ボイラー更新",
+      "client": "顧客",
+      "newClientName": "新規顧客名",
+      "selectClient": "顧客を選択...",
+      "searchClients": "顧客を検索...",
+      "addClient": "新規顧客を追加",
+      "location": "場所",
+      "locationPlaceholder": "市区町村、都道府県",
+      "bidDue": "入札期限",
+      "scope": "範囲",
+      "scopePlaceholder": "全体パッケージ、工種分割、建物エリア、代替案、または分野。",
+      "playbook": "見積プレイブック",
+      "autoDetect": "自動検出",
+      "notes": "メモ",
+      "notesPlaceholder": "任意のメモ"
+    },
+    "actions": {
+      "uploading": "アップロード中...",
+      "createWorkspace": "取込ワークスペースを作成"
+    },
+    "status": {
+      "uploadSuccessSingle": "パッケージをアップロードしました。",
+      "uploadSuccessMultiple": "{count} 件のファイルをアップロードしました。"
+    },
+    "errors": {
+      "noReadableFiles": "ドロップされた項目から読み取り可能なファイルを取得できませんでした。",
+      "outlookRowOnly": "新しい Outlook の受信トレイ一覧からのドラッグは Outlook 専用データ（{payloadLabel}）を使うため、通常の Web サイトにはメールファイルが渡されません。添付ファイル自体をドラッグするか、開いたメッセージから試す、.eml として保存する、またはクラシック Outlook を使用してください。",
+      "outlookWebLink": "新しい Outlook は Web リンクのドラッグデータ（{payloadLabel}）を提供しましたが、ブラウザーはダウンロード可能なメールファイルに変換できませんでした。メッセージを .eml として保存してアップロードするか、添付ファイル自体をドラッグする、またはクラシック Outlook を使用してください。",
+      "outlookNonFile": "新しい Outlook は非ファイルのドラッグデータ（{payloadLabel}）を提供しましたが、実際のメールファイルではありません。メッセージを .eml として保存してアップロードするか、添付ファイル自体をドラッグする、またはクラシック Outlook を使用してください。",
+      "failedClient": "顧客を作成できませんでした。",
+      "selectFile": "パッケージファイルを少なくとも 1 つ選択してください。",
+      "uploadFailed": "アップロードに失敗しました。"
+    }
+  },
+  "NotFound": {
+    "title": "ページが見つかりません",
+    "back": "ダッシュボードに戻る"
+  },
+  "Profile": {
+    "title": "プロフィール",
+    "account": {
+      "title": "アカウント",
+      "email": "メール",
+      "role": "ロール",
+      "organization": "組織",
+      "access": "アクセス",
+      "superAdmin": "スーパー管理者"
+    },
+    "displayName": {
+      "title": "表示名",
+      "name": "名前",
+      "placeholder": "あなたの名前"
+    },
+    "password": {
+      "title": "パスワード変更",
+      "current": "現在のパスワード",
+      "currentPlaceholder": "現在のパスワードを入力",
+      "new": "新しいパスワード",
+      "newPlaceholder": "8文字以上",
+      "confirm": "確認",
+      "confirmPlaceholder": "確認"
+    },
+    "actions": {
+      "saving": "保存中...",
+      "save": "保存",
+      "changing": "変更中...",
+      "changePassword": "パスワードを変更"
+    },
+    "messages": {
+      "nameUpdated": "名前を更新しました。",
+      "passwordChanged": "パスワードを変更しました。",
+      "updateFailed": "更新に失敗しました",
+      "passwordMismatch": "パスワードが一致しません。",
+      "passwordTooShort": "パスワードは8文字以上である必要があります。"
+    }
+  },
+  "Library": {
+    "title": "ライブラリ",
+    "searchPlaceholder": "ライブラリ領域を検索",
+    "refresh": "更新",
+    "loadingKnowledge": "ナレッジを読み込み中...",
+    "surfaces": {
+      "overview": {
+        "label": "ホーム",
+        "description": "ライブラリ作業とライブカバレッジの開始領域。"
+      },
+      "resources": {
+        "label": "リソース",
+        "description": "材料、サービス、設備、外注、消耗品、予備費のカタログ化リソース。"
+      },
+      "rates": {
+        "label": "レートブック",
+        "description": "顧客/リソースの原価・売価の上書き、階層、移動、手当、価格ルール。"
+      },
+      "assemblies": {
+        "label": "アセンブリ",
+        "description": "価格付きリソース行へ展開されるパラメトリックな見積レシピ。"
+      },
+      "labor_units": {
+        "label": "労務単位",
+        "description": "設置単位あたりの時間を表す生産基準。リソース行とレートブックに連携します。"
+      },
+      "cost": {
+        "label": "コストインテリジェンス",
+        "description": "仕入先請求行の証拠、観測、製品、現在のコスト基準行。"
+      },
+      "playbooks": {
+        "label": "見積担当",
+        "description": "見積担当の振る舞い、方法論、ソース連携、商務ポリシー。"
+      },
+      "knowledge": {
+        "label": "ナレッジ",
+        "description": "参考書、データセット、抽出証拠、エージェント検索用資料。"
+      }
+    },
+    "common": {
+      "close": "閉じる",
+      "delete": "削除",
+      "cancel": "キャンセル",
+      "saving": "保存中",
+      "prev": "前へ",
+      "next": "次へ"
+    },
+    "overview": {
+      "title": "ライブラリワークスペース",
+      "subtitle": "ライブのライブラリカバレッジからワークスペースを開く",
+      "groupCount": "{count} グループ",
+      "noData": "データなし",
+      "unassigned": "未割り当て",
+      "other": "その他",
+      "breakdowns": {
+        "resourceRows": "リソースカタログ種別別の行",
+        "rateRows": "レートブックカテゴリ別の行",
+        "rateBooks": "カテゴリ別のレートブック",
+        "assemblyComponents": "アセンブリカテゴリ別のコンポーネント",
+        "assemblyCategories": "カテゴリ別のアセンブリ",
+        "laborRows": "労務単位カタログ別の行",
+        "costBasis": "リソース種別別のコスト基準",
+        "resourceTypes": "種別別のリソース",
+        "sourceBindings": "種別別のソース連携",
+        "estimatorStatus": "ステータス別の見積担当",
+        "references": "ソース種別別の参照",
+        "datasetRows": "データセットカテゴリ別の行"
+      },
+      "fallbacks": {
+        "catalog": "カタログ",
+        "uncategorized": "未分類",
+        "general": "一般",
+        "unclassified": "分類なし",
+        "books": "書籍",
+        "notes": "ノート",
+        "datasetTags": "データセットタグ",
+        "active": "有効",
+        "paused": "一時停止"
+      },
+      "cards": {
+        "resources": {
+          "title": "リソース",
+          "body": "ワークシート、レートブック、アセンブリで使う基本見積リソース。",
+          "metricLabel": "カタログ項目"
+        },
+        "rates": {
+          "title": "レートブック",
+          "body": "階層、移動、手当、価格ルールを含む顧客/リソースの原価・売価。",
+          "metricLabel": "リソース行"
+        },
+        "assemblies": {
+          "title": "アセンブリ",
+          "body": "リソース、設備、入れ子スコープ、パラメトリック数量拾い向けの再利用可能な見積レシピ。",
+          "metricLabel": "アセンブリ"
+        },
+        "laborUnits": {
+          "title": "労務単位",
+          "body": "自社の生産基準が設置数量を時間に変換し、その時間をレートブックで価格化します。",
+          "metricLabel": "生産行"
+        },
+        "cost": {
+          "title": "コストインテリジェンス",
+          "body": "仕入先請求行の証拠、観測価格、現在のコスト基準行とその根拠。",
+          "metricLabel": "コスト基準行"
+        },
+        "playbooks": {
+          "title": "見積担当",
+          "body": "方法論、ソース優先度、商務ポリシー、レビュー指針を備えた再利用可能な見積動作。",
+          "metricLabel": "有効な見積担当"
+        },
+        "books": {
+          "title": "書籍とノート",
+          "body": "参考書、見積担当ノート、抽出証拠、エージェント検索用資料。",
+          "metricLabel": "参照"
+        },
+        "datasets": {
+          "title": "データセット",
+          "body": "エージェント、見積担当、価格ワークフローで使う構造化テーブルとインポート行。",
+          "metricLabel": "データセット"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "予備費",
+        "allowances": "予備費",
+        "consumable": "消耗品",
+        "consumables": "消耗品",
+        "dataset": "データセット",
+        "datasets": "データセット",
+        "equipment": "設備",
+        "knowledge": "ナレッジ",
+        "knowledgeLibrary": "ナレッジライブラリ",
+        "labor": "労務",
+        "manual": "マニュアル",
+        "material": "材料",
+        "materials": "材料",
+        "rateBook": "レートブック",
+        "service": "サービス",
+        "services": "サービス",
+        "subcontract": "外注",
+        "subcontracts": "外注"
+      }
+    },
+    "labor": {
+      "title": "労務単位",
+      "subtitle": "{catalog} / {count} 生産基準",
+      "allCatalogs": "すべてのカタログ",
+      "allCatalogsWithCount": "すべてのカタログ（{count}）",
+      "unitsCount": "{count} 単位",
+      "catalogAria": "労務単位カタログ",
+      "searchPlaceholder": "コード、クラス、カテゴリ、説明を検索",
+      "confirmDeleteUnit": "{name} を削除しますか？",
+      "confirmDeleteCatalog": "{name} とその労務単位を削除しますか？",
+      "groupRowCount": "{count} 行",
+      "avgHours": "平均 {value} 時間",
+      "items": "項目",
+      "sections": "セクション",
+      "groupLevels": {
+        "catalog": "カタログ",
+        "category": "カテゴリ",
+        "class": "クラス",
+        "subclass": "サブクラス"
+      },
+      "view": {
+        "groups": "グループ",
+        "rows": "行"
+      },
+      "actions": {
+        "collapse": "折りたたむ",
+        "expand": "展開",
+        "manageCatalogs": "カタログ管理",
+        "newUnit": "新しい労務単位"
+      },
+      "stats": {
+        "rows": "行",
+        "catalogs": "カタログ",
+        "providers": "提供元",
+        "categories": "カテゴリ",
+        "avgHrs": "平均時間"
+      },
+      "table": {
+        "code": "コード",
+        "laborUnit": "労務単位",
+        "catalog": "カタログ",
+        "category": "カテゴリ",
+        "class": "クラス",
+        "normal": "通常",
+        "difficult": "難",
+        "veryDifficult": "非常に難",
+        "uom": "単位"
+      },
+      "branchLoading": "ブランチを読み込み中...",
+      "branchEmpty": "このブランチに行はありません。",
+      "empty": "このビューに一致する労務単位はありません。",
+      "loading": "労務単位を読み込み中...",
+      "unitDrawer": {
+        "createTitle": "労務単位を作成",
+        "fallbackTitle": "労務単位",
+        "subtitle": "アセンブリとワークシートで使う生産基準を編集します。",
+        "save": "労務単位を保存"
+      },
+      "catalogDrawer": {
+        "title": "労務単位カタログ",
+        "subtitle": "生産基準行のソース区分を管理します。",
+        "newCatalog": "新しいカタログ",
+        "org": "組織",
+        "firstParty": "自社",
+        "save": "カタログを保存",
+        "create": "カタログを作成"
+      },
+      "fields": {
+        "catalog": "カタログ",
+        "chooseCatalog": "カタログを選択",
+        "name": "名前",
+        "code": "コード",
+        "discipline": "分野",
+        "outputUom": "出力単位",
+        "description": "説明",
+        "category": "カテゴリ",
+        "class": "クラス",
+        "subclass": "サブクラス",
+        "normalHours": "通常時間",
+        "difficultHours": "難時間",
+        "veryDifficultHours": "非常に難時間",
+        "default": "既定",
+        "tags": "タグ",
+        "tagsPlaceholder": "カンマ区切り",
+        "provider": "提供元",
+        "sourceNote": "ソースメモ"
+      },
+      "difficulty": {
+        "normal": "通常",
+        "difficult": "難しい",
+        "veryDifficult": "非常に難しい"
+      },
+      "fallbacks": {
+        "internal": "社内",
+        "general": "一般",
+        "manual": "マニュアル",
+        "unknown": "不明"
+      },
+      "errors": {
+        "chooseCatalog": "保存前に労務単位カタログを選択してください。",
+        "unitNameRequired": "労務単位名は必須です。",
+        "normalHours": "通常時間は 0 以上の数値である必要があります。",
+        "difficultyHours": "難易度時間は空欄または 0 以上の数値である必要があります。",
+        "saveUnit": "労務単位を保存できませんでした。",
+        "deleteUnit": "労務単位を削除できませんでした。",
+        "catalogNameRequired": "カタログ名は必須です。",
+        "saveCatalog": "カタログを保存できませんでした。",
+        "deleteCatalog": "カタログを削除できませんでした。"
+      },
+      "footer": {
+        "grouped": "{visible} 件の表示ツリー行のうち {start}-{end}、労務行合計 {total}",
+        "rows": "{total} 行のうち {start}-{end}、{catalogs} カタログで {indexed} 件を索引済み",
+        "firstParty": "自社 {count}",
+        "topLevelGroups": "最上位グループ {count}",
+        "page": "ページ {page} / {total}"
+      },
+      "pageSize": {
+        "visible": "{count} 表示",
+        "rows": "{count} 行",
+        "aria": "労務単位のページサイズ"
+      }
+    }
+  }
+}

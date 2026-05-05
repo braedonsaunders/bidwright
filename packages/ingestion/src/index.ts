@@ -1,4 +1,5 @@
 export * from './classification.js';
+export * from './azure-di.js';
 export * from './chunking.js';
 export * from './project-ingestion.js';
 export * from './retrieval.js';

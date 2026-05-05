@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import {
   Building2,
   AlertTriangle,
@@ -27,11 +28,13 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import { DEFAULT_UOMS, normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
+import { SUPPORTED_LOCALES, localeDisplayName, normalizeLocale } from "@/lib/i18n";
 import {
   Badge,
   Button,
   Card,
   CardBody,
+  CardDescription,
   CardHeader,
   CardTitle,
   FadeIn,
@@ -152,6 +155,24 @@ import {
 } from "@/lib/data-export-import";
 import { setCachedUoms } from "@/components/shared/uom-select";
 
+const AZURE_DI_MODEL_OPTIONS = [
+  { value: "prebuilt-layout", label: "Layout" },
+  { value: "prebuilt-read", label: "Read" },
+  { value: "prebuilt-invoice", label: "Invoice" },
+  { value: "prebuilt-contract", label: "Contract" },
+  { value: "prebuilt-document", label: "Document (legacy)" },
+] as const;
+
+const AZURE_DI_FEATURE_OPTIONS: MultiSelectOption[] = [
+  { value: "keyValuePairs", label: "Key-value pairs", description: "General form fields" },
+  { value: "queryFields", label: "Query fields", description: "Named fields without training" },
+  { value: "ocrHighResolution", label: "High-res OCR", description: "Small text and drawings" },
+  { value: "barcodes", label: "Barcodes", description: "Barcode detection" },
+  { value: "languages", label: "Languages", description: "Language detection" },
+  { value: "formulas", label: "Formulas", description: "Math notation" },
+  { value: "styleFont", label: "Font/style", description: "Font properties" },
+];
+
 // ── Main Component ───────────────────────────────────────────────────────────
 
 function resolveSettingsNavigation(tabParam: string | null, groupParam: string | null) {
@@ -196,6 +217,7 @@ export function SettingsPage({
   initialPlugins?: any[];
   initialDatasets?: DatasetRecord[];
 } = {}) {
+  const t = useTranslations("Settings");
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
   const groupParam = searchParams.get("group");
@@ -252,7 +274,7 @@ export function SettingsPage({
   const [newPassword, setNewPassword] = useState("");
   const [passwordResetSaving, setPasswordResetSaving] = useState(false);
 
-  const { user: currentUser, organization: currentOrganization } = useAuth();
+  const { user: currentUser, organization: currentOrganization, setOrganizationLanguage } = useAuth();
 
   useEffect(() => {
     const next = resolveSettingsNavigation(tabParam, groupParam);
@@ -322,6 +344,7 @@ export function SettingsPage({
         setSettings((prev) => ({
           general: {
             ...prev.general,
+            language: normalizeLocale(apiSettings.general.language ?? currentOrganization?.language ?? prev.general.language),
             timezone: apiSettings.defaults.timezone || prev.general.timezone,
             currency: apiSettings.defaults.currency || prev.general.currency,
             dateFormat: apiSettings.defaults.dateFormat || prev.general.dateFormat,
@@ -367,6 +390,11 @@ export function SettingsPage({
             azureDiKey: (apiSettings.integrations as any).azureDiKey || prev.integrations.azureDiKey,
             documentExtractionProvider: (apiSettings.integrations as any).documentExtractionProvider || prev.integrations.documentExtractionProvider,
             azureDiModel: (apiSettings.integrations as any).azureDiModel || prev.integrations.azureDiModel,
+            azureDiFeatures: Array.isArray((apiSettings.integrations as any).azureDiFeatures)
+              ? (apiSettings.integrations as any).azureDiFeatures
+              : prev.integrations.azureDiFeatures,
+            azureDiQueryFields: (apiSettings.integrations as any).azureDiQueryFields ?? prev.integrations.azureDiQueryFields,
+            azureDiOutputFormat: (apiSettings.integrations as any).azureDiOutputFormat || prev.integrations.azureDiOutputFormat,
             agentRuntime: (apiSettings.integrations as any).agentRuntime || prev.integrations.agentRuntime,
             agentModel: (apiSettings.integrations as any).agentModel || prev.integrations.agentModel,
             agentReasoningEffort: (apiSettings.integrations as any).agentReasoningEffort || prev.integrations.agentReasoningEffort,
@@ -597,7 +625,9 @@ export function SettingsPage({
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 
     const apiPayload: Partial<AppSettingsRecord> = {
-      general: {} as AppSettingsRecord["general"],
+      general: {
+        language: settings.general.language,
+      } as AppSettingsRecord["general"],
       email: {
         host: settings.email.smtpHost,
         port: parseInt(settings.email.smtpPort, 10) || 587,
@@ -638,6 +668,9 @@ export function SettingsPage({
         azureDiKey: settings.integrations.azureDiKey,
         documentExtractionProvider: settings.integrations.documentExtractionProvider,
         azureDiModel: settings.integrations.azureDiModel,
+        azureDiFeatures: settings.integrations.azureDiFeatures,
+        azureDiQueryFields: settings.integrations.azureDiQueryFields,
+        azureDiOutputFormat: settings.integrations.azureDiOutputFormat,
         agentRuntime: (settings.integrations as any).agentRuntime ?? null,
         agentModel: (settings.integrations as any).agentModel ?? null,
         agentReasoningEffort: (settings.integrations as any).agentReasoningEffort ?? "extra_high",
@@ -689,8 +722,10 @@ export function SettingsPage({
     }
   }, [brandCaptureUrl]);
 
-  const updateGeneral = (patch: Partial<GeneralSettings>) =>
+  const updateGeneral = (patch: Partial<GeneralSettings>) => {
+    if (patch.language) setOrganizationLanguage(patch.language);
     setSettings((s) => ({ ...s, general: { ...s.general, ...patch } }));
+  };
   const updateEmail = (patch: Partial<EmailSettings>) =>
     setSettings((s) => ({ ...s, email: { ...s.email, ...patch } }));
   const updateDefaults = (patch: Partial<DefaultSettings>) =>
@@ -812,8 +847,8 @@ export function SettingsPage({
       <FadeIn>
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-semibold text-fg">Settings</h1>
-            <p className="text-xs text-fg/50">Configure your Bidwright workspace</p>
+            <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
+            <p className="text-xs text-fg/50">{t("subtitle")}</p>
           </div>
         </div>
       </FadeIn>
@@ -835,7 +870,7 @@ export function SettingsPage({
                 )}
               >
                 <Icon className="h-3.5 w-3.5" />
-                {group.label}
+                {t(`groups.${group.key}`)}
               </button>
             );
           })}
@@ -846,58 +881,85 @@ export function SettingsPage({
       <FadeIn delay={0.1} className="space-y-5">
           {activeGroup === "organization" && (
             <div className="flex items-center gap-1 shrink-0">
-              {ORG_SUBTABS.map((t) => {
-                const active = orgSubTab === t.id;
+              {ORG_SUBTABS.map((tab) => {
+                const active = orgSubTab === tab.id;
                 return (
-                  <button key={t.id} onClick={() => setOrgSubTab(t.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t.label}</button>
+                  <button key={tab.id} onClick={() => setOrgSubTab(tab.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t(`orgTabs.${tab.id}`)}</button>
                 );
               })}
             </div>
           )}
           {activeGroup === "organization" && orgSubTab === "general" && (
-            <Card>
-              <CardHeader>
-                <CardTitle>General Settings</CardTitle>
-              </CardHeader>
-              <CardBody className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Timezone</Label>
-                    <Select
-                      value={settings.general.timezone}
-                      onValueChange={(v) => updateGeneral({ timezone: v })}
-                      options={TIMEZONES.map((tz) => ({ value: tz, label: tz.replace(/_/g, " ") }))}
-                    />
-                  </div>
-                  <div>
-                    <Label>Currency</Label>
-                    <Select
-                      value={settings.general.currency}
-                      onValueChange={(v) => updateGeneral({ currency: v })}
-                      options={CURRENCIES.map((c) => ({ value: c, label: c }))}
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label>Date Format</Label>
-                    <Select
-                      value={settings.general.dateFormat}
-                      onValueChange={(v) => updateGeneral({ dateFormat: v })}
-                      options={DATE_FORMATS.map((f) => ({ value: f, label: f }))}
-                    />
-                  </div>
-                  <div>
-                    <Label>Fiscal Year Start</Label>
-                    <Select
-                      value={String(settings.general.fiscalYearStart)}
-                      onValueChange={(v) => updateGeneral({ fiscalYearStart: parseInt(v, 10) })}
-                      options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
-                    />
-                  </div>
-                </div>
-              </CardBody>
-            </Card>
+            <div className="space-y-4">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{t("localizationTitle")}</CardTitle>
+                    <CardDescription>{t("localizationDescription")}</CardDescription>
+                  </CardHeader>
+                  <CardBody>
+                    <div className="max-w-md">
+                      <Label>{t("language")}</Label>
+                      <Select
+                        value={settings.general.language}
+                        onValueChange={(v) => updateGeneral({ language: normalizeLocale(v) })}
+                        options={SUPPORTED_LOCALES.map((locale) => ({ value: locale.code, label: localeDisplayName(locale.code) }))}
+                      />
+                    </div>
+                  </CardBody>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>{t("regionalTitle")}</CardTitle>
+                    <CardDescription>{t("regionalDescription")}</CardDescription>
+                  </CardHeader>
+                  <CardBody>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div>
+                        <Label>{t("timezone")}</Label>
+                        <Select
+                          value={settings.general.timezone}
+                          onValueChange={(v) => updateGeneral({ timezone: v })}
+                          options={TIMEZONES.map((tz) => ({ value: tz, label: tz.replace(/_/g, " ") }))}
+                        />
+                      </div>
+                      <div>
+                        <Label>{t("currency")}</Label>
+                        <Select
+                          value={settings.general.currency}
+                          onValueChange={(v) => updateGeneral({ currency: v })}
+                          options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+                        />
+                      </div>
+                      <div>
+                        <Label>{t("dateFormat")}</Label>
+                        <Select
+                          value={settings.general.dateFormat}
+                          onValueChange={(v) => updateGeneral({ dateFormat: v })}
+                          options={DATE_FORMATS.map((f) => ({ value: f, label: f }))}
+                        />
+                      </div>
+                    </div>
+                  </CardBody>
+                </Card>
+                <Card className="lg:col-span-2">
+                  <CardHeader>
+                    <CardTitle>{t("fiscalTitle")}</CardTitle>
+                    <CardDescription>{t("fiscalDescription")}</CardDescription>
+                  </CardHeader>
+                  <CardBody>
+                    <div className="max-w-xs">
+                      <Label>{t("fiscalYearStart")}</Label>
+                      <Select
+                        value={String(settings.general.fiscalYearStart)}
+                        onValueChange={(v) => updateGeneral({ fiscalYearStart: parseInt(v, 10) })}
+                        options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
+                      />
+                    </div>
+                  </CardBody>
+                </Card>
+              </div>
+            </div>
           )}
 
           {activeGroup === "organization" && orgSubTab === "brand" && (
@@ -1497,15 +1559,41 @@ export function SettingsPage({
                           <Select
                             value={settings.integrations.azureDiModel}
                             onValueChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
-                            options={[
-                              { value: "prebuilt-layout", label: "Layout" },
-                              { value: "prebuilt-read", label: "Read" },
-                              { value: "prebuilt-document", label: "Document" },
-                              { value: "prebuilt-invoice", label: "Invoice" },
-                            ]}
+                            options={[...AZURE_DI_MODEL_OPTIONS]}
                           />
                         </div>
                       </div>
+                      <div>
+                        <Label>Analysis features</Label>
+                        <MultiSelect
+                          selected={settings.integrations.azureDiFeatures ?? ["keyValuePairs"]}
+                          onChange={(azureDiFeatures) => updateIntegrations({ azureDiFeatures: azureDiFeatures as IntegrationSettings["azureDiFeatures"] })}
+                          options={AZURE_DI_FEATURE_OPTIONS}
+                          placeholder="Select v4 features..."
+                        />
+                      </div>
+                      <div>
+                        <Label>Content format</Label>
+                        <Select
+                          value={settings.integrations.azureDiOutputFormat}
+                          onValueChange={(value) => updateIntegrations({ azureDiOutputFormat: value as IntegrationSettings["azureDiOutputFormat"] })}
+                          options={[
+                            { value: "text", label: "Text" },
+                            { value: "markdown", label: "Markdown" },
+                          ]}
+                        />
+                      </div>
+                      {(settings.integrations.azureDiFeatures ?? []).includes("queryFields") && (
+                        <div>
+                          <Label>Query fields</Label>
+                          <Textarea
+                            rows={2}
+                            value={settings.integrations.azureDiQueryFields}
+                            onChange={(e) => updateIntegrations({ azureDiQueryFields: e.target.value })}
+                            placeholder="ProjectNumber, BidDueDate, Owner, Architect"
+                          />
+                        </div>
+                      )}
                       <div>
                         <Label>Endpoint</Label>
                         <Input

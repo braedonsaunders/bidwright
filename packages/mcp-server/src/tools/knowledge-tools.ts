@@ -2,6 +2,48 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, projectPath, getProjectId } from "../api-client.js";
 
+function truncateText(text: string, maxChars = 12_000, offset = 0) {
+  const safeOffset = Math.max(0, offset);
+  const safeMax = Math.max(1, Math.min(maxChars, 30_000));
+  const slice = text.slice(safeOffset, safeOffset + safeMax);
+  return {
+    text: slice,
+    totalChars: text.length,
+    offset: safeOffset,
+    maxChars: safeMax,
+    hasMore: safeOffset + slice.length < text.length,
+  };
+}
+
+function paginate<T>(rows: T[], input: { limit?: number; offset?: number }, defaultLimit = 50, maxLimit = 200) {
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(1, Math.min(input.limit ?? defaultLimit, maxLimit));
+  const page = rows.slice(offset, offset + limit);
+  return { rows: page, total: rows.length, offset, limit, hasMore: offset + page.length < rows.length };
+}
+
+function compactValue(value: unknown, maxChars = 220) {
+  if (value == null || typeof value === "number" || typeof value === "boolean") return value;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > maxChars ? `${text.slice(0, maxChars - 1)}...` : text;
+}
+
+function compactRow(row: any, maxColumns = 30) {
+  const record = row?.data && typeof row.data === "object" ? row.data : row;
+  if (!record || typeof record !== "object" || Array.isArray(record)) return compactValue(record);
+  return Object.fromEntries(
+    Object.entries(record)
+      .slice(0, maxColumns)
+      .map(([key, value]) => [key, compactValue(value)]),
+  );
+}
+
+function textMatches(value: unknown, q?: string | null) {
+  const query = q?.trim().toLowerCase();
+  if (!query) return true;
+  return String(value ?? "").toLowerCase().includes(query);
+}
+
 export function registerKnowledgeTools(server: McpServer) {
 
   // ── queryKnowledge ────────────────────────────────────────
@@ -11,7 +53,7 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       query: z.string().describe("Search query — be specific about what you need"),
       scope: z.enum(["project", "library", "all"]).default("all").describe("Search scope: project docs only, global library only, or all"),
-      limit: z.number().default(10).describe("Max results to return"),
+      limit: z.number().int().positive().max(25).default(10).describe("Max results to return"),
     },
     async ({ query, scope, limit }) => {
       // Use the text-based search which outperforms vector search for this use case
@@ -43,7 +85,7 @@ export function registerKnowledgeTools(server: McpServer) {
     "Search the global knowledge library only — estimating manuals, labour productivity data, rate books, material specs, industry standards. Use this for domain knowledge like pipe installation hours per foot, equipment rental rates, etc. Returns text snippets with source, page, and section.",
     {
       query: z.string().describe("What to search for — e.g. 'carbon steel butt weld pipe fittings labor hours'"),
-      limit: z.number().default(10),
+      limit: z.number().int().positive().max(25).default(10),
     },
     async ({ query, limit }) => {
       const params = new URLSearchParams({ q: query, scope: "global", limit: String(limit) });
@@ -75,24 +117,42 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       query: z.string().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
       datasetId: z.string().optional().describe("Search within a specific dataset ID (if known from previous query)"),
-      limit: z.number().optional().default(5).describe("Max datasets to return"),
+      limit: z.number().int().positive().max(25).optional().default(5).describe("Max datasets to return"),
+      offset: z.number().int().min(0).default(0).describe("Row offset when datasetId is provided."),
+      rowLimit: z.number().int().positive().max(200).default(50).describe("Max matching rows to return when datasetId is provided."),
+      sampleRowLimit: z.number().int().positive().max(10).default(3).describe("Sample rows per dataset in global search."),
     },
-    async ({ query, datasetId, limit }) => {
+    async ({ query, datasetId, limit, offset, rowLimit, sampleRowLimit }) => {
       if (datasetId) {
-        // Search within specific dataset — returns rows
+        // Search within a specific dataset. Keep rows paginated so one dataset cannot consume the tool context.
         const params = new URLSearchParams({ q: query });
         const data = await apiGet(`/datasets/${datasetId}/search?${params}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
+        const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
+        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset }, 50, 200);
         return { content: [{ type: "text" as const, text: JSON.stringify({
           dataset: {
             id: dataset.id,
             name: dataset.name,
-            description: dataset.description,
+            description: compactValue(dataset.description, 500),
             tags: dataset.tags,
-            columns: dataset.columns,
+            columns: Array.isArray(dataset.columns)
+              ? dataset.columns.slice(0, 40).map((column: any) => ({
+                  key: column.key,
+                  name: column.name || column.label,
+                  type: column.type,
+                }))
+              : dataset.columns,
+            columnCount: Array.isArray(dataset.columns) ? dataset.columns.length : undefined,
           },
-          rows: data.rows || data,
-          note: "Use the description and tags to understand context. Column names show units and conditions.",
+          rows: {
+            total: page.total,
+            offset: page.offset,
+            limit: page.limit,
+            hasMore: page.hasMore,
+            values: page.rows,
+          },
+          note: "Rows are compact and paginated. Use offset/rowLimit or a narrower query to continue. Column names show units and conditions.",
         }, null, 2) }] };
       }
 
@@ -102,12 +162,13 @@ export function registerKnowledgeTools(server: McpServer) {
       const results = (data.results || []).map((r: any) => ({
         datasetId: r.datasetId,
         name: r.datasetName,
-        description: r.description,
+        description: compactValue(r.description, 500),
         tags: r.tags,
-        columns: r.columns?.map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
+        columns: r.columns?.slice(0, 30).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
+        columnCount: r.columns?.length ?? 0,
         rowCount: r.rowCount,
-        sampleRows: r.sampleRows,
-        note: "Call queryDatasets again with datasetId to get all rows, or use these sample rows if sufficient.",
+        sampleRows: Array.isArray(r.sampleRows) ? r.sampleRows.slice(0, sampleRowLimit).map((row: any) => compactRow(row)) : [],
+        note: "Call queryDatasets again with datasetId plus rowLimit/offset for focused matching rows.",
       }));
       return { content: [{ type: "text" as const, text: JSON.stringify({
         query,
@@ -182,21 +243,46 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── listDatasets ────────────────────────────────────────
   server.tool(
     "listDatasets",
-    "List all existing datasets in the organization. Returns name, description, tags, row count, and column info.",
-    {},
-    async () => {
+    "List existing datasets in the organization as a compact, paginated index. Use queryDatasets for focused row searches.",
+    {
+      q: z.string().optional().describe("Optional search across name, description, category, and tags."),
+      category: z.string().optional(),
+      limit: z.number().int().positive().max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    },
+    async (input) => {
       const data = await apiGet(`/datasets`);
-      const datasets = (Array.isArray(data) ? data : data.datasets || []).map((d: any) => ({
-        id: d.id,
-        name: d.name,
-        description: d.description?.substring(0, 100),
-        category: d.category,
-        tags: d.tags,
-        rowCount: d.rowCount,
-        columns: d.columns?.map((c: any) => c.label || c.key),
-        source: d.source,
-      }));
-      return { content: [{ type: "text" as const, text: JSON.stringify(datasets, null, 2) }] };
+      const q = input.q?.trim().toLowerCase();
+      const all = (Array.isArray(data) ? data : data.datasets || [])
+        .filter((d: any) => !input.category || String(d.category ?? "").toLowerCase() === input.category!.trim().toLowerCase())
+        .filter((d: any) => {
+          if (!q) return true;
+          return [
+            d.name,
+            d.description,
+            d.category,
+            ...(Array.isArray(d.tags) ? d.tags : []),
+          ].some((value) => String(value ?? "").toLowerCase().includes(q));
+        })
+        .map((d: any) => ({
+          id: d.id,
+          name: d.name,
+          description: d.description?.substring(0, 180),
+          category: d.category,
+          tags: d.tags,
+          rowCount: d.rowCount,
+          columns: d.columns?.slice(0, 20).map((c: any) => c.label || c.key),
+          columnCount: d.columns?.length ?? 0,
+          source: d.source,
+        }));
+      const page = paginate(all, input, 50, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        datasets: page.rows,
+      }, null, 2) }] };
     }
   );
 
@@ -204,42 +290,77 @@ export function registerKnowledgeTools(server: McpServer) {
   server.tool(
     "listKnowledgeBooks",
     "List the available knowledge books for this project and organization. Use this before reading handbook/reference content so you know the IDs to pass into readDocumentText.",
-    {},
-    async () => {
+    {
+      q: z.string().optional().describe("Optional name/category/source filename search."),
+      category: z.string().optional(),
+      limit: z.number().int().positive().max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    },
+    async (input) => {
       const params = new URLSearchParams({ projectId: getProjectId() });
       const data = await apiGet(`/knowledge/books?${params}`);
-      const books = (Array.isArray(data) ? data : []).map((book: any) => ({
-        id: book.id,
-        name: book.name,
-        sourceFileName: book.sourceFileName,
-        category: book.category,
-        pageCount: book.pageCount,
-        scope: book.scope,
-        projectId: book.projectId,
-      }));
-      return { content: [{ type: "text" as const, text: JSON.stringify(books, null, 2) }] };
+      const books = (Array.isArray(data) ? data : [])
+        .filter((book: any) => !input.category || String(book.category ?? "").toLowerCase() === input.category!.trim().toLowerCase())
+        .filter((book: any) => textMatches(`${book.name ?? ""} ${book.sourceFileName ?? ""} ${book.category ?? ""}`, input.q))
+        .map((book: any) => ({
+          id: book.id,
+          name: book.name,
+          sourceFileName: book.sourceFileName,
+          category: book.category,
+          pageCount: book.pageCount,
+          scope: book.scope,
+          projectId: book.projectId,
+        }));
+      const page = paginate(books, input, 50, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        books: page.rows,
+      }, null, 2) }] };
     }
   );
 
   server.tool(
     "listKnowledgeDocuments",
     "List manually-authored knowledge page libraries in the organization. Use these IDs with readDocumentText when you need full markdown content from a knowledge page search result.",
-    {},
-    async () => {
+    {
+      q: z.string().optional().describe("Optional title/description/category/tag search."),
+      category: z.string().optional(),
+      limit: z.number().int().positive().max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+    },
+    async (input) => {
       const params = new URLSearchParams({ projectId: getProjectId() });
       const data = await apiGet(`/knowledge/documents?${params}`);
-      const documents = (Array.isArray(data) ? data : []).map((document: any) => ({
-        id: document.id,
-        title: document.title,
-        description: document.description,
-        category: document.category,
-        tags: document.tags,
-        pageCount: document.pageCount,
-        chunkCount: document.chunkCount,
-        scope: document.scope,
-        status: document.status,
-      }));
-      return { content: [{ type: "text" as const, text: JSON.stringify(documents, null, 2) }] };
+      const documents = (Array.isArray(data) ? data : [])
+        .filter((document: any) => !input.category || String(document.category ?? "").toLowerCase() === input.category!.trim().toLowerCase())
+        .filter((document: any) => textMatches([
+          document.title,
+          document.description,
+          document.category,
+          ...(Array.isArray(document.tags) ? document.tags : []),
+        ].join(" "), input.q))
+        .map((document: any) => ({
+          id: document.id,
+          title: document.title,
+          description: compactValue(document.description, 240),
+          category: document.category,
+          tags: document.tags,
+          pageCount: document.pageCount,
+          chunkCount: document.chunkCount,
+          scope: document.scope,
+          status: document.status,
+        }));
+      const page = paginate(documents, input, 50, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        documents: page.rows,
+      }, null, 2) }] };
     }
   );
 
@@ -249,8 +370,10 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       documentId: z.string().describe("SourceDocument ID, KnowledgeBook ID, or KnowledgeDocument ID"),
       pages: z.string().optional().describe("Optional page range like '1-5' or single page like '12'"),
+      offset: z.number().int().min(0).default(0).describe("Character offset for chunking long extracted text."),
+      maxChars: z.number().int().positive().max(30000).default(12000).describe("Maximum characters to return. Default keeps tool output below context limits."),
     },
-    async ({ documentId, pages }) => {
+    async ({ documentId, pages, offset, maxChars }) => {
       const params = pages ? `?pages=${encodeURIComponent(pages)}` : "";
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}${params}`);
       const doc = data.document || data;
@@ -266,12 +389,16 @@ export function registerKnowledgeTools(server: McpServer) {
         pages ? `Requested pages: ${pages}` : null,
       ].filter(Boolean).join("\n");
       const content = typeof doc.content === "string" ? doc.content.trim() : "";
+      const chunk = truncateText(content, maxChars, offset);
 
       let output = `${header}\n\n`;
       if (sections.length > 0) {
         output += `Sections: ${sections.join(", ")}\n\n`;
       }
-      output += content || "(No extracted text available for this document.)";
+      output += chunk.text || "(No extracted text available for this document.)";
+      if (chunk.hasMore) {
+        output += `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readDocumentText again with offset=${chunk.offset + chunk.text.length} and the same pages/maxChars to continue, or request a narrower page range.]`;
+      }
 
       return { content: [{ type: "text" as const, text: output }] };
     }
@@ -282,8 +409,10 @@ export function registerKnowledgeTools(server: McpServer) {
     "Get the Azure Document Intelligence structured extraction for a project document — tables (as markdown), key-value pairs, section headings, page-by-page text. Use this when you need parsed table data or form fields from a PDF.",
     {
       documentId: z.string().describe("SourceDocument ID"),
+      maxTables: z.number().int().positive().max(20).default(5),
+      maxTableChars: z.number().int().positive().max(12000).default(3000),
     },
-    async ({ documentId }) => {
+    async ({ documentId, maxTables, maxTableChars }) => {
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}`);
       // Return structured data if available
       const doc = data.document || data;
@@ -293,8 +422,24 @@ export function registerKnowledgeTools(server: McpServer) {
         documentType: doc.documentType,
       };
       if (doc.structuredData) {
-        result.tables = doc.structuredData.tables;
-        result.keyValuePairs = doc.structuredData.keyValuePairs;
+        const tables = Array.isArray(doc.structuredData.tables) ? doc.structuredData.tables : [];
+        result.tableCount = tables.length;
+        result.tables = tables.slice(0, maxTables).map((table: any) => {
+          const markdown = typeof table.markdown === "string" ? table.markdown : "";
+          const chunk = truncateText(markdown, maxTableChars, 0);
+          return {
+            pageNumber: table.pageNumber ?? table.page,
+            rowCount: table.rowCount ?? table.rows,
+            columnCount: table.columnCount ?? table.columns,
+            caption: compactValue(table.caption ?? table.title, 240),
+            markdown: chunk.text,
+            truncated: chunk.hasMore,
+            totalMarkdownChars: chunk.totalChars,
+          };
+        });
+        result.keyValuePairs = Array.isArray(doc.structuredData.keyValuePairs)
+          ? doc.structuredData.keyValuePairs.slice(0, 100)
+          : doc.structuredData.keyValuePairs;
       }
       // Include section headings from chunks if available
       if (doc.chunks) {
@@ -311,8 +456,10 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       documentId: z.string().describe("SourceDocument ID of the spreadsheet file (from the document manifest in CLAUDE.md)"),
       sheet: z.string().optional().describe("Optional sheet name to read. If omitted, returns all sheets."),
+      offset: z.number().int().min(0).default(0).describe("Character offset for chunking large workbook output."),
+      maxChars: z.number().int().positive().max(30000).default(16000).describe("Maximum output characters. Use sheet to narrow large workbooks."),
     },
-    async ({ documentId, sheet }) => {
+    async ({ documentId, sheet, offset, maxChars }) => {
       try {
         const params = sheet ? `?sheet=${encodeURIComponent(sheet)}` : "";
         const data = await apiGet(`/api/knowledge/read-spreadsheet/${documentId}${params}`);
@@ -327,7 +474,11 @@ export function registerKnowledgeTools(server: McpServer) {
           output += s.markdown + "\n\n";
         }
 
-        return { content: [{ type: "text" as const, text: output }] };
+        const chunk = truncateText(output, maxChars, offset);
+        const suffix = chunk.hasMore
+          ? `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readSpreadsheet again with offset=${chunk.offset + chunk.text.length} and the same sheet/maxChars to continue, or use sheet to narrow.]`
+          : "";
+        return { content: [{ type: "text" as const, text: chunk.text + suffix }] };
       } catch (err: any) {
         return {
           content: [{ type: "text" as const, text: `ERROR reading spreadsheet: ${err?.message || String(err)}. This may not be a spreadsheet file, or the document ID may be wrong. Check the document manifest for the correct ID.` }],
@@ -372,11 +523,35 @@ export function registerKnowledgeTools(server: McpServer) {
     "Search the equipment and material catalogs for items with pricing. Returns catalog items with name, code, unit, unitCost, unitPrice.",
     {
       query: z.string().describe("Search query — e.g. 'fork truck' or 'welder'"),
+      catalogId: z.string().optional(),
+      limit: z.number().int().positive().max(100).default(25),
+      offset: z.number().int().min(0).default(0),
     },
-    async ({ query }) => {
+    async ({ query, catalogId, limit, offset }) => {
       const params = new URLSearchParams({ q: query });
+      if (catalogId) params.set("catalogId", catalogId);
       const data = await apiGet(`/catalogs/search?${params}`);
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      const rows = (Array.isArray(data) ? data : data.items || []).map((item: any) => ({
+        id: item.id,
+        catalogId: item.catalogId,
+        catalogName: item.catalogName ?? item.catalog?.name,
+        name: item.name,
+        code: item.code,
+        unit: item.unit,
+        unitCost: item.unitCost,
+        unitPrice: item.unitPrice,
+        description: compactValue(item.description, 220),
+        metadata: item.metadata ? compactValue(item.metadata, 500) : undefined,
+      }));
+      const page = paginate(rows, { limit, offset }, 25, 100);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        query,
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        items: page.rows,
+      }, null, 2) }] };
     }
   );
 
@@ -384,19 +559,39 @@ export function registerKnowledgeTools(server: McpServer) {
   server.tool(
     "listDocuments",
     "List all project documents with their metadata — fileName, fileType, documentType, pageCount, whether structured data is available. Use this to understand what documents you have before reading them.",
-    {},
-    async () => {
+    {
+      q: z.string().optional().describe("Optional file/category/status search."),
+      documentType: z.string().optional(),
+      limit: z.number().int().positive().max(200).default(100),
+      offset: z.number().int().min(0).default(0),
+    },
+    async (input) => {
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/enhanced`);
-      const docs = (data.documents || data || []).map((d: any) => ({
-        id: d.id,
-        fileName: d.fileName,
-        fileType: d.fileType,
-        documentType: d.documentType,
-        pageCount: d.pageCount,
-        hasStructuredData: !!d.structuredData,
-        indexingStatus: d.indexingStatus,
-      }));
-      return { content: [{ type: "text" as const, text: JSON.stringify(docs, null, 2) }] };
+      const docs = (data.documents || data || [])
+        .filter((d: any) => !input.documentType || String(d.documentType ?? "").toLowerCase() === input.documentType!.trim().toLowerCase())
+        .filter((d: any) => textMatches(`${d.fileName ?? ""} ${d.documentType ?? ""} ${d.category ?? ""} ${d.indexingStatus ?? ""}`, input.q))
+        .map((d: any) => ({
+          id: d.id,
+          fileName: d.fileName,
+          fileType: d.fileType,
+          documentType: d.documentType,
+          pageCount: d.pageCount,
+          hasExtractedText: !!d.hasExtractedText,
+          hasStructuredData: !!d.hasStructuredData,
+          indexingStatus: d.indexingStatus,
+          category: d.category ?? null,
+          knowledgeBookId: d.knowledgeBookId ?? null,
+          knowledgeDocumentId: d.knowledgeDocumentId ?? null,
+          chunkCount: d.chunkCount ?? 0,
+        }));
+      const page = paginate(docs, input, 100, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        documents: page.rows,
+      }, null, 2) }] };
     }
   );
 }

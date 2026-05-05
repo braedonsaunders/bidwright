@@ -133,6 +133,9 @@ export interface EstimateGridProps {
   activeWorksheetId?: WorksheetTabId;
   onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
   onOpenPluginTools?: () => void;
+  variant?: "default" | "snap";
+  maxLineItems?: number;
+  lockedWorksheetId?: string;
 }
 
 type EditingCell = {
@@ -230,7 +233,7 @@ function getCategoryBadgeProps(
     return {
       style: {
         borderColor: catDef.color,
-        backgroundColor: `${catDef.color}1A`,
+        backgroundColor: colorWithAlpha(catDef.color, 0.1),
         color: catDef.color,
       },
     };
@@ -261,6 +264,19 @@ function getCategoryHexColor(
   return catDef?.color ?? DEFAULT_CATEGORY_HEX;
 }
 
+function colorWithAlpha(color: string | null | undefined, alpha: number): string {
+  const hex = (color ?? DEFAULT_CATEGORY_HEX).trim();
+  const shortMatch = /^#([a-f\d])([a-f\d])([a-f\d])$/i.exec(hex);
+  const fullMatch = /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  const parts = shortMatch
+    ? [shortMatch[1] + shortMatch[1], shortMatch[2] + shortMatch[2], shortMatch[3] + shortMatch[3]]
+    : fullMatch
+      ? [fullMatch[1], fullMatch[2], fullMatch[3]]
+      : ["6b", "72", "80"];
+  const [r, g, b] = parts.map((part) => Number.parseInt(part, 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 const EDITABLE_COLUMNS_ORDER: EditableColumn[] = [
   "entityName",
   "vendor",
@@ -285,6 +301,17 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
   "units",
   "cost",
   "extCost",
+  "markup",
+  "price",
+];
+
+const SNAP_VISIBLE_COLUMNS: ColumnId[] = [
+  "expand",
+  "entityName",
+  "description",
+  "quantity",
+  "uom",
+  "cost",
   "markup",
   "price",
 ];
@@ -368,6 +395,7 @@ const WORKSHEET_ORGANIZER_PANEL_GAP = 8;
 
 const ENTITY_DROPDOWN_WIDTH = 560;
 const ENTITY_DROPDOWN_MARGIN = 8;
+const ENTITY_DROPDOWN_HEADER_PADDING = 8;
 const ENTITY_DROPDOWN_HEADER_HEIGHT = 84;
 const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 460;
 const ENTITY_SEARCH_PAGE_SIZE = 90;
@@ -695,7 +723,6 @@ interface EntityOptionItem {
     | "catalog"
     | "rate_schedule"
     | "cost_intelligence"
-    | "cost_resource"
     | "labor_unit"
     | "assembly"
     | "plugin"
@@ -748,6 +775,28 @@ interface EntityOptionGroup {
   tone?: "accent" | "success" | "muted" | "warning";
   items: EntityOptionItem[];
 }
+
+type EntitySelectionCatalogData = {
+  cost?: number;
+  uom?: string;
+  description?: string;
+  vendor?: string | null;
+  sourceNotes?: string;
+  price?: number;
+  quantity?: number;
+  unit1?: number;
+  unit2?: number;
+  unit3?: number;
+  costResourceId?: string;
+  effectiveCostId?: string;
+  laborUnitId?: string;
+  resourceComposition?: Record<string, unknown>;
+  sourceEvidence?: Record<string, unknown>;
+};
+
+type PendingLaborSelection = {
+  catalogData: EntitySelectionCatalogData;
+};
 
 function normalizeEntityLookup(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
@@ -987,6 +1036,25 @@ function payloadNumber(payload: Record<string, unknown> | undefined, key: string
   return undefined;
 }
 
+function laborUnitDefaultHours(payload: Record<string, unknown> | undefined) {
+  const normal = payloadNumber(payload, "hoursNormal");
+  const difficult = payloadNumber(payload, "hoursDifficult");
+  const veryDifficult = payloadNumber(payload, "hoursVeryDifficult");
+  const difficulty = payloadString(payload, "defaultDifficulty");
+  if (difficulty === "very_difficult") return veryDifficult ?? difficult ?? normal;
+  if (difficulty === "difficult") return difficult ?? normal;
+  return normal;
+}
+
+function itemNeedsLaborRateSelection(item: EntityOptionItem) {
+  const isLaborUnit =
+    item.source === "labor_unit" ||
+    item.sourceType === "labor_unit" ||
+    payloadString(item.payload, "source") === "labor_unit" ||
+    !!item.laborUnitId;
+  return isLaborUnit && !item.rateScheduleItemId;
+}
+
 function compactMoney(value: number) {
   const abs = Math.abs(value);
   if (abs >= 1000) return `$${Math.round(value).toLocaleString()}`;
@@ -1022,7 +1090,6 @@ function sourceBadgeLabel(source: EntityOptionItem["source"]) {
   switch (source) {
     case "rate_schedule": return "Rate";
     case "cost_intelligence": return "CI";
-    case "cost_resource": return "Resource";
     case "labor_unit": return "Labor";
     case "assembly": return "Assembly";
     case "external_action": return "Action";
@@ -1037,7 +1104,6 @@ function sourceIconFor(source: EntityOptionItem["source"]) {
   switch (source) {
     case "rate_schedule": return Zap;
     case "cost_intelligence": return BrainCircuit;
-    case "cost_resource": return Boxes;
     case "labor_unit": return Hammer;
     case "assembly": return Layers;
     case "external_action": return Store;
@@ -1062,8 +1128,6 @@ function sourceAccentClasses(source: EntityOptionItem["source"]) {
     case "plugin":
     case "plugin_result":
       return "border-accent/25 bg-accent/8 text-accent";
-    case "cost_resource":
-      return "border-fg/15 bg-panel2 text-fg/65";
     case "catalog":
       return "border-line bg-bg/70 text-fg/65";
     default:
@@ -1099,7 +1163,7 @@ const ENTITY_BROWSE_CARDS: Array<{
     id: "catalogs",
     label: "Catalogues",
     detail: "Materials, labour, stock, equipment",
-    sources: ["catalog_item", "cost_resource"],
+    sources: ["catalog_item"],
     Icon: BookOpen,
     accent: "border-fg/15 bg-bg text-fg/70",
   },
@@ -1152,7 +1216,6 @@ const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
   "catalog_item",
   "rate_schedule_item",
   "labor_unit",
-  "cost_resource",
   "effective_cost",
   "assembly",
   "plugin_tool",
@@ -1205,11 +1268,10 @@ function laborHierarchyLevelLabel(level: number) {
 function sourcePriority(source: EntityOptionItem["source"]) {
   switch (source) {
     case "rate_schedule": return 0;
-    case "labor_unit": return 1;
-    case "catalog": return 2;
-    case "cost_intelligence": return 3;
-    case "cost_resource": return 4;
-    case "assembly": return 5;
+    case "catalog": return 1;
+    case "cost_intelligence": return 2;
+    case "assembly": return 4;
+    case "labor_unit": return 5;
     case "external_action": return 8;
     case "plugin": return 9;
     case "plugin_result": return 10;
@@ -1272,7 +1334,6 @@ function sourceForSearchResult(result: LineItemSearchResult): EntityOptionItem["
     case "catalog_item": return "catalog";
     case "rate_schedule_item": return "rate_schedule";
     case "effective_cost": return "cost_intelligence";
-    case "cost_resource": return "cost_resource";
     case "labor_unit": return "labor_unit";
     case "assembly": return "assembly";
     case "external_action": return "external_action";
@@ -1349,7 +1410,7 @@ function sourceGroupForSearchResult(
         label: headerLabel || "Labor units",
         treePath,
         source,
-        sortPriority: 100,
+        sortPriority: 600,
         tone: "warning" as const,
       };
     }
@@ -1408,25 +1469,10 @@ function sourceGroupForSearchResult(
         categoryId: `cost:${normalizeEntityLookup(resourceType)}:${normalizeEntityLookup(costCategory)}:${normalizeEntityLookup(vendor)}:${normalizeEntityLookup(region)}`,
         entityType,
         defaultUom,
-        label: compactPath(["Cost intel", resourceType || costCategory, vendor, region]),
+        label: compactPath(["Cost Intelligence", "Cost Basis", resourceType || costCategory, vendor, region]),
         source,
         sortPriority: 300,
         tone: "success" as const,
-      };
-    }
-    case "cost_resource": {
-      const resourceType = firstText(payloadString(payload, "resourceType"), result.entityType);
-      const resourceCategory = firstText(payloadString(payload, "resourceCategory"), result.category);
-      const manufacturer = firstText(payloadString(payload, "manufacturer"), result.vendor);
-      return {
-        categoryName: targetCategoryName,
-        categoryId: `resource:${normalizeEntityLookup(resourceType)}:${normalizeEntityLookup(resourceCategory)}:${normalizeEntityLookup(manufacturer)}`,
-        entityType,
-        defaultUom,
-        label: compactPath(["Resources", resourceType || resourceCategory, manufacturer]),
-        source,
-        sortPriority: 400,
-        tone: "muted" as const,
       };
     }
     case "assembly": {
@@ -1503,6 +1549,7 @@ function entityOptionFromSearchResult(
     : result.actionType === "plugin_tool"
       ? `Run ${result.title}`
       : `${result.title}${result.code ? ` (${result.code})` : ""}`;
+  const laborUnitHours = result.sourceType === "labor_unit" ? laborUnitDefaultHours(payload) : undefined;
 
   return {
     group: {
@@ -1548,7 +1595,7 @@ function entityOptionFromSearchResult(
       toolId: payloadString(payload, "toolId") || undefined,
       searchFieldId: payloadString(payload, "searchFieldId") || undefined,
       queryParam: payloadString(payload, "queryParam") || "q",
-      unit1: payloadNumber(payload, "unit1"),
+      unit1: payloadNumber(payload, "unit1") ?? laborUnitHours,
       unit2: payloadNumber(payload, "unit2"),
       unit3: payloadNumber(payload, "unit3"),
       payload,
@@ -1587,17 +1634,50 @@ function groupSearchResults(
   return Array.from(groups.values()).sort((left, right) => {
     if (left.categoryName === "Actions" && right.categoryName !== "Actions") return 1;
     if (right.categoryName === "Actions" && left.categoryName !== "Actions") return -1;
+    const leftPriority = left.sortPriority ?? sourcePriority(left.source);
+    const rightPriority = right.sortPriority ?? sourcePriority(right.source);
+    const laborPriority = sourcePriority("labor_unit");
+    if (left.source === "labor_unit" && right.source !== "labor_unit" && rightPriority < laborPriority) return 1;
+    if (right.source === "labor_unit" && left.source !== "labor_unit" && leftPriority < laborPriority) return -1;
     if (currentCategoryName && left.categoryName === currentCategoryName && right.categoryName !== currentCategoryName) return -1;
     if (currentCategoryName && right.categoryName === currentCategoryName && left.categoryName !== currentCategoryName) return 1;
-    const priorityDelta = (left.sortPriority ?? sourcePriority(left.source)) - (right.sortPriority ?? sourcePriority(right.source));
+    const priorityDelta = leftPriority - rightPriority;
     if (priorityDelta !== 0) return priorityDelta;
     return (left.label ?? left.categoryName).localeCompare(right.label ?? right.categoryName);
   });
 }
 
+function orderEntityGroupsForRow(
+  groups: EntityOptionGroup[],
+  rowCategoryName?: string,
+): EntityOptionGroup[] {
+  const providerGroups = groups.filter((group) => group.categoryName === "Provider Results");
+  const actionGroups = groups.filter((group) => group.categoryName === "Actions");
+  const regularGroups = groups.filter((group) =>
+    group.categoryName !== "Actions" &&
+    group.categoryName !== "Provider Results"
+  );
+  const pricedGroups = regularGroups.filter((group) => group.source !== "labor_unit");
+  const laborGroups = regularGroups.filter((group) => group.source === "labor_unit");
+  const matchingPricedGroups = pricedGroups.filter((group) =>
+    rowCategoryName && group.categoryName === rowCategoryName
+  );
+  const otherPricedGroups = pricedGroups.filter((group) =>
+    !rowCategoryName || group.categoryName !== rowCategoryName
+  );
+
+  return [
+    ...providerGroups,
+    ...matchingPricedGroups,
+    ...otherPricedGroups,
+    ...laborGroups,
+    ...actionGroups,
+  ];
+}
+
 function optionMeasureLabel(item: EntityOptionItem) {
   if (item.source === "labor_unit") {
-    const normal = item.unit1 ?? payloadNumber(item.payload, "unit1");
+    const normal = item.unit1 ?? payloadNumber(item.payload, "unit1") ?? laborUnitDefaultHours(item.payload);
     if (normal !== undefined) return `${normal.toFixed(2)} h/u`;
   }
   const cost = item.unitCost;
@@ -1634,20 +1714,15 @@ function optionMetaParts(item: EntityOptionItem) {
       ].filter(Boolean);
     case "cost_intelligence": {
       const confidence = payloadNumber(payload, "confidence");
+      const vendor = firstText(item.vendor ?? undefined, payloadString(payload, "vendorName"));
       return [
-        item.vendor,
+        vendor ? `Vendor: ${vendor}` : "",
         payloadString(payload, "region"),
         payloadString(payload, "method"),
         confidence !== undefined ? `${Math.round(confidence * 100)}% conf` : "",
         payloadString(payload, "effectiveDate"),
       ].filter(Boolean);
     }
-    case "cost_resource":
-      return [
-        compactPath([payloadString(payload, "resourceType"), payloadString(payload, "resourceCategory")], " / "),
-        payloadString(payload, "manufacturerPartNumber"),
-        item.unit ? `UOM ${item.unit}` : "",
-      ].filter(Boolean);
     case "catalog":
       return [
         payloadString(payload, "scheduleName"),
@@ -1693,6 +1768,69 @@ function laborUnitReferenceParts(item: EntityOptionItem) {
     series: codeParts[0] || "",
     table,
     ref: codeParts.slice(2).join("-"),
+  };
+}
+
+function catalogDataFromEntityOption(item: EntityOptionItem): EntitySelectionCatalogData | undefined {
+  if (
+    item.unitCost === undefined &&
+    item.unitPrice === undefined &&
+    item.unit === undefined &&
+    item.description === undefined &&
+    item.vendor === undefined &&
+    item.sourceNotes === undefined &&
+    item.quantity === undefined &&
+    item.unit1 === undefined &&
+    item.unit2 === undefined &&
+    item.unit3 === undefined &&
+    item.costResourceId === undefined &&
+    item.effectiveCostId === undefined &&
+    item.laborUnitId === undefined &&
+    item.resourceComposition === undefined &&
+    item.sourceEvidence === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    cost: item.unitCost,
+    price: item.unitPrice,
+    uom: item.unit,
+    description: item.description ?? item.label,
+    vendor: item.vendor,
+    sourceNotes: item.sourceNotes,
+    quantity: item.quantity,
+    unit1: item.unit1,
+    unit2: item.unit2,
+    unit3: item.unit3,
+    costResourceId: item.costResourceId,
+    effectiveCostId: item.effectiveCostId,
+    laborUnitId: item.laborUnitId,
+    resourceComposition: item.resourceComposition,
+    sourceEvidence: item.sourceEvidence,
+  };
+}
+
+function mergeCatalogDataWithLabor(
+  laborData: EntitySelectionCatalogData,
+  itemData: EntitySelectionCatalogData | undefined,
+): EntitySelectionCatalogData {
+  return {
+    ...itemData,
+    uom: laborData.uom ?? itemData?.uom,
+    laborUnitId: laborData.laborUnitId,
+    unit1: laborData.unit1 ?? itemData?.unit1,
+    unit2: laborData.unit2 ?? itemData?.unit2,
+    unit3: laborData.unit3 ?? itemData?.unit3,
+    sourceNotes: mergeSourceNotes(laborData.sourceNotes, itemData?.sourceNotes),
+    resourceComposition: mergeResourceCompositions(
+      laborData.resourceComposition,
+      itemData?.resourceComposition,
+    ),
+    sourceEvidence: mergeSourceEvidence(
+      laborData.sourceEvidence,
+      itemData?.sourceEvidence,
+    ),
   };
 }
 
@@ -1882,8 +2020,13 @@ export function EstimateGrid({
   activeWorksheetId,
   onActiveWorksheetChange,
   onOpenPluginTools,
+  variant = "default",
+  maxLineItems,
+  lockedWorksheetId,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
+  const isSnapMode = variant === "snap";
+  const snapWorksheetId = lockedWorksheetId ?? workspace.worksheets[0]?.id ?? null;
 
   // Entity categories loaded from API
   const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
@@ -1892,7 +2035,9 @@ export function EstimateGrid({
   // Tab state
   const [worksheetViewMode, setWorksheetViewMode] = useState<WorksheetViewMode>("tabs");
   const [activeTab, setActiveTabState] = useState<WorksheetViewId>(
-    activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
+    isSnapMode
+      ? snapWorksheetId ?? "all"
+      : activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
   );
   const prevTabRef = useRef<WorksheetViewId>(activeTab);
   const [tabSlideDir, setTabSlideDir] = useState<1 | -1>(1);
@@ -1915,11 +2060,19 @@ export function EstimateGrid({
   }, [onActiveWorksheetChange, workspace.worksheets]);
 
   useEffect(() => {
+    if (isSnapMode) {
+      const nextTab = snapWorksheetId ?? workspace.worksheets[0]?.id ?? "all";
+      if (activeTab !== nextTab) {
+        setActiveTabState(nextTab);
+        prevTabRef.current = nextTab;
+      }
+      return;
+    }
     if (!activeWorksheetId || activeWorksheetId === activeTab) return;
     if (worksheetViewIsFolder(activeTab)) return;
     setActiveTabState(activeWorksheetId);
     prevTabRef.current = activeWorksheetId;
-  }, [activeTab, activeWorksheetId]);
+  }, [activeTab, activeWorksheetId, isSnapMode, snapWorksheetId, workspace.worksheets]);
 
   // Editing state
   const [editingCell, setEditingCell] = useState<EditingCell>(null);
@@ -1931,6 +2084,8 @@ export function EstimateGrid({
 
   // Entity dropdown state
   const [entityDropdownRowId, setEntityDropdownRowId] = useState<string | null>(null);
+  const [entityDropdownClosingRowId, setEntityDropdownClosingRowId] = useState<string | null>(null);
+  const [entityDropdownVisible, setEntityDropdownVisible] = useState(false);
   const [entitySearchTerm, setEntitySearchTerm] = useState("");
   const [entityBrowseMode, setEntityBrowseMode] = useState<EntityBrowseModeId | null>(null);
   const [entityHighlightIdx, setEntityHighlightIdx] = useState(0);
@@ -1938,6 +2093,8 @@ export function EstimateGrid({
   const [entityDropdownPos, setEntityDropdownPos] = useState<EntityDropdownPosition>(null);
   const entityCellRef = useRef<HTMLTableCellElement | null>(null);
   const entityDropdownRef = useRef<HTMLDivElement | null>(null);
+  const entityDropdownCloseTimerRef = useRef<number | null>(null);
+  const entityDropdownOpenFrameRef = useRef<number | null>(null);
 
   // Filter state
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -2006,7 +2163,7 @@ export function EstimateGrid({
 
   // ─── NEW STATE: Column Visibility ───
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnId>>(
-    new Set(DEFAULT_VISIBLE_COLUMNS)
+    new Set(isSnapMode ? SNAP_VISIBLE_COLUMNS : DEFAULT_VISIBLE_COLUMNS)
   );
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const userToggledColumnsRef = useRef(false);
@@ -2040,6 +2197,7 @@ export function EstimateGrid({
   const [entitySearchError, setEntitySearchError] = useState<string | null>(null);
   const [entityActionLoadingId, setEntityActionLoadingId] = useState<string | null>(null);
   const [entityPluginResults, setEntityPluginResults] = useState<EntityOptionItem[]>([]);
+  const [pendingLaborSelections, setPendingLaborSelections] = useState<Record<string, PendingLaborSelection>>({});
   const entitySearchRequestRef = useRef(0);
   const entitySearchLoadingMoreRef = useRef(false);
 
@@ -2076,9 +2234,16 @@ export function EstimateGrid({
           ? row.rateScheduleItemId
           : patch.rateScheduleItemId,
       itemId: patch.itemId === undefined ? row.itemId : patch.itemId,
+      costResourceId: patch.costResourceId === undefined ? row.costResourceId : patch.costResourceId,
+      effectiveCostId: patch.effectiveCostId === undefined ? row.effectiveCostId : patch.effectiveCostId,
+      laborUnitId: patch.laborUnitId === undefined ? row.laborUnitId : patch.laborUnitId,
       tierUnits: patch.tierUnits === undefined ? row.tierUnits : patch.tierUnits,
       sourceNotes:
         patch.sourceNotes === undefined ? row.sourceNotes : patch.sourceNotes,
+      resourceComposition:
+        patch.resourceComposition === undefined ? row.resourceComposition : patch.resourceComposition,
+      sourceEvidence:
+        patch.sourceEvidence === undefined ? row.sourceEvidence : patch.sourceEvidence,
     };
 
     if (
@@ -2159,8 +2324,13 @@ export function EstimateGrid({
       lineOrder: payload.lineOrder ?? fallbackOrder + 1,
       rateScheduleItemId: payload.rateScheduleItemId ?? null,
       itemId: payload.itemId ?? null,
+      costResourceId: payload.costResourceId ?? null,
+      effectiveCostId: payload.effectiveCostId ?? null,
+      laborUnitId: payload.laborUnitId ?? null,
       tierUnits: payload.tierUnits ?? {},
       sourceNotes: payload.sourceNotes,
+      resourceComposition: payload.resourceComposition ?? {},
+      sourceEvidence: payload.sourceEvidence ?? {},
     };
 
     onApply((current) => applyWorksheetItemUpsert(current, optimisticItem));
@@ -2213,14 +2383,21 @@ export function EstimateGrid({
       lineOrder: fallbackOrder + 1,
       rateScheduleItemId: null,
       itemId: null,
+      costResourceId: null,
+      effectiveCostId: null,
+      laborUnitId: null,
       tierUnits: {},
       sourceNotes: "",
+      resourceComposition: {},
+      sourceEvidence: {},
     };
 
     setCategoryFilter("");
     onApply((current) => applyWorksheetItemUpsert(current, draftItem));
     setSelectedRowId(temporaryId);
     setSelectedCell({ rowId: temporaryId, column: "entityName" });
+    setEntityDropdownVisible(false);
+    setEntityDropdownClosingRowId(null);
     setEntityDropdownRowId(temporaryId);
     setEntitySearchTerm("");
     setEntitySearchError(null);
@@ -2248,8 +2425,16 @@ export function EstimateGrid({
     });
   }, [applyMutationError, onApply, workspace.project.id]);
 
-  const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null) => {
-    const anchor = anchorEl ?? entityCellRef.current;
+  const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null, rowId?: string | null) => {
+    const lookupRowId = rowId ?? entityDropdownRowId ?? entityDropdownClosingRowId;
+    const anchor =
+      anchorEl ??
+      entityCellRef.current ??
+      (lookupRowId
+        ? document.querySelector<HTMLTableCellElement>(
+            `[data-cell-row="${lookupRowId}"][data-cell-col="entityName"]`,
+          )
+        : null);
     if (!anchor || typeof window === "undefined") return;
 
     const rect = anchor.getBoundingClientRect();
@@ -2264,7 +2449,8 @@ export function EstimateGrid({
       ENTITY_DROPDOWN_MARGIN,
       viewportHeight - ENTITY_DROPDOWN_MARGIN - headerHeight
     );
-    const headerTop = Math.min(Math.max(rect.top, ENTITY_DROPDOWN_MARGIN), headerTopMax);
+    const alignedHeaderTop = rect.top - ENTITY_DROPDOWN_HEADER_PADDING;
+    const headerTop = Math.min(Math.max(alignedHeaderTop, ENTITY_DROPDOWN_MARGIN), headerTopMax);
     const spaceBelowList = Math.max(
       0,
       viewportHeight - headerTop - headerHeight - ENTITY_DROPDOWN_MARGIN
@@ -2288,7 +2474,8 @@ export function EstimateGrid({
       ENTITY_DROPDOWN_MARGIN,
       viewportWidth - dropdownWidth - ENTITY_DROPDOWN_MARGIN
     );
-    const left = Math.min(Math.max(rect.left, ENTITY_DROPDOWN_MARGIN), maxLeft);
+    const alignedLeft = rect.left - ENTITY_DROPDOWN_HEADER_PADDING;
+    const left = Math.min(Math.max(alignedLeft, ENTITY_DROPDOWN_MARGIN), maxLeft);
 
     setEntityDropdownPos({
       left,
@@ -2298,7 +2485,85 @@ export function EstimateGrid({
       listMaxHeight,
       placement,
     });
+  }, [entityDropdownClosingRowId, entityDropdownRowId]);
+
+  const resetEntityDropdownState = useCallback(() => {
+    setEntityDropdownVisible(false);
+    setEntityDropdownClosingRowId(null);
+    setEntityDropdownPos(null);
+    setEntitySearchTerm("");
+    setEntityBrowseMode(null);
+    setEntityPluginResults([]);
+    setEntitySearchGroups([]);
+    setEntitySearchLoading(false);
+    setEntitySearchLoadingMore(false);
+    entitySearchLoadingMoreRef.current = false;
+    setEntitySearchHasMore(false);
+    setEntitySearchOffset(0);
+    setEntitySearchError(null);
   }, []);
+
+  const clearEntityDropdownTimers = useCallback(() => {
+    if (entityDropdownCloseTimerRef.current !== null) {
+      window.clearTimeout(entityDropdownCloseTimerRef.current);
+      entityDropdownCloseTimerRef.current = null;
+    }
+    if (entityDropdownOpenFrameRef.current !== null) {
+      window.cancelAnimationFrame(entityDropdownOpenFrameRef.current);
+      entityDropdownOpenFrameRef.current = null;
+    }
+  }, []);
+
+  const closeEntityDropdown = useCallback((closingRowId?: string | null) => {
+    clearEntityDropdownTimers();
+    const rowId = closingRowId ?? entityDropdownRowId;
+    if (rowId) setEntityDropdownClosingRowId(rowId);
+    setEntityDropdownVisible(false);
+    setEntityDropdownRowId(null);
+    entityDropdownCloseTimerRef.current = window.setTimeout(() => {
+      entityDropdownCloseTimerRef.current = null;
+      resetEntityDropdownState();
+    }, 260);
+  }, [clearEntityDropdownTimers, entityDropdownRowId, resetEntityDropdownState]);
+
+  const openEntityDropdown = useCallback((
+    rowId: string,
+    anchorEl?: HTMLTableCellElement | null,
+    options: {
+      browseMode?: EntityBrowseModeId | null;
+      searchTerm?: string;
+      searchError?: string | null;
+      clearPluginResults?: boolean;
+    } = {},
+  ) => {
+    clearEntityDropdownTimers();
+    if (anchorEl) {
+      entityCellRef.current = anchorEl;
+      positionEntityDropdown(anchorEl, rowId);
+    }
+    setEntityDropdownVisible(false);
+    setEntityDropdownClosingRowId(null);
+    setEntityDropdownRowId(rowId);
+    setEntitySearchTerm(options.searchTerm ?? "");
+    setEntityBrowseMode(options.browseMode ?? null);
+    setEntitySearchError(options.searchError ?? null);
+    if (options.clearPluginResults ?? true) setEntityPluginResults([]);
+    setSelectedCell({ rowId, column: "entityName" });
+    setSelectedRowId(rowId);
+    entityDropdownOpenFrameRef.current = window.requestAnimationFrame(() => {
+      if (!anchorEl) positionEntityDropdown(null, rowId);
+      entityDropdownOpenFrameRef.current = window.requestAnimationFrame(() => {
+        entityDropdownOpenFrameRef.current = null;
+        setEntityDropdownVisible(true);
+      });
+    });
+  }, [clearEntityDropdownTimers, positionEntityDropdown]);
+
+  const handleEntityDropdownExitComplete = useCallback(() => {
+    if (entityDropdownRowId) return;
+    clearEntityDropdownTimers();
+    resetEntityDropdownState();
+  }, [clearEntityDropdownTimers, entityDropdownRowId, resetEntityDropdownState]);
 
   // Load entity categories on mount
   useEffect(() => {
@@ -2336,10 +2601,28 @@ export function EstimateGrid({
 
   useEffect(() => {
     if (!entityDropdownRowId) return;
+    setEntityDropdownVisible(false);
+    const firstFrame = requestAnimationFrame(() => {
+      const secondFrame = requestAnimationFrame(() => {
+        setEntityDropdownVisible(true);
+      });
+      entityDropdownOpenFrameRef.current = secondFrame;
+    });
+    entityDropdownOpenFrameRef.current = firstFrame;
+    return () => {
+      if (entityDropdownOpenFrameRef.current !== null) {
+        cancelAnimationFrame(entityDropdownOpenFrameRef.current);
+        entityDropdownOpenFrameRef.current = null;
+      }
+    };
+  }, [entityDropdownRowId]);
 
-    positionEntityDropdown();
+  useEffect(() => {
+    if (!entityDropdownRowId) return;
 
-    const handleViewportChange = () => positionEntityDropdown();
+    positionEntityDropdown(null, entityDropdownRowId);
+
+    const handleViewportChange = () => positionEntityDropdown(null, entityDropdownRowId);
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("scroll", handleViewportChange, true);
 
@@ -2348,6 +2631,8 @@ export function EstimateGrid({
       window.removeEventListener("scroll", handleViewportChange, true);
     };
   }, [entityDropdownRowId, positionEntityDropdown]);
+
+  useEffect(() => () => clearEntityDropdownTimers(), [clearEntityDropdownTimers]);
 
   // Focus inline rename input
   useEffect(() => {
@@ -2381,13 +2666,63 @@ export function EstimateGrid({
   const activeEntityBrowseCard = useMemo(
     () => {
       const card = entityBrowseCardById(entityBrowseMode);
+      if (card?.id === "rate_books") return card;
       return card && browseCardIsEnabled(estimateSearchSettings, card) ? card : null;
     },
     [entityBrowseMode, estimateSearchSettings],
   );
 
+  const entityCurrentRateGroup = useMemo<EntityOptionGroup | null>(() => {
+    if (entityBrowseMode !== "rate_books" || !activeEntityRow?.rateScheduleItemId) return null;
+    for (const schedule of workspace.rateSchedules ?? []) {
+      const scheduleItem = (schedule.items ?? []).find((item) => item.id === activeEntityRow.rateScheduleItemId);
+      if (!scheduleItem) continue;
+      const category =
+        entityCategories.find((candidate) => candidate.name === activeEntityRow.category)
+        ?? entityCategories.find((candidate) => candidate.itemSource === "rate_schedule" && candidate.entityType === schedule.category)
+        ?? entityCategories.find((candidate) => candidate.entityType === schedule.category);
+      const firstTier = schedule.tiers?.[0];
+      const rate = firstTier ? (scheduleItem.rates[firstTier.id] ?? 0) : 0;
+      const categoryName = category?.name ?? activeEntityRow.category;
+      return {
+        categoryName,
+        categoryId: `__current_rate:${scheduleItem.id}`,
+        entityType: category?.entityType ?? schedule.category,
+        defaultUom: category?.defaultUom ?? scheduleItem.unit ?? "EA",
+        label: "Current rate item",
+        source: "rate_schedule",
+        sortPriority: -10,
+        tone: "accent",
+        items: [{
+          label: `${scheduleItem.name}${scheduleItem.code ? ` (${scheduleItem.code})` : ""}`,
+          value: scheduleItem.name,
+          source: "rate_schedule",
+          sourceType: "rate_schedule_item",
+          unitCost: rate,
+          unit: scheduleItem.unit,
+          description: scheduleItem.name,
+          rateScheduleItemId: scheduleItem.id,
+          code: scheduleItem.code || undefined,
+          payload: {
+            rateScheduleItemId: scheduleItem.id,
+            scheduleName: schedule.name,
+            scheduleCategory: schedule.category,
+          },
+        }],
+      };
+    }
+    return null;
+  }, [
+    activeEntityRow?.category,
+    activeEntityRow?.rateScheduleItemId,
+    entityBrowseMode,
+    entityCategories,
+    workspace.rateSchedules,
+  ]);
+
   useEffect(() => {
     if (!entityDropdownRowId || !activeEntityRow) {
+      if (entityDropdownClosingRowId) return;
       setEntitySearchGroups([]);
       setEntitySearchLoading(false);
       setEntitySearchLoadingMore(false);
@@ -2428,7 +2763,9 @@ export function EstimateGrid({
           category: activeEntityRow.category,
           worksheetId: activeEntityRow.worksheetId,
           sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
-          disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+          disabledSourceTypes: browseCard?.id === "rate_books"
+            ? estimateSearchSettings.disabledSourceTypes.filter((sourceType) => sourceType !== "rate_schedule_item")
+            : estimateSearchSettings.disabledSourceTypes,
           disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
           disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
           limit: ENTITY_SEARCH_PAGE_SIZE,
@@ -2455,7 +2792,7 @@ export function EstimateGrid({
     return () => {
       window.clearTimeout(timer);
     };
-  }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, workspace.project.id]);
+  }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownClosingRowId, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, workspace.project.id]);
 
   const loadMoreEntitySearchResults = useCallback(async () => {
     if (
@@ -2481,7 +2818,9 @@ export function EstimateGrid({
         category: activeEntityRow.category,
         worksheetId: activeEntityRow.worksheetId,
         sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
-        disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
+        disabledSourceTypes: browseCard?.id === "rate_books"
+          ? estimateSearchSettings.disabledSourceTypes.filter((sourceType) => sourceType !== "rate_schedule_item")
+          : estimateSearchSettings.disabledSourceTypes,
         disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
         disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
         limit: ENTITY_SEARCH_PAGE_SIZE,
@@ -2518,7 +2857,12 @@ export function EstimateGrid({
   ]);
 
   const entityDisplayGroups = useMemo(() => {
-    if (entityPluginResults.length === 0) return entitySearchGroups;
+    const baseGroups = entityCurrentRateGroup && !entitySearchGroups.some((group) =>
+      group.items.some((item) => item.rateScheduleItemId === activeEntityRow?.rateScheduleItemId)
+    )
+      ? [entityCurrentRateGroup, ...entitySearchGroups]
+      : entitySearchGroups;
+    if (entityPluginResults.length === 0) return baseGroups;
     const remoteGroup: EntityOptionGroup = {
       categoryName: "Provider Results",
       categoryId: "__provider_results",
@@ -2530,8 +2874,8 @@ export function EstimateGrid({
       tone: "success",
       items: entityPluginResults,
     };
-    return [remoteGroup, ...entitySearchGroups];
-  }, [entityPluginResults, entitySearchGroups]);
+    return [remoteGroup, ...baseGroups];
+  }, [activeEntityRow?.rateScheduleItemId, entityCurrentRateGroup, entityPluginResults, entitySearchGroups]);
 
   // Flat list of selectable entity items for keyboard navigation when the
   // entity dropdown is open. Items in the "matching" group come first.
@@ -2539,7 +2883,7 @@ export function EstimateGrid({
     if (!entityDropdownRowId || !activeEntityRow) return [];
     type FlatEntity = { group: EntityOptionGroup; item: EntityOptionItem };
     const out: FlatEntity[] = [];
-    for (const group of entityDisplayGroups) {
+    for (const group of orderEntityGroupsForRow(entityDisplayGroups, activeEntityRow.category)) {
       for (const item of group.items) out.push({ group, item });
     }
     return out;
@@ -2557,6 +2901,16 @@ export function EstimateGrid({
     });
   }, [entityFlatItems.length]);
 
+  useEffect(() => {
+    if (entityBrowseMode !== "rate_books" || !activeEntityRow?.rateScheduleItemId || entityFlatItems.length === 0) return;
+    const currentRateIndex = entityFlatItems.findIndex(({ item }) =>
+      item.rateScheduleItemId === activeEntityRow.rateScheduleItemId
+    );
+    if (currentRateIndex >= 0) {
+      setEntityHighlightIdx(currentRateIndex);
+    }
+  }, [activeEntityRow?.rateScheduleItemId, entityBrowseMode, entityFlatItems]);
+
   // Scroll the highlighted entity item into view
   useEffect(() => {
     if (!entityDropdownRowId || !entityDropdownRef.current) return;
@@ -2569,6 +2923,7 @@ export function EstimateGrid({
   // Only applies when user hasn't manually toggled columns yet.
   const autoDefaultColumns = useMemo(() => {
     if (entityCategories.length === 0) return null;
+    if (isSnapMode) return new Set(SNAP_VISIBLE_COLUMNS);
 
     const allItems = (workspace.worksheets ?? []).flatMap((w) => w.items);
     const activeCats = new Set(allItems.map((r) => r.category));
@@ -2585,7 +2940,7 @@ export function EstimateGrid({
     }
 
     return cols;
-  }, [entityCategories, workspace.worksheets]);
+  }, [entityCategories, isSnapMode, workspace.worksheets]);
 
   // Apply auto-default columns when categories first load (and user hasn't toggled)
   useEffect(() => {
@@ -2745,6 +3100,23 @@ export function EstimateGrid({
     : activeFolder
       ? getWorksheetFolderPath(workspace.worksheetFolders ?? [], activeFolder.id)
       : findWs(workspace, activeTab)?.name ?? "Worksheet";
+  const snapLineLimit = isSnapMode
+    ? Math.max(1, Math.floor(maxLineItems ?? 10))
+    : Number.POSITIVE_INFINITY;
+  const snapWorksheetForLimit = isSnapMode
+    ? (snapWorksheetId ? findWs(workspace, snapWorksheetId) : activeWorksheetForActions)
+    : null;
+  const snapLineCount = snapWorksheetForLimit?.items.length ?? 0;
+  const snapRemainingLines = isSnapMode
+    ? Math.max(0, snapLineLimit - snapLineCount)
+    : Number.POSITIVE_INFINITY;
+  const snapLimitReached = isSnapMode && snapRemainingLines <= 0;
+  const ensureSnapLineCapacity = useCallback((requestedCount = 1) => {
+    if (!isSnapMode) return true;
+    if (requestedCount <= snapRemainingLines) return true;
+    onError(`Snaps are capped at ${snapLineLimit} line items. Upgrade to a full quote if this scope is growing.`);
+    return false;
+  }, [isSnapMode, onError, snapLineLimit, snapRemainingLines]);
 
   const fitWidth = worksheetViewMode === "organizer" && gridWidth > 0
     ? gridWidth + WORKSHEET_ORGANIZER_PANEL_WIDTH + WORKSHEET_ORGANIZER_PANEL_GAP
@@ -2950,6 +3322,7 @@ export function EstimateGrid({
     (col: ColumnId) => {
       if (col === "checkbox") return selectedIds.size > 0;
       if (!visibleColumns.has(col)) return false;
+      if (isSnapMode) return true;
       if (fitLevel === "compact") {
         return !["lineOrder", "vendor", "extCost", "markup", "margin"].includes(col);
       }
@@ -2958,7 +3331,7 @@ export function EstimateGrid({
       }
       return true;
     },
-    [fitLevel, visibleColumns, selectedIds.size]
+    [fitLevel, isSnapMode, visibleColumns, selectedIds.size]
   );
 
   // Count visible data columns for colSpan on group header
@@ -2990,10 +3363,7 @@ export function EstimateGrid({
 
     // Entity name uses the dropdown instead
     if (column === "entityName") {
-      setEntityDropdownRowId(rowId);
-      setEntitySearchTerm("");
-      setSelectedCell({ rowId, column });
-      setSelectedRowId(rowId);
+      openEntityDropdown(rowId);
       return;
     }
 
@@ -3282,44 +3652,24 @@ export function EstimateGrid({
     categoryName: string,
     entityType: string,
     defaultUom: string,
-    catalogData?: {
-      cost?: number;
-      uom?: string;
-      description?: string;
-      vendor?: string | null;
-      sourceNotes?: string;
-      price?: number;
-      quantity?: number;
-      unit1?: number;
-      unit2?: number;
-      unit3?: number;
-      costResourceId?: string;
-      effectiveCostId?: string;
-      laborUnitId?: string;
-      resourceComposition?: Record<string, unknown>;
-      sourceEvidence?: Record<string, unknown>;
-    },
+    catalogData?: EntitySelectionCatalogData,
     rateScheduleItemId?: string,
     itemId?: string,
   ) {
-    setEntityDropdownRowId(null);
-    setEntityDropdownPos(null);
-    setEntitySearchTerm("");
-    setEntityBrowseMode(null);
-    setEntityPluginResults([]);
+    closeEntityDropdown(rowId);
 
 	    const row = visibleRows.find((r) => r.id === rowId);
 	    const newCatDef = entityCategories.find((c) => c.name === categoryName);
 	    const oldCategory = row?.category;
 	    const categoryChanged = oldCategory !== categoryName;
-	    const preservingProductivityBasis = !!rateScheduleItemId && !!row?.laborUnitId;
+	    const preservingProductivityBasis = !!rateScheduleItemId && !!(catalogData?.laborUnitId ?? row?.laborUnitId);
 
 	    const patch: Record<string, unknown> = {
 	      categoryId: newCatDef?.id ?? null,
 	      entityName,
 	      category: categoryName,
 	      entityType,
-	      uom: preservingProductivityBasis ? row.uom : catalogData?.uom ?? defaultUom,
+	      uom: preservingProductivityBasis ? (row?.uom || catalogData?.uom || defaultUom) : catalogData?.uom ?? defaultUom,
 	    };
 
     if (catalogData?.cost !== undefined) patch.cost = catalogData.cost;
@@ -3463,10 +3813,22 @@ export function EstimateGrid({
           applyMutationError("Create failed.", error);
         }
       });
+      setPendingLaborSelections((current) => {
+        if (!Object.prototype.hasOwnProperty.call(current, rowId)) return current;
+        const next = { ...current };
+        delete next[rowId];
+        return next;
+      });
       return;
     }
 
 	    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
+    setPendingLaborSelections((current) => {
+      if (!Object.prototype.hasOwnProperty.call(current, rowId)) return current;
+      const next = { ...current };
+      delete next[rowId];
+      return next;
+    });
 	  }
 
   function categoryByAnalyticsBucket(bucket: string) {
@@ -3491,7 +3853,7 @@ export function EstimateGrid({
     if (item.source === "labor_unit") {
       return labourCategory() ?? direct;
     }
-    if (item.source === "cost_intelligence" || item.source === "cost_resource" || item.source === "plugin_result") {
+    if (item.source === "cost_intelligence" || item.source === "plugin_result") {
       const resourceType = [
         payloadString(item.payload, "resourceType"),
         payloadString(item.payload, "costCategory"),
@@ -3561,6 +3923,12 @@ export function EstimateGrid({
         if (dt && item.unit3) next[dt.id] = Number(item.unit3) || 0;
         tierUnits = next;
       }
+    } else if (itemNeedsLaborRateSelection(item) && (item.unit1 || item.unit2 || item.unit3)) {
+      const next: Record<string, number> = {};
+      if (item.unit1) next[TIER_SLOT_FALLBACK_KEY.unit1] = Number(item.unit1) || 0;
+      if (item.unit2) next[TIER_SLOT_FALLBACK_KEY.unit2] = Number(item.unit2) || 0;
+      if (item.unit3) next[TIER_SLOT_FALLBACK_KEY.unit3] = Number(item.unit3) || 0;
+      tierUnits = next;
     }
     return {
       categoryId: targetCategory.id,
@@ -3659,19 +4027,13 @@ export function EstimateGrid({
 
     const row = visibleRows.find((candidate) => candidate.id === rowId);
     if (item.actionType === "open_assembly") {
-      setEntityDropdownRowId(null);
-      setEntityDropdownPos(null);
-      setEntitySearchTerm("");
-      setEntityBrowseMode(null);
+      closeEntityDropdown(rowId);
       setShowAssemblyPicker(true);
       return;
     }
 
     if (item.actionType === "plugin_tool") {
-      setEntityDropdownRowId(null);
-      setEntityDropdownPos(null);
-      setEntitySearchTerm("");
-      setEntityBrowseMode(null);
+      closeEntityDropdown(rowId);
       if (onOpenPluginTools) {
         onOpenPluginTools();
       } else {
@@ -3681,10 +4043,7 @@ export function EstimateGrid({
     }
 
     if (item.actionType === "plugin_result") {
-      setEntityDropdownRowId(null);
-      setEntityDropdownPos(null);
-      setEntitySearchTerm("");
-      setEntityBrowseMode(null);
+      closeEntityDropdown(rowId);
       if (!item.pluginId || !item.toolId || !item.pluginInput) {
         onError("This provider result is missing its plugin execution data.");
         return;
@@ -3715,39 +4074,69 @@ export function EstimateGrid({
       setEntitySearchError("Choose a configured worksheet category before applying this result.");
       return;
     }
-    if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
-      if (item.source === "labor_unit") {
-        const stagedPatch = buildOptionSourcePatch(targetCategory, item);
-        stagedPatch.rateScheduleItemId = row?.rateScheduleItemId ?? undefined;
-        stagedPatch.itemId = row?.itemId ?? null;
-        if (row?.rateScheduleItemId && !isTemporaryWorksheetItemId(row.id)) {
-          stagedPatch.entityName = row.entityName;
-          commitItemPatch(row.id, stagedPatch, "Labor productivity update failed.");
-          setEntityDropdownRowId(null);
-          setEntityDropdownPos(null);
-          setEntitySearchTerm("");
-          setEntityBrowseMode(null);
-          return;
-        }
-        if (stageTemporaryWorksheetItemPatch(rowId, stagedPatch)) {
-          setSelectedCell({ rowId, column: "entityName" });
-          setEntityDropdownRowId(rowId);
-          setEntityBrowseMode("rate_books");
-          setEntitySearchTerm("");
-          setEntitySearchError("Productivity selected. Choose an imported labour rate item to price this line.");
-          return;
+
+    if (itemNeedsLaborRateSelection(item)) {
+      const stagedPatch = buildOptionSourcePatch(targetCategory, item);
+      const laborData = catalogDataFromEntityOption(item) ?? {};
+      const existingRateScheduleItemId = row?.rateScheduleItemId ?? undefined;
+      stagedPatch.rateScheduleItemId = existingRateScheduleItemId;
+      stagedPatch.itemId = row?.itemId ?? null;
+      stagedPatch.entityName = row?.entityName.trim() ? row.entityName : "Choose labour rate...";
+
+      if (existingRateScheduleItemId && (item.unit1 || item.unit2 || item.unit3)) {
+        const schedule = (workspace.rateSchedules ?? []).find((candidate) =>
+          (candidate.items ?? []).some((scheduleItem) => scheduleItem.id === existingRateScheduleItemId),
+        );
+        if (schedule) {
+          const nextTierUnits: Record<string, number> = {};
+          const regular = schedule.tiers.find((tier) => Number(tier.multiplier) === 1);
+          const overtime = schedule.tiers.find((tier) => Number(tier.multiplier) === 1.5);
+          const doubletime = schedule.tiers.find((tier) => Number(tier.multiplier) === 2);
+          if (regular && item.unit1) nextTierUnits[regular.id] = Number(item.unit1) || 0;
+          if (overtime && item.unit2) nextTierUnits[overtime.id] = Number(item.unit2) || 0;
+          if (doubletime && item.unit3) nextTierUnits[doubletime.id] = Number(item.unit3) || 0;
+          stagedPatch.tierUnits = nextTierUnits;
         }
       }
+
+      setPendingLaborSelections((current) => ({
+        ...current,
+        [rowId]: {
+          catalogData: laborData,
+        },
+      }));
+
+      if (!row || stageTemporaryWorksheetItemPatch(rowId, stagedPatch)) {
+        openEntityDropdown(rowId, null, {
+          browseMode: "rate_books",
+          searchError: "Productivity selected. Choose an imported labour rate item to price this line.",
+        });
+        return;
+      }
+
+      commitItemPatch(row.id, stagedPatch, "Labor productivity update failed.");
+
+      openEntityDropdown(rowId, null, {
+        browseMode: "rate_books",
+        searchError: "Productivity selected. Choose an imported labour rate item to price this line.",
+      });
+      return;
+    }
+
+    if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
       setEntitySearchError(
         `Choose an imported ${targetCategory.name} item for this category before creating the row.`
       );
       return;
     }
 
-    setEntityDropdownRowId(null);
-    setEntityDropdownPos(null);
-    setEntitySearchTerm("");
-    setEntityBrowseMode(null);
+    closeEntityDropdown(rowId);
+
+    const pendingLabor = pendingLaborSelections[rowId];
+    const itemCatalogData = catalogDataFromEntityOption(item);
+    const catalogData = pendingLabor && item.rateScheduleItemId
+      ? mergeCatalogDataWithLabor(pendingLabor.catalogData, itemCatalogData)
+      : itemCatalogData;
 
     handleEntitySelect(
 	      rowId,
@@ -3755,39 +4144,7 @@ export function EstimateGrid({
 	      targetCategory.name,
 	      targetCategory.entityType,
 	      targetCategory.defaultUom,
-      item.unitCost !== undefined ||
-        item.unitPrice !== undefined ||
-        item.unit !== undefined ||
-        item.description !== undefined ||
-        item.vendor !== undefined ||
-        item.sourceNotes !== undefined ||
-        item.quantity !== undefined ||
-        item.unit1 !== undefined ||
-        item.unit2 !== undefined ||
-        item.unit3 !== undefined ||
-        item.costResourceId !== undefined ||
-        item.effectiveCostId !== undefined ||
-        item.laborUnitId !== undefined ||
-        item.resourceComposition !== undefined ||
-        item.sourceEvidence !== undefined
-        ? {
-            cost: item.unitCost,
-            price: item.unitPrice,
-            uom: item.unit,
-            description: item.description ?? item.label,
-            vendor: item.vendor,
-            sourceNotes: item.sourceNotes,
-            quantity: item.quantity,
-            unit1: item.unit1,
-            unit2: item.unit2,
-            unit3: item.unit3,
-            costResourceId: item.costResourceId,
-            effectiveCostId: item.effectiveCostId,
-            laborUnitId: item.laborUnitId,
-            resourceComposition: item.resourceComposition,
-            sourceEvidence: item.sourceEvidence,
-          }
-        : undefined,
+      catalogData,
       item.rateScheduleItemId,
       item.itemId,
     );
@@ -3796,6 +4153,7 @@ export function EstimateGrid({
   // ─── Row operations ───
 
   const addNewItem = useCallback((_categoryOverride?: string) => {
+    if (!ensureSnapLineCapacity(1)) return;
     const wsId = activeWorksheetForActions?.id;
     if (!wsId) {
       if (activeFolderId) {
@@ -3810,7 +4168,7 @@ export function EstimateGrid({
     if (!ws) return;
 
     createDraftItem(wsId);
-  }, [activeFolderId, activeWorksheetForActions?.id, createDraftItem, workspace]);
+  }, [activeFolderId, activeWorksheetForActions?.id, createDraftItem, ensureSnapLineCapacity, workspace]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -3855,6 +4213,7 @@ export function EstimateGrid({
   }
 
   function duplicateRow(itemId: string) {
+    if (!ensureSnapLineCapacity(1)) return;
     const row = visibleRows.find((r) => r.id === itemId);
     if (!row) return;
 
@@ -4094,6 +4453,7 @@ export function EstimateGrid({
     if (item.source === "assembly" || item.source === "plugin" || item.source === "external_action" || item.source === "plugin_result") {
       return false;
     }
+    if (itemNeedsLaborRateSelection(item)) return false;
     if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) return false;
     return true;
   }
@@ -4104,6 +4464,11 @@ export function EstimateGrid({
     lineOrder?: number,
 	  ): { payload?: CreateWorksheetItemInput; error?: string } {
 	    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    if (itemNeedsLaborRateSelection(item)) {
+      return {
+        error: "Choose an imported labour rate item before creating a row from a productivity unit.",
+      };
+    }
     if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
       return {
         error: `Choose an imported ${targetCategory?.name ?? "rate"} item before creating a row.`,
@@ -4182,6 +4547,7 @@ export function EstimateGrid({
       canCreateWorksheetItemFromOption(group, item)
     );
     if (selected.length === 0) return;
+    if (!ensureSnapLineCapacity(selected.length)) return;
 
     const worksheet = findWs(workspace, wsId);
     const baseOrder =
@@ -4283,8 +4649,7 @@ export function EstimateGrid({
       setTabMenu(null);
       setOrganizerMenu(null);
       if (entityDropdownRowId) {
-        setEntityDropdownRowId(null);
-        setEntityDropdownPos(null);
+        closeEntityDropdown(entityDropdownRowId);
       }
     }
     if (contextMenu || tabMenu || organizerMenu || entityDropdownRowId) {
@@ -4296,7 +4661,7 @@ export function EstimateGrid({
         document.removeEventListener("click", close);
       };
     }
-  }, [contextMenu, tabMenu, organizerMenu, entityDropdownRowId]);
+  }, [closeEntityDropdown, contextMenu, tabMenu, organizerMenu, entityDropdownRowId]);
 
   // Close column picker on outside click
   useEffect(() => {
@@ -4687,6 +5052,773 @@ export function EstimateGrid({
     );
   }
 
+  function renderEntityDropdownPortal() {
+    const dropdownRowId = entityDropdownRowId ?? entityDropdownClosingRowId;
+    if (!dropdownRowId || !entityDropdownPos) return null;
+
+    const row = (workspace.worksheets ?? [])
+      .flatMap((worksheet) => worksheet.items)
+      .find((candidate) => candidate.id === dropdownRowId) ?? null;
+    if (!row) return null;
+
+    const isDropdownOpen = entityDropdownRowId === dropdownRowId;
+
+		            const orderedGroups = orderEntityGroupsForRow(entityDisplayGroups, row.category);
+	            const sourceStats = Array.from(
+	              entityFlatItems.reduce<Map<string, number>>((map, entry) => {
+	                const label = sourceBadgeLabel(entry.item.source) || "Item";
+	                map.set(label, (map.get(label) ?? 0) + 1);
+	                return map;
+	              }, new Map()),
+	            ).slice(0, 5);
+
+	            const selectFlatItem = (idx: number) => {
+	              const flat = entityFlatItems[idx];
+	              if (!flat) return;
+	              handleEntityAction(row.id, flat.group, flat.item);
+	            };
+	            const entityFlatIndexByKey = new Map(
+	              entityFlatItems.map((entry, index) => [
+	                `${entry.group.categoryId}\u001f${entityOptionKey(entry.item)}`,
+	                index,
+	              ]),
+	            );
+
+	            const handleResultsScroll = (event: { currentTarget: HTMLDivElement }) => {
+	              const target = event.currentTarget;
+	              if (target.scrollTop + target.clientHeight >= target.scrollHeight - 180) {
+	                void loadMoreEntitySearchResults();
+	              }
+	            };
+
+		            const renderGroupItems = (
+		              group: EntityOptionGroup,
+		              filtered: EntityOptionItem[],
+		              options: { inLaborTree?: boolean; laborTreeDepth?: number } = {},
+		            ) =>
+		              filtered.map((item) => {
+		                const myIdx = entityFlatIndexByKey.get(`${group.categoryId}\u001f${entityOptionKey(item)}`) ?? 0;
+		                const isHighlighted = myIdx === entityHighlightIdx;
+		                const itemCategory = inferCanonicalCategoryForOption(group, item) ?? getTargetCategoryForEntityGroup(group, item);
+		                const itemCategoryColor = itemCategory?.color ?? getCategoryHexColor(group.categoryName, entityCategories);
+		                const isLinkedCatalogRate = item.source === "catalog" && !!item.rateScheduleItemId;
+		                const badge = isLinkedCatalogRate ? "Catalog + rate" : sourceBadgeLabel(item.source);
+		                const badgeToneSource = isLinkedCatalogRate ? "rate_schedule" : item.source;
+		                const isActionLoading = item.actionId && entityActionLoadingId === item.actionId;
+		                const SourceIcon = sourceIconFor(item.source);
+		                const isCurrentRateItem =
+		                  entityBrowseMode === "rate_books" &&
+		                  !!row.rateScheduleItemId &&
+		                  item.rateScheduleItemId === row.rateScheduleItemId;
+		                const ActionIcon = isCurrentRateItem
+		                  ? Check
+		                  : item.actionType === "plugin_remote_search"
+	                  ? ExternalLink
+	                  : item.actionType === "plugin_tool"
+	                  ? PlugZap
+	                  : item.actionType === "open_assembly"
+	                  ? Layers
+		                  : ChevronRight;
+		                const isLaborChoice = item.source === "labor_unit";
+		                const needsRate = isLaborChoice && !item.rateScheduleItemId;
+		                const measure = optionMeasureLabel(item);
+		                const detailParts = optionMetaParts(item);
+		                const laborTreeDepth = isLaborChoice ? options.laborTreeDepth ?? group.treePath?.length ?? 0 : 0;
+		                const laborReference = isLaborChoice ? laborUnitReferenceParts(item) : null;
+		                const laborDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursDifficult") : undefined;
+		                const laborVeryDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursVeryDifficult") : undefined;
+		                const buttonStyle: React.CSSProperties = {
+		                  borderColor: colorWithAlpha(
+		                    itemCategoryColor,
+		                    isHighlighted || isCurrentRateItem ? 0.48 : isLaborChoice ? 0.24 : 0.18,
+		                  ),
+		                  backgroundColor: colorWithAlpha(
+		                    itemCategoryColor,
+		                    isHighlighted ? 0.13 : isCurrentRateItem ? 0.08 : isLaborChoice ? 0.045 : 0.03,
+		                  ),
+		                  ...(isCurrentRateItem ? { boxShadow: `inset 3px 0 0 ${itemCategoryColor}` } : {}),
+		                  ...(laborTreeDepth > 1 ? { paddingLeft: Math.min(40, 8 + laborTreeDepth * 5) } : {}),
+		                };
+		                const iconStyle: React.CSSProperties = {
+		                  borderColor: colorWithAlpha(itemCategoryColor, isHighlighted || isCurrentRateItem ? 0.42 : 0.28),
+		                  backgroundColor: colorWithAlpha(itemCategoryColor, isHighlighted || isCurrentRateItem ? 0.14 : 0.08),
+		                  color: itemCategoryColor,
+		                };
+		                return (
+		                  <button
+		                    key={`${group.categoryId}-${entityOptionKey(item)}`}
+		                    data-entity-idx={myIdx}
+		                    className={cn(
+		                      "group flex items-center gap-1.5 px-2 text-left transition-colors",
+		                      isLaborChoice
+		                        ? cn(
+		                            "mx-2 mb-1 w-[calc(100%-1rem)] rounded-md border bg-panel/90 shadow-[0_1px_0_rgba(0,0,0,0.04)]",
+		                            options.inLaborTree
+		                              ? "py-1"
+		                              : "py-1.5",
+		                          )
+		                        : "w-full border-b bg-bg/35 py-1 last:border-b-0",
+		                    )}
+		                    style={buttonStyle}
+		                    onMouseEnter={() => setEntityHighlightIdx(myIdx)}
+		                    onClick={() => selectFlatItem(myIdx)}
+		                  >
+		                    <span
+		                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
+		                      style={iconStyle}
+		                    >
+		                      {isActionLoading ? (
+		                        <Loader2 className="h-3 w-3 animate-spin" />
+		                      ) : (
+		                        <SourceIcon className="h-3 w-3" />
+		                      )}
+		                    </span>
+		                    {isLaborChoice ? (
+		                      <span className="min-w-0 flex-1">
+		                        <span className="grid min-w-0 grid-cols-[minmax(84px,auto)_minmax(0,1fr)_auto] items-center gap-1.5">
+		                          <span
+		                            className="truncate rounded border bg-bg/70 px-1 py-px font-mono text-[9px] font-semibold leading-3"
+		                            style={{
+		                              borderColor: colorWithAlpha(itemCategoryColor, 0.24),
+		                              color: itemCategoryColor,
+		                            }}
+		                          >
+		                            {laborReference?.code || "No code"}
+		                          </span>
+		                          <span className="min-w-0 truncate text-[11px] font-semibold leading-3 text-fg">
+		                            {item.value || item.label}
+		                          </span>
+		                          {measure && (
+		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-semibold tabular-nums leading-3 text-fg/70">
+		                              {measure}
+		                            </span>
+		                          )}
+		                        </span>
+		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/45">
+		                          {laborReference?.table && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
+		                              Table {laborReference.table}
+		                            </span>
+		                          )}
+		                          {laborReference?.ref && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
+		                              Ref {laborReference.ref}
+		                            </span>
+		                          )}
+		                          {item.unit && (
+		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px">
+		                              {item.unit}
+		                            </span>
+		                          )}
+		                          {laborDifficult !== undefined && (
+		                            <span className="shrink-0 tabular-nums">
+		                              Diff {laborDifficult.toFixed(2)}
+		                            </span>
+		                          )}
+		                          {laborVeryDifficult !== undefined && (
+		                            <span className="shrink-0 tabular-nums">
+		                              Very {laborVeryDifficult.toFixed(2)}
+		                            </span>
+		                          )}
+		                          {needsRate && (
+		                            <span
+		                              className="shrink-0 rounded border px-1 py-px text-[8px] font-semibold uppercase leading-3"
+		                              style={{
+		                                borderColor: colorWithAlpha(itemCategoryColor, 0.28),
+		                                backgroundColor: colorWithAlpha(itemCategoryColor, 0.08),
+		                                color: itemCategoryColor,
+		                              }}
+		                            >
+		                              Needs rate
+		                            </span>
+		                          )}
+		                        </span>
+		                      </span>
+		                    ) : (
+		                      <span className="min-w-0 flex-1">
+		                        <span className="flex min-w-0 items-center gap-2">
+		                          <span className="min-w-0 flex-1">
+		                            <span className="block truncate text-[11px] font-semibold leading-3 text-fg">
+		                              {item.label}
+		                            </span>
+		                          </span>
+		                          {measure && (
+		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-medium tabular-nums leading-3 text-fg/60">
+		                              {measure}
+		                            </span>
+		                          )}
+		                        </span>
+		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/42">
+		                          {badge && (
+		                            <span className={cn("shrink-0 rounded border px-1 py-px text-[8px] font-semibold leading-3", sourceAccentClasses(badgeToneSource))}>
+		                              {badge}
+		                            </span>
+		                          )}
+		                          {isCurrentRateItem && (
+		                            <span
+		                              className="shrink-0 rounded border px-1 py-px text-[8px] font-semibold uppercase leading-3"
+		                              style={{
+		                                borderColor: colorWithAlpha(itemCategoryColor, 0.34),
+		                                backgroundColor: colorWithAlpha(itemCategoryColor, 0.1),
+		                                color: itemCategoryColor,
+		                              }}
+		                            >
+		                              Current
+		                            </span>
+		                          )}
+		                          {detailParts.slice(0, 3).map((part, detailIndex) => (
+		                            <span key={`${part}-${detailIndex}`} className="min-w-0 max-w-[190px] truncate">
+		                              {part}
+		                            </span>
+		                          ))}
+		                        </span>
+		                      </span>
+		                    )}
+	                    <span
+	                      className="flex shrink-0 items-center text-fg/25 transition-colors"
+	                      style={isHighlighted || isCurrentRateItem ? { color: itemCategoryColor } : undefined}
+	                    >
+	                      <ActionIcon className="h-3.5 w-3.5" />
+	                    </span>
+	                  </button>
+	                );
+	              });
+
+	            const renderGroupBlock = (
+	              group: EntityOptionGroup,
+	              label: string,
+	              tone: "accent" | "success" | "muted" | "warning" = "muted",
+	            ) => {
+		              if (group.items.length === 0) return null;
+	              const showTreePath = group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1;
+	              const groupCategory = entityCategories.find((category) =>
+	                category.name === group.categoryName || category.entityType === group.entityType
+	              );
+	              const groupCategoryColor = groupCategory?.color ?? getCategoryHexColor(group.categoryName, entityCategories);
+		              return (
+		                <div key={group.categoryId} className="bg-bg/25">
+		                  <div
+		                    className={cn(
+		                      "sticky top-0 z-20 flex items-center justify-between border-b border-t px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal bg-panel shadow-[0_1px_0_rgba(0,0,0,0.04)]",
+		                      !groupCategory && tone === "accent" && "border-accent/20 text-accent",
+		                      !groupCategory && tone === "success" && "border-success/20 text-success",
+		                      !groupCategory && tone === "warning" && "border-warning/20 text-warning",
+	                      !groupCategory && tone === "muted" && "border-line text-fg/40",
+	                    )}
+		                    style={groupCategory ? {
+		                      borderColor: colorWithAlpha(groupCategoryColor, 0.22),
+		                      background: `linear-gradient(0deg, ${colorWithAlpha(groupCategoryColor, 0.16)}, ${colorWithAlpha(groupCategoryColor, 0.16)}), hsl(var(--panel))`,
+		                      color: groupCategoryColor,
+		                    } : undefined}
+		                  >
+		                    <span className="truncate">{label}</span>
+		                    <span className="text-fg/30">{group.items.length}</span>
+			                  </div>
+			                  {showTreePath && (
+			                    <div
+			                      className="border-b px-2 py-1 shadow-[inset_0_-1px_0_rgba(0,0,0,0.03)]"
+			                      style={{
+			                        borderColor: colorWithAlpha(groupCategoryColor, 0.24),
+			                        backgroundColor: colorWithAlpha(groupCategoryColor, 0.075),
+			                      }}
+			                    >
+			                      <div
+			                        className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase leading-3"
+			                        style={{ color: groupCategoryColor }}
+			                      >
+			                        <ListTree className="h-3 w-3" />
+			                        Labour hierarchy
+			                      </div>
+			                      <div className="space-y-0.5">
+			                        {group.treePath!.map((part, level) => {
+			                          const isLeaf = level === group.treePath!.length - 1;
+			                          const depthAlpha = Math.min(0.2, 0.05 + level * 0.025);
+			                          return (
+			                            <div
+			                              key={`${part}-${level}`}
+			                              className="relative flex min-w-0 items-center gap-1.5 text-[10px] leading-4"
+			                              style={{ paddingLeft: Math.min(44, level * 9) }}
+			                            >
+			                              {level > 0 && (
+			                                <span
+			                                  className="absolute left-0 top-1/2 h-px w-2 -translate-y-1/2"
+			                                  style={{ backgroundColor: colorWithAlpha(groupCategoryColor, 0.42) }}
+			                                />
+			                              )}
+			                              <span
+			                                className="flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[8px] font-bold tabular-nums"
+			                                style={{
+			                                  borderColor: colorWithAlpha(groupCategoryColor, isLeaf ? 0.46 : 0.26),
+			                                  backgroundColor: colorWithAlpha(groupCategoryColor, isLeaf ? 0.17 : depthAlpha),
+			                                  color: groupCategoryColor,
+			                                }}
+			                              >
+			                                {level + 1}
+			                              </span>
+			                              <span
+			                                className="w-[58px] shrink-0 text-[8px] font-semibold uppercase tracking-normal"
+			                                style={{ color: colorWithAlpha(groupCategoryColor, 0.76) }}
+			                              >
+			                                {laborHierarchyLevelLabel(level)}
+			                              </span>
+			                              <span
+			                                className={cn(
+			                                  "min-w-0 truncate rounded px-1",
+			                                  isLeaf
+			                                    ? "border text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.03)]"
+			                                    : "font-medium",
+			                                )}
+			                                style={isLeaf ? {
+			                                  borderColor: colorWithAlpha(groupCategoryColor, 0.24),
+			                                  backgroundColor: colorWithAlpha(groupCategoryColor, 0.08),
+			                                  color: "hsl(var(--fg))",
+			                                } : {
+			                                  color: colorWithAlpha(groupCategoryColor, 0.82),
+			                                }}
+			                              >
+			                                {part}
+			                              </span>
+			                            </div>
+			                          );
+			                        })}
+			                      </div>
+			                    </div>
+			                  )}
+		                  {showTreePath ? (
+		                    <div
+		                      className="border-t bg-bg/55 py-1"
+		                      style={{ borderColor: colorWithAlpha(groupCategoryColor, 0.18) }}
+		                    >
+		                      {renderGroupItems(group, group.items)}
+		                    </div>
+		                  ) : (
+		                    renderGroupItems(group, group.items)
+		                  )}
+		                </div>
+		              );
+		            };
+
+		            type LaborTreeNode = {
+		              key: string;
+		              label: string;
+		              level: number;
+		              itemCount: number;
+		              children: Map<string, LaborTreeNode>;
+		              groups: EntityOptionGroup[];
+		            };
+
+		            const buildLaborTree = (groups: EntityOptionGroup[]) => {
+		              const root: LaborTreeNode = {
+		                key: "labor-root",
+		                label: "Labour units",
+		                level: -1,
+		                itemCount: 0,
+		                children: new Map(),
+		                groups: [],
+		              };
+
+		              for (const group of groups) {
+		                const rawPath = (group.treePath?.length ? group.treePath : [group.label ?? group.categoryName])
+		                  .map(cleanHierarchyPart)
+		                  .filter(Boolean);
+		                const path = rawPath[0]?.toLowerCase() === "labour units"
+		                  ? rawPath.slice(1).map((part, index) => ({ part, level: index + 1 }))
+		                  : rawPath.map((part, level) => ({ part, level }));
+		                let cursor = root;
+		                cursor.itemCount += group.items.length;
+		                path.forEach(({ part, level }) => {
+		                  const partKey = normalizeEntityLookup(part) || `${level}-${cursor.children.size}`;
+		                  let child = cursor.children.get(partKey);
+		                  if (!child) {
+		                    child = {
+		                      key: `${cursor.key}/${partKey}`,
+		                      label: part,
+		                      level,
+		                      itemCount: 0,
+		                      children: new Map(),
+		                      groups: [],
+		                    };
+		                    cursor.children.set(partKey, child);
+		                  }
+		                  child.itemCount += group.items.length;
+		                  cursor = child;
+		                });
+		                cursor.groups.push(group);
+		              }
+
+		              return root;
+		            };
+
+		            const laborTreeLabel = (groups: EntityOptionGroup[]) => {
+		              const providers = Array.from(new Set(
+		                groups
+		                  .map((group) => group.treePath?.[1])
+		                  .filter((provider): provider is string => Boolean(provider)),
+		              ));
+		              return providers.length === 1 ? `Labour units / ${providers[0]}` : "Labour units";
+		            };
+
+		            const laborTreeColorForGroups = (groups: EntityOptionGroup[]) => {
+		              const group = groups[0];
+		              const item = group?.items[0];
+		              const category = group && item
+		                ? inferCanonicalCategoryForOption(group, item) ?? getTargetCategoryForEntityGroup(group, item)
+		                : undefined;
+		              return category?.color ?? getCategoryHexColor(group?.categoryName ?? "", entityCategories);
+		            };
+
+		            const renderLaborTreeNode = (node: LaborTreeNode, treeColor: string): ReactNode => {
+		              const children = Array.from(node.children.values());
+		              const isLeaf = node.groups.length > 0;
+		              const visibleDepth = Math.max(0, node.level - 1);
+		              const branchIndent = Math.min(58, 8 + visibleDepth * 10);
+		              const itemIndent = Math.min(66, 14 + (visibleDepth + 1) * 10);
+		              const rowAlpha = isLeaf ? 0.085 : Math.min(0.075, 0.03 + visibleDepth * 0.012);
+		              return (
+		                <div key={node.key} className="relative">
+		                  <div
+		                    className="flex min-w-0 items-center gap-1.5 border-b px-2 py-0.5 text-[10px] leading-4"
+		                    style={{
+		                      paddingLeft: branchIndent,
+		                      borderColor: colorWithAlpha(treeColor, 0.12),
+		                      backgroundColor: colorWithAlpha(treeColor, rowAlpha),
+		                    }}
+		                  >
+		                    <span
+		                      className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[7px] font-bold tabular-nums"
+		                      style={{
+		                        borderColor: colorWithAlpha(treeColor, isLeaf ? 0.4 : 0.25),
+		                        backgroundColor: colorWithAlpha(treeColor, isLeaf ? 0.13 : 0.065),
+		                        color: treeColor,
+		                      }}
+		                    >
+		                      {node.level + 1}
+		                    </span>
+		                    <span
+		                      className="w-[56px] shrink-0 text-[8px] font-semibold uppercase tracking-normal"
+		                      style={{ color: colorWithAlpha(treeColor, 0.74) }}
+		                    >
+		                      {laborHierarchyLevelLabel(node.level)}
+		                    </span>
+		                    <span
+		                      className={cn("min-w-0 truncate", isLeaf ? "font-bold" : "font-medium")}
+		                      style={{ color: isLeaf ? "hsl(var(--fg))" : colorWithAlpha(treeColor, 0.84) }}
+		                    >
+		                      {node.label}
+		                    </span>
+		                    <span className="ml-auto shrink-0 text-[9px] font-medium tabular-nums text-fg/30">
+		                      {node.itemCount}
+		                    </span>
+		                  </div>
+		                  {children.length > 0 && (
+		                    <div className="bg-bg/35">
+		                      {children.map((child) => renderLaborTreeNode(child, treeColor))}
+		                    </div>
+		                  )}
+		                  {node.groups.length > 0 && (
+		                    <div
+		                      className="border-b bg-bg/60 py-1"
+		                      style={{
+		                        paddingLeft: itemIndent,
+		                        borderColor: colorWithAlpha(treeColor, 0.12),
+		                      }}
+		                    >
+		                      {node.groups.map((group) => (
+		                        <div key={`${node.key}-${group.categoryId}`}>
+		                          {renderGroupItems(group, group.items, { inLaborTree: true, laborTreeDepth: 0 })}
+		                        </div>
+		                      ))}
+		                    </div>
+		                  )}
+		                </div>
+		              );
+		            };
+
+		            const renderLaborTreeGroups = (groups: EntityOptionGroup[], keySeed: string) => {
+		              if (groups.length === 0) return null;
+		              const root = buildLaborTree(groups);
+		              const itemCount = groups.reduce((sum, group) => sum + group.items.length, 0);
+		              const treeColor = laborTreeColorForGroups(groups);
+		              return (
+		                <div key={keySeed} className="bg-bg/25">
+		                  <div
+		                    className="sticky top-0 z-20 flex items-center justify-between border-b border-t bg-panel px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal shadow-[0_1px_0_rgba(0,0,0,0.04)]"
+		                    style={{
+		                      borderColor: colorWithAlpha(treeColor, 0.22),
+		                      background: `linear-gradient(0deg, ${colorWithAlpha(treeColor, 0.16)}, ${colorWithAlpha(treeColor, 0.16)}), hsl(var(--panel))`,
+		                      color: treeColor,
+		                    }}
+		                  >
+		                    <span className="truncate">{laborTreeLabel(groups)}</span>
+		                    <span className="text-fg/30">{itemCount}</span>
+		                  </div>
+		                  <div
+		                    className="py-0.5"
+		                    style={{ backgroundColor: colorWithAlpha(treeColor, 0.035) }}
+		                  >
+		                    {Array.from(root.children.values()).map((node) => renderLaborTreeNode(node, treeColor))}
+		                  </div>
+		                </div>
+		              );
+		            };
+
+		            const renderGroupCollection = (
+		              groups: EntityOptionGroup[],
+		              fallbackTone: "accent" | "success" | "muted" | "warning",
+		              keyPrefix: string,
+		            ) => {
+		              const blocks: ReactNode[] = [];
+		              let laborBatch: EntityOptionGroup[] = [];
+
+		              const flushLaborBatch = () => {
+		                if (laborBatch.length === 0) return;
+		                const first = laborBatch[0];
+		                const last = laborBatch[laborBatch.length - 1];
+		                blocks.push(renderLaborTreeGroups(
+		                  laborBatch,
+		                  `${keyPrefix}-labor-${first.categoryId}-${last.categoryId}-${laborBatch.length}`,
+		                ));
+		                laborBatch = [];
+		              };
+
+		              groups.forEach((group, index) => {
+		                if (group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1) {
+		                  laborBatch.push(group);
+		                  return;
+		                }
+		                flushLaborBatch();
+		                const block = renderGroupBlock(
+		                  group,
+		                  group.label ?? group.categoryName,
+		                  group.tone ?? fallbackTone,
+		                );
+		                if (block) blocks.push(block);
+		              });
+		              flushLaborBatch();
+		              return blocks;
+		            };
+
+		            const browseCard = entitySearchTerm.trim() ? null : activeEntityBrowseCard;
+		            const BrowseHeaderIcon = browseCard?.Icon;
+		            const showBrowseLaunchpad = !entitySearchTerm.trim() && !browseCard;
+		            const renderBrowseLaunchpad = () => (
+		              <div className="p-2">
+		                <div className="grid grid-cols-2 gap-1.5">
+		                  {enabledEntityBrowseCards.map((card) => {
+		                    const BrowseIcon = card.Icon;
+		                    return (
+		                      <button
+		                        key={card.id}
+		                        type="button"
+		                        className="group flex min-h-[58px] items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-2 py-1.5 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
+		                        onClick={() => {
+		                          setEntityBrowseMode(card.id);
+		                          setEntityHighlightIdx(0);
+		                        }}
+		                      >
+		                        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", card.accent)}>
+		                          <BrowseIcon className="h-4 w-4" />
+		                        </span>
+		                        <span className="min-w-0">
+		                          <span className="block truncate text-[12px] font-semibold leading-4 text-fg">
+		                            {card.label}
+		                          </span>
+		                          <span className="block truncate text-[10px] leading-3 text-fg/42">
+		                            {card.detail}
+		                          </span>
+		                        </span>
+		                        <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-fg/25 transition-colors group-hover:text-accent" />
+		                      </button>
+		                    );
+		                  })}
+		                </div>
+		                {enabledEntityBrowseCards.length === 0 && (
+		                  <div className="rounded-lg border border-dashed border-line bg-bg/35 px-3 py-7 text-center text-xs text-fg/42">
+		                    All estimate search sources are disabled for this quote.
+		                  </div>
+		                )}
+		              </div>
+		            );
+
+	            const isDropdownShown = isDropdownOpen && entityDropdownVisible;
+	            const openClipPath = entityDropdownPos.placement === "above"
+	              ? `inset(-${entityDropdownPos.listMaxHeight + 8}px 0 0 0 round 12px)`
+	              : "inset(0 0 0 0 round 12px)";
+	            const closedClipPath = entityDropdownPos.placement === "above"
+	              ? "inset(0 0 0 0 round 12px)"
+	              : "inset(0 0 78% 0 round 12px)";
+	            const closedY = entityDropdownPos.placement === "above" ? 20 : -20;
+	            return createPortal(
+	              <div
+	                key={`entity-dropdown-${row.id}`}
+	                ref={entityDropdownRef}
+	                className={cn(
+	                  "fixed z-[200] flex w-[min(560px,calc(100vw-16px))] flex-col border border-line/80 bg-panel/95 shadow-[0_20px_60px_rgba(0,0,0,0.22),0_2px_10px_rgba(0,0,0,0.14)] backdrop-blur-xl will-change-[clip-path,opacity,filter,transform]",
+	                  entityDropdownPos.placement === "above"
+	                    ? "overflow-visible rounded-b-xl rounded-t-none"
+	                    : "overflow-hidden rounded-xl",
+	                )}
+	                style={{
+	                  top: entityDropdownPos.top,
+	                  bottom: entityDropdownPos.bottom,
+                  left: entityDropdownPos.left,
+                  maxHeight: entityDropdownPos.placement === "below" ? entityDropdownPos.maxHeight : undefined,
+                  transformOrigin: entityDropdownPos.placement === "above" ? "24px 100%" : "24px 0px",
+                  perspective: 900,
+                  opacity: isDropdownShown ? 1 : 0,
+	                  clipPath: isDropdownShown ? openClipPath : closedClipPath,
+                  filter: isDropdownShown ? "blur(0px)" : "blur(7px)",
+                  transform: isDropdownShown
+                    ? "translateY(0) scale(1) rotateX(0deg)"
+                    : `translateY(${closedY}px) scale(0.93) rotateX(${entityDropdownPos.placement === "above" ? -7 : 7}deg)`,
+                  transition: isDropdownShown
+                    ? "clip-path 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1), opacity 110ms ease-out, filter 140ms ease-out"
+                    : "clip-path 180ms cubic-bezier(0.55, 0.06, 0.68, 0.19), transform 180ms cubic-bezier(0.55, 0.06, 0.68, 0.19), opacity 140ms ease-in, filter 150ms ease-in",
+	                }}
+	                onTransitionEnd={(event) => {
+	                  if (event.target !== event.currentTarget) return;
+	                  if (event.propertyName !== "transform") return;
+	                  if (!entityDropdownRowId) handleEntityDropdownExitComplete();
+	                }}
+	                onClick={(e) => e.stopPropagation()}
+		              >
+		                <div
+		                  data-entity-dropdown-header
+		                  className={cn(
+		                    "bg-panel2/30 p-2",
+		                    entityDropdownPos.placement === "below" && "border-b border-line/80",
+		                  )}
+		                >
+		                  <div className="flex items-center gap-2 rounded-lg border border-line bg-bg/80 px-2.5 py-1.5 shadow-inner focus-within:border-accent/50 focus-within:ring-1 focus-within:ring-accent/20">
+		                    <Search className="h-4 w-4 shrink-0 text-accent" />
+	                    <input
+	                      ref={entitySearchRef}
+	                      type="text"
+	                      className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
+	                      placeholder="Search libraries, catalogs, rates, plugins..."
+		                      value={entitySearchTerm}
+		                      onChange={(e) => {
+		                        const next = e.target.value;
+		                        setEntitySearchTerm(next);
+		                        if (next.trim()) setEntityBrowseMode(null);
+		                      }}
+		                      onKeyDown={(e) => {
+	                      const len = entityFlatItems.length;
+	                      if (e.key === "Escape") {
+		                        e.preventDefault();
+			                        closeEntityDropdown(row.id);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx((i) => (i + 1) % len);
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx((i) => (i - 1 + len) % len);
+                      } else if (e.key === "Home") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx(0);
+                      } else if (e.key === "End") {
+                        e.preventDefault();
+                        if (len > 0) setEntityHighlightIdx(len - 1);
+                      } else if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (len > 0) selectFlatItem(Math.min(entityHighlightIdx, len - 1));
+                      } else if (e.key === "Tab") {
+                        e.preventDefault();
+                        const advancing = !e.shiftKey;
+                        const targetRowId = row.id;
+                        if (len > 0) {
+                          selectFlatItem(Math.min(entityHighlightIdx, len - 1));
+                        } else {
+	                          closeEntityDropdown(row.id);
+	                        }
+                        // After selecting, hop to the next/prev editable cell
+                        setTimeout(() => {
+                          if (advancing) advanceToNextCell(targetRowId, "entityName");
+	                          else retreatToPrevCell(targetRowId, "entityName");
+	                        }, 0);
+	                      }
+	                    }}
+	                    />
+	                    {entitySearchLoading ? (
+	                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
+	                    ) : (
+	                      <Sparkles className="h-4 w-4 shrink-0 text-accent/70" />
+	                    )}
+		                  </div>
+		                  <div className="mt-1.5 flex min-w-0 items-center gap-1 overflow-hidden">
+		                    {browseCard ? (
+		                      <button
+		                        type="button"
+		                        className={cn("inline-flex max-w-[260px] shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", browseCard.accent)}
+		                        onClick={() => setEntityBrowseMode(null)}
+		                      >
+		                        {BrowseHeaderIcon && <BrowseHeaderIcon className="h-3 w-3" />}
+		                        <span className="truncate">{browseCard.label}</span>
+		                        <X className="h-3 w-3" />
+		                      </button>
+		                    ) : (
+		                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/55 px-1.5 py-0.5 text-[10px] font-medium text-fg/45">
+		                        <CircleDollarSign className="h-3 w-3" />
+		                        {showBrowseLaunchpad ? "Browse source" : `${entityFlatItems.length} loaded`}
+		                      </span>
+		                    )}
+		                    {!showBrowseLaunchpad && sourceStats.map(([label, count]) => (
+		                      <span key={label} className="inline-flex shrink-0 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] text-fg/40">
+		                        {label} {count}
+		                      </span>
+		                    ))}
+	                    {entitySearchHasMore && (
+	                      <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/20 bg-accent/8 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+	                        <ArrowDown className="h-3 w-3" />
+	                        more
+	                      </span>
+	                    )}
+	                  </div>
+	                </div>
+		                <div
+		                  className={cn(
+		                    "overflow-y-auto p-0",
+		                    entityDropdownPos.placement === "above" &&
+		                      "absolute bottom-[calc(100%-1px)] left-[-1px] right-[-1px] rounded-t-xl border border-b-0 border-line/80 bg-panel/95 backdrop-blur-xl",
+		                  )}
+		                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
+			                  onScroll={handleResultsScroll}
+			                >
+			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
+			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
+			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
+			                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
+			                      Searching indexed library...
+		                    </div>
+		                  )}
+		                  {entitySearchError && (
+			                    <div className="rounded-lg border border-danger/20 bg-danger/5 px-2.5 py-2 text-[11px] text-danger">
+			                      {entitySearchError}
+			                    </div>
+			                  )}
+			                  {!showBrowseLaunchpad && !entitySearchLoading && !entitySearchError && entityFlatItems.length === 0 && (
+			                    <div className="rounded-lg border border-dashed border-line bg-bg/40 px-3 py-8 text-center text-xs text-fg/45">
+			                      No matches. Keep typing or create a freeform item.
+			                    </div>
+				                  )}
+				                  {!showBrowseLaunchpad && renderGroupCollection(orderedGroups, "muted", "ordered")}
+				                  {!showBrowseLaunchpad && entitySearchLoadingMore && (
+				                    <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-fg/40">
+				                      <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+				                      Loading more...
+				                    </div>
+				                  )}
+				                  {!showBrowseLaunchpad && !entitySearchHasMore && !entitySearchLoading && entityFlatItems.length > 0 && (
+				                    <div className="py-2 text-center text-[10px] text-fg/30">
+				                      End of indexed results
+				                    </div>
+			                  )}
+		                </div>
+              </div>,
+              document.body,
+            );
+  }
+
   function renderEditableCell(
     row: WorkspaceWorksheetItem,
     column: EditableColumn,
@@ -4815,11 +5947,13 @@ export function EstimateGrid({
     // Entity name cell - show dropdown trigger
 	    if (column === "entityName") {
 	      const isDropdownOpen = entityDropdownRowId === row.id;
+	      const isDropdownClosing = entityDropdownClosingRowId === row.id;
+	      const isDropdownMounted = isDropdownOpen || isDropdownClosing;
 	      const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === "entityName";
 	      const isDraft = isTemporaryWorksheetItemId(row.id) && !row.category;
 	      return (
 	        <td
-          ref={isDropdownOpen ? entityCellRef : undefined}
+          ref={isDropdownMounted ? entityCellRef : undefined}
           data-cell-row={row.id}
           data-cell-col="entityName"
           className={cn(
@@ -4830,20 +5964,10 @@ export function EstimateGrid({
           )}
           onClick={(e) => {
             e.stopPropagation();
-            setSelectedCell({ rowId: row.id, column: "entityName" });
 		            if (isDropdownOpen) {
-		              setEntityDropdownRowId(null);
-		              setEntityDropdownPos(null);
-		              setEntityBrowseMode(null);
-		              setEntityPluginResults([]);
+		              closeEntityDropdown(row.id);
 		            } else {
-		              positionEntityDropdown(e.currentTarget as HTMLTableCellElement);
-		              setEntityDropdownRowId(row.id);
-		              setEntitySearchTerm("");
-		              setEntityBrowseMode(null);
-		              setEntitySearchError(null);
-		              setEntityPluginResults([]);
-	              setSelectedRowId(row.id);
+	              openEntityDropdown(row.id, e.currentTarget as HTMLTableCellElement);
 	            }
           }}
 	        >
@@ -4860,633 +5984,6 @@ export function EstimateGrid({
 	              {isDraft ? "Choose item..." : row.entityName}
 	            </span>
 	          </div>
-          {/* Entity dropdown rendered via portal */}
-	          {isDropdownOpen && entityDropdownPos && (() => {
-	            const matchingGroups = entityDisplayGroups.filter((g) => row.category && g.categoryName === row.category);
-	            const actionGroups = entityDisplayGroups.filter((g) => g.categoryName === "Actions");
-	            const providerGroups = entityDisplayGroups.filter((g) => g.categoryName === "Provider Results");
-	            const otherGroups = entityDisplayGroups.filter((g) =>
-	              (!row.category || g.categoryName !== row.category) &&
-	              g.categoryName !== "Actions" &&
-	              g.categoryName !== "Provider Results"
-	            );
-	            const sourceStats = Array.from(
-	              entityFlatItems.reduce<Map<string, number>>((map, entry) => {
-	                const label = sourceBadgeLabel(entry.item.source) || "Item";
-	                map.set(label, (map.get(label) ?? 0) + 1);
-	                return map;
-	              }, new Map()),
-	            ).slice(0, 5);
-
-	            const selectFlatItem = (idx: number) => {
-	              const flat = entityFlatItems[idx];
-	              if (!flat) return;
-	              handleEntityAction(row.id, flat.group, flat.item);
-	            };
-	            const entityFlatIndexByKey = new Map(
-	              entityFlatItems.map((entry, index) => [
-	                `${entry.group.categoryId}\u001f${entityOptionKey(entry.item)}`,
-	                index,
-	              ]),
-	            );
-
-	            const handleResultsScroll = (event: { currentTarget: HTMLDivElement }) => {
-	              const target = event.currentTarget;
-	              if (target.scrollTop + target.clientHeight >= target.scrollHeight - 180) {
-	                void loadMoreEntitySearchResults();
-	              }
-	            };
-
-		            const renderGroupItems = (
-		              group: EntityOptionGroup,
-		              filtered: EntityOptionItem[],
-		              options: { inLaborTree?: boolean; laborTreeDepth?: number } = {},
-		            ) =>
-		              filtered.map((item) => {
-		                const myIdx = entityFlatIndexByKey.get(`${group.categoryId}\u001f${entityOptionKey(item)}`) ?? 0;
-		                const isHighlighted = myIdx === entityHighlightIdx;
-		                const isLinkedCatalogRate = item.source === "catalog" && !!item.rateScheduleItemId;
-		                const badge = isLinkedCatalogRate ? "Catalog + rate" : sourceBadgeLabel(item.source);
-		                const badgeToneSource = isLinkedCatalogRate ? "rate_schedule" : item.source;
-		                const isActionLoading = item.actionId && entityActionLoadingId === item.actionId;
-		                const SourceIcon = sourceIconFor(item.source);
-		                const ActionIcon = item.actionType === "plugin_remote_search"
-	                  ? ExternalLink
-	                  : item.actionType === "plugin_tool"
-	                  ? PlugZap
-	                  : item.actionType === "open_assembly"
-	                  ? Layers
-		                  : ChevronRight;
-		                const isLaborChoice = item.source === "labor_unit";
-		                const needsRate = isLaborChoice && !item.rateScheduleItemId;
-		                const measure = optionMeasureLabel(item);
-		                const detailParts = optionMetaParts(item);
-		                const laborTreeDepth = isLaborChoice ? options.laborTreeDepth ?? group.treePath?.length ?? 0 : 0;
-		                const laborReference = isLaborChoice ? laborUnitReferenceParts(item) : null;
-		                const laborDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursDifficult") : undefined;
-		                const laborVeryDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursVeryDifficult") : undefined;
-		                return (
-		                  <button
-		                    key={`${group.categoryId}-${entityOptionKey(item)}`}
-		                    data-entity-idx={myIdx}
-		                    className={cn(
-		                      "group flex items-center gap-1.5 px-2 text-left transition-colors",
-		                      isLaborChoice
-		                        ? cn(
-		                            "mx-2 mb-1 w-[calc(100%-1rem)] rounded-md border bg-panel/90 shadow-[0_1px_0_rgba(0,0,0,0.04)] hover:border-warning/35 hover:bg-warning/8",
-		                            options.inLaborTree
-		                              ? "border-warning/15 py-1"
-		                              : "border-warning/20 py-1.5",
-		                          )
-		                        : "w-full border-b border-line/60 bg-bg/35 py-1 hover:bg-accent/5 last:border-b-0",
-		                      isHighlighted && (isLaborChoice ? "border-accent/35 bg-accent/10" : "bg-accent/10"),
-		                    )}
-		                    style={laborTreeDepth > 1 ? { paddingLeft: Math.min(40, 8 + laborTreeDepth * 5) } : undefined}
-		                    onMouseEnter={() => setEntityHighlightIdx(myIdx)}
-		                    onClick={() => selectFlatItem(myIdx)}
-		                  >
-		                    <span className={cn(
-		                      "flex h-5 w-5 shrink-0 items-center justify-center rounded border",
-		                      sourceAccentClasses(item.source),
-		                    )}>
-		                      {isActionLoading ? (
-		                        <Loader2 className="h-3 w-3 animate-spin" />
-		                      ) : (
-		                        <SourceIcon className="h-3 w-3" />
-		                      )}
-		                    </span>
-		                    {isLaborChoice ? (
-		                      <span className="min-w-0 flex-1">
-		                        <span className="grid min-w-0 grid-cols-[minmax(84px,auto)_minmax(0,1fr)_auto] items-center gap-1.5">
-		                          <span className="truncate rounded border border-warning/20 bg-bg/70 px-1 py-px font-mono text-[9px] font-semibold leading-3 text-warning">
-		                            {laborReference?.code || "No code"}
-		                          </span>
-		                          <span className="min-w-0 truncate text-[11px] font-semibold leading-3 text-fg">
-		                            {item.value || item.label}
-		                          </span>
-		                          {measure && (
-		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-semibold tabular-nums leading-3 text-fg/70">
-		                              {measure}
-		                            </span>
-		                          )}
-		                        </span>
-		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/45">
-		                          {laborReference?.table && (
-		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
-		                              Table {laborReference.table}
-		                            </span>
-		                          )}
-		                          {laborReference?.ref && (
-		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px font-medium">
-		                              Ref {laborReference.ref}
-		                            </span>
-		                          )}
-		                          {item.unit && (
-		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px">
-		                              {item.unit}
-		                            </span>
-		                          )}
-		                          {laborDifficult !== undefined && (
-		                            <span className="shrink-0 tabular-nums">
-		                              Diff {laborDifficult.toFixed(2)}
-		                            </span>
-		                          )}
-		                          {laborVeryDifficult !== undefined && (
-		                            <span className="shrink-0 tabular-nums">
-		                              Very {laborVeryDifficult.toFixed(2)}
-		                            </span>
-		                          )}
-		                          {needsRate && (
-		                            <span className="shrink-0 rounded border border-warning/25 bg-warning/8 px-1 py-px text-[8px] font-semibold uppercase leading-3 text-warning">
-		                              Needs rate
-		                            </span>
-		                          )}
-		                        </span>
-		                      </span>
-		                    ) : (
-		                      <span className="min-w-0 flex-1">
-		                        <span className="flex min-w-0 items-center gap-2">
-		                          <span className="min-w-0 flex-1">
-		                            <span className="block truncate text-[11px] font-semibold leading-3 text-fg">
-		                              {item.label}
-		                            </span>
-		                          </span>
-		                          {measure && (
-		                            <span className="shrink-0 rounded border border-line bg-panel px-1 py-px text-[9px] font-medium tabular-nums leading-3 text-fg/60">
-		                              {measure}
-		                            </span>
-		                          )}
-		                        </span>
-		                        <span className="mt-0.5 flex min-w-0 items-center gap-1 text-[9px] leading-3 text-fg/42">
-		                          {badge && (
-		                            <span className={cn("shrink-0 rounded border px-1 py-px text-[8px] font-semibold leading-3", sourceAccentClasses(badgeToneSource))}>
-		                              {badge}
-		                            </span>
-		                          )}
-		                          {detailParts.slice(0, 3).map((part, detailIndex) => (
-		                            <span key={`${part}-${detailIndex}`} className="min-w-0 max-w-[190px] truncate">
-		                              {part}
-		                            </span>
-		                          ))}
-		                        </span>
-		                      </span>
-		                    )}
-	                    <span className="flex shrink-0 items-center text-fg/25 transition-colors group-hover:text-accent">
-	                      <ActionIcon className="h-3.5 w-3.5" />
-	                    </span>
-	                  </button>
-	                );
-	              });
-
-	            const renderGroupBlock = (
-	              group: EntityOptionGroup,
-	              label: string,
-	              tone: "accent" | "success" | "muted" | "warning" = "muted",
-	            ) => {
-		              if (group.items.length === 0) return null;
-	              const showTreePath = group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1;
-		              return (
-		                <div key={group.categoryId} className="bg-bg/25">
-		                  <div className={cn(
-		                    "sticky top-0 z-20 flex items-center justify-between border-b border-t px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal bg-panel shadow-[0_1px_0_rgba(0,0,0,0.04)]",
-		                    tone === "accent" && "border-accent/20 text-accent",
-		                    tone === "success" && "border-success/20 text-success",
-		                    tone === "warning" && "border-warning/20 text-warning",
-	                    tone === "muted" && "border-line text-fg/40",
-	                  )}>
-		                    <span className="truncate">{label}</span>
-		                    <span className="text-fg/30">{group.items.length}</span>
-			                  </div>
-			                  {showTreePath && (
-			                    <div className="border-b border-warning/25 bg-warning/10 px-2 py-1 shadow-[inset_0_-1px_0_rgba(0,0,0,0.03)]">
-			                      <div className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase leading-3 text-warning">
-			                        <ListTree className="h-3 w-3" />
-			                        Labour hierarchy
-			                      </div>
-			                      <div className="space-y-0.5">
-			                        {group.treePath!.map((part, level) => {
-			                          const isLeaf = level === group.treePath!.length - 1;
-			                          return (
-			                            <div
-			                              key={`${part}-${level}`}
-			                              className="relative flex min-w-0 items-center gap-1.5 text-[10px] leading-4"
-			                              style={{ paddingLeft: Math.min(44, level * 9) }}
-			                            >
-			                              {level > 0 && (
-			                                <span className="absolute left-0 top-1/2 h-px w-2 -translate-y-1/2 bg-warning/40" />
-			                              )}
-			                              <span className={cn(
-			                                "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[8px] font-bold tabular-nums",
-			                                isLeaf
-			                                  ? "border-warning/45 bg-warning/18 text-warning"
-			                                  : "border-warning/25 bg-bg/65 text-warning/70",
-			                              )}>
-			                                {level + 1}
-			                              </span>
-			                              <span className="w-[58px] shrink-0 text-[8px] font-semibold uppercase tracking-normal text-warning/70">
-			                                {laborHierarchyLevelLabel(level)}
-			                              </span>
-			                              <span className={cn(
-			                                "min-w-0 truncate rounded px-1",
-			                                isLeaf
-			                                  ? "border border-warning/20 bg-panel/90 text-[11px] font-bold text-fg shadow-[0_1px_0_rgba(0,0,0,0.03)]"
-			                                  : "font-medium text-fg/72",
-			                              )}>
-			                                {part}
-			                              </span>
-			                            </div>
-			                          );
-			                        })}
-			                      </div>
-			                    </div>
-			                  )}
-		                  {showTreePath ? (
-		                    <div className="border-t border-warning/20 bg-bg/55 py-1">
-		                      {renderGroupItems(group, group.items)}
-		                    </div>
-		                  ) : (
-		                    renderGroupItems(group, group.items)
-		                  )}
-		                </div>
-		              );
-		            };
-
-		            type LaborTreeNode = {
-		              key: string;
-		              label: string;
-		              level: number;
-		              itemCount: number;
-		              children: Map<string, LaborTreeNode>;
-		              groups: EntityOptionGroup[];
-		            };
-
-		            const buildLaborTree = (groups: EntityOptionGroup[]) => {
-		              const root: LaborTreeNode = {
-		                key: "labor-root",
-		                label: "Labour units",
-		                level: -1,
-		                itemCount: 0,
-		                children: new Map(),
-		                groups: [],
-		              };
-
-		              for (const group of groups) {
-		                const rawPath = (group.treePath?.length ? group.treePath : [group.label ?? group.categoryName])
-		                  .map(cleanHierarchyPart)
-		                  .filter(Boolean);
-		                const path = rawPath[0]?.toLowerCase() === "labour units"
-		                  ? rawPath.slice(1).map((part, index) => ({ part, level: index + 1 }))
-		                  : rawPath.map((part, level) => ({ part, level }));
-		                let cursor = root;
-		                cursor.itemCount += group.items.length;
-		                path.forEach(({ part, level }) => {
-		                  const partKey = normalizeEntityLookup(part) || `${level}-${cursor.children.size}`;
-		                  let child = cursor.children.get(partKey);
-		                  if (!child) {
-		                    child = {
-		                      key: `${cursor.key}/${partKey}`,
-		                      label: part,
-		                      level,
-		                      itemCount: 0,
-		                      children: new Map(),
-		                      groups: [],
-		                    };
-		                    cursor.children.set(partKey, child);
-		                  }
-		                  child.itemCount += group.items.length;
-		                  cursor = child;
-		                });
-		                cursor.groups.push(group);
-		              }
-
-		              return root;
-		            };
-
-		            const laborTreeLabel = (groups: EntityOptionGroup[]) => {
-		              const providers = Array.from(new Set(
-		                groups
-		                  .map((group) => group.treePath?.[1])
-		                  .filter((provider): provider is string => Boolean(provider)),
-		              ));
-		              return providers.length === 1 ? `Labour units / ${providers[0]}` : "Labour units";
-		            };
-
-		            const renderLaborTreeNode = (node: LaborTreeNode): ReactNode => {
-		              const children = Array.from(node.children.values());
-		              const isLeaf = node.groups.length > 0;
-		              const visibleDepth = Math.max(0, node.level - 1);
-		              const branchIndent = Math.min(58, 8 + visibleDepth * 10);
-		              const itemIndent = Math.min(66, 14 + (visibleDepth + 1) * 10);
-		              return (
-		                <div key={node.key} className="relative">
-		                  <div
-		                    className={cn(
-		                      "flex min-w-0 items-center gap-1.5 border-b border-warning/10 px-2 py-0.5 text-[10px] leading-4",
-		                      isLeaf ? "bg-warning/8" : "bg-warning/5",
-		                    )}
-		                    style={{ paddingLeft: branchIndent }}
-		                  >
-		                    <span className={cn(
-		                      "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[7px] font-bold tabular-nums",
-		                      isLeaf
-		                        ? "border-warning/40 bg-panel/90 text-warning"
-		                        : "border-warning/25 bg-bg/65 text-warning/70",
-		                    )}>
-		                      {node.level + 1}
-		                    </span>
-		                    <span className="w-[56px] shrink-0 text-[8px] font-semibold uppercase tracking-normal text-warning/70">
-		                      {laborHierarchyLevelLabel(node.level)}
-		                    </span>
-		                    <span className={cn(
-		                      "min-w-0 truncate",
-		                      isLeaf ? "font-bold text-fg" : "font-medium text-fg/72",
-		                    )}>
-		                      {node.label}
-		                    </span>
-		                    <span className="ml-auto shrink-0 text-[9px] font-medium tabular-nums text-fg/30">
-		                      {node.itemCount}
-		                    </span>
-		                  </div>
-		                  {children.length > 0 && (
-		                    <div className="bg-bg/35">
-		                      {children.map(renderLaborTreeNode)}
-		                    </div>
-		                  )}
-		                  {node.groups.length > 0 && (
-		                    <div className="border-b border-warning/10 bg-bg/60 py-1" style={{ paddingLeft: itemIndent }}>
-		                      {node.groups.map((group) => (
-		                        <div key={`${node.key}-${group.categoryId}`}>
-		                          {renderGroupItems(group, group.items, { inLaborTree: true, laborTreeDepth: 0 })}
-		                        </div>
-		                      ))}
-		                    </div>
-		                  )}
-		                </div>
-		              );
-		            };
-
-		            const renderLaborTreeGroups = (groups: EntityOptionGroup[], keySeed: string) => {
-		              if (groups.length === 0) return null;
-		              const root = buildLaborTree(groups);
-		              const itemCount = groups.reduce((sum, group) => sum + group.items.length, 0);
-		              return (
-		                <div key={keySeed} className="bg-bg/25">
-		                  <div className="sticky top-0 z-20 flex items-center justify-between border-b border-t border-warning/20 bg-panel px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal text-warning shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-		                    <span className="truncate">{laborTreeLabel(groups)}</span>
-		                    <span className="text-fg/30">{itemCount}</span>
-		                  </div>
-		                  <div className="bg-warning/5 py-0.5">
-		                    {Array.from(root.children.values()).map(renderLaborTreeNode)}
-		                  </div>
-		                </div>
-		              );
-		            };
-
-		            const renderGroupCollection = (
-		              groups: EntityOptionGroup[],
-		              fallbackTone: "accent" | "success" | "muted" | "warning",
-		              keyPrefix: string,
-		            ) => {
-		              const blocks: ReactNode[] = [];
-		              let laborBatch: EntityOptionGroup[] = [];
-
-		              const flushLaborBatch = () => {
-		                if (laborBatch.length === 0) return;
-		                const first = laborBatch[0];
-		                const last = laborBatch[laborBatch.length - 1];
-		                blocks.push(renderLaborTreeGroups(
-		                  laborBatch,
-		                  `${keyPrefix}-labor-${first.categoryId}-${last.categoryId}-${laborBatch.length}`,
-		                ));
-		                laborBatch = [];
-		              };
-
-		              groups.forEach((group, index) => {
-		                if (group.source === "labor_unit" && (group.treePath?.length ?? 0) > 1) {
-		                  laborBatch.push(group);
-		                  return;
-		                }
-		                flushLaborBatch();
-		                const block = renderGroupBlock(
-		                  group,
-		                  group.label ?? group.categoryName,
-		                  group.tone ?? fallbackTone,
-		                );
-		                if (block) blocks.push(block);
-		              });
-		              flushLaborBatch();
-		              return blocks;
-		            };
-
-		            const browseCard = entitySearchTerm.trim() ? null : activeEntityBrowseCard;
-		            const BrowseHeaderIcon = browseCard?.Icon;
-		            const showBrowseLaunchpad = !entitySearchTerm.trim() && !browseCard;
-		            const renderBrowseLaunchpad = () => (
-		              <div className="p-2">
-		                <div className="grid grid-cols-2 gap-1.5">
-		                  {enabledEntityBrowseCards.map((card) => {
-		                    const BrowseIcon = card.Icon;
-		                    return (
-		                      <button
-		                        key={card.id}
-		                        type="button"
-		                        className="group flex min-h-[58px] items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-2 py-1.5 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
-		                        onClick={() => {
-		                          setEntityBrowseMode(card.id);
-		                          setEntityHighlightIdx(0);
-		                        }}
-		                      >
-		                        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", card.accent)}>
-		                          <BrowseIcon className="h-4 w-4" />
-		                        </span>
-		                        <span className="min-w-0">
-		                          <span className="block truncate text-[12px] font-semibold leading-4 text-fg">
-		                            {card.label}
-		                          </span>
-		                          <span className="block truncate text-[10px] leading-3 text-fg/42">
-		                            {card.detail}
-		                          </span>
-		                        </span>
-		                        <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-fg/25 transition-colors group-hover:text-accent" />
-		                      </button>
-		                    );
-		                  })}
-		                </div>
-		                {enabledEntityBrowseCards.length === 0 && (
-		                  <div className="rounded-lg border border-dashed border-line bg-bg/35 px-3 py-7 text-center text-xs text-fg/42">
-		                    All estimate search sources are disabled for this quote.
-		                  </div>
-		                )}
-		              </div>
-		            );
-
-	            return createPortal(
-	              <motion.div
-	                ref={entityDropdownRef}
-	                initial={{ opacity: 0, scale: 0.98, y: entityDropdownPos.placement === "above" ? 2 : -2 }}
-	                animate={{ opacity: 1, scale: 1 }}
-	                exit={{ opacity: 0, scale: 0.98, y: entityDropdownPos.placement === "above" ? 2 : -2 }}
-	                transition={{ duration: 0.12 }}
-	                className={cn(
-	                  "fixed z-[200] flex w-[min(560px,calc(100vw-16px))] flex-col border border-line/80 bg-panel/95 shadow-2xl backdrop-blur-xl",
-	                  entityDropdownPos.placement === "above"
-	                    ? "overflow-visible rounded-b-xl rounded-t-none"
-	                    : "overflow-hidden rounded-xl",
-	                )}
-	                style={{
-	                  top: entityDropdownPos.top,
-	                  bottom: entityDropdownPos.bottom,
-                  left: entityDropdownPos.left,
-                  maxHeight: entityDropdownPos.placement === "below" ? entityDropdownPos.maxHeight : undefined,
-	                }}
-	                onClick={(e) => e.stopPropagation()}
-		              >
-		                <div
-		                  data-entity-dropdown-header
-		                  className={cn(
-		                    "bg-panel2/30 p-2",
-		                    entityDropdownPos.placement === "below" && "border-b border-line/80",
-		                  )}
-		                >
-		                  <div className="flex items-center gap-2 rounded-lg border border-line bg-bg/80 px-2.5 py-1.5 shadow-inner focus-within:border-accent/50 focus-within:ring-1 focus-within:ring-accent/20">
-		                    <Search className="h-4 w-4 shrink-0 text-accent" />
-	                    <input
-	                      ref={entitySearchRef}
-	                      type="text"
-	                      className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
-	                      placeholder="Search libraries, catalogs, rates, plugins..."
-		                      value={entitySearchTerm}
-		                      onChange={(e) => {
-		                        const next = e.target.value;
-		                        setEntitySearchTerm(next);
-		                        if (next.trim()) setEntityBrowseMode(null);
-		                      }}
-		                      onKeyDown={(e) => {
-	                      const len = entityFlatItems.length;
-	                      if (e.key === "Escape") {
-		                        e.preventDefault();
-			                        setEntityDropdownRowId(null);
-		                        setEntityDropdownPos(null);
-		                        setEntityBrowseMode(null);
-		                        setEntityPluginResults([]);
-                      } else if (e.key === "ArrowDown") {
-                        e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx((i) => (i + 1) % len);
-                      } else if (e.key === "ArrowUp") {
-                        e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx((i) => (i - 1 + len) % len);
-                      } else if (e.key === "Home") {
-                        e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx(0);
-                      } else if (e.key === "End") {
-                        e.preventDefault();
-                        if (len > 0) setEntityHighlightIdx(len - 1);
-                      } else if (e.key === "Enter") {
-                        e.preventDefault();
-                        if (len > 0) selectFlatItem(Math.min(entityHighlightIdx, len - 1));
-                      } else if (e.key === "Tab") {
-                        e.preventDefault();
-                        const advancing = !e.shiftKey;
-                        const targetRowId = row.id;
-                        if (len > 0) {
-                          selectFlatItem(Math.min(entityHighlightIdx, len - 1));
-                        } else {
-	                          setEntityDropdownRowId(null);
-		                          setEntityDropdownPos(null);
-		                          setEntitySearchTerm("");
-		                          setEntityBrowseMode(null);
-		                          setEntityPluginResults([]);
-	                        }
-                        // After selecting, hop to the next/prev editable cell
-                        setTimeout(() => {
-                          if (advancing) advanceToNextCell(targetRowId, "entityName");
-	                          else retreatToPrevCell(targetRowId, "entityName");
-	                        }, 0);
-	                      }
-	                    }}
-	                    />
-	                    {entitySearchLoading ? (
-	                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-accent" />
-	                    ) : (
-	                      <Sparkles className="h-4 w-4 shrink-0 text-accent/70" />
-	                    )}
-		                  </div>
-		                  <div className="mt-1.5 flex min-w-0 items-center gap-1 overflow-hidden">
-		                    {browseCard ? (
-		                      <button
-		                        type="button"
-		                        className={cn("inline-flex max-w-[260px] shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium", browseCard.accent)}
-		                        onClick={() => setEntityBrowseMode(null)}
-		                      >
-		                        {BrowseHeaderIcon && <BrowseHeaderIcon className="h-3 w-3" />}
-		                        <span className="truncate">{browseCard.label}</span>
-		                        <X className="h-3 w-3" />
-		                      </button>
-		                    ) : (
-		                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/55 px-1.5 py-0.5 text-[10px] font-medium text-fg/45">
-		                        <CircleDollarSign className="h-3 w-3" />
-		                        {showBrowseLaunchpad ? "Browse source" : `${entityFlatItems.length} loaded`}
-		                      </span>
-		                    )}
-		                    {!showBrowseLaunchpad && sourceStats.map(([label, count]) => (
-		                      <span key={label} className="inline-flex shrink-0 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] text-fg/40">
-		                        {label} {count}
-		                      </span>
-		                    ))}
-	                    {entitySearchHasMore && (
-	                      <span className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-accent/20 bg-accent/8 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-	                        <ArrowDown className="h-3 w-3" />
-	                        more
-	                      </span>
-	                    )}
-	                  </div>
-	                </div>
-		                <div
-		                  className={cn(
-		                    "overflow-y-auto p-0",
-		                    entityDropdownPos.placement === "above" &&
-		                      "absolute bottom-[calc(100%-1px)] left-[-1px] right-[-1px] rounded-t-xl border border-b-0 border-line/80 bg-panel/95 backdrop-blur-xl",
-		                  )}
-		                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
-			                  onScroll={handleResultsScroll}
-			                >
-			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
-			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
-			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
-			                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
-			                      Searching indexed library...
-		                    </div>
-		                  )}
-		                  {entitySearchError && (
-			                    <div className="rounded-lg border border-danger/20 bg-danger/5 px-2.5 py-2 text-[11px] text-danger">
-			                      {entitySearchError}
-			                    </div>
-			                  )}
-			                  {!showBrowseLaunchpad && !entitySearchLoading && !entitySearchError && entityFlatItems.length === 0 && (
-			                    <div className="rounded-lg border border-dashed border-line bg-bg/40 px-3 py-8 text-center text-xs text-fg/45">
-			                      No matches. Keep typing or create a freeform item.
-			                    </div>
-				                  )}
-				                  {!showBrowseLaunchpad && renderGroupCollection(providerGroups, "success", "provider")}
-				                  {!showBrowseLaunchpad && renderGroupCollection(matchingGroups, "accent", "matching")}
-				                  {!showBrowseLaunchpad && renderGroupCollection(otherGroups, "muted", "other")}
-				                  {!showBrowseLaunchpad && renderGroupCollection(actionGroups, "accent", "actions")}
-				                  {!showBrowseLaunchpad && entitySearchLoadingMore && (
-				                    <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-fg/40">
-				                      <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-				                      Loading more...
-				                    </div>
-				                  )}
-				                  {!showBrowseLaunchpad && !entitySearchHasMore && !entitySearchLoading && entityFlatItems.length > 0 && (
-				                    <div className="py-2 text-center text-[10px] text-fg/30">
-				                      End of indexed results
-				                    </div>
-			                  )}
-		                </div>
-              </motion.div>,
-              document.body,
-            );
-          })()}
         </td>
       );
     }
@@ -5559,7 +6056,9 @@ export function EstimateGrid({
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-2 pb-1">
+      {renderEntityDropdownPortal()}
       {/* ─── Worksheet Navigation ─── */}
+      {!isSnapMode && (
       <div className="flex items-center gap-2 border-b border-line shrink-0">
         <div className="flex items-center rounded-md border border-line bg-bg/60 p-0.5">
           <button
@@ -5738,6 +6237,7 @@ export function EstimateGrid({
           </div>
         )}
       </div>
+      )}
 
       {/* ─── Toolbar ─── */}
       <div className="flex items-center gap-2 shrink-0">
@@ -5761,6 +6261,11 @@ export function EstimateGrid({
               </RadixSelect.Content>
             </RadixSelect.Portal>
           </RadixSelect.Root>
+          {isSnapMode && (
+            <Badge tone={snapLimitReached ? "warning" : "info"} className="h-6 px-2 text-[10px]">
+              {snapLineCount}/{snapLineLimit} lines
+            </Badge>
+          )}
 
           <div className="ml-auto flex items-center gap-1.5">
             {/* Column visibility toggle */}
@@ -5803,8 +6308,14 @@ export function EstimateGrid({
 	            <Button
 	              size="xs"
 	              onClick={() => addNewItem()}
-	              disabled={isPending || (workspace.worksheets ?? []).length === 0}
-	              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Add one line item"}
+	              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+	              title={
+                  (workspace.worksheets ?? []).length === 0
+                    ? "Create a worksheet first"
+                    : snapLimitReached
+                      ? `Snap limit reached (${snapLineLimit} lines)`
+                      : "Add one line item"
+                }
 	            >
 	              <Plus className="h-3 w-3" /> Add
 	            </Button>
@@ -5812,8 +6323,14 @@ export function EstimateGrid({
 	              size="xs"
 	              variant="ghost"
 	              onClick={() => setShowAddItemsPicker(true)}
-	              disabled={isPending || (workspace.worksheets ?? []).length === 0}
-	              title={(workspace.worksheets ?? []).length === 0 ? "Create a worksheet first" : "Add multiple line items"}
+	              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+	              title={
+                  (workspace.worksheets ?? []).length === 0
+                    ? "Create a worksheet first"
+                    : snapLimitReached
+                      ? `Snap limit reached (${snapLineLimit} lines)`
+                      : "Add multiple line items"
+                }
 	            >
 	              <Boxes className="h-3 w-3" /> Multi
 	            </Button>

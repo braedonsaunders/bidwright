@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence, LayoutGroup, animate, useMotionValue, useTransform } from "motion/react";
 import {
   Award,
@@ -26,11 +27,17 @@ import {
   EmptyState,
   Input,
   Select,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@/components/ui";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type Stage = "active" | "won" | "lost" | "other";
+type QuoteStatus = "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
+type PerformanceTab = "overview" | "pipeline" | "margins" | "clients";
 
 interface Filters {
   dateFrom: string;
@@ -40,19 +47,18 @@ interface Filters {
   stage: Stage | "";
 }
 
-const STAGE_LABEL: Record<Stage, string> = {
-  active: "Active",
-  won: "Won",
-  lost: "Lost",
-  other: "Other",
-};
-
 const STAGE_COLOR: Record<Stage, string> = {
   active: "rgb(59,130,246)",
   won: "rgb(16,185,129)",
   lost: "rgb(239,68,68)",
   other: "rgba(160,160,160,0.4)",
 };
+
+const QUOTE_STATUSES: QuoteStatus[] = ["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"];
+
+function quoteStatusKey(status: string): QuoteStatus {
+  return QUOTE_STATUSES.includes(status as QuoteStatus) ? (status as QuoteStatus) : "Other";
+}
 
 function statusToStage(status?: string): Stage {
   switch (status?.toLowerCase()) {
@@ -167,10 +173,11 @@ function Donut({ segments, size = 180, total, centerLabel, centerValue }: { segm
   );
 }
 
-function Funnel({ stages }: { stages: Array<{ key: Stage; count: number; value: number; color: string }> }) {
+function Funnel({ stages, className }: { stages: Array<{ key: Stage; count: number; value: number; color: string }>; className?: string }) {
+  const t = useTranslations("Performance");
   const max = Math.max(1, ...stages.map((s) => s.count));
   return (
-    <div className="space-y-2">
+    <div className={cn("space-y-2", className)}>
       {stages.map((s, i) => {
         const pct = (s.count / max) * 100;
         return (
@@ -178,8 +185,8 @@ function Funnel({ stages }: { stages: Array<{ key: Stage; count: number; value: 
             <div className="flex items-center justify-between text-[11px]">
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-                <span className="font-medium text-fg/70">{STAGE_LABEL[s.key]}</span>
-                <span className="text-fg/30">{s.count} {s.count === 1 ? "quote" : "quotes"}</span>
+                <span className="font-medium text-fg/70">{t(`stages.${s.key}`)}</span>
+                <span className="text-fg/30">{t("quoteCount", { count: s.count })}</span>
               </div>
               <span className="font-mono text-fg/60">{formatMoney(s.value)}</span>
             </div>
@@ -193,7 +200,8 @@ function Funnel({ stages }: { stages: Array<{ key: Stage; count: number; value: 
   );
 }
 
-function Histogram({ values }: { values: number[] }) {
+function Histogram({ values, className }: { values: number[]; className?: string }) {
+  const t = useTranslations("Performance");
   const bins = useMemo(() => {
     if (values.length === 0) return [];
     const buckets = [
@@ -212,10 +220,10 @@ function Histogram({ values }: { values: number[] }) {
   }, [values]);
 
   const max = Math.max(1, ...bins.map((b) => b.count));
-  if (values.length === 0) return <EmptyState>No data for distribution.</EmptyState>;
+  if (values.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyDistribution")}</EmptyState>;
 
   return (
-    <div className="flex items-end gap-2 h-28">
+    <div className={cn("flex h-28 items-end gap-2", className)}>
       {bins.map((b, i) => {
         const h = (b.count / max) * 100;
         return (
@@ -232,11 +240,12 @@ function Histogram({ values }: { values: number[] }) {
   );
 }
 
-function Leaderboard({ items }: { items: Array<{ key: string; label: string; primary: number; secondary: number; tone: "success" | "danger" | "default" }> }) {
+function Leaderboard({ items, className }: { items: Array<{ key: string; label: string; primary: number; secondary: number; tone: "success" | "danger" | "default" }>; className?: string }) {
+  const t = useTranslations("Performance");
   const max = Math.max(1, ...items.map((i) => Math.abs(i.primary)));
-  if (items.length === 0) return <EmptyState>No client data yet.</EmptyState>;
+  if (items.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyClientData")}</EmptyState>;
   return (
-    <ol className="space-y-2">
+    <ol className={cn("space-y-2", className)}>
       {items.map((item, i) => {
         const pct = (Math.abs(item.primary) / max) * 100;
         return (
@@ -265,11 +274,12 @@ function Leaderboard({ items }: { items: Array<{ key: string; label: string; pri
   );
 }
 
-function TimeSeries({ buckets }: { buckets: Array<{ key: string; label: string; count: number; value: number }> }) {
+function TimeSeries({ buckets, className }: { buckets: Array<{ key: string; label: string; count: number; value: number }>; className?: string }) {
+  const t = useTranslations("Performance");
   const max = Math.max(1, ...buckets.map((b) => b.value));
-  if (buckets.length === 0) return <EmptyState>No data over time yet.</EmptyState>;
+  if (buckets.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyTimeSeries")}</EmptyState>;
   return (
-    <div className="flex items-end gap-1 h-36 px-1">
+    <div className={cn("flex h-36 items-end gap-1 px-1", className)}>
       {buckets.map((b, i) => {
         const h = (b.value / max) * 100;
         return (
@@ -290,7 +300,9 @@ function TimeSeries({ buckets }: { buckets: Array<{ key: string; label: string; 
 }
 
 export function PerformanceDashboard({ projects }: { projects: ProjectListItem[] }) {
+  const t = useTranslations("Performance");
   const [filters, setFilters] = useState<Filters>({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" });
+  const [activeTab, setActiveTab] = useState<PerformanceTab>("overview");
   const clients = useMemo(() => {
     const set = new Set(projects.map((p) => p.clientName).filter(Boolean));
     return Array.from(set).sort();
@@ -365,7 +377,7 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
   const topClients = useMemo(() => {
     const map = new Map<string, { value: number; profit: number; count: number }>();
     for (const p of filtered) {
-      const k = p.clientName || "Unknown";
+      const k = p.clientName || t("unknownClient");
       const cur = map.get(k) ?? { value: 0, profit: 0, count: 0 };
       cur.value += p.latestRevision?.subtotal ?? 0;
       cur.profit += p.latestRevision?.estimatedProfit ?? 0;
@@ -376,158 +388,233 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
       key, label: key, primary: v.profit, secondary: v.count,
       tone: (v.profit >= 0 ? "success" : "danger") as "success" | "danger",
     })).sort((a, b) => Math.abs(b.primary) - Math.abs(a.primary)).slice(0, 8);
-  }, [filtered]);
+  }, [filtered, t]);
 
   const activeChips: Array<{ key: keyof Filters; label: string }> = [];
-  if (filters.dateFrom) activeChips.push({ key: "dateFrom", label: `From ${filters.dateFrom}` });
-  if (filters.dateTo) activeChips.push({ key: "dateTo", label: `To ${filters.dateTo}` });
-  if (filters.status) activeChips.push({ key: "status", label: `Status: ${filters.status}` });
-  if (filters.client) activeChips.push({ key: "client", label: `Client: ${filters.client}` });
-  if (filters.stage) activeChips.push({ key: "stage", label: `Stage: ${STAGE_LABEL[filters.stage]}` });
+  if (filters.dateFrom) activeChips.push({ key: "dateFrom", label: t("chips.from", { date: filters.dateFrom }) });
+  if (filters.dateTo) activeChips.push({ key: "dateTo", label: t("chips.to", { date: filters.dateTo }) });
+  if (filters.status) activeChips.push({ key: "status", label: t("chips.status", { status: t(`status.${quoteStatusKey(filters.status)}`) }) });
+  if (filters.client) activeChips.push({ key: "client", label: t("chips.client", { client: filters.client }) });
+  if (filters.stage) activeChips.push({ key: "stage", label: t("chips.stage", { stage: t(`stages.${filters.stage}`) }) });
   const hasFilters = activeChips.length > 0;
+  const tabItems: Array<{ value: PerformanceTab; label: string; icon: typeof BarChart3 }> = [
+    { value: "overview", label: t("tabs.overview"), icon: BarChart3 },
+    { value: "pipeline", label: t("tabs.pipeline"), icon: TrendingUp },
+    { value: "margins", label: t("tabs.margins"), icon: Percent },
+    { value: "clients", label: t("tabs.clients"), icon: Trophy },
+  ];
 
   return (
     <LayoutGroup>
-      <div className="flex flex-col gap-6">
-        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-accent" />
-              <span className="text-[11px] font-medium uppercase tracking-wider text-accent">Performance</span>
-            </div>
-            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">Pipeline & quote intelligence</h1>
-            <p className="mt-1 text-sm text-fg/50">
-              Live signal across {projects.length} project{projects.length === 1 ? "" : "s"}{hasFilters && " · filtered view"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge tone="info" className="text-xs">{filtered.length} of {projects.length} quotes</Badge>
-            {kpis.decided > 0 && (
-              <Badge tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "warning" : "danger"} className="text-xs">
-                {formatPercent(kpis.winRate, 0)} win rate
-              </Badge>
-            )}
-          </div>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.4 }}>
-          <Card>
-            <CardBody className="py-2.5">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                <div className="flex shrink-0 items-center gap-1.5 text-fg/50">
-                  <Filter className="h-3.5 w-3.5" />
-                  <span className="text-[10px] font-medium uppercase tracking-wider">Filters</span>
-                </div>
-                <span className="ml-1 shrink-0 text-[10px] uppercase tracking-wider text-fg/35">From</span>
-                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="From date" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
-                <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">To</span>
-                <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label="To date" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
-                <Select size="xs" className="w-28 shrink-0" ariaLabel="Stage" value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: "All stages" }, { value: "active", label: "Active" }, { value: "won", label: "Won" }, { value: "lost", label: "Lost" }, { value: "other", label: "Other" }]} />
-                <Select size="xs" className="w-32 shrink-0" ariaLabel="Status" value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All statuses" }, ...statuses.map((s) => ({ value: s, label: s }))]} />
-                <Select size="xs" className="w-40 shrink-0" ariaLabel="Client" value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: "All clients" }, ...clients.map((c) => ({ value: c, label: c }))]} />
-                {hasFilters && (
-                  <Button variant="ghost" size="xs" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
-                    Clear
-                  </Button>
-                )}
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PerformanceTab)} className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+        <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="shrink-0 rounded-xl border border-line bg-panel px-4 py-3 shadow-sm">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-accent" />
+                <span className="text-[11px] font-medium uppercase tracking-wider text-accent">{t("eyebrow")}</span>
               </div>
-              <AnimatePresence initial={false}>
-                {hasFilters && (
-                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {activeChips.map((chip) => (
-                        <motion.button key={chip.key} layout initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.85 }} onClick={() => setFilters((f) => ({ ...f, [chip.key]: "" }))} className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/8 px-2.5 py-1 text-[11px] text-accent hover:bg-accent/15 transition-colors">
-                          {chip.label}
-                          <X className="h-3 w-3" />
-                        </motion.button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </CardBody>
-          </Card>
-        </motion.div>
+              <div className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h1 className="text-xl font-semibold tracking-tight text-fg">{t("title")}</h1>
+                <p className="text-xs text-fg/50">
+                  {hasFilters ? t("subtitleFiltered", { count: projects.length }) : t("subtitle", { count: projects.length })}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge tone="info" className="text-xs">{t("filteredQuoteCount", { filtered: filtered.length, total: projects.length })}</Badge>
+              {kpis.decided > 0 && (
+                <Badge tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "warning" : "danger"} className="text-xs">
+                  {t("winRateBadge", { rate: formatPercent(kpis.winRate, 0) })}
+                </Badge>
+              )}
+            </div>
+          </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <KpiTile delay={0.05} icon={DollarSign} label="Pipeline value" value={kpis.totalEstimatedValue} format={(v) => formatMoney(v, 0)} tone="accent" sparkValues={timeSeries.map((b) => b.value)} />
-          <KpiTile delay={0.1} icon={TrendingUp} label="Estimated profit" value={kpis.totalEstimatedProfit} format={(v) => formatMoney(v, 0)} tone={kpis.totalEstimatedProfit >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
-          <KpiTile delay={0.15} icon={Percent} label="Average margin" value={kpis.avgMargin * 100} format={(v) => `${v.toFixed(1)}%`} tone={kpis.avgMargin >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
-          <KpiTile delay={0.2} icon={kpis.winRate >= 0.5 ? Trophy : Award} label="Win rate" value={kpis.winRate * 100} format={(v) => `${v.toFixed(0)}%`} sub={`${kpis.won}/${kpis.decided || 0} decided`} tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "accent" : "danger"} sparkValues={[kpis.won, Math.max(0, kpis.decided - kpis.won)]} />
-        </div>
+          <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
+            <TabsList className="h-9 shrink-0">
+              {tabItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <TabsTrigger key={item.value} value={item.value} className="h-7 gap-1.5 px-3">
+                    <Icon className="h-3.5 w-3.5" />
+                    {item.label}
+                  </TabsTrigger>
+                );
+              })}
+            </TabsList>
 
-        <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25, duration: 0.4 }}>
-            <Card className="h-full">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Pipeline funnel</CardTitle>
-                  <span className="text-[11px] text-fg/40">{filtered.length} {filtered.length === 1 ? "quote" : "quotes"}</span>
-                </div>
-              </CardHeader>
-              <CardBody>
-                <Funnel stages={stages} />
-                <div className="mt-4 grid grid-cols-3 gap-2 border-t border-line/50 pt-3">
-                  <FunnelStat icon={CheckCircle2} label="Won" value={kpis.won} sub={kpis.decided > 0 ? formatPercent(kpis.won / kpis.decided, 0) : "—"} tone="success" />
-                  <FunnelStat icon={XCircle} label="Lost" value={Math.max(0, kpis.decided - kpis.won)} sub={kpis.decided > 0 ? formatPercent((kpis.decided - kpis.won) / kpis.decided, 0) : "—"} tone="danger" />
-                  <FunnelStat icon={BarChart3} label="Active" value={stages.find((s) => s.key === "active")?.count ?? 0} sub={formatMoney(stages.find((s) => s.key === "active")?.value ?? 0, 0)} tone="info" />
-                </div>
-              </CardBody>
-            </Card>
-          </motion.div>
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5 overflow-x-auto scrollbar-none">
+              <div className="flex shrink-0 items-center gap-1.5 text-fg/50">
+                <Filter className="h-3.5 w-3.5" />
+                <span className="text-[10px] font-medium uppercase tracking-wider">{t("filters.title")}</span>
+              </div>
+              <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">{t("filters.from")}</span>
+              <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label={t("filters.fromDate")} value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
+              <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">{t("filters.to")}</span>
+              <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label={t("filters.toDate")} value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
+              <Select size="xs" className="w-28 shrink-0" ariaLabel={t("filters.stage")} value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: t("filters.allStages") }, { value: "active", label: t("stages.active") }, { value: "won", label: t("stages.won") }, { value: "lost", label: t("stages.lost") }, { value: "other", label: t("stages.other") }]} />
+              <Select size="xs" className="w-32 shrink-0" ariaLabel={t("filters.status")} value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allStatuses") }, ...statuses.map((s) => ({ value: s, label: t(`status.${quoteStatusKey(s)}`) }))]} />
+              <Select size="xs" className="w-40 shrink-0" ariaLabel={t("filters.client")} value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allClients") }, ...clients.map((c) => ({ value: c, label: c }))]} />
+              {hasFilters && (
+                <Button variant="ghost" size="xs" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
+                  {t("filters.clear")}
+                </Button>
+              )}
+            </div>
+          </div>
 
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3, duration: 0.4 }}>
-            <Card className="h-full">
-              <CardHeader><CardTitle>Status mix</CardTitle></CardHeader>
-              <CardBody className="flex flex-col items-center">
-                <Donut segments={stages.map((s) => ({ label: STAGE_LABEL[s.key], value: s.count, color: s.color }))} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel="Total" centerValue={String(filtered.length)} />
-                <div className="mt-4 grid w-full grid-cols-2 gap-2 text-[11px]">
-                  {stages.map((s) => (
-                    <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
-                      <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-                      <span className="text-fg/65">{STAGE_LABEL[s.key]}</span>
-                      <span className="ml-auto font-mono text-fg/85">{s.count}</span>
-                    </div>
+          <AnimatePresence initial={false}>
+            {hasFilters && (
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden">
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {activeChips.map((chip) => (
+                    <motion.button key={chip.key} layout initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.85 }} onClick={() => setFilters((f) => ({ ...f, [chip.key]: "" }))} className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/8 px-2.5 py-1 text-[11px] text-accent transition-colors hover:bg-accent/15">
+                      {chip.label}
+                      <X className="h-3 w-3" />
+                    </motion.button>
                   ))}
                 </div>
-              </CardBody>
-            </Card>
-          </motion.div>
-        </div>
-
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.4 }}>
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle>Pipeline over time</CardTitle>
-                <span className="text-[11px] text-fg/40">last 12 months</span>
-              </div>
-            </CardHeader>
-            <CardBody><TimeSeries buckets={timeSeries} /></CardBody>
-          </Card>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4, duration: 0.4 }}>
-            <Card className="h-full">
-              <CardHeader><CardTitle>Margin distribution</CardTitle></CardHeader>
-              <CardBody><Histogram values={kpis.margins} /></CardBody>
-            </Card>
-          </motion.div>
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45, duration: 0.4 }}>
-            <Card className="h-full">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Top clients by profit</CardTitle>
-                  <span className="text-[11px] text-fg/40">top 8</span>
-                </div>
-              </CardHeader>
-              <CardBody><Leaderboard items={topClients} /></CardBody>
-            </Card>
-          </motion.div>
+        <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiTile delay={0.05} icon={DollarSign} label={t("kpi.pipelineValue")} value={kpis.totalEstimatedValue} format={(v) => formatMoney(v, 0)} tone="accent" sparkValues={timeSeries.map((b) => b.value)} />
+          <KpiTile delay={0.1} icon={TrendingUp} label={t("kpi.estimatedProfit")} value={kpis.totalEstimatedProfit} format={(v) => formatMoney(v, 0)} tone={kpis.totalEstimatedProfit >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
+          <KpiTile delay={0.15} icon={Percent} label={t("kpi.averageMargin")} value={kpis.avgMargin * 100} format={(v) => `${v.toFixed(1)}%`} tone={kpis.avgMargin >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
+          <KpiTile delay={0.2} icon={kpis.winRate >= 0.5 ? Trophy : Award} label={t("kpi.winRate")} value={kpis.winRate * 100} format={(v) => `${v.toFixed(0)}%`} sub={t("kpi.decided", { won: kpis.won, decided: kpis.decided || 0 })} tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "accent" : "danger"} sparkValues={[kpis.won, Math.max(0, kpis.decided - kpis.won)]} />
         </div>
 
-      </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <TabsContent value="overview" className="h-full min-h-0 data-[state=inactive]:hidden">
+            <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.9fr)]">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
+                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
+                </Card>
+              </motion.div>
+
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("statusMix")}</CardTitle></CardHeader>
+                  <CardBody className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-3">
+                    <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={156} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
+                    <div className="mt-3 grid w-full grid-cols-2 gap-2 text-[11px]">
+                      {stages.map((s) => (
+                        <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
+                          <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                          <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
+                          <span className="ml-auto font-mono text-fg/85">{s.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              </motion.div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="pipeline" className="h-full min-h-0 data-[state=inactive]:hidden">
+            <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.85fr)]">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle>{t("pipelineFunnel")}</CardTitle>
+                      <span className="text-[11px] text-fg/40">{t("quoteCount", { count: filtered.length })}</span>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3">
+                    <Funnel stages={stages} />
+                    <div className="mt-4 grid grid-cols-3 gap-2 border-t border-line/50 pt-3">
+                      <FunnelStat icon={CheckCircle2} label={t("stages.won")} value={kpis.won} sub={kpis.decided > 0 ? formatPercent(kpis.won / kpis.decided, 0) : "—"} tone="success" />
+                      <FunnelStat icon={XCircle} label={t("stages.lost")} value={Math.max(0, kpis.decided - kpis.won)} sub={kpis.decided > 0 ? formatPercent((kpis.decided - kpis.won) / kpis.decided, 0) : "—"} tone="danger" />
+                      <FunnelStat icon={BarChart3} label={t("stages.active")} value={stages.find((s) => s.key === "active")?.count ?? 0} sub={formatMoney(stages.find((s) => s.key === "active")?.value ?? 0, 0)} tone="info" />
+                    </div>
+                  </CardBody>
+                </Card>
+              </motion.div>
+
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("statusMix")}</CardTitle></CardHeader>
+                  <CardBody className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-3">
+                    <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={168} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
+                    <div className="mt-4 grid w-full grid-cols-2 gap-2 text-[11px]">
+                      {stages.map((s) => (
+                        <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
+                          <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                          <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
+                          <span className="ml-auto font-mono text-fg/85">{s.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </CardBody>
+                </Card>
+              </motion.div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="margins" className="h-full min-h-0 data-[state=inactive]:hidden">
+            <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("marginDistribution")}</CardTitle></CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3"><Histogram values={kpis.margins} className="h-full" /></CardBody>
+                </Card>
+              </motion.div>
+
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
+                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
+                </Card>
+              </motion.div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="clients" className="h-full min-h-0 data-[state=inactive]:hidden">
+            <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.05fr)]">
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle>{t("topClientsByProfit")}</CardTitle>
+                      <span className="text-[11px] text-fg/40">{t("top8")}</span>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3"><Leaderboard items={topClients} /></CardBody>
+                </Card>
+              </motion.div>
+
+              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                  <CardHeader className="shrink-0 px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
+                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
+                    </div>
+                  </CardHeader>
+                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
+                </Card>
+              </motion.div>
+            </div>
+          </TabsContent>
+        </div>
+      </Tabs>
     </LayoutGroup>
   );
 }
@@ -542,22 +629,22 @@ function KpiTile({
   const sparkColor = tone === "success" ? "rgb(16,185,129)" : tone === "danger" ? "rgb(239,68,68)" : "rgb(59,130,246)";
   return (
     <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ delay, duration: 0.5, ease: [0.16, 1, 0.3, 1] }} whileHover={{ y: -2 }}>
-      <Card className="overflow-hidden h-full">
-        <CardBody className="py-4">
+      <Card className="h-full overflow-hidden">
+        <CardBody className="py-3">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
               <p className="text-[11px] font-medium uppercase tracking-wider text-fg/45">{label}</p>
-              <p className="mt-1.5 text-2xl font-semibold tabular-nums text-fg">
+              <p className="mt-1 text-xl font-semibold tabular-nums text-fg">
                 <AnimatedNumber value={value} format={format} duration={1.0} />
               </p>
               {sub && <p className="mt-1 text-[11px] text-fg/45">{sub}</p>}
             </div>
-            <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border", toneClass)}>
+            <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border", toneClass)}>
               <Icon className="h-4 w-4" />
             </div>
           </div>
-          <div className="mt-3 flex items-center justify-end" style={{ color: sparkColor }}>
-            <Sparkline values={sparkValues} color={sparkColor} />
+          <div className="mt-2 flex items-center justify-end" style={{ color: sparkColor }}>
+            <Sparkline values={sparkValues} color={sparkColor} height={22} />
           </div>
         </CardBody>
       </Card>
@@ -580,4 +667,3 @@ function FunnelStat({ icon: Icon, label, value, sub, tone }: { icon: typeof Chec
     </div>
   );
 }
-

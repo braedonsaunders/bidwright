@@ -6,6 +6,11 @@
  * the Postgres migration is complete.
  */
 
+import type {
+  AzureDocumentIntelligenceFeature,
+  AzureDocumentIntelligenceModel,
+} from './azure-di.js';
+
 // ---------------------------------------------------------------------------
 // PDF Parser
 // ---------------------------------------------------------------------------
@@ -33,7 +38,11 @@ export interface PdfParserConfig {
   /** Azure Document Intelligence API key. Required for "azure" and "hybrid" providers. */
   azureKey?: string;
   /** Azure model to use. @default 'prebuilt-layout' */
-  azureModel?: 'prebuilt-layout' | 'prebuilt-document' | 'prebuilt-invoice' | 'prebuilt-read';
+  azureModel?: AzureDocumentIntelligenceModel;
+  /** Optional Azure Document Intelligence v4 add-on features. */
+  azureFeatures?: AzureDocumentIntelligenceFeature[];
+  /** Optional v4 query fields. Automatically enables the queryFields feature. */
+  azureQueryFields?: string[];
 }
 
 /** The result of parsing a complete document. */

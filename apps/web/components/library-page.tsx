@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowRight,
@@ -89,53 +90,53 @@ type LibraryPageProps = {
 const surfaceOptions = [
   {
     id: "overview",
-    label: "Home",
+    labelKey: "surfaces.overview.label",
     icon: Home,
-    description: "A launch surface for library work and live coverage.",
+    descriptionKey: "surfaces.overview.description",
   },
   {
     id: "resources",
-    label: "Resources",
+    labelKey: "surfaces.resources.label",
     icon: Boxes,
-    description: "Catalogued material, service, equipment, subcontractor, consumable, and allowance resources.",
+    descriptionKey: "surfaces.resources.description",
   },
   {
     id: "rates",
-    label: "Ratebooks",
+    labelKey: "surfaces.rates.label",
     icon: FileSpreadsheet,
-    description: "Customer/resource cost and sell overrides, tiers, travel, allowances, and pricing rules.",
+    descriptionKey: "surfaces.rates.description",
   },
   {
     id: "assemblies",
-    label: "Assemblies",
+    labelKey: "surfaces.assemblies.label",
     icon: Layers,
-    description: "Parameterized estimating recipes that expand into priced resource lines.",
+    descriptionKey: "surfaces.assemblies.description",
   },
   {
     id: "labor_units",
-    label: "Labor Units",
+    labelKey: "surfaces.labor_units.label",
     icon: Gauge,
-    description: "Production standards for hours per installed unit, linked to resource rows and Ratebooks.",
+    descriptionKey: "surfaces.labor_units.description",
   },
   {
     id: "cost",
-    label: "Cost Intelligence",
+    labelKey: "surfaces.cost.label",
     icon: Database,
-    description: "Vendor bill line evidence, observations, products, and current cost basis rows.",
+    descriptionKey: "surfaces.cost.description",
   },
   {
     id: "playbooks",
-    label: "Estimators",
+    labelKey: "surfaces.playbooks.label",
     icon: BookOpen,
-    description: "Estimator behavior, methodology, source bindings, and commercial policy.",
+    descriptionKey: "surfaces.playbooks.description",
   },
   {
     id: "knowledge",
-    label: "Knowledge",
+    labelKey: "surfaces.knowledge.label",
     icon: BookOpen,
-    description: "Reference books, datasets, extracted evidence, and agent retrieval material.",
+    descriptionKey: "surfaces.knowledge.description",
   },
-] as const satisfies readonly { id: LibrarySurface; label: string; description: string; icon: typeof Gauge }[];
+] as const satisfies readonly { id: LibrarySurface; labelKey: string; descriptionKey: string; icon: typeof Gauge }[];
 
 function coerceSurface(value: string | null): LibrarySurface {
   return surfaceOptions.some((surface) => surface.id === value) ? (value as LibrarySurface) : "overview";
@@ -339,7 +340,52 @@ type CompositionBreakdown = {
   segments: CompositionSegment[];
 };
 
-function normalizedLabel(value: string | null | undefined, fallback = "Unassigned") {
+type CompositionLabels = {
+  unassigned: string;
+  noData: string;
+  other: string;
+};
+
+const overviewSegmentLabelKeys: Record<string, string> = {
+  active: "overview.fallbacks.active",
+  allowance: "overview.segmentLabels.allowance",
+  allowances: "overview.segmentLabels.allowances",
+  book: "overview.fallbacks.books",
+  books: "overview.fallbacks.books",
+  catalog: "overview.fallbacks.catalog",
+  consumable: "overview.segmentLabels.consumable",
+  consumables: "overview.segmentLabels.consumables",
+  dataset: "overview.segmentLabels.dataset",
+  datasets: "overview.segmentLabels.datasets",
+  datasettag: "overview.fallbacks.datasetTags",
+  datasettags: "overview.fallbacks.datasetTags",
+  equipment: "overview.segmentLabels.equipment",
+  general: "overview.fallbacks.general",
+  knowledge: "overview.segmentLabels.knowledge",
+  knowledgelibrary: "overview.segmentLabels.knowledgeLibrary",
+  labor: "overview.segmentLabels.labor",
+  labour: "overview.segmentLabels.labor",
+  manual: "overview.segmentLabels.manual",
+  material: "overview.segmentLabels.material",
+  materials: "overview.segmentLabels.materials",
+  note: "overview.fallbacks.notes",
+  notes: "overview.fallbacks.notes",
+  paused: "overview.fallbacks.paused",
+  ratebook: "overview.segmentLabels.rateBook",
+  service: "overview.segmentLabels.service",
+  services: "overview.segmentLabels.services",
+  subcontract: "overview.segmentLabels.subcontract",
+  subcontracts: "overview.segmentLabels.subcontracts",
+  unassigned: "overview.unassigned",
+  uncategorized: "overview.fallbacks.uncategorized",
+  unclassified: "overview.fallbacks.unclassified",
+};
+
+function overviewLabelToken(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function normalizedLabel(value: string | null | undefined, fallback: string) {
   return value?.trim() || fallback;
 }
 
@@ -347,6 +393,7 @@ function groupedComposition<T>(
   rows: T[],
   labelFor: (row: T) => string | null | undefined,
   valueFor: (row: T) => number = () => 1,
+  labels: CompositionLabels,
   maxSegments = 4,
   palette = compositionPalettes.resources,
 ): CompositionSegment[] {
@@ -354,29 +401,30 @@ function groupedComposition<T>(
   for (const row of rows) {
     const value = valueFor(row);
     if (!Number.isFinite(value) || value <= 0) continue;
-    const label = normalizedLabel(labelFor(row));
+    const label = normalizedLabel(labelFor(row), labels.unassigned);
     groups.set(label, (groups.get(label) ?? 0) + value);
   }
-  return groupedEntriesToSegments([...groups.entries()].map(([label, value]) => ({ label, value })), maxSegments, palette);
+  return groupedEntriesToSegments([...groups.entries()].map(([label, value]) => ({ label, value })), labels, maxSegments, palette);
 }
 
 function groupedEntriesToSegments(
   entries: Array<{ label: string; value: number }>,
+  labels: CompositionLabels,
   maxSegments = 4,
   palette = compositionPalettes.resources,
 ): CompositionSegment[] {
   const positive = entries
-    .map((entry) => ({ label: normalizedLabel(entry.label), value: Number(entry.value) || 0 }))
+    .map((entry) => ({ label: normalizedLabel(entry.label, labels.unassigned), value: Number(entry.value) || 0 }))
     .filter((entry) => entry.value > 0)
     .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
 
   if (positive.length === 0) {
-    return [{ label: "No data", value: 1, color: "bg-panel2", muted: true }];
+    return [{ label: labels.noData, value: 1, color: "bg-panel2", muted: true }];
   }
 
   const visible = positive.slice(0, maxSegments);
   const hidden = positive.slice(maxSegments).reduce((sum, entry) => sum + entry.value, 0);
-  const merged = hidden > 0 ? [...visible, { label: "Other", value: hidden }] : visible;
+  const merged = hidden > 0 ? [...visible, { label: labels.other, value: hidden }] : visible;
   return merged.map((entry, index) => ({
     ...entry,
     color: palette[index % palette.length],
@@ -441,6 +489,7 @@ function SurfaceLaunchCard({
   title: string;
   tone: LibraryTone;
 }) {
+  const t = useTranslations("Library");
   const classes = launchToneClasses[tone];
   const groups = breakdown.segments.filter((segment) => !segment.muted).length;
 
@@ -465,7 +514,7 @@ function SurfaceLaunchCard({
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold text-fg">{title}</div>
               <Badge tone={groups > 0 ? "default" : "warning"} className="mt-1 shrink-0 whitespace-nowrap">
-                {groups > 0 ? `${groups} group${groups === 1 ? "" : "s"}` : "No data"}
+                {groups > 0 ? t("overview.groupCount", { count: groups }) : t("overview.noData")}
               </Badge>
             </div>
             <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{body}</div>
@@ -517,6 +566,18 @@ function LibraryOverview({
   rateSchedules: RateSchedule[];
   resources: CostResourceRecord[];
 }) {
+  const t = useTranslations("Library");
+  const compositionLabels = {
+    unassigned: t("overview.unassigned"),
+    noData: t("overview.noData"),
+    other: t("overview.other"),
+  };
+  const segmentLabel = useCallback((value: string | null | undefined, fallbackKey?: string) => {
+    const raw = value?.trim();
+    if (!raw) return fallbackKey ? t(fallbackKey) : compositionLabels.unassigned;
+    const key = overviewSegmentLabelKeys[overviewLabelToken(raw)];
+    return key ? t(key) : raw;
+  }, [compositionLabels.unassigned, t]);
   const itemCount = totalCatalogItems(catalogs);
   const rateItemCount = totalRateItems(rateSchedules);
   const laborUnitCount = laborUnitLibraries.reduce((sum, library) => sum + (library.unitCount ?? 0), 0);
@@ -534,83 +595,89 @@ function LibraryOverview({
   const playbookBreakdownUsesBindings = playbookBindingCount > 0;
 
   const resourceBreakdown: CompositionBreakdown = {
-    label: "Rows by resource catalog type",
+    label: t("overview.breakdowns.resourceRows"),
     segments: groupedComposition(
       catalogs,
-      (catalog) => catalog.kind || catalog.source || "Catalog",
+      (catalog) => segmentLabel(catalog.kind || catalog.source, "overview.fallbacks.catalog"),
       (catalog) => catalog.itemCount ?? catalog.items?.length ?? 0,
+      compositionLabels,
       4,
       compositionPalettes.resources,
     ),
   };
   const rateBreakdown: CompositionBreakdown = {
-    label: rateBreakdownUsesRows ? "Rows by ratebook category" : "Books by ratebook category",
+    label: rateBreakdownUsesRows ? t("overview.breakdowns.rateRows") : t("overview.breakdowns.rateBooks"),
     segments: groupedComposition(
       rateSchedules,
-      (schedule) => schedule.category || "Uncategorized",
+      (schedule) => segmentLabel(schedule.category, "overview.fallbacks.uncategorized"),
       (schedule) => rateBreakdownUsesRows ? schedule.items?.length ?? 0 : 1,
+      compositionLabels,
       4,
       compositionPalettes.rates,
     ),
   };
   const assemblyBreakdown: CompositionBreakdown = {
-    label: assemblyBreakdownUsesComponents ? "Components by assembly category" : "Assemblies by category",
+    label: assemblyBreakdownUsesComponents ? t("overview.breakdowns.assemblyComponents") : t("overview.breakdowns.assemblyCategories"),
     segments: groupedComposition(
       assemblies,
-      (assembly) => assembly.category || "General",
+      (assembly) => segmentLabel(assembly.category, "overview.fallbacks.general"),
       (assembly) => assemblyBreakdownUsesComponents ? assembly.componentCount : 1,
+      compositionLabels,
       4,
       compositionPalettes.assemblies,
     ),
   };
   const laborUnitBreakdown: CompositionBreakdown = {
-    label: "Rows by labor-unit catalog",
+    label: t("overview.breakdowns.laborRows"),
     segments: groupedComposition(
       laborUnitLibraries,
-      (library) => library.name || library.provider || "Catalog",
+      (library) => segmentLabel(library.name || library.provider, "overview.fallbacks.catalog"),
       (library) => library.unitCount ?? 0,
+      compositionLabels,
       4,
       compositionPalettes.labor,
     ),
   };
   const costBreakdown: CompositionBreakdown = {
-    label: costBreakdownUsesCostRows ? "Cost basis by resource type" : "Resources by type",
+    label: costBreakdownUsesCostRows ? t("overview.breakdowns.costBasis") : t("overview.breakdowns.resourceTypes"),
     segments: costBreakdownUsesCostRows
       ? groupedComposition(
         effectiveCosts,
-        (cost) => cost.resource?.resourceType || cost.resource?.category || cost.method || "Unclassified",
+        (cost) => segmentLabel(cost.resource?.resourceType || cost.resource?.category || cost.method, "overview.fallbacks.unclassified"),
         () => 1,
+        compositionLabels,
         4,
         compositionPalettes.cost,
       )
-      : groupedComposition(resources, (resource) => resource.resourceType || resource.category || "Unclassified", () => 1, 4, compositionPalettes.cost),
+      : groupedComposition(resources, (resource) => segmentLabel(resource.resourceType || resource.category, "overview.fallbacks.unclassified"), () => 1, compositionLabels, 4, compositionPalettes.cost),
   };
   const playbookBreakdown: CompositionBreakdown = {
-    label: playbookBreakdownUsesBindings ? "Source bindings by type" : "Estimators by status",
+    label: playbookBreakdownUsesBindings ? t("overview.breakdowns.sourceBindings") : t("overview.breakdowns.estimatorStatus"),
     segments: playbookBreakdownUsesBindings
       ? groupedEntriesToSegments([
-        { label: "Books", value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeBookIds?.length ?? 0), 0) },
-        { label: "Notes", value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeDocumentIds?.length ?? 0), 0) },
-        { label: "Dataset tags", value: playbooks.reduce((sum, playbook) => sum + (playbook.datasetTags?.length ?? 0), 0) },
-      ], 4, compositionPalettes.playbooks)
+        { label: t("overview.fallbacks.books"), value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeBookIds?.length ?? 0), 0) },
+        { label: t("overview.fallbacks.notes"), value: playbooks.reduce((sum, playbook) => sum + (playbook.knowledgeDocumentIds?.length ?? 0), 0) },
+        { label: t("overview.fallbacks.datasetTags"), value: playbooks.reduce((sum, playbook) => sum + (playbook.datasetTags?.length ?? 0), 0) },
+      ], compositionLabels, 4, compositionPalettes.playbooks)
       : groupedEntriesToSegments([
-        { label: "Active", value: activePlaybookCount },
-        { label: "Paused", value: Math.max(0, playbooks.length - activePlaybookCount) },
-      ], 4, compositionPalettes.playbooks),
+        { label: t("overview.fallbacks.active"), value: activePlaybookCount },
+        { label: t("overview.fallbacks.paused"), value: Math.max(0, playbooks.length - activePlaybookCount) },
+      ], compositionLabels, 4, compositionPalettes.playbooks),
   };
   const booksAndNotesBreakdown: CompositionBreakdown = {
-    label: "References by source type",
+    label: t("overview.breakdowns.references"),
     segments: groupedEntriesToSegments([
-      { label: "Books", value: knowledgeBooks.length },
-      { label: "Notes", value: knowledgeDocuments.length },
-    ], 4, compositionPalettes.books),
+      { label: t("overview.fallbacks.books"), value: knowledgeBooks.length },
+      { label: t("overview.fallbacks.notes"), value: knowledgeDocuments.length },
+    ], compositionLabels, 4, compositionPalettes.books),
   };
   const datasetBreakdown: CompositionBreakdown = {
-    label: "Rows by dataset category",
+    label: t("overview.breakdowns.datasetRows"),
     segments: groupedComposition(
       datasets,
-      (dataset) => dataset.category.replace(/_/g, " "),
+      (dataset) => segmentLabel(dataset.category.replace(/_/g, " ")),
       (dataset) => dataset.rowCount,
+      compositionLabels,
       4,
       compositionPalettes.datasets,
     ),
@@ -619,81 +686,81 @@ function LibraryOverview({
   const launchCards = [
     {
       surface: "resources" as LibrarySurface,
-      title: "Resources",
-      body: "Base estimating resources used by worksheets, Ratebooks, and assemblies.",
+      title: t("overview.cards.resources.title"),
+      body: t("overview.cards.resources.body"),
       breakdown: resourceBreakdown,
       metric: compactCount(itemCount),
-      metricLabel: "Catalog items",
+      metricLabel: t("overview.cards.resources.metricLabel"),
       icon: Boxes,
       tone: "resources" as LibraryTone,
     },
     {
       surface: "rates" as LibrarySurface,
-      title: "Ratebooks",
-      body: "Customer/resource cost and sell overrides with tiering, travel, allowances, and pricing rules.",
+      title: t("overview.cards.rates.title"),
+      body: t("overview.cards.rates.body"),
       breakdown: rateBreakdown,
       metric: compactCount(rateItemCount),
-      metricLabel: "Resource rows",
+      metricLabel: t("overview.cards.rates.metricLabel"),
       icon: FileSpreadsheet,
       tone: "rates" as LibraryTone,
     },
     {
       surface: "assemblies" as LibrarySurface,
-      title: "Assemblies",
-      body: "Reusable estimating recipes for resources, equipment, nested scopes, and parametric takeoff.",
+      title: t("overview.cards.assemblies.title"),
+      body: t("overview.cards.assemblies.body"),
       breakdown: assemblyBreakdown,
       metric: compactCount(assemblies.length),
-      metricLabel: "Assemblies",
+      metricLabel: t("overview.cards.assemblies.metricLabel"),
       icon: Layers,
       tone: "assemblies" as LibraryTone,
     },
     {
       surface: "labor_units" as LibrarySurface,
-      title: "Labor Units",
-      body: "First-party production standards that turn installed quantities into hours, then price those hours through Ratebooks.",
+      title: t("overview.cards.laborUnits.title"),
+      body: t("overview.cards.laborUnits.body"),
       breakdown: laborUnitBreakdown,
       metric: compactCount(laborUnitCount),
-      metricLabel: "Production rows",
+      metricLabel: t("overview.cards.laborUnits.metricLabel"),
       icon: Gauge,
       tone: "labor" as LibraryTone,
     },
     {
       surface: "cost" as LibrarySurface,
-      title: "Cost Intelligence",
-      body: "Vendor bill line evidence, observed prices, current cost basis rows, and the trail behind them.",
+      title: t("overview.cards.cost.title"),
+      body: t("overview.cards.cost.body"),
       breakdown: costBreakdown,
       metric: compactCount(effectiveCostCount),
-      metricLabel: "Cost basis rows",
+      metricLabel: t("overview.cards.cost.metricLabel"),
       icon: Database,
       tone: "cost" as LibraryTone,
     },
     {
       surface: "playbooks" as LibrarySurface,
-      title: "Estimators",
-      body: "Reusable estimating behavior with methodology, source priority, commercial policy, and review guidance.",
+      title: t("overview.cards.playbooks.title"),
+      body: t("overview.cards.playbooks.body"),
       breakdown: playbookBreakdown,
       metric: compactCount(activePlaybookCount),
-      metricLabel: "Active estimators",
+      metricLabel: t("overview.cards.playbooks.metricLabel"),
       icon: BookOpen,
       tone: "playbooks" as LibraryTone,
     },
     {
       surface: "knowledge" as LibrarySurface,
-      title: "Books & Notes",
-      body: "Reference books, estimator notes, extracted evidence, and agent retrieval material.",
+      title: t("overview.cards.books.title"),
+      body: t("overview.cards.books.body"),
       breakdown: booksAndNotesBreakdown,
       metric: compactCount(knowledgeReferenceCount),
-      metricLabel: "References",
+      metricLabel: t("overview.cards.books.metricLabel"),
       icon: BookOpen,
       tone: "books" as LibraryTone,
     },
     {
       surface: "knowledge" as LibrarySurface,
-      title: "Datasets",
-      body: "Structured tables and imported rows used by agents, estimators, and pricing workflows.",
+      title: t("overview.cards.datasets.title"),
+      body: t("overview.cards.datasets.body"),
       breakdown: datasetBreakdown,
       metric: compactCount(datasets.length),
-      metricLabel: "Datasets",
+      metricLabel: t("overview.cards.datasets.metricLabel"),
       icon: Table2,
       tone: "datasets" as LibraryTone,
     },
@@ -703,8 +770,8 @@ function LibraryOverview({
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-2">
         <div className="min-w-0">
-          <div className="text-xs font-semibold text-fg">Library Workspaces</div>
-          <div className="mt-0.5 truncate text-[11px] text-fg/45">Open a workspace from live library coverage</div>
+          <div className="text-xs font-semibold text-fg">{t("overview.title")}</div>
+          <div className="mt-0.5 truncate text-[11px] text-fg/45">{t("overview.subtitle")}</div>
         </div>
         <Badge tone="info" className="lg:hidden">{launchCards.length}</Badge>
       </div>
@@ -854,13 +921,6 @@ type LaborUnitVisibleTreeRow =
 
 const laborUnitRootTreeKey = "__labor_unit_tree_root__";
 
-const laborUnitGroupLabels: Record<LaborUnitGroupLevel, string> = {
-  catalog: "Catalog",
-  category: "Category",
-  class: "Class",
-  subclass: "Subclass",
-};
-
 const laborUnitGroupAccent = ["#0b7a75", "#a15c00", "#2563eb", "#64748b"];
 
 function childKeyForLaborUnitGroup(group: LaborUnitTreeGroupRecord) {
@@ -882,6 +942,7 @@ function LaborUnitGroupRow({
   expandedGroupIds: Set<string>;
   onToggleGroup: (group: LaborUnitTreeGroupRecord) => void;
 }) {
+  const t = useTranslations("Library");
   const expanded = expandedGroupIds.has(group.id);
   const averageNormal = group.unitCount > 0 ? group.normalHoursTotal / group.unitCount : 0;
   const accent = laborUnitGroupAccent[depth] ?? laborUnitGroupAccent[laborUnitGroupAccent.length - 1];
@@ -909,17 +970,17 @@ function LaborUnitGroupRow({
             <span className="flex min-w-0 items-center gap-2">
               <span className="truncate text-xs font-semibold text-fg">{group.label}</span>
               <span className="hidden shrink-0 rounded border border-line/60 bg-bg/45 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-fg/35 sm:inline-flex">
-                {laborUnitGroupLabels[group.level]}
+                {t(`labor.groupLevels.${group.level}`)}
               </span>
             </span>
             <span className="mt-0.5 flex min-w-0 items-center gap-2 text-[10px] text-fg/38">
-              <span>{compactCount(group.unitCount)} row{group.unitCount === 1 ? "" : "s"}</span>
+              <span>{t("labor.groupRowCount", { count: group.unitCount })}</span>
               <span className="h-1 w-1 rounded-full bg-fg/20" />
-              <span>avg {formatNumber(averageNormal)} hrs</span>
+              <span>{t("labor.avgHours", { value: formatNumber(averageNormal) })}</span>
             </span>
           </span>
           <span className="hidden shrink-0 text-[11px] text-fg/42 md:block">
-            {group.level === "subclass" ? "items" : "sections"}
+            {group.level === "subclass" ? t("labor.items") : t("labor.sections")}
           </span>
         </button>
       </td>
@@ -965,6 +1026,7 @@ function flattenLaborUnitTreeRows(
 }
 
 function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnitLibraryRecord[] }) {
+  const t = useTranslations("Library");
   const [catalogs, setCatalogs] = useState<LaborUnitLibraryRecord[]>(initialLibraries);
   const [selectedCatalogId, setSelectedCatalogId] = useState(allLaborUnitCatalogsValue);
   const [units, setUnits] = useState<LaborUnitRecord[]>([]);
@@ -1208,22 +1270,22 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
   const saveUnit = useCallback(async () => {
     const catalog = catalogById.get(unitForm.catalogId);
     if (!catalog) {
-      setDrawerError("Choose a labor unit catalog before saving.");
+      setDrawerError(t("labor.errors.chooseCatalog"));
       return;
     }
     const hoursNormal = Number(unitForm.hoursNormal);
     const hoursDifficult = optionalNumber(unitForm.hoursDifficult);
     const hoursVeryDifficult = optionalNumber(unitForm.hoursVeryDifficult);
     if (!unitForm.name.trim()) {
-      setDrawerError("Labor unit name is required.");
+      setDrawerError(t("labor.errors.unitNameRequired"));
       return;
     }
     if (!Number.isFinite(hoursNormal) || hoursNormal < 0) {
-      setDrawerError("Normal hours must be a non-negative number.");
+      setDrawerError(t("labor.errors.normalHours"));
       return;
     }
     if (Number.isNaN(hoursDifficult) || Number.isNaN(hoursVeryDifficult)) {
-      setDrawerError("Difficulty hours must be blank or a non-negative number.");
+      setDrawerError(t("labor.errors.difficultyHours"));
       return;
     }
 
@@ -1254,15 +1316,15 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       await refreshActiveLaborUnitView();
       closeUnitDrawer();
     } catch (error: any) {
-      setDrawerError(error?.message ?? "Failed to save labor unit.");
+      setDrawerError(error?.message ?? t("labor.errors.saveUnit"));
     } finally {
       setSaving(false);
     }
-  }, [activeUnit, catalogById, closeUnitDrawer, refreshActiveLaborUnitView, unitDrawerMode, unitForm]);
+  }, [activeUnit, catalogById, closeUnitDrawer, refreshActiveLaborUnitView, t, unitDrawerMode, unitForm]);
 
   const deleteActiveUnit = useCallback(async () => {
     if (!activeUnit) return;
-    if (!window.confirm(`Delete ${activeUnit.name}?`)) return;
+    if (!window.confirm(t("labor.confirmDeleteUnit", { name: activeUnit.name }))) return;
     setSaving(true);
     setDrawerError(null);
     try {
@@ -1270,15 +1332,15 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       await refreshActiveLaborUnitView();
       closeUnitDrawer();
     } catch (error: any) {
-      setDrawerError(error?.message ?? "Failed to delete labor unit.");
+      setDrawerError(error?.message ?? t("labor.errors.deleteUnit"));
     } finally {
       setSaving(false);
     }
-  }, [activeUnit, closeUnitDrawer, refreshActiveLaborUnitView]);
+  }, [activeUnit, closeUnitDrawer, refreshActiveLaborUnitView, t]);
 
   const saveCatalog = useCallback(async () => {
     if (!catalogForm.name.trim()) {
-      setDrawerError("Catalog name is required.");
+      setDrawerError(t("labor.errors.catalogNameRequired"));
       return;
     }
     const editingCatalog = editingCatalogId ? catalogById.get(editingCatalogId) ?? null : null;
@@ -1301,16 +1363,16 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       setCatalogForm(laborUnitCatalogFormFromRecord(saved));
       await refreshActiveLaborUnitView(saved.id);
     } catch (error: any) {
-      setDrawerError(error?.message ?? "Failed to save catalog.");
+      setDrawerError(error?.message ?? t("labor.errors.saveCatalog"));
     } finally {
       setSaving(false);
     }
-  }, [catalogById, catalogForm, editingCatalogId, refreshActiveLaborUnitView]);
+  }, [catalogById, catalogForm, editingCatalogId, refreshActiveLaborUnitView, t]);
 
   const deleteEditingCatalog = useCallback(async () => {
     const catalog = editingCatalogId ? catalogById.get(editingCatalogId) ?? null : null;
     if (!catalog) return;
-    if (!window.confirm(`Delete ${catalog.name} and its labor units?`)) return;
+    if (!window.confirm(t("labor.confirmDeleteCatalog", { name: catalog.name }))) return;
     setSaving(true);
     setDrawerError(null);
     try {
@@ -1318,19 +1380,19 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       startNewCatalog();
       await refreshActiveLaborUnitView(allLaborUnitCatalogsValue);
     } catch (error: any) {
-      setDrawerError(error?.message ?? "Failed to delete catalog.");
+      setDrawerError(error?.message ?? t("labor.errors.deleteCatalog"));
     } finally {
       setSaving(false);
     }
-  }, [catalogById, editingCatalogId, refreshActiveLaborUnitView, startNewCatalog]);
+  }, [catalogById, editingCatalogId, refreshActiveLaborUnitView, startNewCatalog, t]);
 
   const catalogOptions = useMemo(() => [
-    { value: allLaborUnitCatalogsValue, label: `All catalogs (${compactCount(totalCatalogRows)})` },
+    { value: allLaborUnitCatalogsValue, label: t("labor.allCatalogsWithCount", { count: compactCount(totalCatalogRows) }) },
     ...catalogs.map((catalog) => ({
       value: catalog.id,
       label: `${catalog.name} (${compactCount(catalog.unitCount ?? 0)})`,
     })),
-  ], [catalogs, totalCatalogRows]);
+  ], [catalogs, t, totalCatalogRows]);
 
   const drawer = (
     <AnimatePresence>
@@ -1357,18 +1419,18 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                 <div className="flex items-center gap-2">
                   <Gauge className="h-4 w-4 text-accent" />
                   <h2 className="truncate text-sm font-semibold text-fg">
-                    {unitDrawerMode === "create" ? "Create Labor Unit" : activeUnit?.name ?? "Labor Unit"}
+                    {unitDrawerMode === "create" ? t("labor.unitDrawer.createTitle") : activeUnit?.name ?? t("labor.unitDrawer.fallbackTitle")}
                   </h2>
                 </div>
                 <p className="mt-0.5 truncate text-[11px] text-fg/45">
-                  Edit the production standard used by assemblies and worksheets.
+                  {t("labor.unitDrawer.subtitle")}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={closeUnitDrawer}
                 className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-                title="Close"
+                title={t("common.close")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1382,38 +1444,38 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
               <div className="grid gap-4">
                   <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Catalog
+                      {t("labor.fields.catalog")}
                       <CompactSelect
                         value={unitForm.catalogId}
                         onValueChange={(value) => updateUnitForm("catalogId", value)}
                         options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.name }))}
-                        placeholder="Choose catalog"
+                        placeholder={t("labor.fields.chooseCatalog")}
                         disabled={unitDrawerMode === "edit"}
                       />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Name
+                      {t("labor.fields.name")}
                       <Input value={unitForm.name} onChange={(event) => updateUnitForm("name", event.target.value)} className="h-8 text-xs" />
                     </label>
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Code
+                      {t("labor.fields.code")}
                       <Input value={unitForm.code} onChange={(event) => updateUnitForm("code", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Discipline
+                      {t("labor.fields.discipline")}
                       <Input value={unitForm.discipline} onChange={(event) => updateUnitForm("discipline", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Output UOM
+                      {t("labor.fields.outputUom")}
                       <Input value={unitForm.outputUom} onChange={(event) => updateUnitForm("outputUom", event.target.value)} className="h-8 text-xs" />
                     </label>
                   </div>
 
                   <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                    Description
+                    {t("labor.fields.description")}
                     <textarea
                       value={unitForm.description}
                       onChange={(event) => updateUnitForm("description", event.target.value)}
@@ -1423,49 +1485,49 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
 
                   <div className="grid gap-3 md:grid-cols-3">
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Category
+                      {t("labor.fields.category")}
                       <Input value={unitForm.category} onChange={(event) => updateUnitForm("category", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Class
+                      {t("labor.fields.class")}
                       <Input value={unitForm.className} onChange={(event) => updateUnitForm("className", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Subclass
+                      {t("labor.fields.subclass")}
                       <Input value={unitForm.subClassName} onChange={(event) => updateUnitForm("subClassName", event.target.value)} className="h-8 text-xs" />
                     </label>
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-4">
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Normal Hrs
+                      {t("labor.fields.normalHours")}
                       <Input value={unitForm.hoursNormal} onChange={(event) => updateUnitForm("hoursNormal", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Difficult Hrs
+                      {t("labor.fields.difficultHours")}
                       <Input value={unitForm.hoursDifficult} onChange={(event) => updateUnitForm("hoursDifficult", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Very Diff. Hrs
+                      {t("labor.fields.veryDifficultHours")}
                       <Input value={unitForm.hoursVeryDifficult} onChange={(event) => updateUnitForm("hoursVeryDifficult", event.target.value)} className="h-8 text-xs" />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Default
+                      {t("labor.fields.default")}
                       <CompactSelect
                         value={unitForm.defaultDifficulty}
                         onValueChange={(value) => updateUnitForm("defaultDifficulty", value as LaborUnitRecord["defaultDifficulty"])}
                         options={[
-                          { value: "normal", label: "Normal" },
-                          { value: "difficult", label: "Difficult" },
-                          { value: "very_difficult", label: "Very Difficult" },
+                          { value: "normal", label: t("labor.difficulty.normal") },
+                          { value: "difficult", label: t("labor.difficulty.difficult") },
+                          { value: "very_difficult", label: t("labor.difficulty.veryDifficult") },
                         ]}
                       />
                     </label>
                   </div>
 
                   <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                    Tags
-                    <Input value={unitForm.tags} onChange={(event) => updateUnitForm("tags", event.target.value)} className="h-8 text-xs" placeholder="comma separated" />
+                    {t("labor.fields.tags")}
+                    <Input value={unitForm.tags} onChange={(event) => updateUnitForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
                   </label>
                 </div>
             </div>
@@ -1475,14 +1537,14 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                 {unitDrawerMode === "edit" && (
                   <Button type="button" variant="danger" size="sm" onClick={() => void deleteActiveUnit()} disabled={saving}>
                     <Trash2 className="h-3.5 w-3.5" />
-                    Delete
+                    {t("common.delete")}
                   </Button>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={closeUnitDrawer} disabled={saving}>Cancel</Button>
+                <Button type="button" variant="ghost" size="sm" onClick={closeUnitDrawer} disabled={saving}>{t("common.cancel")}</Button>
                 <Button type="button" size="sm" onClick={() => void saveUnit()} disabled={saving || !unitForm.catalogId}>
-                  {saving ? "Saving" : "Save Labor Unit"}
+                  {saving ? t("common.saving") : t("labor.unitDrawer.save")}
                 </Button>
               </div>
             </div>
@@ -1512,15 +1574,15 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <Library className="h-4 w-4 text-accent" />
-                  <h2 className="truncate text-sm font-semibold text-fg">Labor Unit Catalogs</h2>
+                  <h2 className="truncate text-sm font-semibold text-fg">{t("labor.catalogDrawer.title")}</h2>
                 </div>
-                <p className="mt-0.5 truncate text-[11px] text-fg/45">Manage the source buckets for production standard rows.</p>
+                <p className="mt-0.5 truncate text-[11px] text-fg/45">{t("labor.catalogDrawer.subtitle")}</p>
               </div>
               <button
                 type="button"
                 onClick={closeCatalogDrawer}
                 className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-                title="Close"
+                title={t("common.close")}
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1530,7 +1592,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
               <div className="min-h-0 overflow-y-auto border-r border-line p-3">
                 <Button type="button" size="sm" className="mb-3 w-full" onClick={startNewCatalog}>
                   <Plus className="h-3.5 w-3.5" />
-                  New Catalog
+                  {t("labor.catalogDrawer.newCatalog")}
                 </Button>
                 <div className="space-y-2">
                   {catalogs.map((catalog) => {
@@ -1548,13 +1610,13 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <div className="truncate text-xs font-semibold text-fg">{catalog.name}</div>
-                            <div className="mt-0.5 truncate text-[10px] text-fg/40">{catalog.provider || "Internal"} / {catalog.discipline || "General"}</div>
+                            <div className="mt-0.5 truncate text-[10px] text-fg/40">{catalog.provider || t("labor.fallbacks.internal")} / {catalog.discipline || t("labor.fallbacks.general")}</div>
                           </div>
-                          <Badge tone={catalog.organizationId ? "success" : "info"}>{catalog.organizationId ? "Org" : "First Party"}</Badge>
+                          <Badge tone={catalog.organizationId ? "success" : "info"}>{catalog.organizationId ? t("labor.catalogDrawer.org") : t("labor.catalogDrawer.firstParty")}</Badge>
                         </div>
                         <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-fg/45">
-                          <span>{compactCount(catalog.unitCount ?? 0)} units</span>
-                          <span>{catalog.source || "manual"}</span>
+                          <span>{t("labor.unitsCount", { count: compactCount(catalog.unitCount ?? 0) })}</span>
+                          <span>{catalog.source || t("labor.fallbacks.manual")}</span>
                         </div>
                       </button>
                     );
@@ -1570,26 +1632,26 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                 <div className="grid gap-4">
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        Name
+                        {t("labor.fields.name")}
                         <Input value={catalogForm.name} onChange={(event) => updateCatalogForm("name", event.target.value)} className="h-8 text-xs" />
                       </label>
                       <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        Provider
+                        {t("labor.fields.provider")}
                         <Input value={catalogForm.provider} onChange={(event) => updateCatalogForm("provider", event.target.value)} className="h-8 text-xs" />
                       </label>
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        Discipline
+                        {t("labor.fields.discipline")}
                         <Input value={catalogForm.discipline} onChange={(event) => updateCatalogForm("discipline", event.target.value)} className="h-8 text-xs" />
                       </label>
                       <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        Tags
-                        <Input value={catalogForm.tags} onChange={(event) => updateCatalogForm("tags", event.target.value)} className="h-8 text-xs" placeholder="comma separated" />
+                        {t("labor.fields.tags")}
+                        <Input value={catalogForm.tags} onChange={(event) => updateCatalogForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
                       </label>
                     </div>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Description
+                      {t("labor.fields.description")}
                       <textarea
                         value={catalogForm.description}
                         onChange={(event) => updateCatalogForm("description", event.target.value)}
@@ -1597,7 +1659,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                       />
                     </label>
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      Source Note
+                      {t("labor.fields.sourceNote")}
                       <Input value={catalogForm.sourceDescription} onChange={(event) => updateCatalogForm("sourceDescription", event.target.value)} className="h-8 text-xs" />
                     </label>
                 </div>
@@ -1609,14 +1671,14 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                 {editingCatalogId && (
                   <Button type="button" variant="danger" size="sm" onClick={() => void deleteEditingCatalog()} disabled={saving}>
                     <Trash2 className="h-3.5 w-3.5" />
-                    Delete
+                    {t("common.delete")}
                   </Button>
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={closeCatalogDrawer} disabled={saving}>Close</Button>
+                <Button type="button" variant="ghost" size="sm" onClick={closeCatalogDrawer} disabled={saving}>{t("common.close")}</Button>
                 <Button type="button" size="sm" onClick={() => void saveCatalog()} disabled={saving}>
-                  {saving ? "Saving" : editingCatalogId ? "Save Catalog" : "Create Catalog"}
+                  {saving ? t("common.saving") : editingCatalogId ? t("labor.catalogDrawer.save") : t("labor.catalogDrawer.create")}
                 </Button>
               </div>
             </div>
@@ -1631,18 +1693,21 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       <div className="shrink-0 border-b border-line px-3 py-2">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-fg">Labor Units</div>
+            <div className="truncate text-sm font-semibold text-fg">{t("labor.title")}</div>
             <div className="mt-0.5 truncate text-[11px] text-fg/45">
-              {selectedCatalog ? selectedCatalog.name : "All catalogs"} / {compactCount(total)} production standards
+              {t("labor.subtitle", {
+                catalog: selectedCatalog ? selectedCatalog.name : t("labor.allCatalogs"),
+                count: compactCount(total),
+              })}
             </div>
           </div>
           <div className="hidden shrink-0 grid-cols-5 gap-2 xl:grid">
             {[
-              { label: "Rows", value: compactCount(total) },
-              { label: "Catalogs", value: compactCount(catalogs.length) },
-              { label: "Providers", value: compactCount(providers) },
-              { label: "Categories", value: compactCount(categories) },
-              { label: "Avg Hrs", value: formatNumber(averageHours) },
+              { label: t("labor.stats.rows"), value: compactCount(total) },
+              { label: t("labor.stats.catalogs"), value: compactCount(catalogs.length) },
+              { label: t("labor.stats.providers"), value: compactCount(providers) },
+              { label: t("labor.stats.categories"), value: compactCount(categories) },
+              { label: t("labor.stats.avgHrs"), value: formatNumber(averageHours) },
             ].map((stat) => (
               <div key={stat.label} className="min-w-20 rounded-md border border-line/65 bg-bg/35 px-2 py-1.5">
                 <div className="truncate text-[10px] text-fg/35">{stat.label}</div>
@@ -1658,14 +1723,14 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
               value={selectedCatalogId}
               onValueChange={setSelectedCatalogId}
               options={catalogOptions}
-              ariaLabel="Labor unit catalog"
+              ariaLabel={t("labor.catalogAria")}
             />
           </div>
           <div className="relative min-w-[220px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
             <Input
               className="h-8 pl-8 text-xs"
-              placeholder="Search code, class, category, or description"
+              placeholder={t("labor.searchPlaceholder")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
@@ -1675,27 +1740,27 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
             <Toggle checked={groupedView} onChange={(checked) => setViewMode(checked ? "grouped" : "rows")} />
             <ListTree className={cn("h-3.5 w-3.5", groupedView ? "text-accent" : "text-fg/30")} />
             <span className="hidden text-[11px] font-medium text-fg/45 sm:inline">
-              {groupedView ? "Groups" : "Rows"}
+              {groupedView ? t("labor.view.groups") : t("labor.view.rows")}
             </span>
           </div>
           {groupedView && (
             <div className="flex shrink-0 items-center gap-1">
               <Button type="button" variant="ghost" size="sm" onClick={collapseAllGroups} disabled={loading || expandedGroupIds.size === 0}>
                 <ChevronRight className="h-3.5 w-3.5" />
-                Collapse
+                {t("labor.actions.collapse")}
               </Button>
               <Button type="button" variant="ghost" size="sm" onClick={expandAllGroups} disabled={loading || !pagedTreeRows.some((row) => row.kind === "group")}>
                 <ChevronDown className="h-3.5 w-3.5" />
-                Expand
+                {t("labor.actions.expand")}
               </Button>
             </div>
           )}
           <Button type="button" variant="secondary" size="sm" onClick={openCatalogManager}>
-            Manage Catalogs
+            {t("labor.actions.manageCatalogs")}
           </Button>
           <Button type="button" size="sm" onClick={openCreateUnit} disabled={!selectedEditableCatalog}>
             <Plus className="h-3.5 w-3.5" />
-            New Labor Unit
+            {t("labor.actions.newUnit")}
           </Button>
         </div>
       </div>
@@ -1715,15 +1780,15 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
           </colgroup>
           <thead className="sticky top-0 z-10 bg-panel text-[10px] uppercase tracking-wide text-fg/35">
             <tr className="border-b border-line">
-              <th className="px-2 py-2 font-medium">Code</th>
-              <th className="px-2 py-2 font-medium">Labor Unit</th>
-              <th className="px-2 py-2 font-medium">Catalog</th>
-              <th className="px-2 py-2 font-medium">Category</th>
-              <th className="px-2 py-2 font-medium">Class</th>
-              <th className="px-2 py-2 text-right font-medium">Normal</th>
-              <th className="px-2 py-2 text-right font-medium">Diff.</th>
-              <th className="px-2 py-2 text-right font-medium">V. Diff.</th>
-              <th className="px-2 py-2 font-medium">UOM</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.code")}</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.laborUnit")}</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.catalog")}</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.category")}</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.class")}</th>
+              <th className="px-2 py-2 text-right font-medium">{t("labor.table.normal")}</th>
+              <th className="px-2 py-2 text-right font-medium">{t("labor.table.difficult")}</th>
+              <th className="px-2 py-2 text-right font-medium">{t("labor.table.veryDifficult")}</th>
+              <th className="px-2 py-2 font-medium">{t("labor.table.uom")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1746,7 +1811,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         <td colSpan={9} className="px-2 py-2 text-[11px] text-fg/38">
                           <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 18 }}>
                             <span className="h-px w-5 bg-line" />
-                            {row.kind === "loading" ? "Loading branch..." : "No rows in this branch."}
+                            {row.kind === "loading" ? t("labor.branchLoading") : t("labor.branchEmpty")}
                           </div>
                         </td>
                       </tr>
@@ -1775,7 +1840,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         </div>
                       </td>
                       <td className="px-2 py-2 text-fg/55">
-                        <div className="truncate">{catalog?.name ?? "Unknown"}</div>
+                        <div className="truncate">{catalog?.name ?? t("labor.fallbacks.unknown")}</div>
                       </td>
                       <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></td>
                       <td className="px-2 py-2 text-fg/55">
@@ -1806,7 +1871,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         {unit.description && <div className="mt-0.5 truncate text-[11px] text-fg/40">{unit.description}</div>}
                       </td>
                       <td className="px-2 py-2 text-fg/55">
-                        <div className="truncate">{catalog?.name ?? "Unknown"}</div>
+                        <div className="truncate">{catalog?.name ?? t("labor.fallbacks.unknown")}</div>
                       </td>
                       <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></td>
                       <td className="px-2 py-2 text-fg/55">
@@ -1822,14 +1887,14 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
             {!loading && (!groupedView ? units.length === 0 : visibleTreeRows.length === 0 && !rootTreePayload?.loading) && (
               <tr>
                 <td colSpan={9} className="px-3 py-10 text-center text-sm text-fg/40">
-                  No labor units match this view.
+                  {t("labor.empty")}
                 </td>
               </tr>
             )}
             {(loading || (groupedView && rootTreePayload?.loading)) && (
               <tr>
                 <td colSpan={9} className="px-3 py-10 text-center text-sm text-fg/40">
-                  Loading labor units...
+                  {t("labor.loading")}
                 </td>
               </tr>
             )}
@@ -1840,29 +1905,29 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line bg-panel2/20 px-3 py-2 text-[11px] text-fg/45">
         <span>
           {groupedView
-            ? `Showing ${compactCount(pageStart)}-${compactCount(pageEnd)} of ${compactCount(visibleRowsTotal)} visible tree rows / ${compactCount(total)} labor rows`
-            : `Showing ${compactCount(pageStart)}-${compactCount(pageEnd)} of ${compactCount(total)} rows / ${compactCount(totalCatalogRows)} indexed across ${compactCount(catalogs.length)} catalog${catalogs.length === 1 ? "" : "s"}`}
+            ? t("labor.footer.grouped", { start: compactCount(pageStart), end: compactCount(pageEnd), visible: compactCount(visibleRowsTotal), total: compactCount(total) })
+            : t("labor.footer.rows", { start: compactCount(pageStart), end: compactCount(pageEnd), total: compactCount(total), indexed: compactCount(totalCatalogRows), catalogs: compactCount(catalogs.length) })}
         </span>
         <div className="flex items-center gap-2">
-          <span>{compactCount(firstPartyCatalogs)} first-party</span>
-          {groupedView && <span>{compactCount(rootTreePayload?.nodes.length ?? 0)} top-level group{rootTreePayload?.nodes.length === 1 ? "" : "s"}</span>}
+          <span>{t("labor.footer.firstParty", { count: compactCount(firstPartyCatalogs) })}</span>
+          {groupedView && <span>{t("labor.footer.topLevelGroups", { count: compactCount(rootTreePayload?.nodes.length ?? 0) })}</span>}
           <CompactSelect
             value={String(pageSize)}
             onValueChange={(value) => setPageSize(Number(value))}
             options={[
-              { value: "50", label: groupedView ? "50 visible" : "50 rows" },
-              { value: "100", label: groupedView ? "100 visible" : "100 rows" },
-              { value: "250", label: groupedView ? "250 visible" : "250 rows" },
+              { value: "50", label: groupedView ? t("labor.pageSize.visible", { count: 50 }) : t("labor.pageSize.rows", { count: 50 }) },
+              { value: "100", label: groupedView ? t("labor.pageSize.visible", { count: 100 }) : t("labor.pageSize.rows", { count: 100 }) },
+              { value: "250", label: groupedView ? t("labor.pageSize.visible", { count: 250 }) : t("labor.pageSize.rows", { count: 250 }) },
             ]}
-            ariaLabel="Labor units page size"
+            ariaLabel={t("labor.pageSize.aria")}
             triggerClassName="h-7 w-[104px]"
           />
           <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0 || loading}>
-            Prev
+            {t("common.prev")}
           </Button>
-          <span className="tabular-nums">Page {compactCount(page + 1)} / {compactCount(totalPages)}</span>
+          <span className="tabular-nums">{t("labor.footer.page", { page: compactCount(page + 1), total: compactCount(totalPages) })}</span>
           <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1 || loading}>
-            Next
+            {t("common.next")}
           </Button>
         </div>
       </div>
@@ -1891,6 +1956,7 @@ export function LibraryPage({
   laborUnitLibraries,
   playbooks,
 }: LibraryPageProps) {
+  const t = useTranslations("Library");
   const searchParams = useSearchParams();
   const initialSurface = coerceSurface(searchParams.get("surface") ?? searchParams.get("tab"));
   const [activeSurface, setActiveSurface] = useState<LibrarySurface>(initialSurface);
@@ -1950,6 +2016,8 @@ export function LibraryPage({
 
   const activeMeta = surfaceOptions.find((surface) => surface.id === activeSurface) ?? surfaceOptions[0];
   const ActiveSurfaceIcon = activeMeta.icon;
+  const activeLabel = t(activeMeta.labelKey);
+  const activeDescription = t(activeMeta.descriptionKey);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-bg">
@@ -1961,25 +2029,25 @@ export function LibraryPage({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-fg/35">
               <Library className="h-3 w-3" />
-              Library
+              {t("title")}
             </div>
             <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
-              <h1 className="shrink-0 text-sm font-semibold text-fg">{activeMeta.label}</h1>
-              <p className="hidden min-w-0 truncate text-xs text-fg/45 lg:block">{activeMeta.description}</p>
+              <h1 className="shrink-0 text-sm font-semibold text-fg">{activeLabel}</h1>
+              <p className="hidden min-w-0 truncate text-xs text-fg/45 lg:block">{activeDescription}</p>
             </div>
           </div>
           <div className="relative hidden w-64 lg:block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
             <Input
               className="h-8 pl-8 text-xs"
-              placeholder="Search library surfaces"
+              placeholder={t("searchPlaceholder")}
               value={globalSearch}
               onChange={(event) => setGlobalSearch(event.target.value)}
             />
             {globalSearch.trim() && (
               <div className="absolute left-0 right-0 top-full z-40 mt-1 overflow-hidden rounded-lg border border-line bg-panel shadow-lg">
                 {surfaceOptions
-                  .filter((surface) => surface.label.toLowerCase().includes(globalSearch.trim().toLowerCase()))
+                  .filter((surface) => t(surface.labelKey).toLowerCase().includes(globalSearch.trim().toLowerCase()))
                   .map((surface) => {
                     const Icon = surface.icon;
                     return (
@@ -1993,7 +2061,7 @@ export function LibraryPage({
                         className="flex w-full items-center gap-2 border-b border-line/60 px-3 py-2 text-left text-xs text-fg/60 last:border-b-0 hover:bg-panel2 hover:text-fg"
                       >
                         <Icon className="h-3.5 w-3.5" />
-                        {surface.label}
+                        {t(surface.labelKey)}
                       </button>
                     );
                   })}
@@ -2002,7 +2070,7 @@ export function LibraryPage({
           </div>
           <Button variant="ghost" size="sm" onClick={costSnapshot.refresh} disabled={costSnapshot.loading}>
             <RefreshCw className={cn("h-3.5 w-3.5", costSnapshot.loading && "animate-spin")} />
-            Refresh
+            {t("refresh")}
           </Button>
         </div>
       </div>
@@ -2015,7 +2083,7 @@ export function LibraryPage({
               active={activeSurface === surface.id}
               count={surface.id === "overview" ? undefined : surfaceCounts[surface.id]}
               icon={surface.icon}
-              label={surface.label}
+              label={t(surface.labelKey)}
               onClick={() => setSurface(surface.id)}
             />
           ))}
@@ -2085,7 +2153,7 @@ export function LibraryPage({
 
           {activeSurface === "knowledge" && (
             <WorkspaceSurface className="p-3">
-              <Suspense fallback={<div className="rounded-lg border border-line bg-panel px-4 py-8 text-center text-sm text-fg/40">Loading knowledge...</div>}>
+              <Suspense fallback={<div className="rounded-lg border border-line bg-panel px-4 py-8 text-center text-sm text-fg/40">{t("loadingKnowledge")}</div>}>
                 <KnowledgePage
                   embedded
                   initialBooks={knowledgeBooks}

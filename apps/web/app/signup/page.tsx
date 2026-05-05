@@ -2,11 +2,13 @@
 
 import { useState, useCallback } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightLogo } from "@/components/brand-logo";
 import { Button, Input, Label, Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
 
 export default function SignupPage() {
+  const t = useTranslations("Auth.signup");
   const { signup } = useAuth();
   const [orgName, setOrgName] = useState("");
   const [orgSlug, setOrgSlug] = useState("");
@@ -30,11 +32,11 @@ export default function SignupPage() {
     setError(null);
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setError(t("passwordMismatch"));
       return;
     }
     if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+      setError(t("passwordTooShort"));
       return;
     }
 
@@ -42,7 +44,7 @@ export default function SignupPage() {
     try {
       await signup({ orgName, orgSlug, email, name, password });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Signup failed");
+      setError(err instanceof Error ? err.message : t("error"));
     } finally {
       setLoading(false);
     }
@@ -53,12 +55,12 @@ export default function SignupPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <BidwrightLogo className="mx-auto h-24 w-auto max-w-[240px]" />
-          <p className="mt-1 text-sm text-fg/40">Create your organization</p>
+          <p className="mt-1 text-sm text-fg/40">{t("eyebrow")}</p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Sign Up</CardTitle>
+            <CardTitle>{t("title")}</CardTitle>
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -70,23 +72,23 @@ export default function SignupPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="orgName">Organization Name</Label>
+                  <Label htmlFor="orgName">{t("organizationName")}</Label>
                   <Input
                     id="orgName"
                     value={orgName}
                     onChange={(e) => handleOrgNameChange(e.target.value)}
-                    placeholder="Acme Electrical"
+                    placeholder={t("organizationNamePlaceholder")}
                     required
                     autoFocus
                   />
                 </div>
                 <div>
-                  <Label htmlFor="orgSlug">URL Slug</Label>
+                  <Label htmlFor="orgSlug">{t("urlSlug")}</Label>
                   <Input
                     id="orgSlug"
                     value={orgSlug}
                     onChange={(e) => { setOrgSlug(e.target.value); setSlugEdited(true); }}
-                    placeholder="acme-electrical"
+                    placeholder={t("urlSlugPlaceholder")}
                     required
                   />
                 </div>
@@ -94,23 +96,23 @@ export default function SignupPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="name">Your Name</Label>
+                  <Label htmlFor="name">{t("yourName")}</Label>
                   <Input
                     id="name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="Jane Smith"
+                    placeholder={t("yourNamePlaceholder")}
                     required
                   />
                 </div>
                 <div>
-                  <Label htmlFor="email">Email</Label>
+                  <Label htmlFor="email">{t("email")}</Label>
                   <Input
                     id="email"
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="jane@acme.com"
+                    placeholder={t("emailPlaceholder")}
                     required
                     autoComplete="email"
                   />
@@ -119,25 +121,25 @@ export default function SignupPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">{t("password")}</Label>
                   <Input
                     id="password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Min 8 characters"
+                    placeholder={t("passwordPlaceholder")}
                     required
                     autoComplete="new-password"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="confirmPassword">Confirm Password</Label>
+                  <Label htmlFor="confirmPassword">{t("confirmPassword")}</Label>
                   <Input
                     id="confirmPassword"
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm"
+                    placeholder={t("confirmPasswordPlaceholder")}
                     required
                     autoComplete="new-password"
                   />
@@ -150,13 +152,13 @@ export default function SignupPage() {
                 className="w-full"
                 disabled={loading || !orgName.trim() || !email.trim() || !password.trim()}
               >
-                {loading ? "Creating account..." : "Create Account"}
+                {loading ? t("submitting") : t("submit")}
               </Button>
             </form>
 
             <div className="mt-4 border-t border-line pt-4 text-center">
               <Link href="/login" className="text-xs text-accent hover:underline">
-                Already have an account? Sign in
+                {t("signInLink")}
               </Link>
             </div>
           </CardBody>

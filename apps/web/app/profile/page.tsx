@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth-provider";
 import { updateProfile } from "@/lib/api";
 import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Badge } from "@/components/ui";
 import { AppShell } from "@/components/app-shell";
 
 export default function ProfilePage() {
+  const t = useTranslations("Profile");
   const { user, organization, isSuperAdmin, refreshUser } = useAuth();
 
   const [name, setName] = useState(user?.name ?? "");
@@ -23,9 +25,9 @@ export default function ProfilePage() {
     try {
       await updateProfile({ name });
       await refreshUser();
-      setMessage({ type: "success", text: "Name updated." });
+      setMessage({ type: "success", text: t("messages.nameUpdated") });
     } catch (err) {
-      setMessage({ type: "error", text: err instanceof Error ? err.message : "Update failed" });
+      setMessage({ type: "error", text: err instanceof Error ? err.message : t("messages.updateFailed") });
     } finally {
       setSaving(false);
     }
@@ -34,11 +36,11 @@ export default function ProfilePage() {
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault();
     if (newPassword !== confirmPassword) {
-      setMessage({ type: "error", text: "Passwords do not match." });
+      setMessage({ type: "error", text: t("messages.passwordMismatch") });
       return;
     }
     if (newPassword.length < 8) {
-      setMessage({ type: "error", text: "Password must be at least 8 characters." });
+      setMessage({ type: "error", text: t("messages.passwordTooShort") });
       return;
     }
     setSaving(true);
@@ -48,9 +50,9 @@ export default function ProfilePage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setMessage({ type: "success", text: "Password changed." });
+      setMessage({ type: "success", text: t("messages.passwordChanged") });
     } catch (err) {
-      setMessage({ type: "error", text: err instanceof Error ? err.message : "Update failed" });
+      setMessage({ type: "error", text: err instanceof Error ? err.message : t("messages.updateFailed") });
     } finally {
       setSaving(false);
     }
@@ -59,7 +61,7 @@ export default function ProfilePage() {
   return (
     <AppShell>
       <div className="mx-auto max-w-xl space-y-6">
-        <h1 className="text-xl font-bold text-fg">Profile</h1>
+        <h1 className="text-xl font-bold text-fg">{t("title")}</h1>
 
         {message && (
           <div className={`rounded-lg border px-4 py-2 text-sm ${
@@ -74,28 +76,28 @@ export default function ProfilePage() {
         {/* Account info */}
         <Card>
           <CardHeader>
-            <CardTitle>Account</CardTitle>
+            <CardTitle>{t("account.title")}</CardTitle>
           </CardHeader>
           <CardBody>
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-fg/50">Email</span>
+                <span className="text-fg/50">{t("account.email")}</span>
                 <span className="text-fg font-medium">{user?.email}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-fg/50">Role</span>
+                <span className="text-fg/50">{t("account.role")}</span>
                 <Badge tone={user?.role === "admin" ? "info" : "default"}>{user?.role}</Badge>
               </div>
               {organization && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-fg/50">Organization</span>
+                  <span className="text-fg/50">{t("account.organization")}</span>
                   <span className="text-fg font-medium">{organization.name}</span>
                 </div>
               )}
               {isSuperAdmin && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-fg/50">Access</span>
-                  <Badge tone="warning">Super Admin</Badge>
+                  <span className="text-fg/50">{t("account.access")}</span>
+                  <Badge tone="warning">{t("account.superAdmin")}</Badge>
                 </div>
               )}
             </div>
@@ -105,21 +107,21 @@ export default function ProfilePage() {
         {/* Edit name */}
         <Card>
           <CardHeader>
-            <CardTitle>Display Name</CardTitle>
+            <CardTitle>{t("displayName.title")}</CardTitle>
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSaveName} className="flex items-end gap-3">
               <div className="flex-1">
-                <Label htmlFor="name">Name</Label>
+                <Label htmlFor="name">{t("displayName.name")}</Label>
                 <Input
                   id="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
+                  placeholder={t("displayName.placeholder")}
                 />
               </div>
               <Button type="submit" variant="accent" disabled={saving || name === user?.name}>
-                {saving ? "Saving..." : "Save"}
+                {saving ? t("actions.saving") : t("actions.save")}
               </Button>
             </form>
           </CardBody>
@@ -128,41 +130,41 @@ export default function ProfilePage() {
         {/* Change password */}
         <Card>
           <CardHeader>
-            <CardTitle>Change Password</CardTitle>
+            <CardTitle>{t("password.title")}</CardTitle>
           </CardHeader>
           <CardBody>
             <form onSubmit={handleChangePassword} className="space-y-3">
               <div>
-                <Label htmlFor="currentPassword">Current Password</Label>
+                <Label htmlFor="currentPassword">{t("password.current")}</Label>
                 <Input
                   id="currentPassword"
                   type="password"
                   value={currentPassword}
                   onChange={(e) => setCurrentPassword(e.target.value)}
-                  placeholder="Enter current password"
+                  placeholder={t("password.currentPlaceholder")}
                   autoComplete="current-password"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label htmlFor="newPassword">New Password</Label>
+                  <Label htmlFor="newPassword">{t("password.new")}</Label>
                   <Input
                     id="newPassword"
                     type="password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Min 8 characters"
+                    placeholder={t("password.newPlaceholder")}
                     autoComplete="new-password"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="confirmPassword">Confirm</Label>
+                  <Label htmlFor="confirmPassword">{t("password.confirm")}</Label>
                   <Input
                     id="confirmPassword"
                     type="password"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm"
+                    placeholder={t("password.confirmPlaceholder")}
                     autoComplete="new-password"
                   />
                 </div>
@@ -172,7 +174,7 @@ export default function ProfilePage() {
                 variant="accent"
                 disabled={saving || !currentPassword || !newPassword}
               >
-                {saving ? "Changing..." : "Change Password"}
+                {saving ? t("actions.changing") : t("actions.changePassword")}
               </Button>
             </form>
           </CardBody>

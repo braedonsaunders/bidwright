@@ -115,6 +115,15 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
         impersonating: true,
       };
       request.store = createApiStore(session.organizationId);
+      const orgUser = await prisma.user.findFirst({
+        where: {
+          organizationId: session.organizationId,
+          email: superAdmin.email,
+          active: true,
+        },
+        select: { id: true },
+      });
+      if (orgUser) request.store.setUserId(orgUser.id);
       request.store.setActivityActor({ id: superAdmin.id, name: superAdmin.name, type: "super_admin" });
     } else if (superAdmin) {
       // Super admin without org context (admin dashboard only)

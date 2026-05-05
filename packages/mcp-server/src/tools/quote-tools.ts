@@ -73,6 +73,97 @@ function toolUiText(message: string, uiEvent: Record<string, unknown>, extra: Re
   }, null, 2);
 }
 
+function asArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function compactText(value: unknown, maxLength = 180) {
+  if (value == null) return value;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}...` : text;
+}
+
+function normalizedText(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function matchesText(value: unknown, query?: string | null) {
+  const q = normalizedText(query);
+  if (!q) return true;
+  return normalizedText(value).includes(q);
+}
+
+function pageSlice<T>(items: T[], input: { limit?: number; offset?: number }, maxLimit = 100) {
+  const offset = Math.max(0, input.offset ?? 0);
+  const limit = Math.max(1, Math.min(input.limit ?? 25, maxLimit));
+  const page = items.slice(offset, offset + limit);
+  return { page, offset, limit, total: items.length, hasMore: offset + page.length < items.length };
+}
+
+function scheduleTiers(schedule: any) {
+  return asArray(schedule.tiers).map((tier: any) => ({
+    id: tier.id,
+    name: tier.name,
+    multiplier: tier.multiplier,
+    uom: tier.uom ?? null,
+  }));
+}
+
+function summarizeRateSchedule(schedule: any, options: { includeSampleItems?: boolean } = {}) {
+  const items = asArray(schedule.items);
+  return {
+    id: schedule.id,
+    name: schedule.name,
+    description: compactText(schedule.description, 160),
+    category: schedule.category,
+    scope: schedule.scope,
+    itemCount: items.length || schedule.itemCount || 0,
+    tierCount: asArray(schedule.tiers).length,
+    tiers: scheduleTiers(schedule),
+    sampleItems: options.includeSampleItems === false
+      ? undefined
+      : items.slice(0, 5).map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          code: item.code,
+          unit: item.unit,
+        })),
+  };
+}
+
+function rateScheduleItemMatches(item: any, schedule: any, input: { q?: string | null; category?: string | null; scheduleId?: string | null }) {
+  if (input.scheduleId && schedule.id !== input.scheduleId) return false;
+  if (input.category && normalizedText(schedule.category) !== normalizedText(input.category)) return false;
+  const q = normalizedText(input.q);
+  if (!q) return true;
+  return [
+    item.name,
+    item.code,
+    item.unit,
+    schedule.name,
+    schedule.category,
+    item.description,
+  ].some((value) => matchesText(value, q));
+}
+
+function compactRateScheduleItem(item: any, schedule: any, options: { includeRates?: boolean } = {}) {
+  return {
+    rateScheduleItemId: item.id,
+    scheduleId: schedule.id,
+    scheduleName: schedule.name,
+    forCategory: schedule.category,
+    name: item.name,
+    code: item.code,
+    unit: item.unit,
+    description: compactText(item.description, 160),
+    rates: options.includeRates === false ? undefined : item.rates,
+    costRates: options.includeRates === false ? undefined : item.costRates,
+    burden: item.burden,
+    perDiem: item.perDiem,
+    tierIds: scheduleTiers(schedule).map((tier) => tier.id),
+  };
+}
+
 export function registerQuoteTools(server: McpServer) {
 
   // ── Cached workspace fetcher (shared across tool handlers) ──────────
@@ -360,13 +451,22 @@ export function registerQuoteTools(server: McpServer) {
   // ── getItemConfig ─────────────────────────────────────────
   server.tool(
     "getItemConfig",
-    `Discover how line items work in this organization. Returns entity categories (with calculation types), available rate schedule items, and catalog items. CALL THIS FIRST before creating any line items. Use searchLineItemCandidates/recommendCostSource for cost-intelligence resources, labor units, assemblies, and canonical source provenance before creating priced rows.`,
-    {},
-    async () => {
+    `Discover how line items work in this organization. Returns compact entity category config plus bounded summaries of imported rate schedules, catalog items, and available org schedules. CALL THIS FIRST before creating line items, then call listRateScheduleItems with q/category/scheduleId when you need specific rateScheduleItemId values.`,
+    {
+      includeRateScheduleItems: z.boolean().default(false).describe("Return a bounded page of imported revision rate items. Default false keeps this config response compact."),
+      q: z.string().optional().describe("Optional search terms for rate schedule items when includeRateScheduleItems=true."),
+      category: z.string().optional().describe("Optional schedule/category filter for rate schedule items and org schedules."),
+      scheduleId: z.string().optional().describe("Optional imported revision schedule id filter for rate schedule items."),
+      limit: z.number().int().positive().max(100).default(25),
+      offset: z.number().int().min(0).default(0),
+      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps in the item page."),
+    },
+    async (input) => {
       const data = await apiGet(projectPath("/workspace"));
       const ws = data.workspace || data;
 
       const entityCategories = (ws.entityCategories || []).map((ec: any) => ({
+        id: ec.id,
         name: ec.name,
         entityType: ec.entityType,
         defaultUom: ec.defaultUom,
@@ -379,18 +479,15 @@ export function registerQuoteTools(server: McpServer) {
         usesRateSchedule: (ec.itemSource ?? "freeform") === "rate_schedule",
       }));
 
-      const rateItems: any[] = [];
+      const allRateItems: any[] = [];
       for (const rs of (ws.rateSchedules || [])) {
-        const tiers = (rs.tiers || []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier }));
         for (const item of (rs.items || [])) {
-          rateItems.push({
-            rateScheduleItemId: item.id, name: item.name, code: item.code,
-            unit: item.unit, forCategory: rs.category, scheduleName: rs.name,
-            rates: item.rates, costRates: item.costRates,
-            burden: item.burden, perDiem: item.perDiem, tiers,
-          });
+          if (rateScheduleItemMatches(item, rs, input)) {
+            allRateItems.push(compactRateScheduleItem(item, rs, { includeRates: input.includeRates }));
+          }
         }
       }
+      const rateItemPage = pageSlice(allRateItems, input, 100);
 
       const catalogItems: any[] = [];
       for (const cat of (ws.catalogs || [])) {
@@ -407,12 +504,12 @@ export function registerQuoteTools(server: McpServer) {
       let orgSchedules: any[] = [];
       try {
         const orgData = await apiGet("/api/rate-schedules");
-        orgSchedules = (orgData.schedules || orgData || []).map((s: any) => ({
-          id: s.id, name: s.name, category: s.category,
-          itemCount: s.items?.length || s.itemCount || 0,
-          sampleItems: (s.items || []).slice(0, 3).map((i: any) => i.name),
-        }));
+        orgSchedules = (orgData.schedules || orgData || [])
+          .filter((s: any) => !input.category || normalizedText(s.category) === normalizedText(input.category))
+          .filter((s: any) => !input.q || [s.name, s.description, s.category, ...(s.items || []).slice(0, 10).map((item: any) => item.name)].some((value) => matchesText(value, input.q)))
+          .map((s: any) => summarizeRateSchedule(s, { includeSampleItems: true }));
       } catch {}
+      const orgSchedulePage = pageSlice(orgSchedules, { limit: Math.min(input.limit, 25), offset: input.offset }, 50);
 
       const rateScheduleCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
       const catalogCats = entityCategories.filter((c: any) => c.itemSource === "catalog");
@@ -420,14 +517,14 @@ export function registerQuoteTools(server: McpServer) {
       let instructions = "";
       if (rateScheduleCats.length > 0) {
         const names = rateScheduleCats.map((c: any) => c.name).join(", ");
-        if (rateItems.length > 0) {
-          instructions += `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. `;
+        if (allRateItems.length > 0 || (ws.rateSchedules || []).length > 0) {
+          instructions += `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. Use listRateScheduleItems with q/category/scheduleId to fetch specific item IDs instead of dumping every rate item. `;
         } else if (orgSchedules.length > 0) {
           instructions += `Categories [${names}] use rate schedules but NONE are imported into this quote yet. ` +
             `You MUST import a rate schedule before creating items in these categories. Steps:\n` +
-            `1. Review the available org schedules listed below\n` +
+            `1. Review the compact available org schedules listed below, using q/category filters if needed\n` +
             `2. Call importRateSchedule with the appropriate schedule ID\n` +
-            `3. Call listRateScheduleItems to get the item IDs\n` +
+            `3. Call listRateScheduleItems with q/category to get specific item IDs\n` +
             `4. Set rateScheduleItemId on each item you create\n` +
             `DO NOT create items with made-up rates — import the schedule first.\n`;
         } else {
@@ -442,7 +539,7 @@ export function registerQuoteTools(server: McpServer) {
         instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
-      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, call searchLineItemCandidates or recommendCostSource with the scope phrase and preferred category. If a result exists, preserve its rateScheduleItemId/itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use listLaborUnits for labour productivity and previewAssembly for assembly-backed scope. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no structured candidate exists, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
+      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, call recommendEstimateBasis with the scope phrase and preferred category. If a result exists, preserve its rateScheduleItemId/itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use recommendLaborBasis/listLaborUnits for labour productivity and previewAssembly for assembly-backed scope. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no structured candidate exists, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
 
       // If no categories configured, provide default guidance
       if (entityCategories.length === 0) {
@@ -496,9 +593,27 @@ export function registerQuoteTools(server: McpServer) {
             { name: "Equipment", entityType: "Equipment", defaultUom: "DAY", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
             { name: "Subcontractor", entityType: "Subcontractor", defaultUom: "LS", calculationType: "manual", itemSource: "freeform", usesRateSchedule: false },
           ],
-          rateScheduleItems: rateItems,
-          availableOrgSchedules: orgSchedules.length > 0 && rateItems.length === 0 ? orgSchedules : undefined,
-          catalogItems: catalogItems.slice(0, 50),
+          importedRateSchedules: (ws.rateSchedules || []).map((schedule: any) => summarizeRateSchedule(schedule, { includeSampleItems: true })),
+          rateScheduleItems: input.includeRateScheduleItems ? {
+            total: rateItemPage.total,
+            offset: rateItemPage.offset,
+            limit: rateItemPage.limit,
+            hasMore: rateItemPage.hasMore,
+            items: rateItemPage.page,
+            note: "This is paginated. Use listRateScheduleItems with q/category/scheduleId to retrieve focused item IDs.",
+          } : undefined,
+          availableOrgSchedules: orgSchedulePage.total > 0 && (ws.rateSchedules || []).length === 0 ? {
+            total: orgSchedulePage.total,
+            offset: orgSchedulePage.offset,
+            limit: orgSchedulePage.limit,
+            hasMore: orgSchedulePage.hasMore,
+            schedules: orgSchedulePage.page,
+          } : undefined,
+          catalogItems: {
+            total: catalogItems.length,
+            shown: Math.min(catalogItems.length, 50),
+            items: catalogItems.slice(0, 50),
+          },
           defaultMarkup: revisionDefaultMarkup,
           instructions,
         }, null, 2) }],
@@ -989,22 +1104,68 @@ export function registerQuoteTools(server: McpServer) {
   // ── listRateSchedules (org-level discovery) ──────────────
   server.tool(
     "listRateSchedules",
-    "List all available org-level rate schedules that can be imported into the quote. Call this to discover what labour/equipment rate schedules exist BEFORE importing them. Returns schedule IDs, names, categories, and item counts.",
-    {},
-    async () => {
-      const data = await apiGet("/api/rate-schedules");
-      const schedules = (data.schedules || data || []).map((s: any) => ({
-        id: s.id,
-        name: s.name,
-        category: s.category,
-        itemCount: s.items?.length || s.itemCount || 0,
-        items: (s.items || []).slice(0, 5).map((i: any) => ({ id: i.id, name: i.name, code: i.code, unit: i.unit })),
-      }));
+    "List available org-level rate schedules as a compact, paginated index. Use q/category filters to find the schedule to import; this tool intentionally does not dump every rate item.",
+    {
+      q: z.string().optional().describe("Search schedule name, description, category, or a small sample of item names."),
+      category: z.string().optional().describe("Filter by schedule category/entity type, e.g. Labour or Equipment."),
+      scope: z.string().default("global").describe("Rate schedule scope. Usually global for importable org schedules."),
+      limit: z.number().int().positive().max(100).default(25),
+      offset: z.number().int().min(0).default(0),
+      includeSampleItems: z.boolean().default(true).describe("Include up to 5 item names per schedule for orientation."),
+    },
+    async (input) => {
+      const data = await apiGet(`/api/rate-schedules${input.scope ? `?scope=${encodeURIComponent(input.scope)}` : ""}`);
+      const filtered = (data.schedules || data || [])
+        .filter((schedule: any) => !input.category || normalizedText(schedule.category) === normalizedText(input.category))
+        .filter((schedule: any) => {
+          if (!input.q) return true;
+          return [
+            schedule.name,
+            schedule.description,
+            schedule.category,
+            ...asArray(schedule.items).slice(0, 20).map((item: any) => `${item.name} ${item.code ?? ""}`),
+          ].some((value) => matchesText(value, input.q));
+        })
+        .map((schedule: any) => summarizeRateSchedule(schedule, { includeSampleItems: input.includeSampleItems }));
+      const page = pageSlice(filtered, input, 100);
       return { content: [{ type: "text" as const, text: JSON.stringify({
-        schedules,
-        note: "Call importRateSchedule with a schedule ID to import it, then listRateScheduleItems to get item IDs for linking to worksheet items.",
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        schedules: page.page,
+        note: "This is a compact index. Call importRateSchedule with a schedule ID to import it. If you need to inspect an org schedule's items first, call getRateSchedule with scheduleId plus q/limit/offset.",
       }, null, 2) }] };
     }
+  );
+
+  server.tool(
+    "getRateSchedule",
+    "Get one org-level rate schedule with paginated item details. Use this only after listRateSchedules identifies a likely schedule.",
+    {
+      scheduleId: z.string().describe("Org-level rate schedule id from listRateSchedules."),
+      q: z.string().optional().describe("Optional item search within this schedule."),
+      limit: z.number().int().positive().max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
+    },
+    async (input) => {
+      const schedule = await apiGet(`/api/rate-schedules/${encodeURIComponent(input.scheduleId)}`);
+      const matchingItems = asArray((schedule as any).items)
+        .filter((item: any) => rateScheduleItemMatches(item, schedule, { q: input.q }));
+      const page = pageSlice(matchingItems, input, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        schedule: summarizeRateSchedule(schedule, { includeSampleItems: false }),
+        items: {
+          total: page.total,
+          offset: page.offset,
+          limit: page.limit,
+          hasMore: page.hasMore,
+          rows: page.page.map((item: any) => compactRateScheduleItem(item, schedule, { includeRates: input.includeRates })),
+        },
+        note: "Items are paginated. Use q/offset/limit to inspect more without overflowing the tool response.",
+      }, null, 2) }] };
+    },
   );
 
   // ── importRateSchedule ───────────────────────────────────
@@ -1027,27 +1188,49 @@ export function registerQuoteTools(server: McpServer) {
   // ── listRateScheduleItems ──────────────────────────────
   server.tool(
     "listRateScheduleItems",
-    "List all rate schedule items available in the current revision. Optionally filter by category (e.g. 'labour', 'equipment').",
+    "List imported revision rate schedule items as a compact, paginated search result. Use q/category/scheduleId to find the exact rateScheduleItemId for worksheet rows.",
     {
       category: z.string().optional().describe("Filter by schedule category (e.g. 'labour', 'equipment')"),
+      q: z.string().optional().describe("Search item name, code, unit, schedule name, or category."),
+      scheduleId: z.string().optional().describe("Filter by imported revision schedule id."),
+      limit: z.number().int().positive().max(200).default(50),
+      offset: z.number().int().min(0).default(0),
+      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
     },
-    async ({ category }) => {
+    async (input) => {
       const data = await apiGet(projectPath("/workspace"));
       const ws = data.workspace || data;
       const items: any[] = [];
       for (const rs of (ws.rateSchedules || [])) {
-        if (category && rs.category !== category) continue;
-        const tiers = (rs.tiers || []).map((t: any) => ({ id: t.id, name: t.name, multiplier: t.multiplier }));
+        if (input.scheduleId && rs.id !== input.scheduleId) continue;
+        if (input.category && normalizedText(rs.category) !== normalizedText(input.category)) continue;
         for (const item of (rs.items || [])) {
-          items.push({
-            rateScheduleItemId: item.id, name: item.name, code: item.code,
-            unit: item.unit, forCategory: rs.category, scheduleName: rs.name,
-            rates: item.rates, costRates: item.costRates,
-            burden: item.burden, perDiem: item.perDiem, tiers,
-          });
+          if (rateScheduleItemMatches(item, rs, input)) {
+            items.push(compactRateScheduleItem(item, rs, { includeRates: input.includeRates }));
+          }
         }
       }
-      return { content: [{ type: "text" as const, text: JSON.stringify(items, null, 2) }] };
+      const page = pageSlice(items, input, 200);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: page.total,
+        offset: page.offset,
+        limit: page.limit,
+        hasMore: page.hasMore,
+        schedules: (ws.rateSchedules || [])
+          .filter((schedule: any) => !input.scheduleId || schedule.id === input.scheduleId)
+          .filter((schedule: any) => !input.category || normalizedText(schedule.category) === normalizedText(input.category))
+          .map((schedule: any) => ({
+            id: schedule.id,
+            name: schedule.name,
+            category: schedule.category,
+            itemCount: asArray(schedule.items).length,
+            tiers: scheduleTiers(schedule),
+          })),
+        items: page.page,
+        note: page.hasMore
+          ? "More items exist. Refine with q/category/scheduleId or increase offset."
+          : "Use rateScheduleItemId plus tierIds/tierUnits when creating rate-backed worksheet rows.",
+      }, null, 2) }] };
     }
   );
 

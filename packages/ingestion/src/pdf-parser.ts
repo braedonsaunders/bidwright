@@ -18,6 +18,14 @@ import type {
   PdfParser,
   PdfParserConfig,
 } from './pdf-types.js';
+import {
+  AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
+  DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  normalizeAzureDocumentIntelligenceFeatures,
+  parseAzureDocumentIntelligenceQueryFields,
+  type AzureDocumentIntelligenceFeature,
+  type AzureDocumentIntelligenceModel,
+} from './azure-di.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +68,52 @@ function mimeTypeForFilename(filename: string): string {
     default:
       return 'application/octet-stream';
   }
+}
+
+function azureDiSupportsAddOnFeatures(mimeType: string): boolean {
+  return mimeType === 'application/pdf' || mimeType.startsWith('image/');
+}
+
+function resolveAzureAnalyzeRequest(
+  config: PdfParserConfig,
+  mimeType: string,
+  warnings: string[],
+): {
+  model: Exclude<AzureDocumentIntelligenceModel, 'prebuilt-document'>;
+  features: AzureDocumentIntelligenceFeature[];
+  queryFields: string[];
+} {
+  const configuredModel = config.azureModel ?? 'prebuilt-layout';
+  const requestedFeatures = normalizeAzureDocumentIntelligenceFeatures(config.azureFeatures);
+  const queryFields = parseAzureDocumentIntelligenceQueryFields(config.azureQueryFields);
+  let model: Exclude<AzureDocumentIntelligenceModel, 'prebuilt-document'> = configuredModel === 'prebuilt-document'
+    ? 'prebuilt-layout'
+    : configuredModel;
+  let features = [...requestedFeatures];
+
+  if (configuredModel === 'prebuilt-document') {
+    features = Array.from(new Set([...features, ...DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES]));
+    warnings.push('Azure DI prebuilt-document is deprecated in v4; using prebuilt-layout with keyValuePairs.');
+  }
+
+  if (queryFields.length > 0 && !features.includes('queryFields')) {
+    features.push('queryFields');
+  }
+
+  if (queryFields.length > 20) {
+    warnings.push('Azure DI queryFields supports up to 20 fields per request; extra fields were skipped.');
+  }
+
+  if (!azureDiSupportsAddOnFeatures(mimeType) && features.length > 0) {
+    warnings.push(`Azure DI add-on features were skipped for ${mimeType}; v4 add-ons are only applied to PDFs and images.`);
+    features = [];
+  }
+
+  return {
+    model,
+    features,
+    queryFields: features.includes('queryFields') ? queryFields.slice(0, 20) : [],
+  };
 }
 
 /**
@@ -541,7 +595,9 @@ async function visionParsePdf(
  * Parse a document using Azure Document Intelligence (formerly Form Recognizer).
  *
  * Uses the REST API directly to avoid heavy SDK dependencies.
- * Supports prebuilt-layout (default), prebuilt-document, prebuilt-invoice, and prebuilt-read.
+ * Supports prebuilt-layout (default), prebuilt-read, prebuilt-invoice, and
+ * prebuilt-contract. Legacy prebuilt-document settings are mapped to v4 layout
+ * with keyValuePairs enabled.
  */
 async function azureParsePdf(
   input: Buffer,
@@ -556,12 +612,16 @@ async function azureParsePdf(
     );
   }
 
-  const model = config.azureModel ?? 'prebuilt-layout';
   const mimeType = mimeTypeForFilename(filename);
   const warnings: string[] = [];
+  const { model, features, queryFields } = resolveAzureAnalyzeRequest(config, mimeType, warnings);
 
   // 1. Submit document for analysis
-  const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/${model}:analyze?api-version=2024-11-30`;
+  const query = new URLSearchParams({ 'api-version': AZURE_DOCUMENT_INTELLIGENCE_API_VERSION });
+  if (features.length > 0) query.set('features', features.join(','));
+  if (queryFields.length > 0) query.set('queryFields', queryFields.join(','));
+  if (config.options?.outputFormat === 'markdown') query.set('outputContentFormat', 'markdown');
+  const analyzeUrl = `${endpoint.replace(/\/$/, '')}/documentintelligence/documentModels/${encodeURIComponent(model)}:analyze?${query.toString()}`;
 
   const submitRes = await fetch(analyzeUrl, {
     method: 'POST',

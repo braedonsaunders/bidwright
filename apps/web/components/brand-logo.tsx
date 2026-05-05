@@ -24,8 +24,8 @@ export function BidwrightMark({
   if (variant === "auto") {
     return (
       <span className={cn("relative inline-flex shrink-0 items-center justify-center", className)} aria-hidden="true">
-        <img src={MARK_SRC} alt="" className={cn("h-full w-full object-contain dark:hidden", imageClassName)} />
-        <img src={MARK_INVERTED_SRC} alt="" className={cn("hidden h-full w-full object-contain dark:block", imageClassName)} />
+        <img src={MARK_SRC} alt="" className={cn("bidwright-mark-image-color h-full w-full object-contain", imageClassName)} />
+        <img src={MARK_INVERTED_SRC} alt="" className={cn("bidwright-mark-image-light h-full w-full object-contain", imageClassName)} />
       </span>
     );
   }

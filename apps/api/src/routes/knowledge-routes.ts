@@ -1,6 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
-import { assertSafeSpreadsheetArchive, createPdfParser } from "@bidwright/ingestion";
+import {
+  DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  assertSafeSpreadsheetArchive,
+  createPdfParser,
+  isAzureDocumentIntelligenceModel,
+  normalizeAzureDocumentIntelligenceFeatures,
+  parseAzureDocumentIntelligenceQueryFields,
+} from "@bidwright/ingestion";
 import { prisma } from "@bidwright/db";
 import { resolveApiPath } from "../paths.js";
 import { readFile } from "node:fs/promises";
@@ -418,7 +425,9 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       const body = request.body as {
         documentId: string;
         projectId?: string;
-        model?: "prebuilt-layout" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-read";
+        model?: "prebuilt-layout" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-read" | "prebuilt-contract";
+        features?: string[];
+        queryFields?: string[] | string;
         updateDocument?: boolean;
       };
 
@@ -431,6 +440,18 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       const integrations = settings.integrations ?? {} as any;
       const azureEndpoint = integrations.azureDiEndpoint || undefined;
       const azureKey = integrations.azureDiKey || undefined;
+      const azureModel = isAzureDocumentIntelligenceModel(body.model)
+        ? body.model
+        : isAzureDocumentIntelligenceModel(integrations.azureDiModel)
+          ? integrations.azureDiModel
+          : "prebuilt-layout";
+      const azureFeatures = normalizeAzureDocumentIntelligenceFeatures(
+        body.features ?? integrations.azureDiFeatures,
+        DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+      );
+      const azureQueryFields = parseAzureDocumentIntelligenceQueryFields(
+        body.queryFields ?? integrations.azureDiQueryFields,
+      );
       if (!azureEndpoint || !azureKey) {
         return reply.code(503).send({
           message: "Azure Document Intelligence not configured. Add credentials in Settings > Integrations > API Keys.",
@@ -478,7 +499,10 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         provider: "azure",
         azureEndpoint,
         azureKey,
-        azureModel: body.model ?? "prebuilt-layout",
+        azureModel,
+        azureFeatures,
+        azureQueryFields,
+        options: { outputFormat: integrations.azureDiOutputFormat === "markdown" ? "markdown" : "text" },
       });
 
       const doc = await parser.parse(fileBuffer, fileName);
