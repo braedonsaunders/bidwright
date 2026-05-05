@@ -1194,8 +1194,8 @@ const ENTITY_BROWSE_CARDS: Array<{
   {
     id: "plugins",
     label: "External Searches",
-    detail: "Provider lookups that return line items",
-    sources: ["external_action"],
+    detail: "Provider searches and tools that return line items",
+    sources: ["external_action", "plugin_tool"],
     Icon: Store,
     accent: "border-accent/25 bg-accent/8 text-accent",
   },
@@ -1610,6 +1610,7 @@ function groupSearchResults(
   currentCategoryName?: string,
 ): EntityOptionGroup[] {
   const groups = new Map<string, EntityOptionGroup>();
+  const hasSearchTerm = searchTerm.trim().length > 0;
   const mappedResults = results.map((result) => entityOptionFromSearchResult(result, categories, searchTerm));
   const linkedCatalogRateIds = new Set(
     mappedResults
@@ -1632,8 +1633,13 @@ function groupSearchResults(
   }
 
   return Array.from(groups.values()).sort((left, right) => {
-    if (left.categoryName === "Actions" && right.categoryName !== "Actions") return 1;
-    if (right.categoryName === "Actions" && left.categoryName !== "Actions") return -1;
+    if (hasSearchTerm) {
+      if (left.categoryName === "Actions" && right.categoryName !== "Actions") return -1;
+      if (right.categoryName === "Actions" && left.categoryName !== "Actions") return 1;
+    } else {
+      if (left.categoryName === "Actions" && right.categoryName !== "Actions") return 1;
+      if (right.categoryName === "Actions" && left.categoryName !== "Actions") return -1;
+    }
     const leftPriority = left.sortPriority ?? sourcePriority(left.source);
     const rightPriority = right.sortPriority ?? sourcePriority(right.source);
     const laborPriority = sourcePriority("labor_unit");
@@ -1650,6 +1656,7 @@ function groupSearchResults(
 function orderEntityGroupsForRow(
   groups: EntityOptionGroup[],
   rowCategoryName?: string,
+  actionsFirst = false,
 ): EntityOptionGroup[] {
   const providerGroups = groups.filter((group) => group.categoryName === "Provider Results");
   const actionGroups = groups.filter((group) => group.categoryName === "Actions");
@@ -1665,6 +1672,16 @@ function orderEntityGroupsForRow(
   const otherPricedGroups = pricedGroups.filter((group) =>
     !rowCategoryName || group.categoryName !== rowCategoryName
   );
+
+  if (actionsFirst) {
+    return [
+      ...providerGroups,
+      ...actionGroups,
+      ...matchingPricedGroups,
+      ...otherPricedGroups,
+      ...laborGroups,
+    ];
+  }
 
   return [
     ...providerGroups,
@@ -2883,11 +2900,11 @@ export function EstimateGrid({
     if (!entityDropdownRowId || !activeEntityRow) return [];
     type FlatEntity = { group: EntityOptionGroup; item: EntityOptionItem };
     const out: FlatEntity[] = [];
-    for (const group of orderEntityGroupsForRow(entityDisplayGroups, activeEntityRow.category)) {
+    for (const group of orderEntityGroupsForRow(entityDisplayGroups, activeEntityRow.category, entitySearchTerm.trim().length > 0)) {
       for (const item of group.items) out.push({ group, item });
     }
     return out;
-  }, [activeEntityRow, entityDisplayGroups, entityDropdownRowId]);
+  }, [activeEntityRow, entityDisplayGroups, entityDropdownRowId, entitySearchTerm]);
 
   // Reset highlight when dropdown opens or search changes
   useEffect(() => {
@@ -5063,16 +5080,16 @@ export function EstimateGrid({
 
     const isDropdownOpen = entityDropdownRowId === dropdownRowId;
 
-		            const orderedGroups = orderEntityGroupsForRow(entityDisplayGroups, row.category);
-	            const sourceStats = Array.from(
-	              entityFlatItems.reduce<Map<string, number>>((map, entry) => {
-	                const label = sourceBadgeLabel(entry.item.source) || "Item";
-	                map.set(label, (map.get(label) ?? 0) + 1);
-	                return map;
-	              }, new Map()),
-	            ).slice(0, 5);
+    const orderedGroups = orderEntityGroupsForRow(entityDisplayGroups, row.category, entitySearchTerm.trim().length > 0);
+    const sourceStats = Array.from(
+      entityFlatItems.reduce<Map<string, number>>((map, entry) => {
+        const label = sourceBadgeLabel(entry.item.source) || "Item";
+        map.set(label, (map.get(label) ?? 0) + 1);
+        return map;
+      }, new Map()),
+    ).slice(0, 5);
 
-	            const selectFlatItem = (idx: number) => {
+    const selectFlatItem = (idx: number) => {
 	              const flat = entityFlatItems[idx];
 	              if (!flat) return;
 	              handleEntityAction(row.id, flat.group, flat.item);

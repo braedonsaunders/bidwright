@@ -136,6 +136,7 @@ import {
 import { PdfStudio } from "@/components/workspace/pdf-studio";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import { RevisionDiffModal } from "@/components/workspace/revision-diff-modal";
+import { WorkspaceI18nSurface } from "@/components/workspace/workspace-i18n-surface";
 import { WorkspaceSearch, type SearchNavigationTarget } from "@/components/workspace/workspace-search";
 import type {
   BidwrightModelLineItemDraft,
@@ -1909,6 +1910,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       : Number(workspace.estimate.totals.totalHours ?? 0);
 
   return (
+    <WorkspaceI18nSurface>
     <div className="flex flex-col flex-1 min-h-0 gap-4">
       {/* ─── Header ─── */}
       <div className="flex items-center gap-4 shrink-0">
@@ -2381,6 +2383,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       )}
       </AnimatePresence>
     </div>
+    </WorkspaceI18nSurface>
   );
 }
 
