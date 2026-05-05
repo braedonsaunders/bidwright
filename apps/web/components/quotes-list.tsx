@@ -25,6 +25,7 @@ import {
   createCustomer,
   createProject,
   getCustomers,
+  listRateBookAssignments,
   type Customer,
   type ProjectListItem,
   type OrgUser,
@@ -349,6 +350,17 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     try {
       const isSnap = manualCreationMode === "snap";
       const selectedCustomer = manualCustomerOptions.find((c) => c.id === manualCustomerId) ?? null;
+      if (isSnap && selectedCustomer) {
+        const defaultRatebooks = await listRateBookAssignments({
+          customerId: selectedCustomer.id,
+          active: true,
+        });
+        if (defaultRatebooks.length === 0) {
+          setManualSaving(false);
+          setManualError(`Snap quotes need a default ratebook for ${selectedCustomer.name}. Add one on the client Ratebooks tab, then try again.`);
+          return;
+        }
+      }
       const clientName = selectedCustomer?.name || t("manual.unassignedClient");
       const location = manualLocation.trim() || "TBD";
       const result = await createProject({

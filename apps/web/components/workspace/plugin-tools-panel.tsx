@@ -47,12 +47,19 @@ interface SelectedTool {
   tool: PluginToolDefinition;
 }
 
+interface InitialPluginToolSelection {
+  pluginId?: string;
+  pluginSlug?: string;
+  toolId?: string;
+}
+
 export function PluginToolsPanel({
   projectId,
   revisionId,
   worksheetId,
   rateSchedules,
   open,
+  initialSelection,
   onClose,
   onItemsCreated,
 }: {
@@ -61,6 +68,7 @@ export function PluginToolsPanel({
   worksheetId?: string;
   rateSchedules?: RateSchedule[];
   open: boolean;
+  initialSelection?: InitialPluginToolSelection | null;
   onClose: () => void;
   onItemsCreated?: () => void;
 }) {
@@ -81,6 +89,25 @@ export function PluginToolsPanel({
       .catch(() => setPlugins([]))
       .finally(() => setLoading(false));
   }, [open]);
+
+  useEffect(() => {
+    if (!open || loading || plugins.length === 0 || !initialSelection) return;
+
+    const plugin = plugins.find((candidate) =>
+      candidate.id === initialSelection.pluginId ||
+      (initialSelection.pluginSlug && candidate.slug === initialSelection.pluginSlug) ||
+      (!!initialSelection.toolId && candidate.toolDefinitions.some((tool) => tool.id === initialSelection.toolId))
+    );
+    if (!plugin) return;
+
+    const tool = initialSelection.toolId
+      ? plugin.toolDefinitions.find((candidate) => candidate.id === initialSelection.toolId)
+      : plugin.toolDefinitions[0];
+    if (!tool) return;
+
+    setSelectedTool({ plugin, tool });
+    setExecutionOutput(null);
+  }, [initialSelection, loading, open, plugins]);
 
   const allTools = useMemo(() => {
     const tools: Array<{ plugin: PluginRecord; tool: PluginToolDefinition }> = [];
@@ -305,4 +332,3 @@ export function PluginToolsPanel({
     </motion.div>
   );
 }
-
