@@ -22,6 +22,9 @@ const ENTRIES: Array<[string, ...string[]]> = [
   ["Snap", "Rápida", "Rapide", "Kurzangebot", "Rápido", "快速", "スナップ", "스냅", "स्नैप", "سريع"],
   ["Open", "Abierto", "Ouvert", "Offen", "Aberto", "打开", "未完了", "열림", "खुला", "مفتوح"],
   ["All", "Todo", "Tout", "Alle", "Tudo", "全部", "すべて", "전체", "सभी", "الكل"],
+  ["No", "No", "Non", "Nein", "Não", "无", "なし", "없음", "नहीं", "لا"],
+  ["Filter", "Filtro", "Filtre", "Filter", "Filtro", "筛选器", "フィルター", "필터", "फ़िल्टर", "مرشح"],
+  ["2W", "2 sem.", "2 sem.", "2 W.", "2 sem.", "2周", "2週", "2주", "2 सप्ताह", "أسبوعان"],
   ["This", "Este", "Ce", "Diese", "Este", "此", "この", "이", "यह", "هذا"],
   ["Page", "Página", "Page", "Seite", "Página", "页面", "ページ", "페이지", "पृष्ठ", "الصفحة"],
   ["Pages", "Páginas", "Pages", "Seiten", "Páginas", "页面", "ページ", "페이지", "पृष्ठ", "الصفحات"],
@@ -731,7 +734,194 @@ const ENTRIES: Array<[string, ...string[]]> = [
   ["Drag this section in the list above to place it anywhere in the PDF.", "Arrastra esta sección en la lista superior para ubicarla en cualquier lugar del PDF.", "Faites glisser cette section dans la liste ci-dessus pour la placer n’importe où dans le PDF.", "Diesen Abschnitt in der Liste oben ziehen, um ihn beliebig im PDF zu platzieren.", "Arraste esta seção na lista acima para posicioná-la em qualquer lugar do PDF.", "在上方列表中拖动此章节，可将其放在 PDF 任意位置。", "上のリストでこのセクションをドラッグしてPDF内の任意の場所に配置します。", "위 목록에서 이 섹션을 드래그해 PDF 어디든 배치하세요.", "PDF में कहीं भी रखने के लिए ऊपर सूची में इस अनुभाग को खींचें।", "اسحب هذا القسم في القائمة أعلاه لوضعه في أي مكان داخل PDF."],
   ["Header uses the organization name and quote number automatically.", "El encabezado usa automáticamente el nombre de la organización y el número de cotización.", "L’en-tête utilise automatiquement le nom de l’organisation et le numéro du devis.", "Die Kopfzeile verwendet automatisch Organisationsname und Angebotsnummer.", "O cabeçalho usa automaticamente o nome da organização e o número da cotação.", "页眉会自动使用组织名称和报价编号。", "ヘッダーは組織名と見積番号を自動使用します。", "머리글은 조직 이름과 견적 번호를 자동으로 사용합니다.", "हेडर संगठन नाम और कोटेशन नंबर स्वतः उपयोग करता है।", "يستخدم الرأس اسم المؤسسة ورقم العرض تلقائيًا."],
   ["Footer uses the organization website and issue date automatically.", "El pie usa automáticamente el sitio web de la organización y la fecha de emisión.", "Le pied de page utilise automatiquement le site Web de l’organisation et la date d’émission.", "Die Fußzeile verwendet automatisch Organisationswebsite und Ausgabedatum.", "O rodapé usa automaticamente o site da organização e a data de emissão.", "页脚会自动使用组织网站和发布日期。", "フッターは組織Webサイトと発行日を自動使用します。", "바닥글은 조직 웹사이트와 발행일을 자동으로 사용합니다.", "फुटर संगठन वेबसाइट और जारी तिथि स्वतः उपयोग करता है।", "يستخدم التذييل موقع المؤسسة وتاريخ الإصدار تلقائيًا."],
-  ["Internal mode — cost, markup, margin & profit are visible. Do not share with customers.", "Modo interno: costo, markup, margen y utilidad son visibles. No compartir con clientes.", "Mode interne : coût, majoration, marge et profit sont visibles. Ne pas partager avec les clients.", "Interner Modus: Kosten, Aufschlag, Marge und Gewinn sind sichtbar. Nicht mit Kunden teilen.", "Modo interno: custo, markup, margem e lucro estão visíveis. Não compartilhe com clientes.", "内部模式：成本、加价、利润率和利润可见。请勿与客户共享。", "内部モード: 原価、マークアップ、マージン、利益が表示されます。顧客と共有しないでください。", "내부 모드: 비용, 마크업, 마진, 이익이 표시됩니다. 고객과 공유하지 마세요.", "आंतरिक मोड: लागत, markup, margin और profit दिखते हैं। ग्राहकों से साझा न करें।", "الوضع الداخلي: التكلفة والزيادة والهامش والربح ظاهرة. لا تشاركها مع العملاء."]
+  ["Internal mode — cost, markup, margin & profit are visible. Do not share with customers.", "Modo interno: costo, markup, margen y utilidad son visibles. No compartir con clientes.", "Mode interne : coût, majoration, marge et profit sont visibles. Ne pas partager avec les clients.", "Interner Modus: Kosten, Aufschlag, Marge und Gewinn sind sichtbar. Nicht mit Kunden teilen.", "Modo interno: custo, markup, margem e lucro estão visíveis. Não compartilhe com clientes.", "内部模式：成本、加价、利润率和利润可见。请勿与客户共享。", "内部モード: 原価、マークアップ、マージン、利益が表示されます。顧客と共有しないでください。", "내부 모드: 비용, 마크업, 마진, 이익이 표시됩니다. 고객과 공유하지 마세요.", "आंतरिक मोड: लागत, markup, margin और profit दिखते हैं। ग्राहकों से साझा न करें।", "الوضع الداخلي: التكلفة والزيادة والهامش والربح ظاهرة. لا تشاركها مع العملاء."],
+  ["General", "General", "Général", "Allgemein", "Geral", "常规", "一般", "일반", "सामान्य", "عام"],
+  ["Conditions", "Condiciones", "Conditions", "Bedingungen", "Condições", "条件", "条件", "조건", "शर्तें", "الشروط"],
+  ["Notes", "Notas", "Notes", "Notizen", "Notas", "备注", "メモ", "메모", "नोट्स", "الملاحظات"],
+  ["Rates", "Tarifas", "Taux", "Sätze", "Taxas", "费率", "レート", "요율", "दरें", "الأسعار"],
+  ["Quality", "Calidad", "Qualité", "Qualität", "Qualidade", "质量", "品質", "품질", "गुणवत्ता", "الجودة"],
+  ["Quote Details", "Detalles de cotización", "Détails du devis", "Angebotsdetails", "Detalhes da cotação", "报价详情", "見積詳細", "견적 세부 정보", "कोटेशन विवरण", "تفاصيل العرض"],
+  ["Quote Title", "Título de cotización", "Titre du devis", "Angebotstitel", "Título da cotação", "报价标题", "見積タイトル", "견적 제목", "कोटेशन शीर्षक", "عنوان العرض"],
+  ["Quote title", "Título de cotización", "Titre du devis", "Angebotstitel", "Título da cotação", "报价标题", "見積タイトル", "견적 제목", "कोटेशन शीर्षक", "عنوان العرض"],
+  ["Contact", "Contacto", "Contact", "Kontakt", "Contato", "联系人", "連絡先", "연락처", "संपर्क", "جهة الاتصال"],
+  ["Department", "Departamento", "Service", "Abteilung", "Departamento", "部门", "部門", "부서", "विभाग", "القسم"],
+  ["Type", "Tipo", "Type", "Typ", "Tipo", "类型", "種類", "유형", "प्रकार", "النوع"],
+  ["New client name", "Nuevo nombre de cliente", "Nouveau nom du client", "Neuer Kundenname", "Novo nome do cliente", "新客户名称", "新しい顧客名", "새 고객 이름", "नया ग्राहक नाम", "اسم عميل جديد"],
+  ["Add new client", "Agregar cliente nuevo", "Ajouter un nouveau client", "Neuen Kunden hinzufügen", "Adicionar novo cliente", "添加新客户", "新しい顧客を追加", "새 고객 추가", "नया ग्राहक जोड़ें", "إضافة عميل جديد"],
+  ["New contact name", "Nuevo nombre de contacto", "Nouveau nom du contact", "Neuer Kontaktname", "Novo nome do contato", "新联系人姓名", "新しい連絡先名", "새 연락처 이름", "नया संपर्क नाम", "اسم جهة اتصال جديدة"],
+  ["Select contact...", "Seleccionar contacto...", "Sélectionner un contact...", "Kontakt auswählen...", "Selecionar contato...", "选择联系人...", "連絡先を選択...", "연락처 선택...", "संपर्क चुनें...", "اختر جهة الاتصال..."],
+  ["Add new contact", "Agregar contacto nuevo", "Ajouter un nouveau contact", "Neuen Kontakt hinzufügen", "Adicionar novo contato", "添加新联系人", "新しい連絡先を追加", "새 연락처 추가", "नया संपर्क जोड़ें", "إضافة جهة اتصال جديدة"],
+  ["Select a client first", "Selecciona primero un cliente", "Sélectionnez d’abord un client", "Zuerst einen Kunden auswählen", "Selecione um cliente primeiro", "请先选择客户", "先に顧客を選択", "먼저 고객을 선택하세요", "पहले ग्राहक चुनें", "اختر العميل أولاً"],
+  ["Select department...", "Seleccionar departamento...", "Sélectionner un service...", "Abteilung auswählen...", "Selecionar departamento...", "选择部门...", "部門を選択...", "부서 선택...", "विभाग चुनें...", "اختر القسم..."],
+  ["Select type...", "Seleccionar tipo...", "Sélectionner un type...", "Typ auswählen...", "Selecionar tipo...", "选择类型...", "種類を選択...", "유형 선택...", "प्रकार चुनें...", "اختر النوع..."],
+  ["Quote Date", "Fecha de cotización", "Date du devis", "Angebotsdatum", "Data da cotação", "报价日期", "見積日", "견적일", "कोटेशन तिथि", "تاريخ العرض"],
+  ["Due Date", "Fecha de vencimiento", "Date d’échéance", "Fälligkeitsdatum", "Data de vencimento", "截止日期", "期限日", "마감일", "देय तिथि", "تاريخ الاستحقاق"],
+  ["Description / Scope of Work", "Descripción / alcance de trabajo", "Description / portée des travaux", "Beschreibung / Leistungsumfang", "Descrição / escopo do trabalho", "描述 / 工作范围", "説明 / 作業範囲", "설명 / 작업 범위", "विवरण / कार्य दायरा", "الوصف / نطاق العمل"],
+  ["Scope of work description...", "Descripción del alcance de trabajo...", "Description de la portée des travaux...", "Beschreibung des Leistungsumfangs...", "Descrição do escopo do trabalho...", "工作范围描述...", "作業範囲の説明...", "작업 범위 설명...", "कार्य दायरे का विवरण...", "وصف نطاق العمل..."],
+  ["Customer-facing estimate notes...", "Notas de estimación para el cliente...", "Notes d’estimation destinées au client...", "Kundenorientierte Kalkulationsnotizen...", "Notas de estimativa para o cliente...", "面向客户的估算备注...", "顧客向け見積メモ...", "고객용 견적 메모...", "ग्राहक हेतु अनुमान नोट्स...", "ملاحظات تقدير موجهة للعميل..."],
+  ["Inclusions", "Inclusiones", "Inclus", "Einschlüsse", "Inclusões", "包含项", "含まれる項目", "포함 사항", "शामिल मदें", "المشمولة"],
+  ["Exclusions", "Exclusiones", "Exclus", "Ausschlüsse", "Exclusões", "排除项", "除外項目", "제외 사항", "बहिष्करण", "المستثناة"],
+  ["Clarifications", "Aclaraciones", "Clarifications", "Klarstellungen", "Esclarecimentos", "澄清事项", "補足事項", "명확화", "स्पष्टीकरण", "التوضيحات"],
+  ["Library", "Biblioteca", "Bibliothèque", "Bibliothek", "Biblioteca", "库", "ライブラリ", "라이브러리", "लाइब्रेरी", "المكتبة"],
+  ["Condition Library —", "Biblioteca de condiciones:", "Bibliothèque de conditions :", "Bedingungsbibliothek:", "Biblioteca de condições:", "条件库：", "条件ライブラリ:", "조건 라이브러리:", "शर्त लाइब्रेरी:", "مكتبة الشروط:"],
+  ["No library entries. Save conditions to build your reusable library.", "No hay entradas de biblioteca. Guarda condiciones para crear tu biblioteca reutilizable.", "Aucune entrée de bibliothèque. Enregistrez des conditions pour créer votre bibliothèque réutilisable.", "Keine Bibliothekseinträge. Speichern Sie Bedingungen, um Ihre wiederverwendbare Bibliothek aufzubauen.", "Nenhuma entrada na biblioteca. Salve condições para criar sua biblioteca reutilizável.", "没有库条目。保存条件以构建可复用库。", "ライブラリ項目がありません。条件を保存して再利用ライブラリを作成します。", "라이브러리 항목이 없습니다. 조건을 저장해 재사용 라이브러리를 만드세요.", "कोई लाइब्रेरी प्रविष्टि नहीं। पुन: उपयोग लाइब्रेरी बनाने के लिए शर्तें सहेजें।", "لا توجد إدخالات في المكتبة. احفظ الشروط لبناء مكتبتك القابلة لإعادة الاستخدام."],
+  ["Use", "Usar", "Utiliser", "Verwenden", "Usar", "使用", "使用", "사용", "उपयोग करें", "استخدام"],
+  ["No inclusions added", "No se agregaron inclusiones", "Aucun inclus ajouté", "Keine Einschlüsse hinzugefügt", "Nenhuma inclusão adicionada", "未添加包含项", "含まれる項目は未追加", "포함 사항이 추가되지 않음", "कोई शामिल मद नहीं जोड़ी गई", "لم تتم إضافة مشمولات"],
+  ["No exclusions added", "No se agregaron exclusiones", "Aucun exclu ajouté", "Keine Ausschlüsse hinzugefügt", "Nenhuma exclusão adicionada", "未添加排除项", "除外項目は未追加", "제외 사항이 추가되지 않음", "कोई बहिष्करण नहीं जोड़ा गया", "لم تتم إضافة مستثنيات"],
+  ["No clarifications added", "No se agregaron aclaraciones", "Aucune clarification ajoutée", "Keine Klarstellungen hinzugefügt", "Nenhum esclarecimento adicionado", "未添加澄清事项", "補足事項は未追加", "명확화가 추가되지 않음", "कोई स्पष्टीकरण नहीं जोड़ा गया", "لم تتم إضافة توضيحات"],
+  ["Add inclusion...", "Agregar inclusión...", "Ajouter un inclus...", "Einschluss hinzufügen...", "Adicionar inclusão...", "添加包含项...", "含まれる項目を追加...", "포함 사항 추가...", "शामिल मद जोड़ें...", "إضافة مشمول..."],
+  ["Add exclusion...", "Agregar exclusión...", "Ajouter un exclu...", "Ausschluss hinzufügen...", "Adicionar exclusão...", "添加排除项...", "除外項目を追加...", "제외 사항 추가...", "बहिष्करण जोड़ें...", "إضافة مستثنى..."],
+  ["Add clarification...", "Agregar aclaración...", "Ajouter une clarification...", "Klarstellung hinzufügen...", "Adicionar esclarecimento...", "添加澄清事项...", "補足事項を追加...", "명확화 추가...", "स्पष्टीकरण जोड़ें...", "إضافة توضيح..."],
+  ["Save to library", "Guardar en biblioteca", "Enregistrer dans la bibliothèque", "In Bibliothek speichern", "Salvar na biblioteca", "保存到库", "ライブラリに保存", "라이브러리에 저장", "लाइब्रेरी में सहेजें", "حفظ في المكتبة"],
+  ["Rate Schedules", "Programas de tarifas", "Barèmes de taux", "Tarifpläne", "Tabelas de taxas", "费率计划", "レートスケジュール", "요율표", "दर अनुसूचियाँ", "جداول الأسعار"],
+  ["Import from Library", "Importar desde biblioteca", "Importer depuis la bibliothèque", "Aus Bibliothek importieren", "Importar da biblioteca", "从库导入", "ライブラリからインポート", "라이브러리에서 가져오기", "लाइब्रेरी से आयात करें", "استيراد من المكتبة"],
+  ["No rate schedules imported. Import from your organization's rate library.", "No se importaron programas de tarifas. Importa desde la biblioteca de tarifas de tu organización.", "Aucun barème importé. Importez depuis la bibliothèque de taux de votre organisation.", "Keine Tarifpläne importiert. Importieren Sie aus der Tarifbibliothek Ihrer Organisation.", "Nenhuma tabela de taxas importada. Importe da biblioteca de taxas da sua organização.", "未导入费率计划。请从组织的费率库导入。", "レートスケジュールがインポートされていません。組織のレートライブラリからインポートしてください。", "가져온 요율표가 없습니다. 조직의 요율 라이브러리에서 가져오세요.", "कोई दर अनुसूची आयात नहीं हुई। अपने संगठन की दर लाइब्रेरी से आयात करें।", "لم يتم استيراد جداول أسعار. استورد من مكتبة أسعار مؤسستك."],
+  ["No rate items in this schedule.", "No hay partidas de tarifa en este programa.", "Aucun article de taux dans ce barème.", "Keine Tarifpositionen in diesem Plan.", "Nenhum item de taxa nesta tabela.", "此计划中没有费率项。", "このスケジュールにレート項目はありません。", "이 요율표에 요율 항목이 없습니다.", "इस अनुसूची में कोई दर आइटम नहीं है।", "لا توجد بنود أسعار في هذا الجدول."],
+  ["Cost Rates", "Tarifas de costo", "Taux de coût", "Kostensätze", "Taxas de custo", "成本费率", "原価レート", "원가 요율", "लागत दरें", "أسعار التكلفة"],
+  ["Estimate Search", "Búsqueda de estimación", "Recherche d’estimation", "Kalkulationssuche", "Busca da estimativa", "估算搜索", "見積検索", "견적 검색", "अनुमान खोज", "بحث التقدير"],
+  ["Quote-level controls for line item search sources, catalog visibility, and labour unit libraries.", "Controles de cotización para fuentes de búsqueda de partidas, visibilidad de catálogos y bibliotecas de unidades de mano de obra.", "Contrôles au niveau du devis pour les sources de recherche de lignes, la visibilité des catalogues et les bibliothèques d’unités de main-d’œuvre.", "Angebotsweite Steuerung für Positionssuchquellen, Katalogsichtbarkeit und Arbeitseinheitenbibliotheken.", "Controles da cotação para fontes de busca de linhas, visibilidade de catálogos e bibliotecas de unidades de mão de obra.", "报价级控件，用于明细项搜索来源、目录可见性和人工单位库。", "明細検索ソース、カタログ表示、労務単位ライブラリの見積レベル制御。", "라인 항목 검색 소스, 카탈로그 표시, 노무 단위 라이브러리를 위한 견적 수준 제어입니다.", "लाइन आइटम खोज स्रोतों, कैटलॉग दृश्यता और श्रम इकाई लाइब्रेरी के लिए कोटेशन-स्तर नियंत्रण।", "عناصر تحكم على مستوى العرض لمصادر بحث البنود وظهور الكتالوجات ومكتبات وحدات العمالة."],
+  ["Sources", "Fuentes", "Sources", "Quellen", "Fontes", "来源", "ソース", "소스", "स्रोत", "المصادر"],
+  ["enabled", "activado", "activé", "aktiviert", "ativado", "已启用", "有効", "활성화됨", "सक्षम", "مفعل"],
+  ["visible", "visible", "visible", "sichtbar", "visível", "可见", "表示", "표시", "दृश्यमान", "مرئي"],
+  ["source types on", "tipos de fuente activos", "types de source activés", "Quellentypen aktiv", "tipos de fonte ativos", "来源类型已开启", "ソース種別が有効", "소스 유형 켜짐", "स्रोत प्रकार चालू", "أنواع مصادر مفعلة"],
+  ["task", "tarea", "tâche", "Aufgabe", "tarefa", "任务", "タスク", "작업", "कार्य", "مهمة"],
+  ["tasks", "tareas", "tâches", "Aufgaben", "tarefas", "任务", "タスク", "작업", "कार्य", "مهام"],
+  ["unit", "unidad", "unité", "Einheit", "unidade", "单位", "単位", "단위", "इकाई", "وحدة"],
+  ["units", "unidades", "unités", "Einheiten", "unidades", "单位", "単位", "단위", "इकाइयाँ", "وحدات"],
+  ["Labour units", "Unidades de mano de obra", "Unités de main-d’œuvre", "Arbeitseinheiten", "Unidades de mão de obra", "人工单位", "労務単位", "노무 단위", "श्रम इकाइयाँ", "وحدات العمالة"],
+  ["Labour Unit Libraries", "Bibliotecas de unidades de mano de obra", "Bibliothèques d’unités de main-d’œuvre", "Arbeitseinheitenbibliotheken", "Bibliotecas de unidades de mão de obra", "人工单位库", "労務単位ライブラリ", "노무 단위 라이브러리", "श्रम इकाई लाइब्रेरी", "مكتبات وحدات العمالة"],
+  ["Imported rate books", "Libros de tarifas importados", "Livres de taux importés", "Importierte Satzbücher", "Livros de taxas importados", "已导入费率书", "インポート済みレートブック", "가져온 요율표", "आयातित दर पुस्तिकाएँ", "دفاتر أسعار مستوردة"],
+  ["Quote-linked labour and equipment rates.", "Tarifas de mano de obra y equipo vinculadas a la cotización.", "Taux de main-d’œuvre et d’équipement liés au devis.", "Mit dem Angebot verknüpfte Arbeits- und Gerätesätze.", "Taxas de mão de obra e equipamento vinculadas à cotação.", "与报价关联的人工和设备费率。", "見積に紐づく労務・設備レート。", "견적에 연결된 노무 및 장비 요율입니다.", "कोटेशन से जुड़ी श्रम और उपकरण दरें।", "أسعار العمالة والمعدات المرتبطة بالعرض."],
+  ["Catalogs", "Catálogos", "Catalogues", "Kataloge", "Catálogos", "目录", "カタログ", "카탈로그", "कैटलॉग", "الكتالوجات"],
+  ["Catalog items.", "Elementos de catálogo.", "Articles de catalogue.", "Katalogpositionen.", "Itens de catálogo.", "目录项。", "カタログ項目。", "카탈로그 항목입니다.", "कैटलॉग आइटम।", "بنود الكتالوج."],
+  ["Catalog items", "Elementos de catálogo", "Articles de catalogue", "Katalogpositionen", "Itens de catálogo", "目录项", "カタログ項目", "카탈로그 항목", "कैटलॉग आइटम", "بنود الكتالوج"],
+  ["Library catalog items.", "Partidas de catálogos de biblioteca.", "Articles de catalogue de bibliothèque.", "Bibliothekskatalogpositionen.", "Itens de catálogo da biblioteca.", "库目录项。", "ライブラリカタログ項目。", "라이브러리 카탈로그 항목입니다.", "लाइब्रेरी कैटलॉग आइटम।", "بنود كتالوج المكتبة."],
+  ["Production units, crews, and rate-book prompts.", "Unidades de producción, cuadrillas y sugerencias de libros de tarifas.", "Unités de production, équipes et invites de livres de taux.", "Produktionseinheiten, Kolonnen und Satzbuchabfragen.", "Unidades de produção, equipes e prompts de livros de taxas.", "生产单位、班组和费率书提示。", "生産単位、クルー、レートブック候補。", "생산 단위, 작업조 및 요율표 프롬프트입니다.", "उत्पादन इकाइयाँ, दल और दर पुस्तिका संकेत।", "وحدات الإنتاج والفرق ومطالبات دفاتر الأسعار."],
+  ["Cost intelligence", "Inteligencia de costos", "Info coûts", "Kostenintelligenz", "Inteligência de custos", "成本情报", "コスト情報", "비용 정보", "लागत इंटेलिजेंस", "معلومات التكلفة"],
+  ["Effective vendor and market cost observations.", "Observaciones efectivas de costos de proveedores y mercado.", "Observations de coûts fournisseurs et marché effectives.", "Wirksame Lieferanten- und Marktkostenbeobachtungen.", "Observações efetivas de custos de fornecedores e mercado.", "有效的供应商和市场成本观察。", "有効なベンダーおよび市場コスト観測。", "유효한 공급업체 및 시장 비용 관측입니다.", "प्रभावी विक्रेता और बाजार लागत अवलोकन।", "ملاحظات فعالة لتكاليف الموردين والسوق."],
+  ["Saved build-ups and multi-line selections.", "Desgloses guardados y selecciones de varias líneas.", "Compositions enregistrées et sélections multilignes.", "Gespeicherte Aufbauten und Mehrfachpositionsauswahlen.", "Composições salvas e seleções de várias linhas.", "已保存的组合和多行选择。", "保存済みの積算構成と複数行選択。", "저장된 구성 및 다중 라인 선택입니다.", "सहेजे गए बिल्ड-अप और बहु-लाइन चयन।", "تركيبات محفوظة وتحديدات متعددة البنود."],
+  ["Plugin calculators", "Calculadoras de plugin", "Calculateurs de module", "Plugin-Rechner", "Calculadoras de plugin", "插件计算器", "プラグイン計算機", "플러그인 계산기", "प्लगइन कैलकुलेटर", "حاسبات المكونات الإضافية"],
+  ["Tools that create worksheet lines when searched by name.", "Herramientas que crean líneas de hoja al buscarlas por nombre.", "Outils qui créent des lignes de feuille lorsqu’ils sont recherchés par nom.", "Werkzeuge, die bei Namenssuche Arbeitsblattzeilen erstellen.", "Ferramentas que criam linhas da planilha quando pesquisadas por nome.", "按名称搜索时可创建工作表行的工具。", "名前検索でワークシート行を作成するツール。", "이름으로 검색하면 워크시트 라인을 만드는 도구입니다.", "नाम से खोजने पर वर्कशीट लाइनें बनाने वाले उपकरण।", "أدوات تنشئ أسطر ورقة عمل عند البحث بالاسم."],
+  ["catalog item", "elemento de catálogo", "article de catalogue", "Katalogposition", "item de catálogo", "目录项", "カタログ項目", "카탈로그 항목", "कैटलॉग आइटम", "بند كتالوج"],
+  ["rate schedule item", "elemento de programa de tarifas", "article de barème", "Tarifplanposition", "item da tabela de taxas", "费率计划项", "レートスケジュール項目", "요율표 항목", "दर अनुसूची आइटम", "بند جدول أسعار"],
+  ["labor unit", "unidad de mano de obra", "unité de main-d’œuvre", "Arbeitseinheit", "unidade de mão de obra", "人工单位", "労務単位", "노무 단위", "श्रम इकाई", "وحدة عمالة"],
+  ["effective cost", "costo efectivo", "coût effectif", "effektive Kosten", "custo efetivo", "有效成本", "有効原価", "유효 비용", "प्रभावी लागत", "تكلفة فعلية"],
+  ["plugin tool", "herramienta de plugin", "outil de module", "Plugin-Werkzeug", "ferramenta de plugin", "插件工具", "プラグインツール", "플러그인 도구", "प्लगइन उपकरण", "أداة مكون إضافي"],
+  ["external action", "acción externa", "action externe", "externe Aktion", "ação externa", "外部操作", "外部アクション", "외부 작업", "बाहरी क्रिया", "إجراء خارجي"],
+  ["Filter catalogs...", "Filtrar catálogos...", "Filtrer les catalogues...", "Kataloge filtern...", "Filtrar catálogos...", "筛选目录...", "カタログを絞り込み...", "카탈로그 필터...", "कैटलॉग फ़िल्टर करें...", "تصفية الكتالوجات..."],
+  ["Filter libraries...", "Filtrar bibliotecas...", "Filtrer les bibliothèques...", "Bibliotheken filtern...", "Filtrar bibliotecas...", "筛选库...", "ライブラリを絞り込み...", "라이브러리 필터...", "लाइब्रेरी फ़िल्टर करें...", "تصفية المكتبات..."],
+  ["Enable visible", "Activar visibles", "Activer les visibles", "Sichtbare aktivieren", "Ativar visíveis", "启用可见项", "表示項目を有効化", "표시 항목 활성화", "दृश्यमान सक्षम करें", "تفعيل الظاهرة"],
+  ["Disable visible", "Desactivar visibles", "Désactiver les visibles", "Sichtbare deaktivieren", "Desativar visíveis", "禁用可见项", "表示項目を無効化", "표시 항목 비활성화", "दृश्यमान अक्षम करें", "تعطيل الظاهرة"],
+  ["Source disabled", "Fuente desactivada", "Source désactivée", "Quelle deaktiviert", "Fonte desativada", "来源已禁用", "ソース無効", "소스 비활성화", "स्रोत अक्षम", "المصدر معطل"],
+  ["No catalogs available.", "No hay catálogos disponibles.", "Aucun catalogue disponible.", "Keine Kataloge verfügbar.", "Nenhum catálogo disponível.", "没有可用目录。", "利用可能なカタログはありません。", "사용 가능한 카탈로그가 없습니다.", "कोई कैटलॉग उपलब्ध नहीं।", "لا توجد كتالوجات متاحة."],
+  ["No catalogs match this filter.", "Ningún catálogo coincide con este filtro.", "Aucun catalogue ne correspond à ce filtre.", "Keine Kataloge entsprechen diesem Filter.", "Nenhum catálogo corresponde a este filtro.", "没有目录匹配此筛选器。", "このフィルターに一致するカタログはありません。", "이 필터와 일치하는 카탈로그가 없습니다.", "कोई कैटलॉग इस फ़िल्टर से मेल नहीं खाता।", "لا توجد كتالوجات تطابق هذا المرشح."],
+  ["Loading labour libraries...", "Cargando bibliotecas de mano de obra...", "Chargement des bibliothèques de main-d’œuvre...", "Arbeitseinheitenbibliotheken werden geladen...", "Carregando bibliotecas de mão de obra...", "正在加载人工库...", "労務ライブラリを読み込み中...", "노무 라이브러리 로드 중...", "श्रम लाइब्रेरी लोड हो रही हैं...", "جارٍ تحميل مكتبات العمالة..."],
+  ["No labour unit libraries available.", "No hay bibliotecas de unidades de mano de obra disponibles.", "Aucune bibliothèque d’unités de main-d’œuvre disponible.", "Keine Arbeitseinheitenbibliotheken verfügbar.", "Nenhuma biblioteca de unidades de mão de obra disponível.", "没有可用的人工单位库。", "利用可能な労務単位ライブラリはありません。", "사용 가능한 노무 단위 라이브러리가 없습니다.", "कोई श्रम इकाई लाइब्रेरी उपलब्ध नहीं।", "لا توجد مكتبات وحدات عمالة متاحة."],
+  ["No libraries match this filter.", "Ninguna biblioteca coincide con este filtro.", "Aucune bibliothèque ne correspond à ce filtre.", "Keine Bibliotheken entsprechen diesem Filter.", "Nenhuma biblioteca corresponde a este filtro.", "没有库匹配此筛选器。", "このフィルターに一致するライブラリはありません。", "이 필터와 일치하는 라이브러리가 없습니다.", "कोई लाइब्रेरी इस फ़िल्टर से मेल नहीं खाती।", "لا توجد مكتبات تطابق هذا المرشح."],
+  ["Organizer", "Organizador", "Organisateur", "Organizer", "Organizador", "组织器", "整理", "정리함", "आयोजक", "المنظم"],
+  ["Project Files", "Archivos del proyecto", "Fichiers du projet", "Projektdateien", "Arquivos do projeto", "项目文件", "プロジェクトファイル", "프로젝트 파일", "प्रोजेक्ट फ़ाइलें", "ملفات المشروع"],
+  ["Construction estimating", "Estimación de construcción", "Estimation de construction", "Baukalkulation", "Estimativa de construção", "施工估算", "建設見積", "건설 견적", "निर्माण अनुमान", "تقدير البناء"],
+  ["Click a file to view.", "Haz clic en un archivo para verlo.", "Cliquez sur un fichier pour l’afficher.", "Klicken Sie auf eine Datei zur Ansicht.", "Clique em um arquivo para visualizar.", "点击文件查看。", "ファイルをクリックして表示。", "파일을 클릭해 보세요.", "देखने के लिए फ़ाइल क्लिक करें।", "انقر ملفًا لعرضه."],
+  ["Contribution", "Contribución", "Contribution", "Beitrag", "Contribuição", "贡献", "寄与", "기여", "योगदान", "المساهمة"],
+  ["Ranked by direct cost", "Ordenado por costo directo", "Classé par coût direct", "Nach Direktkosten sortiert", "Classificado por custo direto", "按直接成本排序", "直接原価順", "직접 비용순", "प्रत्यक्ष लागत के अनुसार क्रमबद्ध", "مرتبة حسب التكلفة المباشرة"],
+  ["No Cost Basis", "Sin base de costo", "Aucune base de coût", "Keine Kostenbasis", "Sem base de custo", "无成本依据", "原価根拠なし", "원가 기준 없음", "कोई लागत आधार नहीं", "لا يوجد أساس تكلفة"],
+  ["Cost Basis", "Base de costo", "Base de coût", "Kostenbasis", "Base de custo", "成本依据", "原価根拠", "원가 기준", "लागत आधार", "أساس التكلفة"],
+  ["Margin drag", "Arrastre de margen", "Frein sur la marge", "Margenbelastung", "Arrasto de margem", "利润率拖累", "マージン低下要因", "마진 저하", "मार्जिन दबाव", "ضغط الهامش"],
+  ["Margin Drag", "Arrastre de margen", "Frein sur la marge", "Margenbelastung", "Arrasto de margem", "利润率拖累", "マージン低下要因", "마진 저하", "मार्जिन दबाव", "ضغط الهامش"],
+  ["None flagged", "Ninguno marcado", "Aucun signalé", "Keine markiert", "Nenhum sinalizado", "未标记", "指摘なし", "표시 없음", "कुछ भी चिह्नित नहीं", "لا شيء محدد"],
+  ["Loss", "Pérdida", "Perte", "Verlust", "Perda", "亏损", "損失", "손실", "हानि", "خسارة"],
+  ["Concentrated", "Concentrado", "Concentré", "Konzentriert", "Concentrado", "集中", "集中", "집중됨", "केंद्रित", "مركز"],
+  ["Accretive", "Acrecitivo", "Relutif", "Wertsteigernd", "Agregador", "增益", "増益", "증가 효과", "मूल्य-वर्धक", "مضيف للقيمة"],
+  ["In Range", "En rango", "Dans la plage", "Im Bereich", "Dentro do intervalo", "在范围内", "範囲内", "범위 내", "सीमा में", "ضمن النطاق"],
+  ["Cost concentration", "Concentración de costos", "Concentration des coûts", "Kostenkonzentration", "Concentração de custos", "成本集中度", "コスト集中", "비용 집중", "लागत एकाग्रता", "تركز التكلفة"],
+  ["Profit driver", "Impulsor de utilidad", "Moteur de profit", "Gewinntreiber", "Driver de lucro", "利润驱动项", "利益ドライバー", "이익 동인", "लाभ चालक", "محرك الربح"],
+  ["Largest avg line", "Mayor línea promedio", "Ligne moyenne la plus élevée", "Größte Durchschnittsposition", "Maior linha média", "最大平均行", "最大平均行", "가장 큰 평균 라인", "सबसे बड़ी औसत लाइन", "أكبر متوسط بند"],
+  ["Gantt", "Gantt", "Gantt", "Gantt", "Gantt", "甘特图", "ガント", "간트", "गैंट", "جانت"],
+  ["Board", "Tablero", "Tableau", "Board", "Quadro", "看板", "ボード", "보드", "बोर्ड", "لوحة"],
+  ["Late", "Atrasado", "En retard", "Verspätet", "Atrasado", "逾期", "遅延", "지연", "देर", "متأخر"],
+  ["Slip", "Deslizamiento", "Glissement", "Verzug", "Desvio", "滑移", "ずれ", "밀림", "फिसलन", "انزلاق"],
+  ["Issues", "Incidencias", "Problèmes", "Probleme", "Problemas", "问题", "課題", "이슈", "समस्याएँ", "المشكلات"],
+  ["TBD", "Por definir", "À définir", "Noch offen", "A definir", "待定", "未定", "미정", "निर्धारित होना है", "يحدد لاحقًا"],
+  ["Primary", "Principal", "Principal", "Primär", "Principal", "主要", "プライマリ", "기본", "प्राथमिक", "أساسي"],
+  ["Scroll earlier", "Desplazar antes", "Faire défiler plus tôt", "Früher scrollen", "Rolar para antes", "向前滚动", "前へスクロール", "이전으로 스크롤", "पहले की ओर स्क्रॉल करें", "التمرير إلى وقت سابق"],
+  ["Jump to today", "Ir a hoy", "Aller à aujourd’hui", "Zu heute springen", "Ir para hoje", "跳到今天", "今日へ移動", "오늘로 이동", "आज पर जाएँ", "الانتقال إلى اليوم"],
+  ["Scroll later", "Desplazar después", "Faire défiler plus tard", "Später scrollen", "Rolar para depois", "向后滚动", "後へスクロール", "나중으로 스크롤", "बाद की ओर स्क्रॉल करें", "التمرير إلى وقت لاحق"],
+  ["Zoom out", "Alejar", "Zoom arrière", "Verkleinern", "Reduzir zoom", "缩小", "ズームアウト", "축소", "ज़ूम आउट", "تصغير"],
+  ["Zoom in", "Acercar", "Zoom avant", "Vergrößern", "Ampliar zoom", "放大", "ズームイン", "확대", "ज़ूम इन", "تكبير"],
+  ["Zoom day", "Zoom día", "Zoom jour", "Zoom Tag", "Zoom dia", "缩放到天", "日表示", "일 단위 줌", "दिन ज़ूम", "تكبير اليوم"],
+  ["Zoom week", "Zoom semana", "Zoom semaine", "Zoom Woche", "Zoom semana", "缩放到周", "週表示", "주 단위 줌", "सप्ताह ज़ूम", "تكبير الأسبوع"],
+  ["Zoom month", "Zoom mes", "Zoom mois", "Zoom Monat", "Zoom mês", "缩放到月", "月表示", "월 단위 줌", "महीना ज़ूम", "تكبير الشهر"],
+  ["List Mode", "Modo lista", "Mode liste", "Listenmodus", "Modo lista", "列表模式", "リストモード", "목록 모드", "सूची मोड", "وضع القائمة"],
+  ["Board Mode", "Modo tablero", "Mode tableau", "Boardmodus", "Modo quadro", "看板模式", "ボードモード", "보드 모드", "बोर्ड मोड", "وضع اللوحة"],
+  ["Task", "Tarea", "Tâche", "Aufgabe", "Tarefa", "任务", "タスク", "작업", "कार्य", "مهمة"],
+  ["Add task", "Agregar tarea", "Ajouter une tâche", "Aufgabe hinzufügen", "Adicionar tarefa", "添加任务", "タスクを追加", "작업 추가", "कार्य जोड़ें", "إضافة مهمة"],
+  ["Toggle filters", "Alternar filtros", "Activer/désactiver les filtres", "Filter umschalten", "Alternar filtros", "切换筛选器", "フィルター切替", "필터 전환", "फ़िल्टर टॉगल करें", "تبديل المرشحات"],
+  ["Toggle critical path", "Alternar ruta crítica", "Activer/désactiver le chemin critique", "Kritischen Pfad umschalten", "Alternar caminho crítico", "切换关键路径", "クリティカルパス切替", "주공정 전환", "क्रिटिकल पाथ टॉगल करें", "تبديل المسار الحرج"],
+  ["Path", "Ruta", "Chemin", "Pfad", "Caminho", "路径", "パス", "경로", "पथ", "المسار"],
+  ["Hide baseline", "Ocultar línea base", "Masquer la référence", "Basisplan ausblenden", "Ocultar linha de base", "隐藏基线", "ベースラインを非表示", "기준선 숨기기", "बेसलाइन छिपाएँ", "إخفاء خط الأساس"],
+  ["Show baseline", "Mostrar línea base", "Afficher la référence", "Basisplan anzeigen", "Mostrar linha de base", "显示基线", "ベースラインを表示", "기준선 표시", "बेसलाइन दिखाएँ", "إظهار خط الأساس"],
+  ["Schedule health filter", "Filtro de salud del programa", "Filtre de santé du calendrier", "Terminplan-Gesundheitsfilter", "Filtro de saúde do cronograma", "计划健康筛选器", "スケジュール健全性フィルター", "일정 상태 필터", "शेड्यूल स्वास्थ्य फ़िल्टर", "مرشح صحة الجدول"],
+  ["deadline miss", "incumplimiento de plazo", "échéance manquée", "Terminverfehlung", "perda de prazo", "错过截止日期", "期限未達", "마감 미스", "समयसीमा चूक", "تأخر عن الموعد"],
+  ["deadline misses", "incumplimientos de plazo", "échéances manquées", "Terminverfehlungen", "perdas de prazo", "错过截止日期", "期限未達", "마감 미스", "समयसीमा चूक", "تأخرات عن المواعيد"],
+  ["resource conflict", "conflicto de recursos", "conflit de ressources", "Ressourcenkonflikt", "conflito de recursos", "资源冲突", "リソース競合", "리소스 충돌", "संसाधन संघर्ष", "تعارض موارد"],
+  ["resource conflicts", "conflictos de recursos", "conflits de ressources", "Ressourcenkonflikte", "conflitos de recursos", "资源冲突", "リソース競合", "리소스 충돌", "संसाधन संघर्ष", "تعارضات موارد"],
+  ["constraint violation", "violación de restricción", "violation de contrainte", "Einschränkungsverstoß", "violação de restrição", "约束违规", "制約違反", "제약 위반", "बाधा उल्लंघन", "مخالفة قيد"],
+  ["constraint violations", "violaciones de restricción", "violations de contrainte", "Einschränkungsverstöße", "violações de restrição", "约束违规", "制約違反", "제약 위반", "बाधा उल्लंघन", "مخالفات قيود"],
+  ["Baseline controls. Active:", "Controles de línea base. Activo:", "Contrôles de référence. Actif :", "Basisplansteuerung. Aktiv:", "Controles da linha de base. Ativo:", "基线控件。活动：", "ベースライン操作。アクティブ:", "기준선 제어. 활성:", "बेसलाइन नियंत्रण। सक्रिय:", "عناصر تحكم خط الأساس. نشط:"],
+  ["Baseline", "Línea base", "Référence", "Basisplan", "Linha de base", "基线", "ベースライン", "기준선", "बेसलाइन", "خط الأساس"],
+  ["Active:", "Activo:", "Actif :", "Aktiv:", "Ativo:", "活动：", "アクティブ:", "활성:", "सक्रिय:", "نشط:"],
+  ["No Baseline", "Sin línea base", "Aucune référence", "Kein Basisplan", "Sem linha de base", "无基线", "ベースラインなし", "기준선 없음", "कोई बेसलाइन नहीं", "لا يوجد خط أساس"],
+  ["Clear", "Borrar", "Effacer", "Löschen", "Limpar", "清除", "クリア", "지우기", "साफ़ करें", "مسح"],
+  ["Hide", "Ocultar", "Masquer", "Ausblenden", "Ocultar", "隐藏", "非表示", "숨기기", "छिपाएँ", "إخفاء"],
+  ["Control", "Control", "Contrôle", "Steuerung", "Controle", "控制", "制御", "제어", "नियंत्रण", "التحكم"],
+  ["Manage schedule calendars, resources, and baselines", "Administrar calendarios, recursos y líneas base del programa", "Gérer les calendriers, ressources et références du calendrier", "Terminplankalender, Ressourcen und Basispläne verwalten", "Gerenciar calendários, recursos e linhas de base do cronograma", "管理计划日历、资源和基线", "スケジュールカレンダー、リソース、ベースラインを管理", "일정 캘린더, 리소스 및 기준선 관리", "शेड्यूल कैलेंडर, संसाधन और बेसलाइन प्रबंधित करें", "إدارة تقاويم الجدول والموارد وخطوط الأساس"],
+  ["Variance", "Varianza", "Écart", "Abweichung", "Variação", "偏差", "差異", "편차", "विचलन", "التباين"],
+  ["Float", "Holgura", "Marge libre", "Puffer", "Folga", "浮动时间", "余裕", "여유", "फ्लोट", "المرونة"],
+  ["Progress", "Progreso", "Avancement", "Fortschritt", "Progresso", "进度", "進捗", "진행률", "प्रगति", "التقدم"],
+  ["Assignee", "Responsable", "Responsable", "Zuständige Person", "Responsável", "负责人", "担当者", "담당자", "असाइनी", "المسؤول"],
+  ["Summary", "Resumen", "Résumé", "Zusammenfassung", "Resumo", "摘要", "サマリー", "요약", "सारांश", "الملخص"],
+  ["Overdue", "Vencido", "En retard", "Überfällig", "Atrasado", "逾期", "期限超過", "연체", "अतिदेय", "متأخر"],
+  ["Logic", "Lógica", "Logique", "Logik", "Lógica", "逻辑", "ロジック", "논리", "तर्क", "المنطق"],
+  ["Open End", "Fin abierta", "Fin ouverte", "Offenes Ende", "Fim aberto", "开放结束", "未接続終了", "열린 종료", "खुला अंत", "نهاية مفتوحة"],
+  ["Deadline", "Plazo", "Échéance", "Termin", "Prazo", "截止日期", "期限", "마감일", "समयसीमा", "الموعد النهائي"],
+  ["Constraint", "Restricción", "Contrainte", "Einschränkung", "Restrição", "约束", "制約", "제약", "बाधा", "القيد"],
+  ["Actuals", "Datos reales", "Réels", "Ist-Werte", "Reais", "实际值", "実績", "실적", "वास्तविक", "الفعليات"],
+  ["Not Started", "No iniciado", "Non démarré", "Nicht gestartet", "Não iniciado", "未开始", "未開始", "시작 전", "शुरू नहीं", "لم يبدأ"],
+  ["In Progress", "En curso", "En cours", "In Arbeit", "Em andamento", "进行中", "進行中", "진행 중", "प्रगति में", "قيد التنفيذ"],
+  ["On Hold", "En pausa", "En attente", "Angehalten", "Em espera", "暂停", "保留中", "보류", "होल्ड पर", "قيد الانتظار"],
+  ["Excellent", "Excelente", "Excellent", "Ausgezeichnet", "Excelente", "优秀", "優秀", "우수", "उत्कृष्ट", "ممتاز"],
+  ["Good", "Bueno", "Bon", "Gut", "Bom", "良好", "良好", "좋음", "अच्छा", "جيد"],
+  ["Needs review", "Requiere revisión", "À réviser", "Prüfung nötig", "Precisa de revisão", "需要审核", "要確認", "검토 필요", "समीक्षा आवश्यक", "بحاجة إلى مراجعة"],
+  ["Needs work", "Necesita trabajo", "Nécessite du travail", "Nacharbeit nötig", "Precisa de ajustes", "需要处理", "要対応", "작업 필요", "काम आवश्यक", "بحاجة إلى عمل"],
+  ["Pass", "Aprobado", "Réussi", "Bestanden", "Aprovado", "通过", "合格", "통과", "पास", "ناجح"],
+  ["No validation findings yet.", "Aún no hay hallazgos de validación.", "Aucune constatation de validation pour l’instant.", "Noch keine Validierungsbefunde.", "Ainda não há apontamentos de validação.", "还没有验证发现。", "検証所見はまだありません。", "아직 검증 발견 사항이 없습니다.", "अभी कोई सत्यापन निष्कर्ष नहीं।", "لا توجد ملاحظات تحقق بعد."],
+  ["Reviewed", "Revisado", "Révisé", "Geprüft", "Revisado", "已审核", "レビュー済み", "검토됨", "समीक्षित", "تمت المراجعة"],
+  ["Quote", "Cotización", "Devis", "Angebot", "Cotação", "报价", "見積", "견적", "कोटेशन", "العرض"],
+  ["Added", "Agregado", "Ajouté", "Hinzugefügt", "Adicionado", "已添加", "追加済み", "추가됨", "जोड़ा गया", "تمت الإضافة"],
+  ["Updated", "Actualizado", "Mis à jour", "Aktualisiert", "Atualizado", "已更新", "更新済み", "업데이트됨", "अपडेट किया गया", "تم التحديث"],
+  ["Removed", "Eliminado", "Supprimé", "Entfernt", "Removido", "已移除", "削除済み", "제거됨", "हटाया गया", "تمت الإزالة"],
+  ["Created", "Creado", "Créé", "Erstellt", "Criado", "已创建", "作成済み", "생성됨", "बनाया गया", "تم الإنشاء"],
+  ["Deleted", "Eliminado", "Supprimé", "Gelöscht", "Excluído", "已删除", "削除済み", "삭제됨", "हटाया गया", "تم الحذف"],
+  ["Sent", "Enviado", "Envoyé", "Gesendet", "Enviado", "已发送", "送信済み", "전송됨", "भेजा गया", "تم الإرسال"],
+  ["Accepted", "Aceptado", "Accepté", "Übernommen", "Aceito", "已接受", "承認済み", "수락됨", "स्वीकार किया गया", "تم القبول"],
+  ["Reverted", "Revertido", "Annulé", "Zurückgesetzt", "Revertido", "已还原", "元に戻しました", "되돌림", "वापस किया गया", "تم التراجع"],
+  ["Revert", "Revertir", "Rétablir", "Zurücksetzen", "Reverter", "还原", "元に戻す", "되돌리기", "वापस करें", "تراجع"],
+  ["Reverted:", "Revertido:", "Annulé :", "Zurückgesetzt:", "Revertido:", "已还原：", "元に戻しました:", "되돌림:", "वापस किया गया:", "تم التراجع:"],
+  ["Revision", "Revisión", "Révision", "Revision", "Revisão", "修订", "リビジョン", "개정", "संशोधन", "المراجعة"],
+  ["Schedule", "Programa", "Calendrier", "Terminplan", "Cronograma", "计划", "スケジュール", "일정", "शेड्यूल", "الجدول"],
+  ["All actions", "Todas las acciones", "Toutes les actions", "Alle Aktionen", "Todas as ações", "所有操作", "すべてのアクション", "모든 작업", "सभी कार्रवाइयाँ", "كل الإجراءات"],
+  ["just now", "ahora mismo", "à l’instant", "gerade eben", "agora mesmo", "刚刚", "たった今", "방금", "अभी-अभी", "الآن"],
+  ["ago", "hace", "il y a", "vor", "atrás", "前", "前", "전", "पहले", "منذ"],
+  ["field", "campo", "champ", "Feld", "campo", "字段", "フィールド", "필드", "फ़ील्ड", "حقل"],
+  ["fields", "campos", "champs", "Felder", "campos", "字段", "フィールド", "필드", "फ़ील्ड", "حقول"],
+  ["tool call", "llamada de herramienta", "appel d’outil", "Werkzeugaufruf", "chamada de ferramenta", "工具调用", "ツール呼び出し", "도구 호출", "टूल कॉल", "استدعاء أداة"],
+  ["tool calls", "llamadas de herramienta", "appels d’outil", "Werkzeugaufrufe", "chamadas de ferramenta", "工具调用", "ツール呼び出し", "도구 호출", "टूल कॉल", "استدعاءات أدوات"],
+  ["AI conversation", "Conversación de IA", "Conversation IA", "KI-Unterhaltung", "Conversa de IA", "AI 对话", "AI会話", "AI 대화", "AI वार्तालाप", "محادثة ذكاء اصطناعي"],
+  ["AI-generated phases", "fases generadas por IA", "phases générées par IA", "KI-generierte Phasen", "fases geradas por IA", "AI 生成阶段", "AI生成フェーズ", "AI 생성 단계", "AI-जनित चरण", "مراحل مولدة بالذكاء الاصطناعي"],
+  ["AI-generated items", "elementos generados por IA", "articles générés par IA", "KI-generierte Elemente", "itens gerados por IA", "AI 生成项目", "AI生成項目", "AI 생성 항목", "AI-जनित आइटम", "بنود مولدة بالذكاء الاصطناعي"],
+  ["Sent quote", "Cotización enviada", "Devis envoyé", "Angebot gesendet", "Cotação enviada", "报价已发送", "見積を送信しました", "견적 전송됨", "कोटेशन भेजा गया", "تم إرسال العرض"],
+  ["Updated revision settings", "Configuración de revisión actualizada", "Paramètres de révision mis à jour", "Revisionseinstellungen aktualisiert", "Configurações de revisão atualizadas", "修订设置已更新", "リビジョン設定を更新", "개정 설정 업데이트됨", "संशोधन सेटिंग अपडेट हुई", "تم تحديث إعدادات المراجعة"],
+  ["Updated quote details", "Detalles de cotización actualizados", "Détails du devis mis à jour", "Angebotsdetails aktualisiert", "Detalhes da cotação atualizados", "报价详情已更新", "見積詳細を更新", "견적 세부 정보 업데이트됨", "कोटेशन विवरण अपडेट हुआ", "تم تحديث تفاصيل العرض"]
 ];
 
 const TRANSLATIONS = Object.fromEntries(
@@ -770,6 +960,20 @@ const TERM_TRANSLATIONS = Object.fromEntries(
     ),
   ]),
 ) as Record<NonEnglishLocale, Record<string, string>>;
+
+function translateTerm(locale: NonEnglishLocale, value: string) {
+  return TERM_TRANSLATIONS[locale][termKey(value)] ?? value;
+}
+
+function translateCountTerm(locale: NonEnglishLocale, count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${translateTerm(locale, count === 1 ? singular : plural)}`;
+}
+
+function translateAgo(locale: NonEnglishLocale, value: string) {
+  const ago = translateTerm(locale, "ago");
+  if (locale === "es" || locale === "fr-CA" || locale === "de" || locale === "ar") return `${ago} ${value}`;
+  return `${value} ${ago}`;
+}
 
 const PRESERVED_WORDS = new Set([
   "2D",
@@ -1030,6 +1234,48 @@ function translateDynamic(locale: NonEnglishLocale, value: string) {
 
   match = /^(\d+)\/(\d+) visible$/.exec(value);
   if (match) return `${match[1]}/${match[2]} ${terms.visible}`;
+
+  match = /^(\d+)\/(\d+) enabled$/.exec(value);
+  if (match) return `${match[1]}/${match[2]} ${translateTerm(locale, "enabled")}`;
+
+  match = /^(\d+)\/(\d+) source types on$/.exec(value);
+  if (match) return `${match[1]}/${match[2]} ${translateTerm(locale, "source types on")}`;
+
+  match = /^(\d+) tasks?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "task", "tasks");
+
+  match = /^(\d+) items?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "Item", "Items");
+
+  match = /^(\d+) units?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "unit", "units");
+
+  match = /^(\d+) fields?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "field", "fields");
+
+  match = /^(\d+) tool calls?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "tool call", "tool calls");
+
+  match = /^(\d+) deadline misses?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "deadline miss", "deadline misses");
+
+  match = /^(\d+) resource conflicts?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "resource conflict", "resource conflicts");
+
+  match = /^(\d+) constraint violations?$/.exec(value);
+  if (match) return translateCountTerm(locale, Number(match[1]), "constraint violation", "constraint violations");
+
+  match = /^(\d+[mhd]) ago$/.exec(value);
+  if (match) return translateAgo(locale, match[1]);
+
+  match = /^Reviewed (.+)$/.exec(value);
+  if (match) return `${translateTerm(locale, "Reviewed")} ${match[1]}`;
+
+  match = /^Quote (.+)$/.exec(value);
+  if (match) return `${translateTerm(locale, "Quote")} ${match[1]}`;
+
+  match = /^Baseline controls\. Active: (.+)$/.exec(value);
+  if (match) return `${translateTerm(locale, "Baseline controls. Active:")} ${match[1]}`;
 
   match = /^(.+) margin$/.exec(value);
   if (match) return terms.margin(match[1]);
