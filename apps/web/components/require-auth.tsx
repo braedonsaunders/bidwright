@@ -2,11 +2,13 @@
 
 import { useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useAuth } from "./auth-provider";
 
 const PUBLIC_PATHS = ["/login", "/signup", "/setup"];
 
 export function RequireAuth({ children, requireSuperAdmin }: { children: ReactNode; requireSuperAdmin?: boolean }) {
+  const t = useTranslations("Common");
   const { user, loading, initialized, isSuperAdmin } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -39,7 +41,7 @@ export function RequireAuth({ children, requireSuperAdmin }: { children: ReactNo
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg">
-        <div className="text-fg/40 text-sm">Loading...</div>
+        <div className="text-fg/40 text-sm">{t("loading")}</div>
       </div>
     );
   }

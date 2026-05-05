@@ -5,7 +5,6 @@ import { apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
 const sourceTypeSchema = z.enum([
   "catalog_item",
   "rate_schedule_item",
-  "cost_resource",
   "effective_cost",
   "labor_unit",
   "assembly",
@@ -203,7 +202,7 @@ function resolveCandidateCategory(
     const labour = findCategoryByBucket(categories, ["labour", "labor"]);
     if (labour) return labour;
   }
-  if (resourceType.includes("material") || resourceType.includes("product") || candidate.sourceType === "cost_resource" || candidate.sourceType === "effective_cost") {
+  if (resourceType.includes("material") || resourceType.includes("product") || candidate.sourceType === "effective_cost") {
     const material = findCategoryByBucket(categories, ["material"]);
     if (material) return material;
   }
@@ -312,7 +311,7 @@ function sourceQualityForCandidate(candidate: SearchCandidate, matchType: BasisM
 }
 
 function candidateBasisKind(candidate: SearchCandidate, matchType: BasisMatchType): string {
-  if (candidate.sourceType === "effective_cost" || candidate.sourceType === "cost_resource") {
+  if (candidate.sourceType === "effective_cost") {
     if (matchType === "exact") return "cost_intelligence_exact";
     if (matchType === "similar") return "cost_intelligence_similar";
     return "cost_intelligence_context";
@@ -903,6 +902,7 @@ export function registerResourceTools(server: McpServer) {
       documentId: z.string().optional().describe("Optional drawing/document id."),
       page: z.number().int().positive().optional().describe("Optional 1-based page number."),
       limit: z.number().int().positive().max(100).default(25),
+      offset: z.number().int().min(0).default(0),
     },
     async (input) => {
       const projectId = getProjectId();
@@ -913,9 +913,12 @@ export function registerResourceTools(server: McpServer) {
         documentId: input.documentId,
         page: input.page,
       })}`);
-      const annotations = annotationsFromPayload(data)
-        .filter((annotation) => annotationMatchesQuery(annotation, input.q))
-        .slice(0, input.limit)
+      const matches = annotationsFromPayload(data)
+        .filter((annotation) => annotationMatchesQuery(annotation, input.q));
+      const offset = input.offset ?? 0;
+      const limit = input.limit ?? 25;
+      const annotations = matches
+        .slice(offset, offset + limit)
         .map((annotation) => {
           const measurement = annotationMeasurement(annotation);
           const label = stringValue(annotation.label) ?? stringValue(annotation.groupName) ?? "Takeoff annotation";
@@ -935,12 +938,23 @@ export function registerResourceTools(server: McpServer) {
             },
           };
           return {
-            ...annotation,
+            id: annotation.id,
+            documentId: annotation.documentId,
+            pageNumber: annotation.pageNumber,
+            annotationType: annotation.annotationType,
+            label,
+            groupName: annotation.groupName,
             measurement,
             basis,
           };
         });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ annotations }, null, 2) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        total: matches.length,
+        offset,
+        limit,
+        hasMore: offset + annotations.length < matches.length,
+        annotations,
+      }, null, 2) }] };
     },
   );
 

@@ -123,14 +123,13 @@ const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
   "catalog_item",
   "rate_schedule_item",
   "labor_unit",
-  "cost_resource",
   "effective_cost",
   "assembly",
   "plugin_tool",
   "external_action",
 ];
 
-const CATALOG_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = ["catalog_item", "cost_resource"];
+const CATALOG_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = ["catalog_item"];
 const LABOR_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = ["labor_unit"];
 
 const ESTIMATE_SEARCH_SOURCE_CONTROLS: Array<{
@@ -149,8 +148,8 @@ const ESTIMATE_SEARCH_SOURCE_CONTROLS: Array<{
   },
   {
     label: "Catalogs",
-    detail: "Catalog items and reusable cost resources.",
-    sourceTypes: ["catalog_item", "cost_resource"],
+    detail: "Library catalog items.",
+    sourceTypes: ["catalog_item"],
     Icon: Boxes,
     accent: "border-fg/15 bg-bg text-fg/70",
   },

@@ -30,7 +30,7 @@ async function main() {
     await tx.organizationSettings.create({
       data: {
         organizationId: orgId,
-        general: { orgName: 'Bidwright Demo Co', address: '', phone: '', website: '', logoUrl: '' },
+        general: { orgName: 'Bidwright Demo Co', address: '', phone: '', website: '', logoUrl: '', language: 'en' },
         email: { host: '', port: 587, username: '', password: '', fromAddress: '', fromName: '' },
         defaults: { defaultMarkup: 15, breakoutStyle: 'category', quoteType: 'Firm' },
         integrations: { openaiKey: '', anthropicKey: '', openrouterKey: '', geminiKey: '', llmProvider: 'anthropic', llmModel: 'claude-sonnet-4-20250514' },

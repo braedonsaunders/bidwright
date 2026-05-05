@@ -76,6 +76,36 @@ body {
   color: hsl(220 20% 12%);
 }
 
+.bidwright-mark-image-light {
+  display: none;
+}
+
+.dark .bidwright-mark-image-color {
+  display: none;
+}
+
+.dark .bidwright-mark-image-light {
+  display: block;
+}
+
+.light .bidwright-mark-image-color {
+  display: block;
+}
+
+.light .bidwright-mark-image-light {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) .bidwright-mark-image-color {
+    display: none;
+  }
+
+  :root:not(.light) .bidwright-mark-image-light {
+    display: block;
+  }
+}
+
 
 a {
   color: inherit;
@@ -111,4 +141,3 @@ a {
 table {
   border-collapse: collapse;
 }
-

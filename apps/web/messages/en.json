@@ -1,0 +1,735 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "Dashboard",
+      "intake": "Intake",
+      "quotes": "Quotes",
+      "clients": "Clients",
+      "library": "Library",
+      "performance": "Performance",
+      "settings": "Settings"
+    },
+    "theme": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System",
+      "label": "Theme: {theme}",
+      "labelWithResolved": "Theme: {theme} ({resolved})"
+    },
+    "switchOrganization": "Switch organization",
+    "organizations": "Organizations",
+    "noOtherOrganizations": "No other organizations",
+    "superAdmin": "Super Admin",
+    "personal": "Personal",
+    "adminPanel": "Admin Panel",
+    "searchTools": "Search tools",
+    "searchPlaceholder": "Search...",
+    "toolsCount": "Tools ({count})",
+    "noToolsFound": "No tools found for \"{query}\"",
+    "quotes": "Quotes",
+    "quotesCount": "Quotes ({count})",
+    "activeProject": "Active Project",
+    "activeProjectLabel": "Active project: {name}",
+    "switchProject": "Switch Project",
+    "loading": "Loading...",
+    "notSignedIn": "Not signed in",
+    "profile": "Profile",
+    "signOut": "Sign Out",
+    "expandSidebar": "Expand sidebar",
+    "collapseSidebar": "Collapse sidebar"
+  },
+  "Common": {
+    "loading": "Loading..."
+  },
+  "Auth": {
+    "login": {
+      "title": "Sign in",
+      "email": "Email",
+      "emailPlaceholder": "you@company.com",
+      "password": "Password",
+      "passwordPlaceholder": "Enter your password",
+      "hidePassword": "Hide password",
+      "showPassword": "Show password",
+      "submit": "Continue",
+      "submitting": "Signing in",
+      "error": "Login failed. Please try again.",
+      "noAccount": "No account?",
+      "createAccount": "Create account"
+    },
+    "signup": {
+      "eyebrow": "Create your organization",
+      "title": "Sign Up",
+      "organizationName": "Organization Name",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "URL Slug",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "Your Name",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "Email",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "Password",
+      "passwordPlaceholder": "Min 8 characters",
+      "confirmPassword": "Confirm Password",
+      "confirmPasswordPlaceholder": "Confirm",
+      "passwordMismatch": "Passwords do not match",
+      "passwordTooShort": "Password must be at least 8 characters",
+      "error": "Signup failed",
+      "submit": "Create Account",
+      "submitting": "Creating account...",
+      "signInLink": "Already have an account? Sign in"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "Active",
+      "won": "Won",
+      "lost": "Lost",
+      "other": "Other"
+    },
+    "greeting": {
+      "late": "Working late",
+      "morning": "Good morning",
+      "afternoon": "Good afternoon",
+      "evening": "Good evening"
+    },
+    "newIntake": "New intake",
+    "activeValue": "Active value",
+    "activeQuoteCount": "{count} active {count, plural, one {quote} other {quotes}}",
+    "averageMargin": "Average margin",
+    "projectedProfit": "{profit} projected profit",
+    "winRate": "Win rate",
+    "decidedQuotes": "{count} decided {count, plural, one {quote} other {quotes}}",
+    "noDecisionsYet": "No decisions yet",
+    "exceptions": "Exceptions",
+    "exceptionSummary": "{aging} aging, {margin} margin watch",
+    "pipelineTitle": "Pipeline command map",
+    "trackedValue": "{value} total tracked value",
+    "quotes": "Quotes",
+    "noPipeline": "No bid pipeline yet.",
+    "noQuotes": "No quotes",
+    "bidQuality": "Bid quality",
+    "watch": "Watch",
+    "clear": "Clear",
+    "margin": "Margin",
+    "win": "Win",
+    "operatingSignal": "Operating signal",
+    "active": "Active",
+    "aging": "Aging",
+    "won30d": "Won 30d",
+    "attention": "Attention",
+    "agingActiveWork": "Aging active work",
+    "oldestDays": "Oldest {days}d",
+    "marginUnder": "Margin under 12%",
+    "needsPricingReview": "Needs pricing review",
+    "wonThisMonth": "Won this month",
+    "recentDecisions": "Recent decisions",
+    "noUrgentExceptions": "No urgent exceptions",
+    "quotePulse": "Quote pulse",
+    "all": "All",
+    "noRecentQuotes": "No recent quotes"
+  },
+  "Clients": {
+    "title": "Clients",
+    "subtitle": "Accounts, quote history, pipeline health, and client value.",
+    "newClient": "New Client",
+    "searchPlaceholder": "Search clients, contacts, quote titles, cities...",
+    "resultCount": "{count} {count, plural, one {client} other {clients}}",
+    "filteredResultCount": "{filtered} of {total} clients",
+    "noMatches": "No clients match this view.",
+    "inactive": "Inactive",
+    "noLocation": "No location",
+    "noEmail": "No email",
+    "noPhone": "No phone",
+    "filters": {
+      "all": "All",
+      "active": "Active pipeline",
+      "quoted": "Quoted",
+      "prospects": "Prospects",
+      "inactive": "Inactive"
+    },
+    "table": {
+      "client": "Client",
+      "contact": "Contact",
+      "quotes": "Quotes",
+      "active": "Active",
+      "awarded": "Awarded",
+      "win": "Win",
+      "margin": "Margin",
+      "updated": "Updated"
+    },
+    "modal": {
+      "title": "New client",
+      "description": "Create the account record before quoting the work.",
+      "close": "Close new client dialog",
+      "name": "Name",
+      "namePlaceholder": "Client name",
+      "shortName": "Short Name",
+      "website": "Website",
+      "email": "Email",
+      "phone": "Phone",
+      "city": "City",
+      "provinceState": "Province / State",
+      "cancel": "Cancel",
+      "create": "Create Client",
+      "nameRequired": "Client name is required.",
+      "createError": "Could not create client."
+    }
+  },
+  "Quotes": {
+    "title": "Quotes",
+    "subtitle": "Manage and track all your quotes",
+    "newQuoteButton": "New Quote",
+    "menu": {
+      "aiIntake": "AI Intake",
+      "aiIntakeDescription": "Upload a bid package",
+      "newQuote": "New Quote",
+      "newQuoteDescription": "Start from a blank quote",
+      "newSnap": "New Snap",
+      "newSnapDescription": "One-page quick quote"
+    },
+    "manual": {
+      "snapTitle": "New Snap",
+      "quoteTitle": "New quote",
+      "snapDescription": "Create a fast one-page quote with a ten-line estimate grid.",
+      "quoteDescription": "Create a blank estimate workspace without running AI intake.",
+      "close": "Close manual quote dialog",
+      "snapTitleLabel": "Snap title",
+      "quoteTitleLabel": "Quote title",
+      "snapTitlePlaceholder": "e.g. Pump room service call",
+      "quoteTitlePlaceholder": "e.g. Cogen pipe rack insulation",
+      "client": "Client",
+      "newClientName": "New client name",
+      "selectClient": "Select client...",
+      "searchClients": "Search clients...",
+      "addClient": "Add new client",
+      "location": "Location",
+      "locationPlaceholder": "TBD",
+      "cancel": "Cancel",
+      "createSnap": "Create Snap",
+      "createQuote": "Create Quote",
+      "failedClient": "Failed to create client.",
+      "titleRequired": "Quote title is required.",
+      "unassignedClient": "Unassigned Client",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} Manual Quote",
+      "snapSummary": "Snap quote created for quick small-work pricing.",
+      "createError": "Could not create quote."
+    },
+    "filters": {
+      "searchPlaceholder": "Search by quote #, title, client, project, location...",
+      "status": "Status",
+      "client": "Client",
+      "estimator": "Estimator",
+      "department": "Department",
+      "clear": "Clear",
+      "clearAll": "Clear all",
+      "resultCount": "{count} {count, plural, one {quote} other {quotes}}",
+      "filteredResultCount": "{filtered} of {total} quotes"
+    },
+    "table": {
+      "quoteNumber": "Quote #",
+      "kind": "Type",
+      "title": "Title",
+      "client": "Client",
+      "estimator": "Estimator",
+      "status": "Status",
+      "subtotal": "Subtotal",
+      "margin": "Margin",
+      "updated": "Updated"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "Full"
+    },
+    "status": {
+      "Open": "Open",
+      "Pending": "Pending",
+      "Awarded": "Awarded",
+      "DidNotGet": "Did Not Get",
+      "Declined": "Declined",
+      "Cancelled": "Cancelled",
+      "Closed": "Closed",
+      "Other": "Other"
+    },
+    "unassigned": "Unassigned",
+    "emptyFiltered": "No quotes match your filters",
+    "empty": "No quotes found"
+  },
+  "Settings": {
+    "title": "Settings",
+    "subtitle": "Configure your Bidwright workspace",
+    "groups": {
+      "organization": "Organization",
+      "data": "Data Management",
+      "importExport": "Import / Export",
+      "integrations": "Integrations",
+      "users": "Users & Access"
+    },
+    "orgTabs": {
+      "general": "General",
+      "brand": "Brand",
+      "departments": "Departments",
+      "defaults": "Defaults",
+      "terms": "Terms & Conditions",
+      "personas": "Personas"
+    },
+    "generalTitle": "General Settings",
+    "generalDescription": "Set the organization language, regional formats, and reporting calendar.",
+    "localizationTitle": "Localization",
+    "localizationDescription": "Language is shared by everyone in this organization and updates the app shell immediately.",
+    "regionalTitle": "Regional Formats",
+    "regionalDescription": "These settings drive currency, dates, and default time displays.",
+    "fiscalTitle": "Fiscal Calendar",
+    "fiscalDescription": "Choose the month used for annual roll-ups and reporting defaults.",
+    "language": "Language",
+    "timezone": "Timezone",
+    "currency": "Currency",
+    "dateFormat": "Date Format",
+    "fiscalYearStart": "Fiscal Year Start"
+  },
+  "Performance": {
+    "eyebrow": "Performance",
+    "title": "Pipeline & quote intelligence",
+    "subtitle": "Live signal across {count} {count, plural, one {project} other {projects}}",
+    "subtitleFiltered": "Live signal across {count} {count, plural, one {project} other {projects}} · filtered view",
+    "filteredQuoteCount": "{filtered} of {total} quotes",
+    "winRateBadge": "{rate} win rate",
+    "quoteCount": "{count} {count, plural, one {quote} other {quotes}}",
+    "total": "Total",
+    "unknownClient": "Unknown",
+    "emptyDistribution": "No data for distribution.",
+    "emptyClientData": "No client data yet.",
+    "emptyTimeSeries": "No data over time yet.",
+    "pipelineFunnel": "Pipeline funnel",
+    "statusMix": "Status mix",
+    "pipelineOverTime": "Pipeline over time",
+    "last12Months": "last 12 months",
+    "marginDistribution": "Margin distribution",
+    "topClientsByProfit": "Top clients by profit",
+    "top8": "top 8",
+    "tabs": {
+      "overview": "Overview",
+      "pipeline": "Pipeline",
+      "margins": "Margins",
+      "clients": "Clients"
+    },
+    "stages": {
+      "active": "Active",
+      "won": "Won",
+      "lost": "Lost",
+      "other": "Other"
+    },
+    "status": {
+      "Open": "Open",
+      "Pending": "Pending",
+      "Awarded": "Awarded",
+      "DidNotGet": "Did Not Get",
+      "Declined": "Declined",
+      "Cancelled": "Cancelled",
+      "Closed": "Closed",
+      "Other": "Other"
+    },
+    "filters": {
+      "title": "Filters",
+      "from": "From",
+      "to": "To",
+      "fromDate": "From date",
+      "toDate": "To date",
+      "stage": "Stage",
+      "status": "Status",
+      "client": "Client",
+      "allStages": "All stages",
+      "allStatuses": "All statuses",
+      "allClients": "All clients",
+      "clear": "Clear"
+    },
+    "chips": {
+      "from": "From {date}",
+      "to": "To {date}",
+      "status": "Status: {status}",
+      "client": "Client: {client}",
+      "stage": "Stage: {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "Pipeline value",
+      "estimatedProfit": "Estimated profit",
+      "averageMargin": "Average margin",
+      "winRate": "Win rate",
+      "decided": "{won}/{decided} decided"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "Uploading",
+      "loaded": "Package loaded",
+      "release": "Release",
+      "waiting": "Waiting"
+    },
+    "package": {
+      "title": "Intake package",
+      "loadedSize": "{size} loaded"
+    },
+    "selected": {
+      "multipleFiles": "{count} package files captured",
+      "totalSize": "{size} total",
+      "more": "+{count} more",
+      "clearPackage": "Clear package"
+    },
+    "drop": {
+      "releaseTitle": "Release to attach package",
+      "title": "Drop files or folder",
+      "description": "Upload drawings, specifications, spreadsheets, addenda, images, ZIP archives, and Outlook messages.",
+      "selectFiles": "Select files",
+      "selectFolder": "Select folder",
+      "emailFormats": ".msg and .eml"
+    },
+    "context": {
+      "title": "Project context",
+      "description": "Capture the minimum context required to create the estimate workspace."
+    },
+    "fields": {
+      "destination": "Destination",
+      "newProject": "New project",
+      "projectName": "Project name",
+      "projectNamePlaceholder": "e.g. North Campus Boiler Upgrade",
+      "client": "Client",
+      "newClientName": "New client name",
+      "selectClient": "Select client...",
+      "searchClients": "Search clients...",
+      "addClient": "Add new client",
+      "location": "Location",
+      "locationPlaceholder": "City, State",
+      "bidDue": "Bid due",
+      "scope": "Scope",
+      "scopePlaceholder": "Full package, trade split, building area, alternate, or discipline.",
+      "playbook": "Estimating playbook",
+      "autoDetect": "Auto-detect",
+      "notes": "Notes",
+      "notesPlaceholder": "Optional notes"
+    },
+    "actions": {
+      "uploading": "Uploading...",
+      "createWorkspace": "Create intake workspace"
+    },
+    "status": {
+      "uploadSuccessSingle": "Package uploaded successfully.",
+      "uploadSuccessMultiple": "{count} files uploaded successfully."
+    },
+    "errors": {
+      "noReadableFiles": "The dropped item did not expose any readable files.",
+      "outlookRowOnly": "New Outlook inbox-list drags use Outlook-only payloads ({payloadLabel}) and do not expose an email file to normal websites. Drag the attachment itself, try dragging from an opened message if Outlook exposes it there, save as .eml, or use classic Outlook.",
+      "outlookWebLink": "New Outlook exposed web-link drag data ({payloadLabel}), but the browser could not turn it into a downloadable email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.",
+      "outlookNonFile": "New Outlook exposed non-file drag data ({payloadLabel}), not a real email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.",
+      "failedClient": "Failed to create client.",
+      "selectFile": "Select at least one package file.",
+      "uploadFailed": "Upload failed."
+    }
+  },
+  "NotFound": {
+    "title": "Page not found",
+    "back": "Back to dashboard"
+  },
+  "Profile": {
+    "title": "Profile",
+    "account": {
+      "title": "Account",
+      "email": "Email",
+      "role": "Role",
+      "organization": "Organization",
+      "access": "Access",
+      "superAdmin": "Super Admin"
+    },
+    "displayName": {
+      "title": "Display Name",
+      "name": "Name",
+      "placeholder": "Your name"
+    },
+    "password": {
+      "title": "Change Password",
+      "current": "Current Password",
+      "currentPlaceholder": "Enter current password",
+      "new": "New Password",
+      "newPlaceholder": "Min 8 characters",
+      "confirm": "Confirm",
+      "confirmPlaceholder": "Confirm"
+    },
+    "actions": {
+      "saving": "Saving...",
+      "save": "Save",
+      "changing": "Changing...",
+      "changePassword": "Change Password"
+    },
+    "messages": {
+      "nameUpdated": "Name updated.",
+      "passwordChanged": "Password changed.",
+      "updateFailed": "Update failed",
+      "passwordMismatch": "Passwords do not match.",
+      "passwordTooShort": "Password must be at least 8 characters."
+    }
+  },
+  "Library": {
+    "title": "Library",
+    "searchPlaceholder": "Search library surfaces",
+    "refresh": "Refresh",
+    "loadingKnowledge": "Loading knowledge...",
+    "surfaces": {
+      "overview": {
+        "label": "Home",
+        "description": "A launch surface for library work and live coverage."
+      },
+      "resources": {
+        "label": "Resources",
+        "description": "Catalogued material, service, equipment, subcontractor, consumable, and allowance resources."
+      },
+      "rates": {
+        "label": "Ratebooks",
+        "description": "Customer/resource cost and sell overrides, tiers, travel, allowances, and pricing rules."
+      },
+      "assemblies": {
+        "label": "Assemblies",
+        "description": "Parameterized estimating recipes that expand into priced resource lines."
+      },
+      "labor_units": {
+        "label": "Labor Units",
+        "description": "Production standards for hours per installed unit, linked to resource rows and Ratebooks."
+      },
+      "cost": {
+        "label": "Cost Intelligence",
+        "description": "Vendor bill line evidence, observations, products, and current cost basis rows."
+      },
+      "playbooks": {
+        "label": "Estimators",
+        "description": "Estimator behavior, methodology, source bindings, and commercial policy."
+      },
+      "knowledge": {
+        "label": "Knowledge",
+        "description": "Reference books, datasets, extracted evidence, and agent retrieval material."
+      }
+    },
+    "common": {
+      "close": "Close",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "saving": "Saving",
+      "prev": "Prev",
+      "next": "Next"
+    },
+    "overview": {
+      "title": "Library Workspaces",
+      "subtitle": "Open a workspace from live library coverage",
+      "groupCount": "{count} {count, plural, one {group} other {groups}}",
+      "noData": "No data",
+      "unassigned": "Unassigned",
+      "other": "Other",
+      "breakdowns": {
+        "resourceRows": "Rows by resource catalog type",
+        "rateRows": "Rows by ratebook category",
+        "rateBooks": "Books by ratebook category",
+        "assemblyComponents": "Components by assembly category",
+        "assemblyCategories": "Assemblies by category",
+        "laborRows": "Rows by labor-unit catalog",
+        "costBasis": "Cost basis by resource type",
+        "resourceTypes": "Resources by type",
+        "sourceBindings": "Source bindings by type",
+        "estimatorStatus": "Estimators by status",
+        "references": "References by source type",
+        "datasetRows": "Rows by dataset category"
+      },
+      "fallbacks": {
+        "catalog": "Catalog",
+        "uncategorized": "Uncategorized",
+        "general": "General",
+        "unclassified": "Unclassified",
+        "books": "Books",
+        "notes": "Notes",
+        "datasetTags": "Dataset tags",
+        "active": "Active",
+        "paused": "Paused"
+      },
+      "cards": {
+        "resources": {
+          "title": "Resources",
+          "body": "Base estimating resources used by worksheets, Ratebooks, and assemblies.",
+          "metricLabel": "Catalog items"
+        },
+        "rates": {
+          "title": "Ratebooks",
+          "body": "Customer/resource cost and sell overrides with tiering, travel, allowances, and pricing rules.",
+          "metricLabel": "Resource rows"
+        },
+        "assemblies": {
+          "title": "Assemblies",
+          "body": "Reusable estimating recipes for resources, equipment, nested scopes, and parametric takeoff.",
+          "metricLabel": "Assemblies"
+        },
+        "laborUnits": {
+          "title": "Labor Units",
+          "body": "First-party production standards that turn installed quantities into hours, then price those hours through Ratebooks.",
+          "metricLabel": "Production rows"
+        },
+        "cost": {
+          "title": "Cost Intelligence",
+          "body": "Vendor bill line evidence, observed prices, current cost basis rows, and the trail behind them.",
+          "metricLabel": "Cost basis rows"
+        },
+        "playbooks": {
+          "title": "Estimators",
+          "body": "Reusable estimating behavior with methodology, source priority, commercial policy, and review guidance.",
+          "metricLabel": "Active estimators"
+        },
+        "books": {
+          "title": "Books & Notes",
+          "body": "Reference books, estimator notes, extracted evidence, and agent retrieval material.",
+          "metricLabel": "References"
+        },
+        "datasets": {
+          "title": "Datasets",
+          "body": "Structured tables and imported rows used by agents, estimators, and pricing workflows.",
+          "metricLabel": "Datasets"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "Allowance",
+        "allowances": "Allowances",
+        "consumable": "Consumable",
+        "consumables": "Consumables",
+        "dataset": "Dataset",
+        "datasets": "Datasets",
+        "equipment": "Equipment",
+        "knowledge": "Knowledge",
+        "knowledgeLibrary": "Knowledge Library",
+        "labor": "Labor",
+        "manual": "Manual",
+        "material": "Material",
+        "materials": "Materials",
+        "rateBook": "Ratebook",
+        "service": "Service",
+        "services": "Services",
+        "subcontract": "Subcontract",
+        "subcontracts": "Subcontracts"
+      }
+    },
+    "labor": {
+      "title": "Labor Units",
+      "subtitle": "{catalog} / {count} production standards",
+      "allCatalogs": "All catalogs",
+      "allCatalogsWithCount": "All catalogs ({count})",
+      "unitsCount": "{count} units",
+      "catalogAria": "Labor unit catalog",
+      "searchPlaceholder": "Search code, class, category, or description",
+      "confirmDeleteUnit": "Delete {name}?",
+      "confirmDeleteCatalog": "Delete {name} and its labor units?",
+      "groupRowCount": "{count} {count, plural, one {row} other {rows}}",
+      "avgHours": "avg {value} hrs",
+      "items": "items",
+      "sections": "sections",
+      "groupLevels": {
+        "catalog": "Catalog",
+        "category": "Category",
+        "class": "Class",
+        "subclass": "Subclass"
+      },
+      "view": {
+        "groups": "Groups",
+        "rows": "Rows"
+      },
+      "actions": {
+        "collapse": "Collapse",
+        "expand": "Expand",
+        "manageCatalogs": "Manage Catalogs",
+        "newUnit": "New Labor Unit"
+      },
+      "stats": {
+        "rows": "Rows",
+        "catalogs": "Catalogs",
+        "providers": "Providers",
+        "categories": "Categories",
+        "avgHrs": "Avg Hrs"
+      },
+      "table": {
+        "code": "Code",
+        "laborUnit": "Labor Unit",
+        "catalog": "Catalog",
+        "category": "Category",
+        "class": "Class",
+        "normal": "Normal",
+        "difficult": "Diff.",
+        "veryDifficult": "V. Diff.",
+        "uom": "UOM"
+      },
+      "branchLoading": "Loading branch...",
+      "branchEmpty": "No rows in this branch.",
+      "empty": "No labor units match this view.",
+      "loading": "Loading labor units...",
+      "unitDrawer": {
+        "createTitle": "Create Labor Unit",
+        "fallbackTitle": "Labor Unit",
+        "subtitle": "Edit the production standard used by assemblies and worksheets.",
+        "save": "Save Labor Unit"
+      },
+      "catalogDrawer": {
+        "title": "Labor Unit Catalogs",
+        "subtitle": "Manage the source buckets for production standard rows.",
+        "newCatalog": "New Catalog",
+        "org": "Org",
+        "firstParty": "First Party",
+        "save": "Save Catalog",
+        "create": "Create Catalog"
+      },
+      "fields": {
+        "catalog": "Catalog",
+        "chooseCatalog": "Choose catalog",
+        "name": "Name",
+        "code": "Code",
+        "discipline": "Discipline",
+        "outputUom": "Output UOM",
+        "description": "Description",
+        "category": "Category",
+        "class": "Class",
+        "subclass": "Subclass",
+        "normalHours": "Normal Hrs",
+        "difficultHours": "Difficult Hrs",
+        "veryDifficultHours": "Very Diff. Hrs",
+        "default": "Default",
+        "tags": "Tags",
+        "tagsPlaceholder": "comma separated",
+        "provider": "Provider",
+        "sourceNote": "Source Note"
+      },
+      "difficulty": {
+        "normal": "Normal",
+        "difficult": "Difficult",
+        "veryDifficult": "Very Difficult"
+      },
+      "fallbacks": {
+        "internal": "Internal",
+        "general": "General",
+        "manual": "manual",
+        "unknown": "Unknown"
+      },
+      "errors": {
+        "chooseCatalog": "Choose a labor unit catalog before saving.",
+        "unitNameRequired": "Labor unit name is required.",
+        "normalHours": "Normal hours must be a non-negative number.",
+        "difficultyHours": "Difficulty hours must be blank or a non-negative number.",
+        "saveUnit": "Failed to save labor unit.",
+        "deleteUnit": "Failed to delete labor unit.",
+        "catalogNameRequired": "Catalog name is required.",
+        "saveCatalog": "Failed to save catalog.",
+        "deleteCatalog": "Failed to delete catalog."
+      },
+      "footer": {
+        "grouped": "Showing {start}-{end} of {visible} visible tree rows / {total} labor rows",
+        "rows": "Showing {start}-{end} of {total} rows / {indexed} indexed across {catalogs} catalogs",
+        "firstParty": "{count} first-party",
+        "topLevelGroups": "{count} top-level groups",
+        "page": "Page {page} / {total}"
+      },
+      "pageSize": {
+        "visible": "{count} visible",
+        "rows": "{count} rows",
+        "aria": "Labor units page size"
+      }
+    }
+  }
+}

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   AlertTriangle,
   ArrowRight,
@@ -27,13 +28,6 @@ import { cn } from "@/lib/utils";
 
 type Stage = "active" | "won" | "lost" | "other";
 type Tone = "accent" | "success" | "warning" | "danger" | "info";
-
-const STAGE_LABEL: Record<Stage, string> = {
-  active: "Active",
-  won: "Won",
-  lost: "Lost",
-  other: "Other",
-};
 
 const STAGE_COLOR: Record<Stage, string> = {
   active: "rgb(59,130,246)",
@@ -61,13 +55,13 @@ function statusToStage(status?: string): Stage {
   }
 }
 
-function greetingFor(date: Date) {
+function greetingKeyFor(date: Date) {
   const h = date.getHours();
-  if (h < 5) return "Working late";
-  if (h < 12) return "Good morning";
-  if (h < 17) return "Good afternoon";
-  if (h < 21) return "Good evening";
-  return "Working late";
+  if (h < 5) return "late";
+  if (h < 12) return "morning";
+  if (h < 17) return "afternoon";
+  if (h < 21) return "evening";
+  return "late";
 }
 
 function daysSince(iso: string): number {
@@ -104,6 +98,7 @@ export function ProjectDashboard({
 }: {
   projects: ProjectListItem[];
 }) {
+  const t = useTranslations("Dashboard");
   const { user, organization } = useAuth();
   const [now, setNow] = useState(() => new Date());
 
@@ -180,7 +175,7 @@ export function ProjectDashboard({
               </span>
             </div>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">
-              {greetingFor(now)}{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
+              {t(`greeting.${greetingKeyFor(now)}`)}{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -188,7 +183,7 @@ export function ProjectDashboard({
             <Button size="sm" asChild>
               <Link href="/intake">
                 <Upload className="h-3.5 w-3.5" />
-                New intake
+                {t("newIntake")}
               </Link>
             </Button>
           </div>
@@ -199,37 +194,37 @@ export function ProjectDashboard({
         <MetricCell
           delay={0.03}
           icon={CircleDollarSign}
-          label="Active value"
+          label={t("activeValue")}
           value={stats.stageValue.active}
           format={formatCompactMoney}
-          sub={`${stats.activeCount} active ${stats.activeCount === 1 ? "quote" : "quotes"}`}
+          sub={t("activeQuoteCount", { count: stats.activeCount })}
           tone="accent"
         />
         <MetricCell
           delay={0.06}
           icon={Gauge}
-          label="Average margin"
+          label={t("averageMargin")}
           value={stats.avgMargin * 100}
           format={(value) => `${value.toFixed(1)}%`}
-          sub={`${formatCompactMoney(stats.totalProfit)} projected profit`}
+          sub={t("projectedProfit", { profit: formatCompactMoney(stats.totalProfit) })}
           tone={stats.avgMargin >= 0.18 ? "success" : stats.avgMargin >= 0.1 ? "warning" : "danger"}
         />
         <MetricCell
           delay={0.09}
           icon={Award}
-          label="Win rate"
+          label={t("winRate")}
           value={stats.winRate * 100}
           format={(value) => `${Math.round(value)}%`}
-          sub={stats.decided ? `${stats.decided} decided quotes` : "No decisions yet"}
+          sub={stats.decided ? t("decidedQuotes", { count: stats.decided }) : t("noDecisionsYet")}
           tone="success"
         />
         <MetricCell
           delay={0.12}
           icon={AlertTriangle}
-          label="Exceptions"
+          label={t("exceptions")}
           value={stats.stale.length + stats.lowMargin.length}
           format={formatInteger}
-          sub={`${stats.stale.length} aging, ${stats.lowMargin.length} margin watch`}
+          sub={t("exceptionSummary", { aging: stats.stale.length, margin: stats.lowMargin.length })}
           tone={stats.stale.length + stats.lowMargin.length > 0 ? "warning" : "success"}
         />
       </div>
@@ -301,7 +296,8 @@ function PipelineMap({
     totalValue: number;
   };
 }) {
-  const stages = Object.keys(STAGE_LABEL) as Stage[];
+  const t = useTranslations("Dashboard");
+  const stages: Stage[] = ["active", "won", "lost", "other"];
   const maxValue = Math.max(1, ...stages.map((stage) => stats.stageValue[stage]));
   const visibleProjects = projects
     .filter((project) => project.quote)
@@ -314,12 +310,12 @@ function PipelineMap({
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold text-fg">
             <Layers3 className="h-4 w-4 text-accent" />
-            Pipeline command map
+            {t("pipelineTitle")}
           </div>
-          <div className="mt-0.5 text-[11px] text-fg/40">{formatCompactMoney(stats.totalValue)} total tracked value</div>
+          <div className="mt-0.5 text-[11px] text-fg/40">{t("trackedValue", { value: formatCompactMoney(stats.totalValue) })}</div>
         </div>
         <Link href="/quotes" className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:underline">
-          Quotes <ArrowRight className="h-3 w-3" />
+          {t("quotes")} <ArrowRight className="h-3 w-3" />
         </Link>
       </div>
 
@@ -356,7 +352,7 @@ function PipelineMap({
 
         {projects.length === 0 ? (
           <div className="relative z-10 flex h-full items-center justify-center">
-            <EmptyState className="w-full max-w-md">No bid pipeline yet.</EmptyState>
+            <EmptyState className="w-full max-w-md">{t("noPipeline")}</EmptyState>
           </div>
         ) : (
           <div className="relative z-10 grid h-full gap-3 md:grid-cols-4">
@@ -377,7 +373,7 @@ function PipelineMap({
                     <div>
                       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-fg/50">
                         <span className="h-2 w-2 rounded-full" style={{ background: STAGE_COLOR[stage] }} />
-                        {STAGE_LABEL[stage]}
+                        {t(`stages.${stage}`)}
                       </div>
                       <div className="mt-1 text-lg font-semibold tabular-nums text-fg">{formatCompactMoney(value)}</div>
                     </div>
@@ -396,7 +392,7 @@ function PipelineMap({
                     </div>
                     <div className="min-w-0 flex-1 space-y-1 overflow-hidden">
                       {stageProjects.length === 0 ? (
-                        <div className="rounded-md border border-dashed border-line px-2 py-4 text-center text-[11px] text-fg/30">No quotes</div>
+                        <div className="rounded-md border border-dashed border-line px-2 py-4 text-center text-[11px] text-fg/30">{t("noQuotes")}</div>
                       ) : (
                         stageProjects.map((project, index) => {
                           const subtotal = project.latestRevision?.subtotal ?? 0;
@@ -441,6 +437,7 @@ function BidQualityPanel({
     winRate: number;
   };
 }) {
+  const t = useTranslations("Dashboard");
   const marginPct = Math.max(0, Math.min(100, stats.avgMargin * 100));
   const winPct = Math.max(0, Math.min(100, stats.winRate * 100));
 
@@ -450,25 +447,25 @@ function BidQualityPanel({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-fg">
             <BarChart3 className="h-4 w-4 text-success" />
-            Bid quality
+            {t("bidQuality")}
           </div>
-          <Badge tone={stats.lowMargin.length ? "warning" : "success"}>{stats.lowMargin.length ? "Watch" : "Clear"}</Badge>
+          <Badge tone={stats.lowMargin.length ? "warning" : "success"}>{stats.lowMargin.length ? t("watch") : t("clear")}</Badge>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3">
-          <RadialMeter label="Margin" value={marginPct} display={`${marginPct.toFixed(1)}%`} tone="success" />
-          <RadialMeter label="Win" value={winPct} display={`${Math.round(winPct)}%`} tone="accent" />
+          <RadialMeter label={t("margin")} value={marginPct} display={`${marginPct.toFixed(1)}%`} tone="success" />
+          <RadialMeter label={t("win")} value={winPct} display={`${Math.round(winPct)}%`} tone="accent" />
         </div>
       </Panel>
 
       <Panel className="p-4">
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Zap className="h-4 w-4 text-accent" />
-          Operating signal
+          {t("operatingSignal")}
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <SignalBlock label="Active" value={stats.activeCount} tone="accent" />
-          <SignalBlock label="Aging" value={stats.stale.length} tone={stats.stale.length ? "warning" : "success"} />
-          <SignalBlock label="Won 30d" value={stats.recentlyWon.length} tone="success" />
+          <SignalBlock label={t("active")} value={stats.activeCount} tone="accent" />
+          <SignalBlock label={t("aging")} value={stats.stale.length} tone={stats.stale.length ? "warning" : "success"} />
+          <SignalBlock label={t("won30d")} value={stats.recentlyWon.length} tone="success" />
         </div>
       </Panel>
     </div>
@@ -484,14 +481,15 @@ function AttentionPanel({
     stale: ProjectListItem[];
   };
 }) {
+  const t = useTranslations("Dashboard");
   const attention = [
     stats.stale.length
       ? {
           key: "stale",
           icon: Clock,
-          label: "Aging active work",
+          label: t("agingActiveWork"),
           value: String(stats.stale.length),
-          detail: `Oldest ${daysSince(stats.stale[0].updatedAt ?? stats.stale[0].createdAt)}d`,
+          detail: t("oldestDays", { days: daysSince(stats.stale[0].updatedAt ?? stats.stale[0].createdAt) }),
           tone: "warning" as Tone,
           href: `/projects/${stats.stale[0].id}`,
         }
@@ -500,9 +498,9 @@ function AttentionPanel({
       ? {
           key: "margin",
           icon: AlertTriangle,
-          label: "Margin under 12%",
+          label: t("marginUnder"),
           value: String(stats.lowMargin.length),
-          detail: "Needs pricing review",
+          detail: t("needsPricingReview"),
           tone: "danger" as Tone,
           href: `/projects/${stats.lowMargin[0].id}`,
         }
@@ -511,9 +509,9 @@ function AttentionPanel({
       ? {
           key: "won",
           icon: Award,
-          label: "Won this month",
+          label: t("wonThisMonth"),
           value: String(stats.recentlyWon.length),
-          detail: "Recent decisions",
+          detail: t("recentDecisions"),
           tone: "success" as Tone,
           href: "/performance",
         }
@@ -525,14 +523,14 @@ function AttentionPanel({
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <AlertTriangle className="h-4 w-4 text-warning" />
-          Attention
+          {t("attention")}
         </div>
-        <Badge tone={attention.length ? "warning" : "success"}>{attention.length || "Clear"}</Badge>
+        <Badge tone={attention.length ? "warning" : "success"}>{attention.length || t("clear")}</Badge>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-hidden p-3">
         {attention.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-line text-sm text-fg/35">
-            No urgent exceptions
+            {t("noUrgentExceptions")}
           </div>
         ) : (
           attention.slice(0, 4).map((item, index) => {
@@ -567,18 +565,19 @@ function AttentionPanel({
 }
 
 function QuotePulse({ quotes }: { quotes: ProjectListItem[] }) {
+  const t = useTranslations("Dashboard");
   return (
     <Panel className="flex min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <CalendarClock className="h-4 w-4 text-accent" />
-          Quote pulse
+          {t("quotePulse")}
         </div>
-        <Link href="/quotes" className="text-[11px] font-medium text-accent hover:underline">All</Link>
+        <Link href="/quotes" className="text-[11px] font-medium text-accent hover:underline">{t("all")}</Link>
       </div>
       <div className="min-h-0 flex-1 space-y-1.5 overflow-hidden p-3">
         {quotes.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-line px-3 py-6 text-center text-sm text-fg/35">No recent quotes</div>
+          <div className="rounded-lg border border-dashed border-line px-3 py-6 text-center text-sm text-fg/35">{t("noRecentQuotes")}</div>
         ) : (
           quotes.map((quote) => {
             const stage = statusToStage(quote.quote?.status);

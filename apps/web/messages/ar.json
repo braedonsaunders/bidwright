@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "لوحة التحكم",
+      "intake": "الإدخال",
+      "quotes": "عروض الأسعار",
+      "clients": "العملاء",
+      "library": "المكتبة",
+      "performance": "الأداء",
+      "settings": "الإعدادات"
+    },
+    "theme": {
+      "light": "فاتح",
+      "dark": "داكن",
+      "system": "النظام",
+      "label": "السمة: {theme}",
+      "labelWithResolved": "السمة: {theme} ({resolved})"
+    },
+    "switchOrganization": "تبديل المؤسسة",
+    "organizations": "المؤسسات",
+    "noOtherOrganizations": "لا توجد مؤسسات أخرى",
+    "superAdmin": "مشرف عام",
+    "personal": "شخصي",
+    "adminPanel": "لوحة الإدارة",
+    "searchTools": "البحث في الأدوات",
+    "searchPlaceholder": "بحث...",
+    "toolsCount": "الأدوات ({count})",
+    "noToolsFound": "لم يتم العثور على أدوات لـ \"{query}\"",
+    "quotes": "عروض الأسعار",
+    "quotesCount": "عروض الأسعار ({count})",
+    "activeProject": "المشروع النشط",
+    "activeProjectLabel": "المشروع النشط: {name}",
+    "switchProject": "تبديل المشروع",
+    "loading": "جار التحميل...",
+    "notSignedIn": "لم يتم تسجيل الدخول",
+    "profile": "الملف الشخصي",
+    "signOut": "تسجيل الخروج",
+    "expandSidebar": "توسيع الشريط الجانبي",
+    "collapseSidebar": "طي الشريط الجانبي"
+  },
+  "Settings": {
+    "title": "الإعدادات",
+    "subtitle": "قم بتكوين مساحة عمل Bidwright",
+    "groups": {
+      "organization": "المؤسسة",
+      "data": "إدارة البيانات",
+      "importExport": "استيراد / تصدير",
+      "integrations": "التكاملات",
+      "users": "المستخدمون والصلاحيات"
+    },
+    "orgTabs": {
+      "general": "عام",
+      "brand": "العلامة التجارية",
+      "departments": "الأقسام",
+      "defaults": "الإعدادات الافتراضية",
+      "terms": "الشروط والأحكام",
+      "personas": "الشخصيات"
+    },
+    "generalTitle": "الإعدادات العامة",
+    "language": "اللغة",
+    "timezone": "المنطقة الزمنية",
+    "currency": "العملة",
+    "dateFormat": "تنسيق التاريخ",
+    "fiscalYearStart": "بداية السنة المالية",
+    "generalDescription": "اضبط لغة المؤسسة والتنسيقات الإقليمية وتقويم التقارير.",
+    "localizationTitle": "الترجمة والتوطين",
+    "localizationDescription": "تتم مشاركة اللغة مع كل أفراد المؤسسة وتحدّث واجهة التطبيق فوراً.",
+    "regionalTitle": "التنسيقات الإقليمية",
+    "regionalDescription": "تتحكم هذه الإعدادات في العملة والتواريخ وأوقات العرض الافتراضية.",
+    "fiscalTitle": "التقويم المالي",
+    "fiscalDescription": "اختر الشهر المستخدم للتجميعات السنوية وإعدادات التقارير."
+  },
+  "Common": {
+    "loading": "جار التحميل..."
+  },
+  "Auth": {
+    "login": {
+      "title": "تسجيل الدخول",
+      "email": "البريد الإلكتروني",
+      "emailPlaceholder": "you@company.com",
+      "password": "كلمة المرور",
+      "passwordPlaceholder": "أدخل كلمة المرور",
+      "hidePassword": "إخفاء كلمة المرور",
+      "showPassword": "إظهار كلمة المرور",
+      "submit": "متابعة",
+      "submitting": "جار تسجيل الدخول",
+      "error": "فشل تسجيل الدخول. حاول مرة أخرى.",
+      "noAccount": "ليس لديك حساب؟",
+      "createAccount": "إنشاء حساب"
+    },
+    "signup": {
+      "eyebrow": "أنشئ مؤسستك",
+      "title": "إنشاء حساب",
+      "organizationName": "اسم المؤسسة",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "معرّف الرابط",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "اسمك",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "البريد الإلكتروني",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "كلمة المرور",
+      "passwordPlaceholder": "8 أحرف على الأقل",
+      "confirmPassword": "تأكيد كلمة المرور",
+      "confirmPasswordPlaceholder": "تأكيد",
+      "passwordMismatch": "كلمتا المرور غير متطابقتين",
+      "passwordTooShort": "يجب أن تتكون كلمة المرور من 8 أحرف على الأقل",
+      "error": "فشل إنشاء الحساب",
+      "submit": "إنشاء الحساب",
+      "submitting": "جار إنشاء الحساب...",
+      "signInLink": "لديك حساب بالفعل؟ سجل الدخول"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "نشط",
+      "won": "فاز",
+      "lost": "خسر",
+      "other": "أخرى"
+    },
+    "greeting": {
+      "late": "تعمل لوقت متأخر",
+      "morning": "صباح الخير",
+      "afternoon": "مساء الخير",
+      "evening": "مساء الخير"
+    },
+    "newIntake": "إدخال جديد",
+    "activeValue": "القيمة النشطة",
+    "activeQuoteCount": "{count} عروض نشطة",
+    "averageMargin": "متوسط الهامش",
+    "projectedProfit": "{profit} ربح متوقع",
+    "winRate": "معدل الفوز",
+    "decidedQuotes": "{count} عروض محسومة",
+    "noDecisionsYet": "لا توجد قرارات بعد",
+    "exceptions": "الاستثناءات",
+    "exceptionSummary": "{aging} متقادمة، {margin} مراقبة هامش",
+    "pipelineTitle": "خريطة مسار العروض",
+    "trackedValue": "{value} إجمالي القيمة المتتبعة",
+    "quotes": "عروض الأسعار",
+    "noPipeline": "لا يوجد مسار عروض بعد.",
+    "noQuotes": "لا توجد عروض",
+    "bidQuality": "جودة العرض",
+    "watch": "راقب",
+    "clear": "واضح",
+    "margin": "الهامش",
+    "win": "الفوز",
+    "operatingSignal": "مؤشر التشغيل",
+    "active": "نشط",
+    "aging": "متقادم",
+    "won30d": "فوز 30 يوم",
+    "attention": "انتباه",
+    "agingActiveWork": "عمل نشط متقادم",
+    "oldestDays": "الأقدم {days} يوم",
+    "marginUnder": "الهامش أقل من 12%",
+    "needsPricingReview": "يحتاج إلى مراجعة التسعير",
+    "wonThisMonth": "فاز هذا الشهر",
+    "recentDecisions": "قرارات حديثة",
+    "noUrgentExceptions": "لا توجد استثناءات عاجلة",
+    "quotePulse": "نبض العروض",
+    "all": "الكل",
+    "noRecentQuotes": "لا توجد عروض حديثة"
+  },
+  "Clients": {
+    "title": "العملاء",
+    "subtitle": "الحسابات وسجل العروض وصحة المسار وقيمة العميل.",
+    "newClient": "عميل جديد",
+    "searchPlaceholder": "ابحث عن العملاء أو جهات الاتصال أو عناوين العروض أو المدن...",
+    "resultCount": "{count} عملاء",
+    "filteredResultCount": "{filtered} من {total} عملاء",
+    "noMatches": "لا يوجد عملاء يطابقون هذا العرض.",
+    "inactive": "غير نشط",
+    "noLocation": "لا يوجد موقع",
+    "noEmail": "لا يوجد بريد",
+    "noPhone": "لا يوجد هاتف",
+    "filters": {
+      "all": "الكل",
+      "active": "مسار نشط",
+      "quoted": "بعروض",
+      "prospects": "عملاء محتملون",
+      "inactive": "غير نشط"
+    },
+    "table": {
+      "client": "العميل",
+      "contact": "جهة الاتصال",
+      "quotes": "العروض",
+      "active": "نشط",
+      "awarded": "ممنوح",
+      "win": "فوز",
+      "margin": "الهامش",
+      "updated": "محدّث"
+    },
+    "modal": {
+      "title": "عميل جديد",
+      "description": "أنشئ سجل الحساب قبل تسعير العمل.",
+      "close": "إغلاق مربع العميل الجديد",
+      "name": "الاسم",
+      "namePlaceholder": "اسم العميل",
+      "shortName": "الاسم المختصر",
+      "website": "الموقع الإلكتروني",
+      "email": "البريد الإلكتروني",
+      "phone": "الهاتف",
+      "city": "المدينة",
+      "provinceState": "المقاطعة / الولاية",
+      "cancel": "إلغاء",
+      "create": "إنشاء عميل",
+      "nameRequired": "اسم العميل مطلوب.",
+      "createError": "تعذر إنشاء العميل."
+    }
+  },
+  "Quotes": {
+    "title": "عروض الأسعار",
+    "subtitle": "إدارة وتتبع كل عروض الأسعار",
+    "newQuoteButton": "عرض سعر جديد",
+    "menu": {
+      "aiIntake": "إدخال بالذكاء الاصطناعي",
+      "aiIntakeDescription": "تحميل حزمة العطاء",
+      "newQuote": "عرض سعر جديد",
+      "newQuoteDescription": "البدء من عرض فارغ",
+      "newSnap": "Snap جديد",
+      "newSnapDescription": "عرض سريع من صفحة واحدة"
+    },
+    "manual": {
+      "snapTitle": "Snap جديد",
+      "quoteTitle": "عرض سعر جديد",
+      "snapDescription": "أنشئ عرضا سريعا من صفحة واحدة مع شبكة تقدير من عشرة أسطر.",
+      "quoteDescription": "أنشئ مساحة تقدير فارغة دون تشغيل إدخال الذكاء الاصطناعي.",
+      "close": "إغلاق مربع عرض السعر اليدوي",
+      "snapTitleLabel": "عنوان Snap",
+      "quoteTitleLabel": "عنوان عرض السعر",
+      "snapTitlePlaceholder": "مثال: طلب خدمة غرفة المضخات",
+      "quoteTitlePlaceholder": "مثال: عزل حامل أنابيب التوليد المشترك",
+      "client": "العميل",
+      "newClientName": "اسم العميل الجديد",
+      "selectClient": "اختر عميلا...",
+      "searchClients": "البحث عن العملاء...",
+      "addClient": "إضافة عميل جديد",
+      "location": "الموقع",
+      "locationPlaceholder": "يحدد لاحقا",
+      "cancel": "إلغاء",
+      "createSnap": "إنشاء Snap",
+      "createQuote": "إنشاء عرض سعر",
+      "failedClient": "تعذر إنشاء العميل.",
+      "titleRequired": "عنوان عرض السعر مطلوب.",
+      "unassignedClient": "عميل غير معين",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} عرض يدوي",
+      "snapSummary": "تم إنشاء عرض Snap لتسعير سريع للأعمال الصغيرة.",
+      "createError": "تعذر إنشاء عرض السعر."
+    },
+    "filters": {
+      "searchPlaceholder": "ابحث برقم العرض أو العنوان أو العميل أو المشروع أو الموقع...",
+      "status": "الحالة",
+      "client": "العميل",
+      "estimator": "المقدر",
+      "department": "القسم",
+      "clear": "مسح",
+      "clearAll": "مسح الكل",
+      "resultCount": "{count} عرض سعر",
+      "filteredResultCount": "{filtered} من {total} عرض سعر"
+    },
+    "table": {
+      "quoteNumber": "عرض #",
+      "kind": "النوع",
+      "title": "العنوان",
+      "client": "العميل",
+      "estimator": "المقدر",
+      "status": "الحالة",
+      "subtotal": "المجموع الفرعي",
+      "margin": "الهامش",
+      "updated": "محدث"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "كامل"
+    },
+    "status": {
+      "Open": "مفتوح",
+      "Pending": "معلق",
+      "Awarded": "ممنوح",
+      "DidNotGet": "لم يتم الحصول عليه",
+      "Declined": "مرفوض",
+      "Cancelled": "ملغى",
+      "Closed": "مغلق",
+      "Other": "آخر"
+    },
+    "unassigned": "غير معين",
+    "emptyFiltered": "لا توجد عروض تطابق عوامل التصفية",
+    "empty": "لم يتم العثور على عروض"
+  },
+  "Performance": {
+    "eyebrow": "الأداء",
+    "title": "ذكاء مسار العمل وعروض الأسعار",
+    "subtitle": "إشارة مباشرة عبر {count} مشروع",
+    "subtitleFiltered": "إشارة مباشرة عبر {count} مشروع · عرض مفلتر",
+    "filteredQuoteCount": "{filtered} من {total} عرض سعر",
+    "winRateBadge": "معدل الفوز {rate}",
+    "quoteCount": "{count} عرض سعر",
+    "total": "الإجمالي",
+    "unknownClient": "غير معروف",
+    "emptyDistribution": "لا توجد بيانات للتوزيع.",
+    "emptyClientData": "لا توجد بيانات عملاء بعد.",
+    "emptyTimeSeries": "لا توجد بيانات زمنية بعد.",
+    "pipelineFunnel": "قمع مسار العمل",
+    "statusMix": "مزيج الحالات",
+    "pipelineOverTime": "مسار العمل بمرور الوقت",
+    "last12Months": "آخر 12 شهرا",
+    "marginDistribution": "توزيع الهامش",
+    "topClientsByProfit": "أفضل العملاء حسب الربح",
+    "top8": "أفضل 8",
+    "stages": {
+      "active": "نشط",
+      "won": "فائز",
+      "lost": "خاسر",
+      "other": "آخر"
+    },
+    "status": {
+      "Open": "مفتوح",
+      "Pending": "معلق",
+      "Awarded": "ممنوح",
+      "DidNotGet": "لم يتم الحصول عليه",
+      "Declined": "مرفوض",
+      "Cancelled": "ملغى",
+      "Closed": "مغلق",
+      "Other": "آخر"
+    },
+    "filters": {
+      "title": "عوامل التصفية",
+      "from": "من",
+      "to": "إلى",
+      "fromDate": "تاريخ البدء",
+      "toDate": "تاريخ الانتهاء",
+      "stage": "المرحلة",
+      "status": "الحالة",
+      "client": "العميل",
+      "allStages": "كل المراحل",
+      "allStatuses": "كل الحالات",
+      "allClients": "كل العملاء",
+      "clear": "مسح"
+    },
+    "chips": {
+      "from": "من {date}",
+      "to": "إلى {date}",
+      "status": "الحالة: {status}",
+      "client": "العميل: {client}",
+      "stage": "المرحلة: {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "قيمة المسار",
+      "estimatedProfit": "الربح المقدر",
+      "averageMargin": "متوسط الهامش",
+      "winRate": "معدل الفوز",
+      "decided": "{won}/{decided} محسومة"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "جار الرفع",
+      "loaded": "تم تحميل الحزمة",
+      "release": "إفلات",
+      "waiting": "انتظار"
+    },
+    "package": {
+      "title": "حزمة الإدخال",
+      "loadedSize": "تم تحميل {size}"
+    },
+    "selected": {
+      "multipleFiles": "تم التقاط {count} ملف من الحزمة",
+      "totalSize": "الإجمالي {size}",
+      "more": "+{count} المزيد",
+      "clearPackage": "مسح الحزمة"
+    },
+    "drop": {
+      "releaseTitle": "أفلت لإرفاق الحزمة",
+      "title": "أفلت الملفات أو المجلد",
+      "description": "ارفع الرسومات والمواصفات والجداول والملحقات والصور وأرشيفات ZIP ورسائل Outlook.",
+      "selectFiles": "اختيار ملفات",
+      "selectFolder": "اختيار مجلد",
+      "emailFormats": ".msg و .eml"
+    },
+    "context": {
+      "title": "سياق المشروع",
+      "description": "التقط الحد الأدنى من السياق المطلوب لإنشاء مساحة عمل التقدير."
+    },
+    "fields": {
+      "destination": "الوجهة",
+      "newProject": "مشروع جديد",
+      "projectName": "اسم المشروع",
+      "projectNamePlaceholder": "مثال: ترقية غلاية الحرم الشمالي",
+      "client": "العميل",
+      "newClientName": "اسم العميل الجديد",
+      "selectClient": "اختر عميلا...",
+      "searchClients": "البحث عن العملاء...",
+      "addClient": "إضافة عميل جديد",
+      "location": "الموقع",
+      "locationPlaceholder": "المدينة، الولاية",
+      "bidDue": "موعد العطاء",
+      "scope": "النطاق",
+      "scopePlaceholder": "الحزمة الكاملة أو تقسيم التخصص أو منطقة المبنى أو البديل أو التخصص.",
+      "playbook": "دليل التقدير",
+      "autoDetect": "اكتشاف تلقائي",
+      "notes": "ملاحظات",
+      "notesPlaceholder": "ملاحظات اختيارية"
+    },
+    "actions": {
+      "uploading": "جار الرفع...",
+      "createWorkspace": "إنشاء مساحة عمل الإدخال"
+    },
+    "status": {
+      "uploadSuccessSingle": "تم رفع الحزمة بنجاح.",
+      "uploadSuccessMultiple": "تم رفع {count} ملفات بنجاح."
+    },
+    "errors": {
+      "noReadableFiles": "العنصر الذي تم إفلاته لم يوفر أي ملفات قابلة للقراءة.",
+      "outlookRowOnly": "السحب من قائمة بريد Outlook الجديد يستخدم حمولات خاصة بـ Outlook ({payloadLabel}) ولا يوفر ملف بريد للمواقع العادية. اسحب المرفق نفسه، أو جرّب من رسالة مفتوحة، أو احفظ كملف .eml، أو استخدم Outlook الكلاسيكي.",
+      "outlookWebLink": "وفر Outlook الجديد بيانات رابط ويب ({payloadLabel})، لكن المتصفح لم يتمكن من تحويلها إلى ملف بريد قابل للتنزيل. احفظ الرسالة كملف .eml ثم ارفعها، أو اسحب المرفق نفسه، أو استخدم Outlook الكلاسيكي.",
+      "outlookNonFile": "وفر Outlook الجديد بيانات ليست ملفا ({payloadLabel}) وليست ملف بريد حقيقي. احفظ الرسالة كملف .eml ثم ارفعها، أو اسحب المرفق نفسه، أو استخدم Outlook الكلاسيكي.",
+      "failedClient": "تعذر إنشاء العميل.",
+      "selectFile": "اختر ملف حزمة واحدا على الأقل.",
+      "uploadFailed": "فشل الرفع."
+    }
+  },
+  "NotFound": {
+    "title": "الصفحة غير موجودة",
+    "back": "العودة إلى لوحة التحكم"
+  },
+  "Profile": {
+    "title": "الملف الشخصي",
+    "account": {
+      "title": "الحساب",
+      "email": "البريد الإلكتروني",
+      "role": "الدور",
+      "organization": "المؤسسة",
+      "access": "الوصول",
+      "superAdmin": "مسؤول عام"
+    },
+    "displayName": {
+      "title": "اسم العرض",
+      "name": "الاسم",
+      "placeholder": "اسمك"
+    },
+    "password": {
+      "title": "تغيير كلمة المرور",
+      "current": "كلمة المرور الحالية",
+      "currentPlaceholder": "أدخل كلمة المرور الحالية",
+      "new": "كلمة مرور جديدة",
+      "newPlaceholder": "8 أحرف على الأقل",
+      "confirm": "تأكيد",
+      "confirmPlaceholder": "تأكيد"
+    },
+    "actions": {
+      "saving": "جار الحفظ...",
+      "save": "حفظ",
+      "changing": "جار التغيير...",
+      "changePassword": "تغيير كلمة المرور"
+    },
+    "messages": {
+      "nameUpdated": "تم تحديث الاسم.",
+      "passwordChanged": "تم تغيير كلمة المرور.",
+      "updateFailed": "فشل التحديث",
+      "passwordMismatch": "كلمات المرور غير متطابقة.",
+      "passwordTooShort": "يجب أن تتكون كلمة المرور من 8 أحرف على الأقل."
+    }
+  },
+  "Library": {
+    "title": "المكتبة",
+    "searchPlaceholder": "البحث في مساحات المكتبة",
+    "refresh": "تحديث",
+    "loadingKnowledge": "جار تحميل المعرفة...",
+    "surfaces": {
+      "overview": {
+        "label": "الرئيسية",
+        "description": "مساحة بدء لعمل المكتبة والتغطية الحية."
+      },
+      "resources": {
+        "label": "الموارد",
+        "description": "موارد مفهرسة للمواد والخدمات والمعدات والمقاولين الفرعيين والمستهلكات والمخصصات."
+      },
+      "rates": {
+        "label": "دفاتر الأسعار",
+        "description": "تجاوزات تكلفة وسعر بيع للعميل/المورد، مستويات، سفر، مخصصات وقواعد تسعير."
+      },
+      "assemblies": {
+        "label": "التجميعات",
+        "description": "وصفات تقدير معيارية تتوسع إلى بنود موارد مسعّرة."
+      },
+      "labor_units": {
+        "label": "وحدات العمل",
+        "description": "معايير إنتاج للساعات لكل وحدة مركبة، مرتبطة بصفوف الموارد ودفاتر الأسعار."
+      },
+      "cost": {
+        "label": "ذكاء التكلفة",
+        "description": "أدلة بنود فواتير الموردين والملاحظات والمنتجات وصفوف أساس التكلفة الحالية."
+      },
+      "playbooks": {
+        "label": "المقدّرون",
+        "description": "سلوك المقدّر والمنهجية وروابط المصادر والسياسة التجارية."
+      },
+      "knowledge": {
+        "label": "المعرفة",
+        "description": "كتب مرجعية ومجموعات بيانات وأدلة مستخرجة ومواد استرجاع للوكلاء."
+      }
+    },
+    "common": {
+      "close": "إغلاق",
+      "delete": "حذف",
+      "cancel": "إلغاء",
+      "saving": "جار الحفظ",
+      "prev": "السابق",
+      "next": "التالي"
+    },
+    "overview": {
+      "title": "مساحات المكتبة",
+      "subtitle": "افتح مساحة من تغطية المكتبة الحية",
+      "groupCount": "{count} مجموعة",
+      "noData": "لا توجد بيانات",
+      "unassigned": "غير معيّن",
+      "other": "أخرى",
+      "breakdowns": {
+        "resourceRows": "الصفوف حسب نوع كتالوج الموارد",
+        "rateRows": "الصفوف حسب فئة دفتر الأسعار",
+        "rateBooks": "دفاتر الأسعار حسب الفئة",
+        "assemblyComponents": "المكونات حسب فئة التجميع",
+        "assemblyCategories": "التجميعات حسب الفئة",
+        "laborRows": "الصفوف حسب كتالوج وحدات العمل",
+        "costBasis": "أساس التكلفة حسب نوع المورد",
+        "resourceTypes": "الموارد حسب النوع",
+        "sourceBindings": "روابط المصادر حسب النوع",
+        "estimatorStatus": "المقدّرون حسب الحالة",
+        "references": "المراجع حسب نوع المصدر",
+        "datasetRows": "الصفوف حسب فئة مجموعة البيانات"
+      },
+      "fallbacks": {
+        "catalog": "كتالوج",
+        "uncategorized": "بلا فئة",
+        "general": "عام",
+        "unclassified": "غير مصنف",
+        "books": "كتب",
+        "notes": "ملاحظات",
+        "datasetTags": "وسوم البيانات",
+        "active": "نشط",
+        "paused": "متوقف مؤقتاً"
+      },
+      "cards": {
+        "resources": {
+          "title": "الموارد",
+          "body": "موارد تقدير أساسية تستخدمها أوراق العمل ودفاتر الأسعار والتجميعات.",
+          "metricLabel": "عناصر الكتالوج"
+        },
+        "rates": {
+          "title": "دفاتر الأسعار",
+          "body": "تكاليف وأسعار بيع للعميل/المورد مع مستويات وسفر ومخصصات وقواعد تسعير.",
+          "metricLabel": "صفوف الموارد"
+        },
+        "assemblies": {
+          "title": "التجميعات",
+          "body": "وصفات تقدير قابلة لإعادة الاستخدام للموارد والمعدات والنطاقات المتداخلة والحصر المعياري.",
+          "metricLabel": "التجميعات"
+        },
+        "laborUnits": {
+          "title": "وحدات العمل",
+          "body": "معايير إنتاج داخلية تحول الكميات المركبة إلى ساعات ثم تسعّر هذه الساعات عبر دفاتر الأسعار.",
+          "metricLabel": "صفوف الإنتاج"
+        },
+        "cost": {
+          "title": "ذكاء التكلفة",
+          "body": "أدلة بنود فواتير الموردين والأسعار المرصودة وصفوف أساس التكلفة الحالية ومسارها الداعم.",
+          "metricLabel": "صفوف أساس التكلفة"
+        },
+        "playbooks": {
+          "title": "المقدّرون",
+          "body": "سلوك تقدير قابل لإعادة الاستخدام مع منهجية وأولوية مصادر وسياسة تجارية وإرشادات مراجعة.",
+          "metricLabel": "المقدّرون النشطون"
+        },
+        "books": {
+          "title": "الكتب والملاحظات",
+          "body": "كتب مرجعية وملاحظات المقدّر وأدلة مستخرجة ومواد استرجاع للوكلاء.",
+          "metricLabel": "المراجع"
+        },
+        "datasets": {
+          "title": "مجموعات البيانات",
+          "body": "جداول منظمة وصفوف مستوردة يستخدمها الوكلاء والمقدّرون وتدفقات التسعير.",
+          "metricLabel": "مجموعات البيانات"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "مخصص",
+        "allowances": "مخصصات",
+        "consumable": "مستهلك",
+        "consumables": "مستهلكات",
+        "dataset": "مجموعة بيانات",
+        "datasets": "مجموعات بيانات",
+        "equipment": "معدات",
+        "knowledge": "معرفة",
+        "knowledgeLibrary": "مكتبة المعرفة",
+        "labor": "عمل",
+        "manual": "دليل",
+        "material": "مادة",
+        "materials": "مواد",
+        "rateBook": "دفتر أسعار",
+        "service": "خدمة",
+        "services": "خدمات",
+        "subcontract": "مقاولة فرعية",
+        "subcontracts": "مقاولات فرعية"
+      }
+    },
+    "labor": {
+      "title": "وحدات العمل",
+      "subtitle": "{catalog} / {count} معيار إنتاج",
+      "allCatalogs": "كل الكتالوجات",
+      "allCatalogsWithCount": "كل الكتالوجات ({count})",
+      "unitsCount": "{count} وحدة",
+      "catalogAria": "كتالوج وحدات العمل",
+      "searchPlaceholder": "ابحث عن رمز أو صنف أو فئة أو وصف",
+      "confirmDeleteUnit": "حذف {name}؟",
+      "confirmDeleteCatalog": "حذف {name} ووحدات العمل الخاصة به؟",
+      "groupRowCount": "{count} صف",
+      "avgHours": "متوسط {value} ساعة",
+      "items": "عناصر",
+      "sections": "أقسام",
+      "groupLevels": {
+        "catalog": "كتالوج",
+        "category": "فئة",
+        "class": "صنف",
+        "subclass": "صنف فرعي"
+      },
+      "view": {
+        "groups": "مجموعات",
+        "rows": "صفوف"
+      },
+      "actions": {
+        "collapse": "طي",
+        "expand": "توسيع",
+        "manageCatalogs": "إدارة الكتالوجات",
+        "newUnit": "وحدة عمل جديدة"
+      },
+      "stats": {
+        "rows": "صفوف",
+        "catalogs": "كتالوجات",
+        "providers": "مزوّدون",
+        "categories": "فئات",
+        "avgHrs": "متوسط الساعات"
+      },
+      "table": {
+        "code": "الرمز",
+        "laborUnit": "وحدة العمل",
+        "catalog": "الكتالوج",
+        "category": "الفئة",
+        "class": "الصنف",
+        "normal": "عادي",
+        "difficult": "صعب",
+        "veryDifficult": "صعب جداً",
+        "uom": "الوحدة"
+      },
+      "branchLoading": "جار تحميل الفرع...",
+      "branchEmpty": "لا توجد صفوف في هذا الفرع.",
+      "empty": "لا توجد وحدات عمل تطابق هذا العرض.",
+      "loading": "جار تحميل وحدات العمل...",
+      "unitDrawer": {
+        "createTitle": "إنشاء وحدة عمل",
+        "fallbackTitle": "وحدة عمل",
+        "subtitle": "حرر معيار الإنتاج المستخدم في التجميعات وأوراق العمل.",
+        "save": "حفظ وحدة العمل"
+      },
+      "catalogDrawer": {
+        "title": "كتالوجات وحدات العمل",
+        "subtitle": "إدارة حاويات المصدر لصفوف معايير الإنتاج.",
+        "newCatalog": "كتالوج جديد",
+        "org": "المؤسسة",
+        "firstParty": "داخلي",
+        "save": "حفظ الكتالوج",
+        "create": "إنشاء كتالوج"
+      },
+      "fields": {
+        "catalog": "كتالوج",
+        "chooseCatalog": "اختر كتالوجاً",
+        "name": "الاسم",
+        "code": "الرمز",
+        "discipline": "التخصص",
+        "outputUom": "وحدة الإخراج",
+        "description": "الوصف",
+        "category": "الفئة",
+        "class": "الصنف",
+        "subclass": "الصنف الفرعي",
+        "normalHours": "الساعات العادية",
+        "difficultHours": "الساعات الصعبة",
+        "veryDifficultHours": "الساعات الصعبة جداً",
+        "default": "افتراضي",
+        "tags": "وسوم",
+        "tagsPlaceholder": "مفصولة بفواصل",
+        "provider": "المزوّد",
+        "sourceNote": "ملاحظة المصدر"
+      },
+      "difficulty": {
+        "normal": "عادي",
+        "difficult": "صعب",
+        "veryDifficult": "صعب جداً"
+      },
+      "fallbacks": {
+        "internal": "داخلي",
+        "general": "عام",
+        "manual": "دليل",
+        "unknown": "غير معروف"
+      },
+      "errors": {
+        "chooseCatalog": "اختر كتالوج وحدات عمل قبل الحفظ.",
+        "unitNameRequired": "اسم وحدة العمل مطلوب.",
+        "normalHours": "يجب أن تكون الساعات العادية رقماً غير سالب.",
+        "difficultyHours": "يجب أن تكون ساعات الصعوبة فارغة أو رقماً غير سالب.",
+        "saveUnit": "فشل حفظ وحدة العمل.",
+        "deleteUnit": "فشل حذف وحدة العمل.",
+        "catalogNameRequired": "اسم الكتالوج مطلوب.",
+        "saveCatalog": "فشل حفظ الكتالوج.",
+        "deleteCatalog": "فشل حذف الكتالوج."
+      },
+      "footer": {
+        "grouped": "عرض {start}-{end} من {visible} صف شجري مرئي / {total} صف عمل",
+        "rows": "عرض {start}-{end} من {total} صف / {indexed} مفهرسة عبر {catalogs} كتالوجات",
+        "firstParty": "{count} داخلي",
+        "topLevelGroups": "{count} مجموعات عليا",
+        "page": "الصفحة {page} / {total}"
+      },
+      "pageSize": {
+        "visible": "{count} مرئي",
+        "rows": "{count} صف",
+        "aria": "حجم صفحة وحدات العمل"
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import type { AuthUser, OrgInfo, MeResponse } from "@/lib/api";
+import type { SupportedLocale } from "@/lib/i18n";
 import {
   login as apiLogin,
   signup as apiSignup,
@@ -36,6 +37,7 @@ interface AuthContextValue {
   impersonate: (orgId: string) => Promise<void>;
   stopImpersonation: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  setOrganizationLanguage: (language: SupportedLocale) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -123,6 +125,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsSuperAdmin(false);
       setImpersonating(false);
     }
+  }, []);
+
+  const setOrganizationLanguage = useCallback((language: SupportedLocale) => {
+    setOrganization((current) => current ? { ...current, language } : current);
   }, []);
 
   const login = useCallback(async (email: string, password: string, orgSlug?: string) => {
@@ -220,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         impersonate: impersonateFn,
         stopImpersonation: stopImpersonationFn,
         refreshUser,
+        setOrganizationLanguage,
       }}
     >
       {children}

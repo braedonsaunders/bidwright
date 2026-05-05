@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "डैशबोर्ड",
+      "intake": "इनटेक",
+      "quotes": "कोटेशन",
+      "clients": "ग्राहक",
+      "library": "लाइब्रेरी",
+      "performance": "प्रदर्शन",
+      "settings": "सेटिंग्स"
+    },
+    "theme": {
+      "light": "हल्का",
+      "dark": "गहरा",
+      "system": "सिस्टम",
+      "label": "थीम: {theme}",
+      "labelWithResolved": "थीम: {theme} ({resolved})"
+    },
+    "switchOrganization": "संगठन बदलें",
+    "organizations": "संगठन",
+    "noOtherOrganizations": "कोई अन्य संगठन नहीं",
+    "superAdmin": "सुपर एडमिन",
+    "personal": "व्यक्तिगत",
+    "adminPanel": "एडमिन पैनल",
+    "searchTools": "टूल खोजें",
+    "searchPlaceholder": "खोजें...",
+    "toolsCount": "टूल ({count})",
+    "noToolsFound": "\"{query}\" के लिए कोई टूल नहीं मिला",
+    "quotes": "कोटेशन",
+    "quotesCount": "कोटेशन ({count})",
+    "activeProject": "सक्रिय प्रोजेक्ट",
+    "activeProjectLabel": "सक्रिय प्रोजेक्ट: {name}",
+    "switchProject": "प्रोजेक्ट बदलें",
+    "loading": "लोड हो रहा है...",
+    "notSignedIn": "साइन इन नहीं है",
+    "profile": "प्रोफाइल",
+    "signOut": "साइन आउट",
+    "expandSidebar": "साइडबार खोलें",
+    "collapseSidebar": "साइडबार बंद करें"
+  },
+  "Settings": {
+    "title": "सेटिंग्स",
+    "subtitle": "अपना Bidwright वर्कस्पेस कॉन्फ़िगर करें",
+    "groups": {
+      "organization": "संगठन",
+      "data": "डेटा प्रबंधन",
+      "importExport": "आयात / निर्यात",
+      "integrations": "इंटीग्रेशन",
+      "users": "यूज़र और एक्सेस"
+    },
+    "orgTabs": {
+      "general": "सामान्य",
+      "brand": "ब्रांड",
+      "departments": "विभाग",
+      "defaults": "डिफ़ॉल्ट",
+      "terms": "नियम और शर्तें",
+      "personas": "पर्सोना"
+    },
+    "generalTitle": "सामान्य सेटिंग्स",
+    "language": "भाषा",
+    "timezone": "समय क्षेत्र",
+    "currency": "मुद्रा",
+    "dateFormat": "दिनांक फ़ॉर्मैट",
+    "fiscalYearStart": "वित्तीय वर्ष की शुरुआत",
+    "generalDescription": "संगठन की भाषा, क्षेत्रीय फ़ॉर्मैट और रिपोर्टिंग कैलेंडर सेट करें।",
+    "localizationTitle": "स्थानीयकरण",
+    "localizationDescription": "भाषा पूरे संगठन के लिए साझा होती है और ऐप शेल तुरंत अपडेट होता है।",
+    "regionalTitle": "क्षेत्रीय फ़ॉर्मैट",
+    "regionalDescription": "ये सेटिंग मुद्रा, तारीख और डिफ़ॉल्ट समय दिखाने को नियंत्रित करती हैं।",
+    "fiscalTitle": "वित्तीय कैलेंडर",
+    "fiscalDescription": "वार्षिक रोल-अप और रिपोर्टिंग डिफ़ॉल्ट के लिए महीना चुनें।"
+  },
+  "Common": {
+    "loading": "लोड हो रहा है..."
+  },
+  "Auth": {
+    "login": {
+      "title": "साइन इन",
+      "email": "ईमेल",
+      "emailPlaceholder": "you@company.com",
+      "password": "पासवर्ड",
+      "passwordPlaceholder": "अपना पासवर्ड डालें",
+      "hidePassword": "पासवर्ड छिपाएँ",
+      "showPassword": "पासवर्ड दिखाएँ",
+      "submit": "जारी रखें",
+      "submitting": "साइन इन हो रहा है",
+      "error": "लॉगिन विफल रहा। फिर से कोशिश करें।",
+      "noAccount": "खाता नहीं है?",
+      "createAccount": "खाता बनाएँ"
+    },
+    "signup": {
+      "eyebrow": "अपना संगठन बनाएँ",
+      "title": "साइन अप",
+      "organizationName": "संगठन का नाम",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "URL स्लग",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "आपका नाम",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "ईमेल",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "पासवर्ड",
+      "passwordPlaceholder": "कम से कम 8 अक्षर",
+      "confirmPassword": "पासवर्ड की पुष्टि करें",
+      "confirmPasswordPlaceholder": "पुष्टि करें",
+      "passwordMismatch": "पासवर्ड मेल नहीं खाते",
+      "passwordTooShort": "पासवर्ड कम से कम 8 अक्षरों का होना चाहिए",
+      "error": "साइन अप विफल रहा",
+      "submit": "खाता बनाएँ",
+      "submitting": "खाता बनाया जा रहा है...",
+      "signInLink": "पहले से खाता है? साइन इन करें"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "सक्रिय",
+      "won": "जीता",
+      "lost": "हारा",
+      "other": "अन्य"
+    },
+    "greeting": {
+      "late": "देर तक काम",
+      "morning": "सुप्रभात",
+      "afternoon": "नमस्कार",
+      "evening": "शुभ संध्या"
+    },
+    "newIntake": "नया इनटेक",
+    "activeValue": "सक्रिय मूल्य",
+    "activeQuoteCount": "{count} सक्रिय कोटेशन",
+    "averageMargin": "औसत मार्जिन",
+    "projectedProfit": "{profit} अनुमानित लाभ",
+    "winRate": "जीत दर",
+    "decidedQuotes": "{count} तय कोटेशन",
+    "noDecisionsYet": "अभी कोई निर्णय नहीं",
+    "exceptions": "अपवाद",
+    "exceptionSummary": "{aging} पुराने, {margin} मार्जिन निगरानी",
+    "pipelineTitle": "पाइपलाइन मैप",
+    "trackedValue": "{value} कुल ट्रैक किया गया मूल्य",
+    "quotes": "कोटेशन",
+    "noPipeline": "अभी कोई बिड पाइपलाइन नहीं है।",
+    "noQuotes": "कोई कोटेशन नहीं",
+    "bidQuality": "बिड गुणवत्ता",
+    "watch": "निगरानी",
+    "clear": "साफ",
+    "margin": "मार्जिन",
+    "win": "जीत",
+    "operatingSignal": "ऑपरेटिंग संकेत",
+    "active": "सक्रिय",
+    "aging": "पुराना",
+    "won30d": "30 दिन में जीते",
+    "attention": "ध्यान",
+    "agingActiveWork": "पुराना सक्रिय काम",
+    "oldestDays": "सबसे पुराना {days} दिन",
+    "marginUnder": "मार्जिन 12% से कम",
+    "needsPricingReview": "मूल्य समीक्षा चाहिए",
+    "wonThisMonth": "इस महीने जीते",
+    "recentDecisions": "हाल के निर्णय",
+    "noUrgentExceptions": "कोई तात्कालिक अपवाद नहीं",
+    "quotePulse": "कोटेशन पल्स",
+    "all": "सभी",
+    "noRecentQuotes": "कोई हालिया कोटेशन नहीं"
+  },
+  "Clients": {
+    "title": "ग्राहक",
+    "subtitle": "खाते, कोटेशन इतिहास, पाइपलाइन स्वास्थ्य और ग्राहक मूल्य।",
+    "newClient": "नया ग्राहक",
+    "searchPlaceholder": "ग्राहक, संपर्क, कोटेशन शीर्षक, शहर खोजें...",
+    "resultCount": "{count} ग्राहक",
+    "filteredResultCount": "{total} में से {filtered} ग्राहक",
+    "noMatches": "इस दृश्य से कोई ग्राहक मेल नहीं खाता।",
+    "inactive": "निष्क्रिय",
+    "noLocation": "कोई स्थान नहीं",
+    "noEmail": "कोई ईमेल नहीं",
+    "noPhone": "कोई फोन नहीं",
+    "filters": {
+      "all": "सभी",
+      "active": "सक्रिय पाइपलाइन",
+      "quoted": "कोटेड",
+      "prospects": "प्रॉस्पेक्ट",
+      "inactive": "निष्क्रिय"
+    },
+    "table": {
+      "client": "ग्राहक",
+      "contact": "संपर्क",
+      "quotes": "कोटेशन",
+      "active": "सक्रिय",
+      "awarded": "अवार्डेड",
+      "win": "जीत",
+      "margin": "मार्जिन",
+      "updated": "अपडेटेड"
+    },
+    "modal": {
+      "title": "नया ग्राहक",
+      "description": "काम का कोटेशन बनाने से पहले खाता रिकॉर्ड बनाएँ।",
+      "close": "नया ग्राहक डायलॉग बंद करें",
+      "name": "नाम",
+      "namePlaceholder": "ग्राहक का नाम",
+      "shortName": "छोटा नाम",
+      "website": "वेबसाइट",
+      "email": "ईमेल",
+      "phone": "फोन",
+      "city": "शहर",
+      "provinceState": "राज्य / प्रांत",
+      "cancel": "रद्द करें",
+      "create": "ग्राहक बनाएँ",
+      "nameRequired": "ग्राहक का नाम आवश्यक है।",
+      "createError": "ग्राहक नहीं बनाया जा सका।"
+    }
+  },
+  "Quotes": {
+    "title": "कोट",
+    "subtitle": "अपने सभी कोट प्रबंधित और ट्रैक करें",
+    "newQuoteButton": "नया कोट",
+    "menu": {
+      "aiIntake": "AI इनटेक",
+      "aiIntakeDescription": "बिड पैकेज अपलोड करें",
+      "newQuote": "नया कोट",
+      "newQuoteDescription": "खाली कोट से शुरू करें",
+      "newSnap": "नया Snap",
+      "newSnapDescription": "एक-पेज त्वरित कोट"
+    },
+    "manual": {
+      "snapTitle": "नया Snap",
+      "quoteTitle": "नया कोट",
+      "snapDescription": "दस-लाइन अनुमान ग्रिड के साथ तेज एक-पेज कोट बनाएं।",
+      "quoteDescription": "AI इनटेक चलाए बिना खाली अनुमान कार्यक्षेत्र बनाएं।",
+      "close": "मैनुअल कोट संवाद बंद करें",
+      "snapTitleLabel": "Snap शीर्षक",
+      "quoteTitleLabel": "कोट शीर्षक",
+      "snapTitlePlaceholder": "जैसे पंप रूम सर्विस कॉल",
+      "quoteTitlePlaceholder": "जैसे कोजेन पाइप रैक इंसुलेशन",
+      "client": "क्लाइंट",
+      "newClientName": "नए क्लाइंट का नाम",
+      "selectClient": "क्लाइंट चुनें...",
+      "searchClients": "क्लाइंट खोजें...",
+      "addClient": "नया क्लाइंट जोड़ें",
+      "location": "स्थान",
+      "locationPlaceholder": "निर्धारित होना है",
+      "cancel": "रद्द करें",
+      "createSnap": "Snap बनाएं",
+      "createQuote": "कोट बनाएं",
+      "failedClient": "क्लाइंट नहीं बनाया जा सका।",
+      "titleRequired": "कोट शीर्षक आवश्यक है।",
+      "unassignedClient": "अनअसाइन्ड क्लाइंट",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} मैनुअल कोट",
+      "snapSummary": "छोटे कामों की तेज कीमत के लिए Snap कोट बनाया गया।",
+      "createError": "कोट नहीं बनाया जा सका।"
+    },
+    "filters": {
+      "searchPlaceholder": "कोट #, शीर्षक, क्लाइंट, प्रोजेक्ट, स्थान से खोजें...",
+      "status": "स्थिति",
+      "client": "क्लाइंट",
+      "estimator": "अनुमानकर्ता",
+      "department": "विभाग",
+      "clear": "साफ करें",
+      "clearAll": "सब साफ करें",
+      "resultCount": "{count} कोट",
+      "filteredResultCount": "{total} में से {filtered} कोट"
+    },
+    "table": {
+      "quoteNumber": "कोट #",
+      "kind": "प्रकार",
+      "title": "शीर्षक",
+      "client": "क्लाइंट",
+      "estimator": "अनुमानकर्ता",
+      "status": "स्थिति",
+      "subtotal": "उप-योग",
+      "margin": "मार्जिन",
+      "updated": "अपडेटेड"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "पूर्ण"
+    },
+    "status": {
+      "Open": "खुला",
+      "Pending": "लंबित",
+      "Awarded": "अवार्डेड",
+      "DidNotGet": "नहीं मिला",
+      "Declined": "अस्वीकृत",
+      "Cancelled": "रद्द",
+      "Closed": "बंद",
+      "Other": "अन्य"
+    },
+    "unassigned": "अनअसाइन्ड",
+    "emptyFiltered": "आपके फिल्टर से कोई कोट मेल नहीं खाता",
+    "empty": "कोई कोट नहीं मिला"
+  },
+  "Performance": {
+    "eyebrow": "प्रदर्शन",
+    "title": "पाइपलाइन और कोट इंटेलिजेंस",
+    "subtitle": "{count} प्रोजेक्ट पर लाइव संकेत",
+    "subtitleFiltered": "{count} प्रोजेक्ट पर लाइव संकेत · फिल्टर दृश्य",
+    "filteredQuoteCount": "{total} में से {filtered} कोट",
+    "winRateBadge": "{rate} जीत दर",
+    "quoteCount": "{count} कोट",
+    "total": "कुल",
+    "unknownClient": "अज्ञात",
+    "emptyDistribution": "वितरण के लिए कोई डेटा नहीं।",
+    "emptyClientData": "अभी कोई क्लाइंट डेटा नहीं।",
+    "emptyTimeSeries": "अभी समय के साथ कोई डेटा नहीं।",
+    "pipelineFunnel": "पाइपलाइन फ़नल",
+    "statusMix": "स्थिति मिश्रण",
+    "pipelineOverTime": "समय के साथ पाइपलाइन",
+    "last12Months": "पिछले 12 महीने",
+    "marginDistribution": "मार्जिन वितरण",
+    "topClientsByProfit": "लाभ के अनुसार शीर्ष क्लाइंट",
+    "top8": "शीर्ष 8",
+    "stages": {
+      "active": "सक्रिय",
+      "won": "जीता",
+      "lost": "हारा",
+      "other": "अन्य"
+    },
+    "status": {
+      "Open": "खुला",
+      "Pending": "लंबित",
+      "Awarded": "अवार्डेड",
+      "DidNotGet": "नहीं मिला",
+      "Declined": "अस्वीकृत",
+      "Cancelled": "रद्द",
+      "Closed": "बंद",
+      "Other": "अन्य"
+    },
+    "filters": {
+      "title": "फिल्टर",
+      "from": "से",
+      "to": "तक",
+      "fromDate": "आरंभ तारीख",
+      "toDate": "समाप्ति तारीख",
+      "stage": "चरण",
+      "status": "स्थिति",
+      "client": "क्लाइंट",
+      "allStages": "सभी चरण",
+      "allStatuses": "सभी स्थितियां",
+      "allClients": "सभी क्लाइंट",
+      "clear": "साफ करें"
+    },
+    "chips": {
+      "from": "{date} से",
+      "to": "{date} तक",
+      "status": "स्थिति: {status}",
+      "client": "क्लाइंट: {client}",
+      "stage": "चरण: {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "पाइपलाइन मूल्य",
+      "estimatedProfit": "अनुमानित लाभ",
+      "averageMargin": "औसत मार्जिन",
+      "winRate": "जीत दर",
+      "decided": "{won}/{decided} निर्णयित"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "अपलोड हो रहा है",
+      "loaded": "पैकेज लोड हुआ",
+      "release": "छोड़ें",
+      "waiting": "प्रतीक्षा"
+    },
+    "package": {
+      "title": "इनटेक पैकेज",
+      "loadedSize": "{size} लोड हुआ"
+    },
+    "selected": {
+      "multipleFiles": "{count} पैकेज फाइलें कैप्चर हुईं",
+      "totalSize": "कुल {size}",
+      "more": "+{count} और",
+      "clearPackage": "पैकेज साफ करें"
+    },
+    "drop": {
+      "releaseTitle": "पैकेज जोड़ने के लिए छोड़ें",
+      "title": "फाइलें या फ़ोल्डर ड्रॉप करें",
+      "description": "ड्रॉइंग, स्पेसिफिकेशन, स्प्रेडशीट, एडेंडा, इमेज, ZIP आर्काइव और Outlook संदेश अपलोड करें।",
+      "selectFiles": "फाइलें चुनें",
+      "selectFolder": "फ़ोल्डर चुनें",
+      "emailFormats": ".msg और .eml"
+    },
+    "context": {
+      "title": "प्रोजेक्ट संदर्भ",
+      "description": "अनुमान कार्यक्षेत्र बनाने के लिए जरूरी न्यूनतम संदर्भ दर्ज करें।"
+    },
+    "fields": {
+      "destination": "गंतव्य",
+      "newProject": "नया प्रोजेक्ट",
+      "projectName": "प्रोजेक्ट नाम",
+      "projectNamePlaceholder": "जैसे North Campus Boiler Upgrade",
+      "client": "क्लाइंट",
+      "newClientName": "नए क्लाइंट का नाम",
+      "selectClient": "क्लाइंट चुनें...",
+      "searchClients": "क्लाइंट खोजें...",
+      "addClient": "नया क्लाइंट जोड़ें",
+      "location": "स्थान",
+      "locationPlaceholder": "शहर, राज्य",
+      "bidDue": "बिड देय",
+      "scope": "स्कोप",
+      "scopePlaceholder": "पूरा पैकेज, ट्रेड स्प्लिट, बिल्डिंग एरिया, वैकल्पिक या अनुशासन।",
+      "playbook": "अनुमान प्लेबुक",
+      "autoDetect": "ऑटो-डिटेक्ट",
+      "notes": "नोट्स",
+      "notesPlaceholder": "वैकल्पिक नोट्स"
+    },
+    "actions": {
+      "uploading": "अपलोड हो रहा है...",
+      "createWorkspace": "इनटेक कार्यक्षेत्र बनाएं"
+    },
+    "status": {
+      "uploadSuccessSingle": "पैकेज सफलतापूर्वक अपलोड हुआ।",
+      "uploadSuccessMultiple": "{count} फाइलें सफलतापूर्वक अपलोड हुईं।"
+    },
+    "errors": {
+      "noReadableFiles": "ड्रॉप किए गए आइटम ने कोई पढ़ने योग्य फाइल नहीं दी।",
+      "outlookRowOnly": "New Outlook इनबॉक्स सूची से ड्रैग Outlook-only payloads ({payloadLabel}) का उपयोग करता है और सामान्य वेबसाइटों को ईमेल फाइल नहीं देता। अटैचमेंट को ही ड्रैग करें, खुले संदेश से कोशिश करें, .eml के रूप में सेव करें, या classic Outlook इस्तेमाल करें।",
+      "outlookWebLink": "New Outlook ने web-link drag data ({payloadLabel}) दिया, लेकिन ब्राउज़र इसे डाउनलोड होने वाली ईमेल फाइल में नहीं बदल सका। संदेश को .eml के रूप में सेव कर अपलोड करें, अटैचमेंट को ड्रैग करें, या classic Outlook इस्तेमाल करें।",
+      "outlookNonFile": "New Outlook ने non-file drag data ({payloadLabel}) दिया, वास्तविक ईमेल फाइल नहीं। संदेश को .eml के रूप में सेव कर अपलोड करें, अटैचमेंट को ड्रैग करें, या classic Outlook इस्तेमाल करें।",
+      "failedClient": "क्लाइंट नहीं बनाया जा सका।",
+      "selectFile": "कम से कम एक पैकेज फाइल चुनें।",
+      "uploadFailed": "अपलोड विफल।"
+    }
+  },
+  "NotFound": {
+    "title": "पेज नहीं मिला",
+    "back": "डैशबोर्ड पर वापस"
+  },
+  "Profile": {
+    "title": "प्रोफ़ाइल",
+    "account": {
+      "title": "खाता",
+      "email": "ईमेल",
+      "role": "भूमिका",
+      "organization": "संगठन",
+      "access": "एक्सेस",
+      "superAdmin": "सुपर एडमिन"
+    },
+    "displayName": {
+      "title": "डिस्प्ले नाम",
+      "name": "नाम",
+      "placeholder": "आपका नाम"
+    },
+    "password": {
+      "title": "पासवर्ड बदलें",
+      "current": "वर्तमान पासवर्ड",
+      "currentPlaceholder": "वर्तमान पासवर्ड दर्ज करें",
+      "new": "नया पासवर्ड",
+      "newPlaceholder": "कम से कम 8 अक्षर",
+      "confirm": "पुष्टि करें",
+      "confirmPlaceholder": "पुष्टि करें"
+    },
+    "actions": {
+      "saving": "सेव हो रहा है...",
+      "save": "सेव",
+      "changing": "बदला जा रहा है...",
+      "changePassword": "पासवर्ड बदलें"
+    },
+    "messages": {
+      "nameUpdated": "नाम अपडेट हुआ।",
+      "passwordChanged": "पासवर्ड बदला गया।",
+      "updateFailed": "अपडेट विफल",
+      "passwordMismatch": "पासवर्ड मेल नहीं खाते।",
+      "passwordTooShort": "पासवर्ड कम से कम 8 अक्षर का होना चाहिए।"
+    }
+  },
+  "Library": {
+    "title": "लाइब्रेरी",
+    "searchPlaceholder": "लाइब्रेरी क्षेत्र खोजें",
+    "refresh": "ताज़ा करें",
+    "loadingKnowledge": "ज्ञान लोड हो रहा है...",
+    "surfaces": {
+      "overview": {
+        "label": "होम",
+        "description": "लाइब्रेरी कार्य और लाइव कवरेज के लिए प्रारंभिक क्षेत्र।"
+      },
+      "resources": {
+        "label": "संसाधन",
+        "description": "सामग्री, सेवा, उपकरण, उपठेका, उपभोग्य और अलाउंस संसाधनों की सूची।"
+      },
+      "rates": {
+        "label": "रेटबुक",
+        "description": "ग्राहक/संसाधन लागत और विक्रय ओवरराइड, स्तर, यात्रा, अलाउंस और मूल्य नियम।"
+      },
+      "assemblies": {
+        "label": "असेंबली",
+        "description": "पैरामीटर आधारित अनुमान रेसिपी जो मूल्ययुक्त संसाधन पंक्तियों में खुलती हैं।"
+      },
+      "labor_units": {
+        "label": "श्रम इकाइयाँ",
+        "description": "प्रति स्थापित इकाई घंटों के उत्पादन मानक, संसाधन पंक्तियों और रेटबुक से जुड़े।"
+      },
+      "cost": {
+        "label": "लागत इंटेलिजेंस",
+        "description": "विक्रेता बिल पंक्ति प्रमाण, अवलोकन, उत्पाद और वर्तमान लागत आधार पंक्तियाँ।"
+      },
+      "playbooks": {
+        "label": "अनुमानकर्ता",
+        "description": "अनुमानकर्ता व्यवहार, पद्धति, स्रोत बाइंडिंग और वाणिज्यिक नीति।"
+      },
+      "knowledge": {
+        "label": "ज्ञान",
+        "description": "संदर्भ पुस्तकें, डेटा सेट, निकाले गए प्रमाण और एजेंट पुनर्प्राप्ति सामग्री।"
+      }
+    },
+    "common": {
+      "close": "बंद करें",
+      "delete": "हटाएँ",
+      "cancel": "रद्द करें",
+      "saving": "सहेज रहा है",
+      "prev": "पिछला",
+      "next": "अगला"
+    },
+    "overview": {
+      "title": "लाइब्रेरी कार्यक्षेत्र",
+      "subtitle": "लाइव लाइब्रेरी कवरेज से कार्यक्षेत्र खोलें",
+      "groupCount": "{count} समूह",
+      "noData": "कोई डेटा नहीं",
+      "unassigned": "असाइन नहीं",
+      "other": "अन्य",
+      "breakdowns": {
+        "resourceRows": "संसाधन कैटलॉग प्रकार के अनुसार पंक्तियाँ",
+        "rateRows": "रेटबुक श्रेणी के अनुसार पंक्तियाँ",
+        "rateBooks": "श्रेणी के अनुसार रेटबुक",
+        "assemblyComponents": "असेंबली श्रेणी के अनुसार घटक",
+        "assemblyCategories": "श्रेणी के अनुसार असेंबली",
+        "laborRows": "श्रम इकाई कैटलॉग के अनुसार पंक्तियाँ",
+        "costBasis": "संसाधन प्रकार के अनुसार लागत आधार",
+        "resourceTypes": "प्रकार के अनुसार संसाधन",
+        "sourceBindings": "प्रकार के अनुसार स्रोत बाइंडिंग",
+        "estimatorStatus": "स्थिति के अनुसार अनुमानकर्ता",
+        "references": "स्रोत प्रकार के अनुसार संदर्भ",
+        "datasetRows": "डेटा सेट श्रेणी के अनुसार पंक्तियाँ"
+      },
+      "fallbacks": {
+        "catalog": "कैटलॉग",
+        "uncategorized": "बिना श्रेणी",
+        "general": "सामान्य",
+        "unclassified": "अवर्गीकृत",
+        "books": "पुस्तकें",
+        "notes": "नोट्स",
+        "datasetTags": "डेटा सेट टैग",
+        "active": "सक्रिय",
+        "paused": "रुका हुआ"
+      },
+      "cards": {
+        "resources": {
+          "title": "संसाधन",
+          "body": "वर्कशीट, रेटबुक और असेंबली में उपयोग होने वाले आधार अनुमान संसाधन।",
+          "metricLabel": "कैटलॉग आइटम"
+        },
+        "rates": {
+          "title": "रेटबुक",
+          "body": "स्तरों, यात्रा, अलाउंस और मूल्य नियमों के साथ ग्राहक/संसाधन लागत और विक्रय दरें।",
+          "metricLabel": "संसाधन पंक्तियाँ"
+        },
+        "assemblies": {
+          "title": "असेंबली",
+          "body": "संसाधन, उपकरण, नेस्टेड स्कोप और पैरामीट्रिक टेकऑफ के लिए पुनः उपयोग योग्य अनुमान रेसिपी।",
+          "metricLabel": "असेंबली"
+        },
+        "laborUnits": {
+          "title": "श्रम इकाइयाँ",
+          "body": "स्वामित्व वाले उत्पादन मानक स्थापित मात्राओं को घंटों में बदलते हैं और फिर उन घंटों का मूल्य रेटबुक से लगाते हैं।",
+          "metricLabel": "उत्पादन पंक्तियाँ"
+        },
+        "cost": {
+          "title": "लागत इंटेलिजेंस",
+          "body": "विक्रेता बिल पंक्ति प्रमाण, देखे गए मूल्य, वर्तमान लागत आधार पंक्तियाँ और उनका प्रमाण पथ।",
+          "metricLabel": "लागत आधार पंक्तियाँ"
+        },
+        "playbooks": {
+          "title": "अनुमानकर्ता",
+          "body": "पद्धति, स्रोत प्राथमिकता, वाणिज्यिक नीति और समीक्षा मार्गदर्शन के साथ पुनः उपयोग योग्य अनुमान व्यवहार।",
+          "metricLabel": "सक्रिय अनुमानकर्ता"
+        },
+        "books": {
+          "title": "पुस्तकें और नोट्स",
+          "body": "संदर्भ पुस्तकें, अनुमानकर्ता नोट्स, निकाले गए प्रमाण और एजेंट पुनर्प्राप्ति सामग्री।",
+          "metricLabel": "संदर्भ"
+        },
+        "datasets": {
+          "title": "डेटा सेट",
+          "body": "एजेंट, अनुमानकर्ता और मूल्य निर्धारण वर्कफ़्लो में उपयोग होने वाली संरचित तालिकाएँ और आयातित पंक्तियाँ।",
+          "metricLabel": "डेटा सेट"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "अलाउंस",
+        "allowances": "अलाउंस",
+        "consumable": "उपभोग्य",
+        "consumables": "उपभोग्य",
+        "dataset": "डेटा सेट",
+        "datasets": "डेटा सेट",
+        "equipment": "उपकरण",
+        "knowledge": "ज्ञान",
+        "knowledgeLibrary": "ज्ञान लाइब्रेरी",
+        "labor": "श्रम",
+        "manual": "मैनुअल",
+        "material": "सामग्री",
+        "materials": "सामग्री",
+        "rateBook": "रेटबुक",
+        "service": "सेवा",
+        "services": "सेवाएँ",
+        "subcontract": "उपठेका",
+        "subcontracts": "उपठेके"
+      }
+    },
+    "labor": {
+      "title": "श्रम इकाइयाँ",
+      "subtitle": "{catalog} / {count} उत्पादन मानक",
+      "allCatalogs": "सभी कैटलॉग",
+      "allCatalogsWithCount": "सभी कैटलॉग ({count})",
+      "unitsCount": "{count} इकाइयाँ",
+      "catalogAria": "श्रम इकाई कैटलॉग",
+      "searchPlaceholder": "कोड, वर्ग, श्रेणी या विवरण खोजें",
+      "confirmDeleteUnit": "{name} हटाएँ?",
+      "confirmDeleteCatalog": "{name} और इसकी श्रम इकाइयाँ हटाएँ?",
+      "groupRowCount": "{count} पंक्तियाँ",
+      "avgHours": "औसत {value} घंटे",
+      "items": "आइटम",
+      "sections": "अनुभाग",
+      "groupLevels": {
+        "catalog": "कैटलॉग",
+        "category": "श्रेणी",
+        "class": "वर्ग",
+        "subclass": "उपवर्ग"
+      },
+      "view": {
+        "groups": "समूह",
+        "rows": "पंक्तियाँ"
+      },
+      "actions": {
+        "collapse": "समेटें",
+        "expand": "फैलाएँ",
+        "manageCatalogs": "कैटलॉग प्रबंधित करें",
+        "newUnit": "नई श्रम इकाई"
+      },
+      "stats": {
+        "rows": "पंक्तियाँ",
+        "catalogs": "कैटलॉग",
+        "providers": "प्रदाता",
+        "categories": "श्रेणियाँ",
+        "avgHrs": "औसत घंटे"
+      },
+      "table": {
+        "code": "कोड",
+        "laborUnit": "श्रम इकाई",
+        "catalog": "कैटलॉग",
+        "category": "श्रेणी",
+        "class": "वर्ग",
+        "normal": "सामान्य",
+        "difficult": "कठिन",
+        "veryDifficult": "बहुत कठिन",
+        "uom": "इकाई"
+      },
+      "branchLoading": "शाखा लोड हो रही है...",
+      "branchEmpty": "इस शाखा में कोई पंक्ति नहीं।",
+      "empty": "इस दृश्य से मेल खाती कोई श्रम इकाई नहीं।",
+      "loading": "श्रम इकाइयाँ लोड हो रही हैं...",
+      "unitDrawer": {
+        "createTitle": "श्रम इकाई बनाएँ",
+        "fallbackTitle": "श्रम इकाई",
+        "subtitle": "असेंबली और वर्कशीट में उपयोग होने वाला उत्पादन मानक संपादित करें।",
+        "save": "श्रम इकाई सहेजें"
+      },
+      "catalogDrawer": {
+        "title": "श्रम इकाई कैटलॉग",
+        "subtitle": "उत्पादन मानक पंक्तियों के स्रोत समूह प्रबंधित करें।",
+        "newCatalog": "नया कैटलॉग",
+        "org": "संगठन",
+        "firstParty": "स्वयं",
+        "save": "कैटलॉग सहेजें",
+        "create": "कैटलॉग बनाएँ"
+      },
+      "fields": {
+        "catalog": "कैटलॉग",
+        "chooseCatalog": "कैटलॉग चुनें",
+        "name": "नाम",
+        "code": "कोड",
+        "discipline": "विषय",
+        "outputUom": "आउटपुट इकाई",
+        "description": "विवरण",
+        "category": "श्रेणी",
+        "class": "वर्ग",
+        "subclass": "उपवर्ग",
+        "normalHours": "सामान्य घंटे",
+        "difficultHours": "कठिन घंटे",
+        "veryDifficultHours": "बहुत कठिन घंटे",
+        "default": "डिफ़ॉल्ट",
+        "tags": "टैग",
+        "tagsPlaceholder": "कॉमा से अलग",
+        "provider": "प्रदाता",
+        "sourceNote": "स्रोत नोट"
+      },
+      "difficulty": {
+        "normal": "सामान्य",
+        "difficult": "कठिन",
+        "veryDifficult": "बहुत कठिन"
+      },
+      "fallbacks": {
+        "internal": "आंतरिक",
+        "general": "सामान्य",
+        "manual": "मैनुअल",
+        "unknown": "अज्ञात"
+      },
+      "errors": {
+        "chooseCatalog": "सहेजने से पहले श्रम इकाई कैटलॉग चुनें।",
+        "unitNameRequired": "श्रम इकाई का नाम आवश्यक है।",
+        "normalHours": "सामान्य घंटे गैर-ऋणात्मक संख्या होने चाहिए।",
+        "difficultyHours": "कठिनाई घंटे खाली या गैर-ऋणात्मक संख्या होने चाहिए।",
+        "saveUnit": "श्रम इकाई सहेजने में विफल।",
+        "deleteUnit": "श्रम इकाई हटाने में विफल।",
+        "catalogNameRequired": "कैटलॉग नाम आवश्यक है।",
+        "saveCatalog": "कैटलॉग सहेजने में विफल।",
+        "deleteCatalog": "कैटलॉग हटाने में विफल।"
+      },
+      "footer": {
+        "grouped": "{visible} दृश्य ट्री पंक्तियों में से {start}-{end} दिखा रहा है / कुल {total} श्रम पंक्तियाँ",
+        "rows": "{total} पंक्तियों में से {start}-{end} दिखा रहा है / {catalogs} कैटलॉग में {indexed} अनुक्रमित",
+        "firstParty": "{count} स्वयं",
+        "topLevelGroups": "{count} शीर्ष-स्तर समूह",
+        "page": "पृष्ठ {page} / {total}"
+      },
+      "pageSize": {
+        "visible": "{count} दृश्य",
+        "rows": "{count} पंक्तियाँ",
+        "aria": "श्रम इकाई पृष्ठ आकार"
+      }
+    }
+  }
+}

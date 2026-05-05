@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition, type DragEvent, type FormEvent, type InputHTMLAttributes } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTranslations } from "next-intl";
 import {
   ArrowRight,
   CalendarClock,
@@ -117,6 +118,13 @@ interface DroppedRemoteFileCandidate {
 interface ExtractDroppedFilesResult {
   files: SelectedUploadFile[];
   errorMessage?: string;
+}
+
+interface DropMessages {
+  noReadableFiles: string;
+  outlookRowOnly: (payloadLabel: string) => string;
+  outlookWebLink: (payloadLabel: string) => string;
+  outlookNonFile: (payloadLabel: string) => string;
 }
 
 interface SelectedUploadFile extends PackageIngestFile {
@@ -607,7 +615,7 @@ async function readFileSystemHandle(handle: FileSystemHandleLike | null, prefix:
   return files;
 }
 
-async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractDroppedFilesResult> {
+async function extractDroppedFiles(dataTransfer: DataTransfer, messages: DropMessages): Promise<ExtractDroppedFilesResult> {
   const items = Array.from(dataTransfer.items ?? []);
   const payloadTypes = new Set<string>(Array.from(dataTransfer.types ?? []).map((type) => type.toLowerCase()));
 
@@ -619,7 +627,7 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
     );
     return files.length > 0
       ? { files }
-      : { files: [], errorMessage: "The dropped item did not expose any readable files." };
+      : { files: [], errorMessage: messages.noReadableFiles };
   }
 
   const extractedFiles: SelectedUploadFile[] = [];
@@ -692,38 +700,39 @@ async function extractDroppedFiles(dataTransfer: DataTransfer): Promise<ExtractD
   if (OUTLOOK_ROW_ONLY_PAYLOAD_TYPES.some((type) => payloadTypes.has(type))) {
     return {
       files: [],
-      errorMessage: `New Outlook inbox-list drags use Outlook-only payloads (${payloadLabel}) and do not expose an email file to normal websites. Drag the attachment itself, try dragging from an opened message if Outlook exposes it there, save as .eml, or use classic Outlook.`,
+      errorMessage: messages.outlookRowOnly(payloadLabel),
     };
   }
 
   if (remoteCandidates.length > 0) {
     return {
       files: [],
-      errorMessage: `New Outlook exposed web-link drag data (${payloadLabel}), but the browser could not turn it into a downloadable email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.`,
+      errorMessage: messages.outlookWebLink(payloadLabel),
     };
   }
 
   if (directStringValues.size > 0) {
     return {
       files: [],
-      errorMessage: `New Outlook exposed non-file drag data (${payloadLabel}), not a real email file. Save the message as .eml and upload it, drag the attachment itself, or use classic Outlook.`,
+      errorMessage: messages.outlookNonFile(payloadLabel),
     };
   }
 
   return {
     files: [],
-    errorMessage: "The dropped item did not expose any readable files.",
+    errorMessage: messages.noReadableFiles,
   };
 }
 
 export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
+  const t = useTranslations("Intake");
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [files, setFiles] = useState<SelectedUploadFile[]>([]);
   const [projectId, setProjectId] = useState("");
-  const [packageName, setPackageName] = useState("Client package");
+  const [packageName, setPackageName] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
@@ -774,7 +783,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
       setQuickAddName("");
       setQuickAddOpen(false);
     } catch (quickAddError) {
-      setError(quickAddError instanceof Error ? quickAddError.message : "Failed to create client.");
+      setError(quickAddError instanceof Error ? quickAddError.message : t("errors.failedClient"));
     } finally {
       setQuickAddSaving(false);
     }
@@ -810,7 +819,12 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     event.preventDefault();
     setDragActive(false);
 
-    const { files: droppedFiles, errorMessage } = await extractDroppedFiles(event.dataTransfer);
+    const { files: droppedFiles, errorMessage } = await extractDroppedFiles(event.dataTransfer, {
+      noReadableFiles: t("errors.noReadableFiles"),
+      outlookRowOnly: (payloadLabel) => t("errors.outlookRowOnly", { payloadLabel }),
+      outlookWebLink: (payloadLabel) => t("errors.outlookWebLink", { payloadLabel }),
+      outlookNonFile: (payloadLabel) => t("errors.outlookNonFile", { payloadLabel }),
+    });
 
     if (droppedFiles.length > 0) {
       handleFiles(droppedFiles);
@@ -818,13 +832,13 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
     }
 
     setStatus(null);
-    setError(errorMessage ?? "The dropped item did not expose any readable files.");
+    setError(errorMessage ?? t("errors.noReadableFiles"));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!files.length) {
-      setError("Select at least one package file.");
+      setError(t("errors.selectFile"));
       return;
     }
 
@@ -838,7 +852,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
         const result = await submitPackageIngest({
           files,
           projectId: projectId || undefined,
-          packageName,
+          packageName: packageName.trim() || undefined,
           clientName: selectedCustomer?.name || undefined,
           customerId: customerIdRef.current || undefined,
           location: location || undefined,
@@ -855,8 +869,8 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
 
         setStatus(
           files.length === 1
-            ? "Package uploaded successfully."
-            : `${files.length} files uploaded successfully.`
+            ? t("status.uploadSuccessSingle")
+            : t("status.uploadSuccessMultiple", { count: files.length })
         );
 
         if (nextProjectId) {
@@ -864,7 +878,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           router.push(`/projects/${nextProjectId}?tab=estimate&intake=true${personaParam}`);
         }
       } catch (submissionError) {
-        setError(submissionError instanceof Error ? submissionError.message : "Upload failed.");
+        setError(submissionError instanceof Error ? submissionError.message : t("errors.uploadFailed"));
         setStatus(null);
       }
     });
@@ -877,7 +891,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
       : `${Math.max(1, Math.round(totalBytes / 1024))} KB`
     : "0 MB";
   const selectedPersona = personas.find((persona) => persona.id === personaId) ?? null;
-  const intakeState = isPending ? "Uploading" : files.length ? "Package loaded" : dragActive ? "Release" : "Waiting";
+  const intakeState = isPending ? t("state.uploading") : files.length ? t("state.loaded") : dragActive ? t("state.release") : t("state.waiting");
 
   return (
     <form className="flex min-h-0 w-full flex-1" onSubmit={handleSubmit}>
@@ -905,8 +919,8 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                   <FileUp className="h-4 w-4" />
                 </span>
                 <div>
-                  <div className="text-sm font-semibold text-fg">Intake package</div>
-                  <div className="text-xs text-fg/45">{totalSizeLabel} loaded</div>
+                  <div className="text-sm font-semibold text-fg">{t("package.title")}</div>
+                  <div className="text-xs text-fg/45">{t("package.loadedSize", { size: totalSizeLabel })}</div>
                 </div>
               </div>
               <Badge tone={files.length ? "success" : "info"}>{intakeState}</Badge>
@@ -937,16 +951,16 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                         />
                       </motion.div>
                       <h2 className="mt-5 max-w-xl text-2xl font-semibold leading-tight text-fg">
-                        {files.length === 1 ? files[0].relativePath : `${files.length} package files captured`}
+                        {files.length === 1 ? files[0].relativePath : t("selected.multipleFiles", { count: files.length })}
                       </h2>
-                      <p className="mt-2 text-sm text-fg/50">{totalSizeLabel} total</p>
+                      <p className="mt-2 text-sm text-fg/50">{t("selected.totalSize", { size: totalSizeLabel })}</p>
                       <div className="mt-5 flex max-h-28 flex-wrap justify-center gap-1.5 overflow-hidden">
                         {files.slice(0, 10).map((selectedFile) => (
                           <Badge key={`${selectedFile.relativePath}-${selectedFile.file.size}-${selectedFile.file.lastModified}`} className="max-w-[220px] truncate">
                             {selectedFile.relativePath}
                           </Badge>
                         ))}
-                        {files.length > 10 ? <Badge>+{files.length - 10} more</Badge> : null}
+                        {files.length > 10 ? <Badge>{t("selected.more", { count: files.length - 10 })}</Badge> : null}
                       </div>
                       <button
                         type="button"
@@ -954,7 +968,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                         className="mt-5 inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg/70 px-3 py-2 text-xs font-medium text-fg/60 transition-colors hover:border-danger/30 hover:bg-danger/10 hover:text-danger"
                       >
                         <X className="h-3.5 w-3.5" />
-                        Clear package
+                        {t("selected.clearPackage")}
                       </button>
                     </div>
                   </motion.div>
@@ -984,10 +998,10 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                       />
                     </motion.div>
                     <h2 className="mt-6 text-3xl font-semibold leading-tight text-fg">
-                      {dragActive ? "Release to attach package" : "Drop files or folder"}
+                      {dragActive ? t("drop.releaseTitle") : t("drop.title")}
                     </h2>
                     <p className="mt-3 max-w-lg text-sm leading-6 text-fg/55">
-                      Upload drawings, specifications, spreadsheets, addenda, images, ZIP archives, and Outlook messages.
+                      {t("drop.description")}
                     </p>
                     <div className="mt-6 flex flex-wrap justify-center gap-2">
                       <button
@@ -996,7 +1010,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                         onClick={() => fileInputRef.current?.click()}
                       >
                         <FileText className="h-4 w-4 text-accent" />
-                        Select files
+                        {t("drop.selectFiles")}
                       </button>
                       <button
                         type="button"
@@ -1004,11 +1018,11 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                         onClick={() => folderInputRef.current?.click()}
                       >
                         <FolderOpen className="h-4 w-4 text-accent" />
-                        Select folder
+                        {t("drop.selectFolder")}
                       </button>
                       <span className="inline-flex h-10 items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-3 text-sm font-medium text-fg/45">
                         <Mail className="h-4 w-4" />
-                        .msg and .eml
+                        {t("drop.emailFormats")}
                       </span>
                     </div>
                   </motion.div>
@@ -1047,10 +1061,10 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-semibold text-fg">
                 <Target className="h-4 w-4 text-accent" />
-                Project context
+                {t("context.title")}
               </div>
               <p className="mt-1 text-xs leading-5 text-fg/45">
-                Capture the minimum context required to create the estimate workspace.
+                {t("context.description")}
               </p>
             </div>
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-success/10 text-success">
@@ -1060,9 +1074,9 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
 
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
             <div>
-              <Label>Destination</Label>
-              <StyledSelect value={projectId || "__new__"} onValueChange={(v) => setProjectId(v === "__new__" ? "" : v)} placeholder="New project">
-                <SelectItem value="__new__">New project</SelectItem>
+              <Label>{t("fields.destination")}</Label>
+              <StyledSelect value={projectId || "__new__"} onValueChange={(v) => setProjectId(v === "__new__" ? "" : v)} placeholder={t("fields.newProject")}>
+                <SelectItem value="__new__">{t("fields.newProject")}</SelectItem>
                 {projects.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
                     {p.name}{(p as any).quote ? ` (${(p as any).quote.quoteNumber})` : ""}
@@ -1072,16 +1086,16 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             </div>
 
             <div>
-              <Label>Project name</Label>
-              <Input value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder="e.g. North Campus Boiler Upgrade" />
+              <Label>{t("fields.projectName")}</Label>
+              <Input value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder={t("fields.projectNamePlaceholder")} />
             </div>
 
             <div>
-              <Label>Client</Label>
+              <Label>{t("fields.client")}</Label>
               {quickAddOpen ? (
                 <div className="flex gap-1.5">
                   <Input
-                    placeholder="New client name"
+                    placeholder={t("fields.newClientName")}
                     value={quickAddName}
                     onChange={(e) => setQuickAddName(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleQuickAdd())}
@@ -1107,12 +1121,12 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                           label: c.name,
                           secondary: c.shortName || undefined,
                         }))}
-                      placeholder="Select client..."
-                      searchPlaceholder="Search clients..."
+                      placeholder={t("fields.selectClient")}
+                      searchPlaceholder={t("fields.searchClients")}
                       triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
                     />
                   </div>
-                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
+                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title={t("fields.addClient")}>
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>
@@ -1123,23 +1137,23 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               <div>
                 <Label className="flex items-center gap-1.5">
                   <MapPin className="h-3 w-3" />
-                  Location
+                  {t("fields.location")}
                 </Label>
-                <Input placeholder="City, State" value={location} onChange={(e) => setLocation(e.target.value)} />
+                <Input placeholder={t("fields.locationPlaceholder")} value={location} onChange={(e) => setLocation(e.target.value)} />
               </div>
               <div>
                 <Label className="flex items-center gap-1.5">
                   <CalendarClock className="h-3 w-3" />
-                  Bid due
+                  {t("fields.bidDue")}
                 </Label>
                 <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               </div>
             </div>
 
             <div>
-              <Label>Scope</Label>
+              <Label>{t("fields.scope")}</Label>
               <Textarea
-                placeholder="Full package, trade split, building area, alternate, or discipline."
+                placeholder={t("fields.scopePlaceholder")}
                 value={scope}
                 onChange={(e) => setScope(e.target.value)}
                 className="min-h-16 resize-none"
@@ -1148,13 +1162,13 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
 
             {personas.length > 0 && (
               <div>
-                <Label>Estimating playbook</Label>
+                <Label>{t("fields.playbook")}</Label>
                 <StyledSelect
                   value={personaId || "__auto__"}
                   onValueChange={(v) => setPersonaId(v === "__auto__" ? "" : v)}
-                  placeholder="Auto-detect"
+                  placeholder={t("fields.autoDetect")}
                 >
-                  <SelectItem value="__auto__">Auto-detect</SelectItem>
+                  <SelectItem value="__auto__">{t("fields.autoDetect")}</SelectItem>
                   {personas.map((persona) => (
                     <SelectItem key={persona.id} value={persona.id}>
                       {persona.name}{persona.trade ? ` - ${persona.trade}` : ""}
@@ -1170,8 +1184,8 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             )}
 
             <div>
-              <Label>Notes</Label>
-              <Textarea placeholder="Optional notes" value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-16 resize-none" />
+              <Label>{t("fields.notes")}</Label>
+              <Textarea placeholder={t("fields.notesPlaceholder")} value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-16 resize-none" />
             </div>
           </div>
 
@@ -1186,12 +1200,12 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
               {isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Uploading...
+                  {t("actions.uploading")}
                 </>
               ) : (
                 <>
                   <FileUp className="h-4 w-4" />
-                  Create intake workspace
+                  {t("actions.createWorkspace")}
                   <ArrowRight className="h-4 w-4" />
                 </>
               )}

@@ -1713,7 +1713,7 @@ export interface BrandProfile {
 }
 
 export interface AppSettings {
-  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string };
+  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string; language: string };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string; authMethod?: "smtp" | "oauth2"; oauth2TenantId?: string; oauth2ClientId?: string; oauth2ClientSecret?: string };
   defaults: {
     defaultMarkup: number;
@@ -1743,7 +1743,10 @@ export interface AppSettings {
     azureDiEndpoint?: string;
     azureDiKey?: string;
     documentExtractionProvider?: "azure" | "local" | "auto";
-    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
+    azureDiModel?: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-contract";
+    azureDiFeatures?: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
+    azureDiQueryFields?: string;
+    azureDiOutputFormat?: "text" | "markdown";
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

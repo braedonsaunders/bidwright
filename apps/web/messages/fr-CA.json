@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "Tableau de bord",
+      "intake": "Réception",
+      "quotes": "Soumissions",
+      "clients": "Clients",
+      "library": "Bibliothèque",
+      "performance": "Performance",
+      "settings": "Paramètres"
+    },
+    "theme": {
+      "light": "Clair",
+      "dark": "Sombre",
+      "system": "Système",
+      "label": "Thème : {theme}",
+      "labelWithResolved": "Thème : {theme} ({resolved})"
+    },
+    "switchOrganization": "Changer d’organisation",
+    "organizations": "Organisations",
+    "noOtherOrganizations": "Aucune autre organisation",
+    "superAdmin": "Super administrateur",
+    "personal": "Personnel",
+    "adminPanel": "Panneau d’administration",
+    "searchTools": "Rechercher des outils",
+    "searchPlaceholder": "Rechercher...",
+    "toolsCount": "Outils ({count})",
+    "noToolsFound": "Aucun outil trouvé pour « {query} »",
+    "quotes": "Soumissions",
+    "quotesCount": "Soumissions ({count})",
+    "activeProject": "Projet actif",
+    "activeProjectLabel": "Projet actif : {name}",
+    "switchProject": "Changer de projet",
+    "loading": "Chargement...",
+    "notSignedIn": "Non connecté",
+    "profile": "Profil",
+    "signOut": "Se déconnecter",
+    "expandSidebar": "Développer la barre latérale",
+    "collapseSidebar": "Réduire la barre latérale"
+  },
+  "Settings": {
+    "title": "Paramètres",
+    "subtitle": "Configurez votre espace de travail Bidwright",
+    "groups": {
+      "organization": "Organisation",
+      "data": "Gestion des données",
+      "importExport": "Importation / Exportation",
+      "integrations": "Intégrations",
+      "users": "Utilisateurs et accès"
+    },
+    "orgTabs": {
+      "general": "Général",
+      "brand": "Marque",
+      "departments": "Départements",
+      "defaults": "Valeurs par défaut",
+      "terms": "Conditions générales",
+      "personas": "Personas"
+    },
+    "generalTitle": "Paramètres généraux",
+    "language": "Langue",
+    "timezone": "Fuseau horaire",
+    "currency": "Devise",
+    "dateFormat": "Format de date",
+    "fiscalYearStart": "Début de l’exercice",
+    "generalDescription": "Définissez la langue de l’organisation, les formats régionaux et le calendrier de rapports.",
+    "localizationTitle": "Localisation",
+    "localizationDescription": "La langue est partagée par toute l’organisation et met à jour l’interface principale immédiatement.",
+    "regionalTitle": "Formats régionaux",
+    "regionalDescription": "Ces paramètres contrôlent la devise, les dates et les heures par défaut.",
+    "fiscalTitle": "Calendrier fiscal",
+    "fiscalDescription": "Choisissez le mois utilisé pour les cumuls annuels et les rapports."
+  },
+  "Common": {
+    "loading": "Chargement..."
+  },
+  "Auth": {
+    "login": {
+      "title": "Se connecter",
+      "email": "Courriel",
+      "emailPlaceholder": "vous@entreprise.com",
+      "password": "Mot de passe",
+      "passwordPlaceholder": "Entrez votre mot de passe",
+      "hidePassword": "Masquer le mot de passe",
+      "showPassword": "Afficher le mot de passe",
+      "submit": "Continuer",
+      "submitting": "Connexion",
+      "error": "Échec de la connexion. Veuillez réessayer.",
+      "noAccount": "Pas de compte?",
+      "createAccount": "Créer un compte"
+    },
+    "signup": {
+      "eyebrow": "Créez votre organisation",
+      "title": "Inscription",
+      "organizationName": "Nom de l’organisation",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "Identifiant URL",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "Votre nom",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "Courriel",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "Mot de passe",
+      "passwordPlaceholder": "Minimum 8 caractères",
+      "confirmPassword": "Confirmer le mot de passe",
+      "confirmPasswordPlaceholder": "Confirmer",
+      "passwordMismatch": "Les mots de passe ne correspondent pas",
+      "passwordTooShort": "Le mot de passe doit contenir au moins 8 caractères",
+      "error": "Échec de l’inscription",
+      "submit": "Créer le compte",
+      "submitting": "Création du compte...",
+      "signInLink": "Vous avez déjà un compte? Connectez-vous"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "Actif",
+      "won": "Gagné",
+      "lost": "Perdu",
+      "other": "Autre"
+    },
+    "greeting": {
+      "late": "Vous travaillez tard",
+      "morning": "Bonjour",
+      "afternoon": "Bon après-midi",
+      "evening": "Bonsoir"
+    },
+    "newIntake": "Nouvelle réception",
+    "activeValue": "Valeur active",
+    "activeQuoteCount": "{count} {count, plural, one {soumission active} other {soumissions actives}}",
+    "averageMargin": "Marge moyenne",
+    "projectedProfit": "{profit} de profit projeté",
+    "winRate": "Taux de gain",
+    "decidedQuotes": "{count} {count, plural, one {soumission décidée} other {soumissions décidées}}",
+    "noDecisionsYet": "Aucune décision pour le moment",
+    "exceptions": "Exceptions",
+    "exceptionSummary": "{aging} vieillissantes, {margin} à surveiller pour la marge",
+    "pipelineTitle": "Carte du pipeline",
+    "trackedValue": "{value} de valeur totale suivie",
+    "quotes": "Soumissions",
+    "noPipeline": "Aucun pipeline de soumissions pour le moment.",
+    "noQuotes": "Aucune soumission",
+    "bidQuality": "Qualité des soumissions",
+    "watch": "Surveiller",
+    "clear": "Clair",
+    "margin": "Marge",
+    "win": "Gain",
+    "operatingSignal": "Signal opérationnel",
+    "active": "Actif",
+    "aging": "Vieillissant",
+    "won30d": "Gagné 30 j",
+    "attention": "Attention",
+    "agingActiveWork": "Travail actif vieillissant",
+    "oldestDays": "Plus ancien {days} j",
+    "marginUnder": "Marge sous 12 %",
+    "needsPricingReview": "Révision des prix requise",
+    "wonThisMonth": "Gagné ce mois-ci",
+    "recentDecisions": "Décisions récentes",
+    "noUrgentExceptions": "Aucune exception urgente",
+    "quotePulse": "Pouls des soumissions",
+    "all": "Tout",
+    "noRecentQuotes": "Aucune soumission récente"
+  },
+  "Clients": {
+    "title": "Clients",
+    "subtitle": "Comptes, historique des soumissions, santé du pipeline et valeur client.",
+    "newClient": "Nouveau client",
+    "searchPlaceholder": "Rechercher clients, contacts, titres de soumission, villes...",
+    "resultCount": "{count} {count, plural, one {client} other {clients}}",
+    "filteredResultCount": "{filtered} sur {total} clients",
+    "noMatches": "Aucun client ne correspond à cette vue.",
+    "inactive": "Inactif",
+    "noLocation": "Aucun emplacement",
+    "noEmail": "Aucun courriel",
+    "noPhone": "Aucun téléphone",
+    "filters": {
+      "all": "Tous",
+      "active": "Pipeline actif",
+      "quoted": "Soumissionnés",
+      "prospects": "Prospects",
+      "inactive": "Inactifs"
+    },
+    "table": {
+      "client": "Client",
+      "contact": "Contact",
+      "quotes": "Soumissions",
+      "active": "Actif",
+      "awarded": "Attribué",
+      "win": "Gain",
+      "margin": "Marge",
+      "updated": "Mis à jour"
+    },
+    "modal": {
+      "title": "Nouveau client",
+      "description": "Créez le compte avant de soumissionner le travail.",
+      "close": "Fermer la fenêtre nouveau client",
+      "name": "Nom",
+      "namePlaceholder": "Nom du client",
+      "shortName": "Nom court",
+      "website": "Site web",
+      "email": "Courriel",
+      "phone": "Téléphone",
+      "city": "Ville",
+      "provinceState": "Province / État",
+      "cancel": "Annuler",
+      "create": "Créer le client",
+      "nameRequired": "Le nom du client est obligatoire.",
+      "createError": "Impossible de créer le client."
+    }
+  },
+  "Quotes": {
+    "title": "Soumissions",
+    "subtitle": "Gerer et suivre toutes vos soumissions",
+    "newQuoteButton": "Nouvelle soumission",
+    "menu": {
+      "aiIntake": "Admission IA",
+      "aiIntakeDescription": "Televerser un dossier d'appel d'offres",
+      "newQuote": "Nouvelle soumission",
+      "newQuoteDescription": "Commencer avec une soumission vide",
+      "newSnap": "Nouveau Snap",
+      "newSnapDescription": "Soumission rapide d'une page"
+    },
+    "manual": {
+      "snapTitle": "Nouveau Snap",
+      "quoteTitle": "Nouvelle soumission",
+      "snapDescription": "Creez une soumission rapide d'une page avec une grille d'estimation de dix lignes.",
+      "quoteDescription": "Creez un espace d'estimation vide sans lancer l'admission IA.",
+      "close": "Fermer la boite de dialogue de soumission manuelle",
+      "snapTitleLabel": "Titre du Snap",
+      "quoteTitleLabel": "Titre de la soumission",
+      "snapTitlePlaceholder": "ex. Appel de service salle des pompes",
+      "quoteTitlePlaceholder": "ex. Isolation du support de tuyauterie de cogeneration",
+      "client": "Client",
+      "newClientName": "Nom du nouveau client",
+      "selectClient": "Selectionner un client...",
+      "searchClients": "Rechercher des clients...",
+      "addClient": "Ajouter un nouveau client",
+      "location": "Emplacement",
+      "locationPlaceholder": "A determiner",
+      "cancel": "Annuler",
+      "createSnap": "Creer le Snap",
+      "createQuote": "Creer la soumission",
+      "failedClient": "Impossible de creer le client.",
+      "titleRequired": "Le titre de la soumission est requis.",
+      "unassignedClient": "Client non assigne",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} Soumission manuelle",
+      "snapSummary": "Soumission Snap creee pour tarifer rapidement les petits travaux.",
+      "createError": "Impossible de creer la soumission."
+    },
+    "filters": {
+      "searchPlaceholder": "Rechercher par no de soumission, titre, client, projet, emplacement...",
+      "status": "Statut",
+      "client": "Client",
+      "estimator": "Estimateur",
+      "department": "Departement",
+      "clear": "Effacer",
+      "clearAll": "Tout effacer",
+      "resultCount": "{count} {count, plural, one {soumission} other {soumissions}}",
+      "filteredResultCount": "{filtered} sur {total} soumissions"
+    },
+    "table": {
+      "quoteNumber": "Soumission #",
+      "kind": "Type",
+      "title": "Titre",
+      "client": "Client",
+      "estimator": "Estimateur",
+      "status": "Statut",
+      "subtotal": "Sous-total",
+      "margin": "Marge",
+      "updated": "Mis a jour"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "Complete"
+    },
+    "status": {
+      "Open": "Ouverte",
+      "Pending": "En attente",
+      "Awarded": "Accordee",
+      "DidNotGet": "Non obtenue",
+      "Declined": "Refusee",
+      "Cancelled": "Annulee",
+      "Closed": "Fermee",
+      "Other": "Autre"
+    },
+    "unassigned": "Non assigne",
+    "emptyFiltered": "Aucune soumission ne correspond a vos filtres",
+    "empty": "Aucune soumission trouvee"
+  },
+  "Performance": {
+    "eyebrow": "Performance",
+    "title": "Intelligence du pipeline et des soumissions",
+    "subtitle": "Signal en direct sur {count} projets",
+    "subtitleFiltered": "Signal en direct sur {count} projets · vue filtrée",
+    "filteredQuoteCount": "{filtered} sur {total} soumissions",
+    "winRateBadge": "{rate} taux de gain",
+    "quoteCount": "{count} {count, plural, one {soumission} other {soumissions}}",
+    "total": "Total",
+    "unknownClient": "Inconnu",
+    "emptyDistribution": "Aucune donnée pour la distribution.",
+    "emptyClientData": "Aucune donnée client pour le moment.",
+    "emptyTimeSeries": "Aucune donnée dans le temps pour le moment.",
+    "pipelineFunnel": "Entonnoir du pipeline",
+    "statusMix": "Répartition des statuts",
+    "pipelineOverTime": "Pipeline dans le temps",
+    "last12Months": "12 derniers mois",
+    "marginDistribution": "Distribution des marges",
+    "topClientsByProfit": "Principaux clients par profit",
+    "top8": "top 8",
+    "stages": {
+      "active": "Actif",
+      "won": "Gagné",
+      "lost": "Perdu",
+      "other": "Autre"
+    },
+    "status": {
+      "Open": "Ouverte",
+      "Pending": "En attente",
+      "Awarded": "Accordée",
+      "DidNotGet": "Non obtenue",
+      "Declined": "Refusée",
+      "Cancelled": "Annulée",
+      "Closed": "Fermée",
+      "Other": "Autre"
+    },
+    "filters": {
+      "title": "Filtres",
+      "from": "De",
+      "to": "À",
+      "fromDate": "Date de début",
+      "toDate": "Date de fin",
+      "stage": "Étape",
+      "status": "Statut",
+      "client": "Client",
+      "allStages": "Toutes les étapes",
+      "allStatuses": "Tous les statuts",
+      "allClients": "Tous les clients",
+      "clear": "Effacer"
+    },
+    "chips": {
+      "from": "De {date}",
+      "to": "À {date}",
+      "status": "Statut : {status}",
+      "client": "Client : {client}",
+      "stage": "Étape : {stage}"
+    },
+    "kpi": {
+      "pipelineValue": "Valeur du pipeline",
+      "estimatedProfit": "Profit estimé",
+      "averageMargin": "Marge moyenne",
+      "winRate": "Taux de gain",
+      "decided": "{won}/{decided} décidées"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "Téléversement",
+      "loaded": "Dossier chargé",
+      "release": "Relâcher",
+      "waiting": "En attente"
+    },
+    "package": {
+      "title": "Dossier d’admission",
+      "loadedSize": "{size} chargé"
+    },
+    "selected": {
+      "multipleFiles": "{count} fichiers de dossier capturés",
+      "totalSize": "{size} au total",
+      "more": "+{count} de plus",
+      "clearPackage": "Effacer le dossier"
+    },
+    "drop": {
+      "releaseTitle": "Relâchez pour joindre le dossier",
+      "title": "Déposez des fichiers ou un dossier",
+      "description": "Téléversez dessins, devis, feuilles de calcul, addendas, images, archives ZIP et messages Outlook.",
+      "selectFiles": "Sélectionner des fichiers",
+      "selectFolder": "Sélectionner un dossier",
+      "emailFormats": ".msg et .eml"
+    },
+    "context": {
+      "title": "Contexte du projet",
+      "description": "Saisissez le contexte minimal requis pour créer l’espace d’estimation."
+    },
+    "fields": {
+      "destination": "Destination",
+      "newProject": "Nouveau projet",
+      "projectName": "Nom du projet",
+      "projectNamePlaceholder": "ex. Modernisation chaudière campus nord",
+      "client": "Client",
+      "newClientName": "Nom du nouveau client",
+      "selectClient": "Sélectionner un client...",
+      "searchClients": "Rechercher des clients...",
+      "addClient": "Ajouter un nouveau client",
+      "location": "Emplacement",
+      "locationPlaceholder": "Ville, province",
+      "bidDue": "Échéance de l’offre",
+      "scope": "Portée",
+      "scopePlaceholder": "Dossier complet, lot par métier, zone, option ou discipline.",
+      "playbook": "Guide d’estimation",
+      "autoDetect": "Détection automatique",
+      "notes": "Notes",
+      "notesPlaceholder": "Notes optionnelles"
+    },
+    "actions": {
+      "uploading": "Téléversement...",
+      "createWorkspace": "Créer l’espace d’admission"
+    },
+    "status": {
+      "uploadSuccessSingle": "Dossier téléversé avec succès.",
+      "uploadSuccessMultiple": "{count} fichiers téléversés avec succès."
+    },
+    "errors": {
+      "noReadableFiles": "L’élément déposé n’a exposé aucun fichier lisible.",
+      "outlookRowOnly": "Les glissements depuis la liste de messages du nouveau Outlook utilisent des données propres à Outlook ({payloadLabel}) et n’exposent pas de fichier courriel aux sites web. Glissez la pièce jointe, essayez depuis un message ouvert, enregistrez en .eml ou utilisez Outlook classique.",
+      "outlookWebLink": "Le nouveau Outlook a fourni des données de lien web ({payloadLabel}), mais le navigateur n’a pas pu les convertir en fichier courriel téléchargeable. Enregistrez le message en .eml, glissez la pièce jointe ou utilisez Outlook classique.",
+      "outlookNonFile": "Le nouveau Outlook a fourni des données non fichier ({payloadLabel}), pas un vrai fichier courriel. Enregistrez le message en .eml, glissez la pièce jointe ou utilisez Outlook classique.",
+      "failedClient": "Impossible de créer le client.",
+      "selectFile": "Sélectionnez au moins un fichier de dossier.",
+      "uploadFailed": "Échec du téléversement."
+    }
+  },
+  "NotFound": {
+    "title": "Page introuvable",
+    "back": "Retour au tableau de bord"
+  },
+  "Profile": {
+    "title": "Profil",
+    "account": {
+      "title": "Compte",
+      "email": "Courriel",
+      "role": "Rôle",
+      "organization": "Organisation",
+      "access": "Accès",
+      "superAdmin": "Super administrateur"
+    },
+    "displayName": {
+      "title": "Nom affiché",
+      "name": "Nom",
+      "placeholder": "Votre nom"
+    },
+    "password": {
+      "title": "Changer le mot de passe",
+      "current": "Mot de passe actuel",
+      "currentPlaceholder": "Entrez le mot de passe actuel",
+      "new": "Nouveau mot de passe",
+      "newPlaceholder": "Minimum 8 caractères",
+      "confirm": "Confirmer",
+      "confirmPlaceholder": "Confirmer"
+    },
+    "actions": {
+      "saving": "Enregistrement...",
+      "save": "Enregistrer",
+      "changing": "Modification...",
+      "changePassword": "Changer le mot de passe"
+    },
+    "messages": {
+      "nameUpdated": "Nom mis à jour.",
+      "passwordChanged": "Mot de passe modifié.",
+      "updateFailed": "Échec de la mise à jour",
+      "passwordMismatch": "Les mots de passe ne correspondent pas.",
+      "passwordTooShort": "Le mot de passe doit contenir au moins 8 caractères."
+    }
+  },
+  "Library": {
+    "title": "Bibliothèque",
+    "searchPlaceholder": "Rechercher dans les espaces de bibliothèque",
+    "refresh": "Actualiser",
+    "loadingKnowledge": "Chargement des connaissances...",
+    "surfaces": {
+      "overview": {
+        "label": "Accueil",
+        "description": "Espace de lancement pour le travail de bibliothèque et la couverture active."
+      },
+      "resources": {
+        "label": "Ressources",
+        "description": "Ressources cataloguées de matériaux, services, équipement, sous-traitance, consommables et allocations."
+      },
+      "rates": {
+        "label": "Tarifs",
+        "description": "Coûts et prix client/ressource, paliers, déplacements, allocations et règles de tarification."
+      },
+      "assemblies": {
+        "label": "Assemblages",
+        "description": "Recettes d’estimation paramétrées qui se déploient en lignes de ressources chiffrées."
+      },
+      "labor_units": {
+        "label": "Unités de main-d’œuvre",
+        "description": "Normes de production en heures par unité installée, liées aux ressources et aux tarifs."
+      },
+      "cost": {
+        "label": "Intelligence des coûts",
+        "description": "Preuves de lignes de factures fournisseurs, observations, produits et bases de coûts actuelles."
+      },
+      "playbooks": {
+        "label": "Estimateurs",
+        "description": "Comportement d’estimateur, méthodologie, sources liées et politique commerciale."
+      },
+      "knowledge": {
+        "label": "Connaissances",
+        "description": "Livres de référence, jeux de données, preuves extraites et matériel de recherche pour agents."
+      }
+    },
+    "common": {
+      "close": "Fermer",
+      "delete": "Supprimer",
+      "cancel": "Annuler",
+      "saving": "Enregistrement",
+      "prev": "Préc.",
+      "next": "Suiv."
+    },
+    "overview": {
+      "title": "Espaces de bibliothèque",
+      "subtitle": "Ouvrir un espace à partir de la couverture active",
+      "groupCount": "{count} {count, plural, one {groupe} other {groupes}}",
+      "noData": "Aucune donnée",
+      "unassigned": "Non assigné",
+      "other": "Autre",
+      "breakdowns": {
+        "resourceRows": "Lignes par type de catalogue de ressources",
+        "rateRows": "Lignes par catégorie de tarif",
+        "rateBooks": "Tarifs par catégorie",
+        "assemblyComponents": "Composants par catégorie d’assemblage",
+        "assemblyCategories": "Assemblages par catégorie",
+        "laborRows": "Lignes par catalogue d’unités de main-d’œuvre",
+        "costBasis": "Base de coût par type de ressource",
+        "resourceTypes": "Ressources par type",
+        "sourceBindings": "Sources liées par type",
+        "estimatorStatus": "Estimateurs par état",
+        "references": "Références par type de source",
+        "datasetRows": "Lignes par catégorie de jeu de données"
+      },
+      "fallbacks": {
+        "catalog": "Catalogue",
+        "uncategorized": "Sans catégorie",
+        "general": "Général",
+        "unclassified": "Non classé",
+        "books": "Livres",
+        "notes": "Mémos",
+        "datasetTags": "Étiquettes de données",
+        "active": "Actif",
+        "paused": "En pause"
+      },
+      "cards": {
+        "resources": {
+          "title": "Ressources",
+          "body": "Ressources d’estimation de base utilisées par les feuilles de travail, les tarifs et les assemblages.",
+          "metricLabel": "Articles de catalogue"
+        },
+        "rates": {
+          "title": "Tarifs",
+          "body": "Coûts et prix client/ressource avec paliers, déplacements, allocations et règles de tarification.",
+          "metricLabel": "Lignes de ressources"
+        },
+        "assemblies": {
+          "title": "Assemblages",
+          "body": "Recettes d’estimation réutilisables pour ressources, équipement, portées imbriquées et relevés paramétriques.",
+          "metricLabel": "Assemblages"
+        },
+        "laborUnits": {
+          "title": "Unités de main-d’œuvre",
+          "body": "Normes de production internes qui transforment les quantités installées en heures, puis chiffrent ces heures avec les tarifs.",
+          "metricLabel": "Lignes de production"
+        },
+        "cost": {
+          "title": "Intelligence des coûts",
+          "body": "Preuves de factures fournisseurs, prix observés, bases de coûts actuelles et piste justificative.",
+          "metricLabel": "Lignes de base de coût"
+        },
+        "playbooks": {
+          "title": "Estimateurs",
+          "body": "Comportement d’estimation réutilisable avec méthodologie, priorité des sources, politique commerciale et guide de révision.",
+          "metricLabel": "Estimateurs actifs"
+        },
+        "books": {
+          "title": "Livres et notes",
+          "body": "Livres de référence, notes d’estimateur, preuves extraites et matériel de recherche pour agents.",
+          "metricLabel": "Références"
+        },
+        "datasets": {
+          "title": "Jeux de données",
+          "body": "Tables structurées et lignes importées utilisées par les agents, les estimateurs et les flux de tarification.",
+          "metricLabel": "Jeux de données"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "Allocation",
+        "allowances": "Allocations",
+        "consumable": "Consommable",
+        "consumables": "Consommables",
+        "dataset": "Jeu de données",
+        "datasets": "Jeux de données",
+        "equipment": "Équipement",
+        "knowledge": "Connaissances",
+        "knowledgeLibrary": "Bibliothèque de connaissances",
+        "labor": "Main-d’œuvre",
+        "manual": "Manuel",
+        "material": "Matériau",
+        "materials": "Matériaux",
+        "rateBook": "Tarif",
+        "service": "Prestation",
+        "services": "Prestations",
+        "subcontract": "Sous-traitance",
+        "subcontracts": "Sous-traitances"
+      }
+    },
+    "labor": {
+      "title": "Unités de main-d’œuvre",
+      "subtitle": "{catalog} / {count} normes de production",
+      "allCatalogs": "Tous les catalogues",
+      "allCatalogsWithCount": "Tous les catalogues ({count})",
+      "unitsCount": "{count} unités",
+      "catalogAria": "Catalogue d’unités de main-d’œuvre",
+      "searchPlaceholder": "Rechercher code, classe, catégorie ou description",
+      "confirmDeleteUnit": "Supprimer {name} ?",
+      "confirmDeleteCatalog": "Supprimer {name} et ses unités de main-d’œuvre ?",
+      "groupRowCount": "{count} {count, plural, one {ligne} other {lignes}}",
+      "avgHours": "moy. {value} h",
+      "items": "éléments",
+      "sections": "rubriques",
+      "groupLevels": {
+        "catalog": "Catalogue",
+        "category": "Catégorie",
+        "class": "Classe",
+        "subclass": "Sous-classe"
+      },
+      "view": {
+        "groups": "Groupes",
+        "rows": "Lignes"
+      },
+      "actions": {
+        "collapse": "Réduire",
+        "expand": "Développer",
+        "manageCatalogs": "Gérer les catalogues",
+        "newUnit": "Nouvelle unité de main-d’œuvre"
+      },
+      "stats": {
+        "rows": "Lignes",
+        "catalogs": "Catalogues",
+        "providers": "Fournisseurs",
+        "categories": "Catégories",
+        "avgHrs": "Moy. h"
+      },
+      "table": {
+        "code": "Identifiant",
+        "laborUnit": "Unité de main-d’œuvre",
+        "catalog": "Catalogue",
+        "category": "Catégorie",
+        "class": "Classe",
+        "normal": "Standard",
+        "difficult": "Complexe",
+        "veryDifficult": "Très diff.",
+        "uom": "Unité"
+      },
+      "branchLoading": "Chargement de la branche...",
+      "branchEmpty": "Aucune ligne dans cette branche.",
+      "empty": "Aucune unité de main-d’œuvre ne correspond à cette vue.",
+      "loading": "Chargement des unités de main-d’œuvre...",
+      "unitDrawer": {
+        "createTitle": "Créer une unité de main-d’œuvre",
+        "fallbackTitle": "Unité de main-d’œuvre",
+        "subtitle": "Modifier la norme de production utilisée par les assemblages et les feuilles de travail.",
+        "save": "Enregistrer l’unité"
+      },
+      "catalogDrawer": {
+        "title": "Catalogues d’unités de main-d’œuvre",
+        "subtitle": "Gérer les compartiments source des lignes de normes de production.",
+        "newCatalog": "Nouveau catalogue",
+        "org": "Org.",
+        "firstParty": "Interne",
+        "save": "Enregistrer le catalogue",
+        "create": "Créer le catalogue"
+      },
+      "fields": {
+        "catalog": "Catalogue",
+        "chooseCatalog": "Choisir un catalogue",
+        "name": "Nom",
+        "code": "Identifiant",
+        "discipline": "Métier",
+        "outputUom": "Unité de sortie",
+        "description": "Détails",
+        "category": "Catégorie",
+        "class": "Classe",
+        "subclass": "Sous-classe",
+        "normalHours": "Heures normales",
+        "difficultHours": "Heures difficiles",
+        "veryDifficultHours": "Heures très difficiles",
+        "default": "Par défaut",
+        "tags": "Étiquettes",
+        "tagsPlaceholder": "séparées par des virgules",
+        "provider": "Fournisseur",
+        "sourceNote": "Note source"
+      },
+      "difficulty": {
+        "normal": "Standard",
+        "difficult": "Difficile",
+        "veryDifficult": "Très difficile"
+      },
+      "fallbacks": {
+        "internal": "Interne",
+        "general": "Général",
+        "manual": "manuel",
+        "unknown": "Inconnu"
+      },
+      "errors": {
+        "chooseCatalog": "Choisissez un catalogue d’unités avant d’enregistrer.",
+        "unitNameRequired": "Le nom de l’unité est obligatoire.",
+        "normalHours": "Les heures normales doivent être un nombre non négatif.",
+        "difficultyHours": "Les heures de difficulté doivent être vides ou être un nombre non négatif.",
+        "saveUnit": "Impossible d’enregistrer l’unité.",
+        "deleteUnit": "Impossible de supprimer l’unité.",
+        "catalogNameRequired": "Le nom du catalogue est obligatoire.",
+        "saveCatalog": "Impossible d’enregistrer le catalogue.",
+        "deleteCatalog": "Impossible de supprimer le catalogue."
+      },
+      "footer": {
+        "grouped": "Affichage de {start}-{end} sur {visible} lignes d’arbre visibles / {total} lignes de main-d’œuvre",
+        "rows": "Affichage de {start}-{end} sur {total} lignes / {indexed} indexées dans {catalogs} catalogues",
+        "firstParty": "{count} internes",
+        "topLevelGroups": "{count} groupes principaux",
+        "page": "Page {page} sur {total}"
+      },
+      "pageSize": {
+        "visible": "{count} visibles",
+        "rows": "{count} lignes",
+        "aria": "Taille de page des unités de main-d’œuvre"
+      }
+    }
+  }
+}

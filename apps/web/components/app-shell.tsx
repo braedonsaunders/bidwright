@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Building2,
@@ -34,22 +35,22 @@ import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/intake", label: "Intake", icon: PackageOpen },
-  { href: "/quotes", label: "Quotes", icon: FileText },
-  { href: "/clients", label: "Clients", icon: Building2 },
-  { href: "/library", label: "Library", icon: Library, activePaths: ["/library", "/knowledge"] },
-  { href: "/performance", label: "Performance", icon: TrendingUp },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", labelKey: "dashboard", icon: LayoutDashboard },
+  { href: "/intake", labelKey: "intake", icon: PackageOpen },
+  { href: "/quotes", labelKey: "quotes", icon: FileText },
+  { href: "/clients", labelKey: "clients", icon: Building2 },
+  { href: "/library", labelKey: "library", icon: Library, activePaths: ["/library", "/knowledge"] },
+  { href: "/performance", labelKey: "performance", icon: TrendingUp },
+  { href: "/settings", labelKey: "settings", icon: Settings },
 ];
 
 type ThemePreference = "light" | "dark" | "system";
 type ResolvedTheme = "light" | "dark";
 
-const THEME_OPTIONS: Array<{ value: ThemePreference; label: string; icon: typeof Sun }> = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor },
+const THEME_OPTIONS: Array<{ value: ThemePreference; labelKey: ThemePreference; icon: typeof Sun }> = [
+  { value: "light", labelKey: "light", icon: Sun },
+  { value: "dark", labelKey: "dark", icon: Moon },
+  { value: "system", labelKey: "system", icon: Monitor },
 ];
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "bidwright-sidebar-collapsed";
@@ -108,6 +109,7 @@ export function AppShell({
   children: ReactNode;
   projects?: ProjectListItem[];
 }) {
+  const t = useTranslations("AppShell");
   const pathname = usePathname();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const {
@@ -169,10 +171,14 @@ export function AppShell({
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null;
   const themeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[2];
+  const themeLabel = t(`theme.${themeOption.labelKey}`);
+  const themeDescription = theme === "system"
+    ? t("theme.labelWithResolved", { theme: themeLabel, resolved: resolvedTheme })
+    : t("theme.label", { theme: themeLabel });
   const ThemeIcon = themeOption.icon;
   const SidebarToggleIcon = sidebarCollapsed ? PanelLeftOpen : PanelLeftClose;
   const flushWorkspace = pathname.startsWith("/library");
-  const fittedWorkspace = pathname.startsWith("/clients");
+  const fittedWorkspace = pathname.startsWith("/clients") || pathname.startsWith("/performance");
 
   useEffect(() => {
     const stored = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
@@ -254,7 +260,7 @@ export function AppShell({
         <div className={cn("border-b border-line py-3", sidebarCollapsed ? "px-2" : "px-3")}>
           <div className="relative">
             <div className={cn("flex items-center", sidebarCollapsed ? "flex-col gap-2" : "gap-1")}>
-              <SidebarTooltip label="Switch organization" disabled={!sidebarCollapsed}>
+              <SidebarTooltip label={t("switchOrganization")} disabled={!sidebarCollapsed}>
                 <button
                   type="button"
                   onClick={async () => {
@@ -271,8 +277,8 @@ export function AppShell({
                     "flex min-w-0 items-center rounded-lg transition-colors hover:bg-panel2/50",
                     sidebarCollapsed ? "h-10 w-10 justify-center p-1.5" : "flex-1 gap-2.5 px-2 py-1.5",
                   )}
-                  aria-label="Switch organization"
-                  title={sidebarCollapsed ? undefined : "Switch organization"}
+                  aria-label={t("switchOrganization")}
+                  title={sidebarCollapsed ? undefined : t("switchOrganization")}
                 >
                   <BidwrightMark
                     className={cn(sidebarCollapsed ? "h-7 w-7" : "h-8 w-8")}
@@ -285,7 +291,7 @@ export function AppShell({
                           Bidwright
                         </p>
                         <p className="truncate text-[10px] font-medium uppercase tracking-widest text-fg/30">
-                          {authOrg?.name ?? (isSuperAdmin ? "Super Admin" : "Personal")}
+                          {authOrg?.name ?? (isSuperAdmin ? t("superAdmin") : t("personal"))}
                         </p>
                       </div>
                       <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-fg/25" />
@@ -293,7 +299,7 @@ export function AppShell({
                   )}
                 </button>
               </SidebarTooltip>
-              <SidebarTooltip label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} disabled={!sidebarCollapsed}>
+              <SidebarTooltip label={sidebarCollapsed ? t("expandSidebar") : t("collapseSidebar")} disabled={!sidebarCollapsed}>
                 <button
                   type="button"
                   onClick={() => setSidebarCollapsed((value) => !value)}
@@ -301,8 +307,8 @@ export function AppShell({
                     "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fg/45 transition-colors hover:bg-panel2/60 hover:text-fg",
                     sidebarCollapsed && "h-9 w-10",
                   )}
-                  aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                  title={sidebarCollapsed ? undefined : "Collapse sidebar"}
+                  aria-label={sidebarCollapsed ? t("expandSidebar") : t("collapseSidebar")}
+                  title={sidebarCollapsed ? undefined : t("collapseSidebar")}
                 >
                   <SidebarToggleIcon className="h-4 w-4" />
                 </button>
@@ -317,10 +323,10 @@ export function AppShell({
                 )}
               >
                 <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                  Organizations
+                  {t("organizations")}
                 </div>
                 {myOrgs.length === 0 && (
-                  <div className="px-3 py-2 text-xs text-fg/40">No other organizations</div>
+                  <div className="px-3 py-2 text-xs text-fg/40">{t("noOtherOrganizations")}</div>
                 )}
                 {myOrgs.map((org) => (
                   <button
@@ -355,7 +361,7 @@ export function AppShell({
                       className="flex items-center gap-2 px-3 py-2 text-xs text-amber-500/80 hover:bg-amber-500/10 hover:text-amber-500 transition-colors"
                     >
                       <Shield className="h-3 w-3" />
-                      Admin Panel
+                      {t("adminPanel")}
                     </Link>
                   </>
                 )}
@@ -366,7 +372,7 @@ export function AppShell({
 
         {sidebarCollapsed ? (
           <div className="px-2 pt-3">
-            <SidebarTooltip label="Search tools">
+            <SidebarTooltip label={t("searchTools")}>
               <button
                 type="button"
                 onClick={() => {
@@ -374,7 +380,7 @@ export function AppShell({
                   window.requestAnimationFrame(() => document.getElementById("app-shell-search")?.focus());
                 }}
                 className="flex h-10 w-full items-center justify-center rounded-lg text-fg/45 transition-colors hover:bg-panel2 hover:text-fg"
-                aria-label="Search tools"
+                aria-label={t("searchTools")}
               >
                 <Search className="h-4 w-4" />
               </button>
@@ -387,7 +393,7 @@ export function AppShell({
               <Input
                 id="app-shell-search"
                 className="h-8 pl-8 text-xs"
-                placeholder="Search..."
+                placeholder={t("searchPlaceholder")}
                 value={searchQuery}
                 onChange={(e) => {
                   setSearchQuery(e.target.value);
@@ -408,7 +414,7 @@ export function AppShell({
               {searchOpen && searchResults.length > 0 && (
                 <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
                   <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                    Tools ({searchResults.length})
+                    {t("toolsCount", { count: searchResults.length })}
                   </div>
                   {searchResults.map((result) => (
                     <div
@@ -426,7 +432,7 @@ export function AppShell({
               )}
               {searchOpen && searchResults.length === 0 && searchQuery.trim() && (
                 <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel px-3 py-3 text-xs text-fg/40 shadow-lg">
-                  No tools found for "{searchQuery}"
+                  {t("noToolsFound", { query: searchQuery })}
                 </div>
               )}
             </div>
@@ -439,8 +445,9 @@ export function AppShell({
               ? pathname === "/"
               : (item.activePaths ?? [item.href]).some((href) => pathname.startsWith(href));
             const Icon = item.icon;
+            const label = t(`nav.${item.labelKey}`);
             return (
-              <SidebarTooltip key={item.href} label={item.label} disabled={!sidebarCollapsed}>
+              <SidebarTooltip key={item.href} label={label} disabled={!sidebarCollapsed}>
                 <Link
                   href={item.href}
                   className={cn(
@@ -450,11 +457,11 @@ export function AppShell({
                       ? "bg-accent/10 font-medium text-accent"
                       : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
                   )}
-                  aria-label={item.label}
-                  title={sidebarCollapsed ? undefined : item.label}
+                  aria-label={label}
+                  title={sidebarCollapsed ? undefined : label}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
-                  {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                  {!sidebarCollapsed && <span className="truncate">{label}</span>}
                 </Link>
               </SidebarTooltip>
             );
@@ -471,7 +478,7 @@ export function AppShell({
               <>
                 <div className="px-3 pb-1 pt-5">
                   <span className="text-[11px] font-medium uppercase tracking-wider text-fg/30">
-                    Quotes{searchQuery.trim() ? ` (${quotesToShow.length})` : ""}
+                    {searchQuery.trim() ? t("quotesCount", { count: quotesToShow.length }) : t("quotes")}
                   </span>
                 </div>
                 {quotesToShow.slice(0, 6).map((quote) => {
@@ -507,7 +514,7 @@ export function AppShell({
         {!sidebarCollapsed && activeProject && (
           <div ref={projectSelectorRef} className="relative border-t border-line px-4 py-3">
             <div className="flex items-center justify-between text-xs text-fg/40">
-              <span>Active Project</span>
+              <span>{t("activeProject")}</span>
               <div className="flex items-center gap-1">
                 <span>{formatCompactMoney(activeProject.latestRevision?.subtotal ?? 0)}</span>
                 <div className="relative">
@@ -517,7 +524,7 @@ export function AppShell({
                       setThemeMenuOpen((open) => !open);
                     }}
                     className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/50 hover:text-fg/70"
-                    title={`Theme: ${themeOption.label}${theme === "system" ? ` (${resolvedTheme})` : ""}`}
+                    title={themeDescription}
                   >
                     <ThemeIcon className="h-3.5 w-3.5" />
                   </button>
@@ -541,7 +548,7 @@ export function AppShell({
                             }}
                           >
                             <Icon className="h-3.5 w-3.5" />
-                            <span className="min-w-0 flex-1">{option.label}</span>
+                            <span className="min-w-0 flex-1">{t(`theme.${option.labelKey}`)}</span>
                             {selected ? <Check className="h-3.5 w-3.5" /> : null}
                           </button>
                         );
@@ -562,7 +569,7 @@ export function AppShell({
             {projectSelectorOpen && projects.length > 0 && (
               <div className="absolute bottom-full left-3 right-3 mb-1 max-h-56 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg py-1 z-50">
                 <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                  Switch Project
+                  {t("switchProject")}
                 </div>
                 {projects.map((p) => (
                   <button
@@ -592,7 +599,7 @@ export function AppShell({
           <div ref={projectSelectorRef} className="relative space-y-2 border-t border-line px-2 py-3">
             {activeProject && (
               <div className="relative">
-                <SidebarTooltip label={`Active project: ${activeProject.name}`}>
+                <SidebarTooltip label={t("activeProjectLabel", { name: activeProject.name })}>
                   <button
                     type="button"
                     onClick={() => setProjectSelectorOpen((v) => !v)}
@@ -600,7 +607,7 @@ export function AppShell({
                       "flex h-10 w-full items-center justify-center rounded-lg transition-colors hover:bg-panel2 hover:text-fg",
                       projectSelectorOpen ? "bg-panel2 text-fg" : "text-fg/45",
                     )}
-                    aria-label={`Active project: ${activeProject.name}`}
+                    aria-label={t("activeProjectLabel", { name: activeProject.name })}
                   >
                     <PackageOpen className="h-4 w-4" />
                   </button>
@@ -609,7 +616,7 @@ export function AppShell({
                 {projectSelectorOpen && projects.length > 0 && (
                   <div className="absolute bottom-0 left-full z-50 ml-2 max-h-56 w-64 overflow-y-auto rounded-lg border border-line bg-panel py-1 shadow-lg">
                     <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                      Switch Project
+                      {t("switchProject")}
                     </div>
                     {projects.map((p) => (
                       <button
@@ -637,7 +644,7 @@ export function AppShell({
             )}
 
             <div className="relative">
-              <SidebarTooltip label={`Theme: ${themeOption.label}${theme === "system" ? ` (${resolvedTheme})` : ""}`}>
+              <SidebarTooltip label={themeDescription}>
                 <button
                   type="button"
                   onClick={(e) => {
@@ -648,7 +655,7 @@ export function AppShell({
                     "flex h-10 w-full items-center justify-center rounded-lg transition-colors hover:bg-panel2 hover:text-fg",
                     themeMenuOpen ? "bg-panel2 text-fg" : "text-fg/45",
                   )}
-                  aria-label={`Theme: ${themeOption.label}${theme === "system" ? ` (${resolvedTheme})` : ""}`}
+                  aria-label={themeDescription}
                 >
                   <ThemeIcon className="h-4 w-4" />
                 </button>
@@ -673,7 +680,7 @@ export function AppShell({
                         }}
                       >
                         <Icon className="h-3.5 w-3.5" />
-                        <span className="min-w-0 flex-1">{option.label}</span>
+                        <span className="min-w-0 flex-1">{t(`theme.${option.labelKey}`)}</span>
                         {selected ? <Check className="h-3.5 w-3.5" /> : null}
                       </button>
                     );
@@ -696,7 +703,7 @@ export function AppShell({
               </div>
               <div className="min-w-0 flex-1 text-left">
                 <p className="truncate text-xs font-medium text-fg/70">
-                  {authLoading ? "Loading..." : authUser?.name ?? "Not signed in"}
+                  {authLoading ? t("loading") : authUser?.name ?? t("notSignedIn")}
                 </p>
                 <p className="truncate text-[10px] text-fg/30">{authUser?.email ?? ""}</p>
               </div>
@@ -711,7 +718,7 @@ export function AppShell({
                   className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
                 >
                   <User className="h-3.5 w-3.5" />
-                  Profile
+                  {t("profile")}
                 </Link>
                 <div className="my-1 border-t border-line" />
                 <button
@@ -720,7 +727,7 @@ export function AppShell({
                   className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
                 >
                   <LogOut className="h-3.5 w-3.5" />
-                  Sign Out
+                  {t("signOut")}
                 </button>
               </div>
             )}
@@ -729,7 +736,7 @@ export function AppShell({
 
         {sidebarCollapsed && (
           <div className="relative border-t border-line px-2 py-3">
-            <SidebarTooltip label={authLoading ? "Loading..." : authUser?.name ?? "Not signed in"}>
+            <SidebarTooltip label={authLoading ? t("loading") : authUser?.name ?? t("notSignedIn")}>
               <button
                 type="button"
                 onClick={() => setUserMenuOpen((v) => !v)}
@@ -737,7 +744,7 @@ export function AppShell({
                   "flex h-10 w-full items-center justify-center rounded-lg transition-colors hover:bg-panel2 hover:text-fg",
                   userMenuOpen ? "bg-panel2 text-fg" : "text-fg/45",
                 )}
-                aria-label={authLoading ? "Loading..." : authUser?.name ?? "Not signed in"}
+                aria-label={authLoading ? t("loading") : authUser?.name ?? t("notSignedIn")}
               >
                 <User className="h-4 w-4" />
               </button>
@@ -751,7 +758,7 @@ export function AppShell({
                   className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
                 >
                   <User className="h-3.5 w-3.5" />
-                  Profile
+                  {t("profile")}
                 </Link>
                 <div className="my-1 border-t border-line" />
                 <button
@@ -760,7 +767,7 @@ export function AppShell({
                   className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
                 >
                   <LogOut className="h-3.5 w-3.5" />
-                  Sign Out
+                  {t("signOut")}
                 </button>
               </div>
             )}

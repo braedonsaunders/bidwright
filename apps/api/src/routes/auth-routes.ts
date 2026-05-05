@@ -9,6 +9,7 @@ import {
   validateSession,
 } from "../services/auth-service.js";
 import { clearSessionCookie, getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
+import { organizationInfo, organizationInfoSelect } from "../organization-info.js";
 
 // ---------------------------------------------------------------------------
 // Helper: strip passwordHash from user records
@@ -20,7 +21,7 @@ function safeUser(user: any) {
 }
 
 function orgSettingsPayload(orgName: string) {
-  return { companyName: orgName };
+  return { companyName: orgName, language: "en" };
 }
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     // Find user by email across all orgs
     const users = await prisma.user.findMany({
       where: { email: normalizedEmail, active: true },
-      include: { organization: { select: { id: true, name: true, slug: true } } },
+      include: { organization: { select: organizationInfoSelect } },
     });
 
     // Also check if this email belongs to a super admin
@@ -60,7 +61,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Super admin with no org user — auto-impersonate the first org if one exists
       const firstOrg = await prisma.organization.findFirst({
-        select: { id: true, name: true, slug: true },
+        select: organizationInfoSelect,
         orderBy: { createdAt: "asc" },
       });
 
@@ -74,7 +75,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       return {
         token,
         user: { id: superAdmin.id, email: superAdmin.email, name: superAdmin.name, role: "admin", active: true },
-        organization: firstOrg ?? null,
+        organization: organizationInfo(firstOrg),
         isSuperAdmin: true,
       };
     }
@@ -188,7 +189,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return {
       token,
       user: safeUser(result.user),
-      organization: { id: result.org.id, name: result.org.name, slug: result.org.slug },
+      organization: organizationInfo(result.org),
     };
   });
 
@@ -248,7 +249,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     if (user) {
       const org = await prisma.organization.findUnique({
         where: { id: user.organizationId },
-        select: { id: true, name: true, slug: true },
+        select: organizationInfoSelect,
       });
       return {
         user: {
@@ -259,7 +260,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           active: user.active,
           organizationId: user.organizationId,
         },
-        organization: org,
+        organization: organizationInfo(org),
         isSuperAdmin: false,
         impersonating: false,
       };
@@ -270,7 +271,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       if (session.organizationId) {
         org = await prisma.organization.findUnique({
           where: { id: session.organizationId },
-          select: { id: true, name: true, slug: true },
+          select: organizationInfoSelect,
         });
       }
       return {
@@ -281,7 +282,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
           role: "admin",
           active: superAdmin.active,
         },
-        organization: org,
+        organization: organizationInfo(org),
         isSuperAdmin: true,
         impersonating: !!session.organizationId,
       };
@@ -361,7 +362,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     return {
       token,
       superAdmin: { id: result.admin.id, email: result.admin.email, name: result.admin.name },
-      organization: result.org ? { id: result.org.id, name: result.org.name, slug: result.org.slug } : null,
+      organization: organizationInfo(result.org),
     };
   });
 
@@ -422,7 +423,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
     const users = await prisma.user.findMany({
       where: { email: request.user.email, active: true },
-      include: { organization: { select: { id: true, name: true, slug: true } } },
+      include: { organization: { select: organizationInfoSelect } },
     });
 
     return users.map((u) => ({
@@ -445,7 +446,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
     // Find the user record in the target org
     const targetUser = await prisma.user.findFirst({
       where: { email: request.user.email, organizationId, active: true },
-      include: { organization: { select: { id: true, name: true, slug: true } } },
+      include: { organization: { select: organizationInfoSelect } },
     });
 
     if (!targetUser) {
@@ -477,7 +478,7 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
         role: targetUser.role,
         organizationId: targetUser.organizationId,
       },
-      organization: targetUser.organization,
+      organization: organizationInfo(targetUser.organization),
     };
   });
 
@@ -572,10 +573,11 @@ async function loginUser(
   return {
     token,
     user: safeUser(user),
-    organization: user.organization ?? {
+    organization: organizationInfo(user.organization) ?? {
       id: user.organizationId,
       name: "",
       slug: "",
+      language: "en",
     },
   };
 }

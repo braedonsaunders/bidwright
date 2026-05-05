@@ -1037,6 +1037,141 @@ export function generatePdfHtml(
   return html;
 }
 
+export function generateSnapPdfHtml(data: PdfDataPackage): string {
+  const formatMoney = (v: number) =>
+    `$${v.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  const formatDate = (value: string | null) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  };
+  const renderText = (value: string) =>
+    escapeHtml(value.trim()).replace(/\r?\n/g, "<br>");
+
+  const quoteDate = formatDate(data.dateQuote) || new Date().toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const dueDate = formatDate(data.dateDue);
+  const terms = data.orgTermsAndConditions.trim();
+  const inclusions = data.conditions.filter((condition) => condition.type.toLowerCase().includes("inclusion"));
+  const exclusions = data.conditions.filter((condition) => condition.type.toLowerCase().includes("exclusion"));
+  const hasNotes = !!data.notes.trim() || inclusions.length > 0 || exclusions.length > 0;
+
+  const lineRows = data.lineItems.length > 0
+    ? data.lineItems.map((item, index) => `
+      <tr>
+        <td class="line-no">${item.lineOrder || index + 1}</td>
+        <td>
+          <strong>${escapeHtml(item.entityName || "Line item")}</strong>
+          ${item.description ? `<div class="muted">${escapeHtml(item.description)}</div>` : ""}
+        </td>
+        <td class="num">${Number(item.quantity || 0).toLocaleString("en-US", { maximumFractionDigits: 2 })}</td>
+        <td>${escapeHtml(item.uom || "")}</td>
+        <td class="num"><strong>${formatMoney(item.price || 0)}</strong></td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="5" class="empty">No line items added.</td></tr>`;
+
+  const notesHtml = hasNotes ? `
+    <section class="notes">
+      <h2>Notes / Exclusions</h2>
+      ${data.notes.trim() ? `<div class="text-block">${renderText(data.notes)}</div>` : ""}
+      ${inclusions.length > 0 ? `<div class="condition-list"><strong>Inclusions</strong><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>` : ""}
+      ${exclusions.length > 0 ? `<div class="condition-list"><strong>Exclusions</strong><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>` : ""}
+    </section>
+  ` : "";
+
+  const termsHtml = terms ? `
+    <section class="terms-page">
+      <h1>Terms &amp; Conditions</h1>
+      <div class="terms-body">${escapeHtml(terms)}</div>
+    </section>
+  ` : "";
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  @page { size: letter portrait; margin: ${PDF_PAGE_MARGINS_MM.top}mm ${PDF_PAGE_MARGINS_MM.right}mm ${PDF_PAGE_MARGINS_MM.bottom}mm ${PDF_PAGE_MARGINS_MM.left}mm; }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: #141414; font-family: ${FONT_STACKS.sans}; font-size: 10.5px; line-height: 1.38; }
+  .snap-page { min-height: 255mm; display: flex; flex-direction: column; }
+  .snap-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; border-bottom: 2px solid #151515; padding-bottom: 12px; }
+  .brand { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #444; }
+  .logo { max-width: 150px; max-height: 48px; object-fit: contain; }
+  .title { margin-top: 18px; font-size: 23px; line-height: 1.08; font-weight: 750; letter-spacing: -0.01em; }
+  .meta-grid { display: grid; grid-template-columns: repeat(2, minmax(90px, 1fr)); gap: 7px 16px; min-width: 260px; }
+  .meta-label { display: block; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #777; }
+  .meta-value { font-weight: 650; }
+  h2 { margin: 13px 0 6px; font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #555; }
+  .text-block { white-space: normal; color: #333; }
+  .scope { max-width: 92%; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th { padding: 6px 7px; border-bottom: 1px solid #222; background: #f3f4f6; color: #333; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; text-align: left; }
+  td { padding: 6px 7px; border-bottom: 1px solid #e4e4e4; vertical-align: top; }
+  .line-no { width: 28px; color: #777; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .muted { margin-top: 2px; color: #666; font-size: 9.5px; }
+  .empty { text-align: center; color: #777; padding: 18px; }
+  .notes { margin-top: 10px; padding: 9px 10px; border: 1px solid #dedede; background: #fafafa; }
+  .notes h2 { margin-top: 0; }
+  .condition-list { margin-top: 6px; }
+  ul { margin: 3px 0 0 15px; padding: 0; }
+  li { margin: 1px 0; }
+  .snap-footer { margin-top: auto; display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 20px; align-items: end; padding-top: 14px; }
+  .footer-note { color: #777; font-size: 9px; }
+  .totals { border-top: 2px solid #151515; padding-top: 8px; }
+  .total-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .grand-total { margin-top: 7px; padding-top: 7px; border-top: 1px solid #cfcfcf; font-size: 15px; font-weight: 750; }
+  .terms-page { page-break-before: always; break-before: page; white-space: pre-wrap; }
+  .terms-page h1 { margin: 0 0 14px; font-size: 18px; }
+  .terms-body { font-size: 10px; line-height: 1.45; color: #333; }
+</style></head><body>
+  <section class="snap-page">
+    <header class="snap-header">
+      <div>
+        ${data.orgLogoUrl ? `<img class="logo" src="${escapeHtml(data.orgLogoUrl)}" alt="${escapeHtml(data.orgName || "Logo")}" />` : `<div class="brand">${escapeHtml(data.orgName || "Quote")}</div>`}
+        <div class="title">${escapeHtml(data.title || data.quoteNumber || "Snap Quote")}</div>
+      </div>
+      <div class="meta-grid">
+        <div><span class="meta-label">Quote</span><span class="meta-value">${escapeHtml(data.quoteNumber)}</span></div>
+        <div><span class="meta-label">Date</span><span class="meta-value">${escapeHtml(quoteDate)}</span></div>
+        <div><span class="meta-label">Client</span><span class="meta-value">${escapeHtml(data.clientName)}</span></div>
+        <div><span class="meta-label">Site</span><span class="meta-value">${escapeHtml(data.location)}</span></div>
+        ${dueDate ? `<div><span class="meta-label">Valid Until</span><span class="meta-value">${escapeHtml(dueDate)}</span></div>` : ""}
+        <div><span class="meta-label">Type</span><span class="meta-value">${escapeHtml(data.type)}</span></div>
+      </div>
+    </header>
+
+    ${data.description.trim() ? `<section class="scope"><h2>Scope</h2><div class="text-block">${renderText(data.description)}</div></section>` : ""}
+
+    <section>
+      <h2>Estimate</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Item</th><th class="num">Qty</th><th>UOM</th><th class="num">Price</th></tr>
+        </thead>
+        <tbody>${lineRows}</tbody>
+      </table>
+    </section>
+
+    ${notesHtml}
+
+    <footer class="snap-footer">
+      <div class="footer-note">${escapeHtml(data.orgWebsite || data.orgName || "")}</div>
+      <div class="totals">
+        <div class="total-row grand-total"><span>Total</span><span>${formatMoney(data.subtotal)}</span></div>
+      </div>
+    </footer>
+  </section>
+  ${termsHtml}
+</body></html>`;
+}
+
 function renderReportSection(section: PdfDataPackage["reportSections"][number]): string {
   const typeConfig: Record<string, { iconClass: string; emoji: string }> = {
     content:         { iconClass: "report-icon-content", emoji: "&#128221;" },

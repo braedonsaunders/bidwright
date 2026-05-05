@@ -2,6 +2,7 @@ import { ArrowUpDown, Building2, Layers, Users, Zap } from "lucide-react";
 import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
 import type { BrandProfile } from "@/lib/api";
+import type { SupportedLocale } from "@/lib/i18n";
 
 export const STORAGE_KEY = "bidwright-settings";
 
@@ -34,6 +35,7 @@ export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] =
 ];
 
 export interface GeneralSettings {
+  language: SupportedLocale;
   timezone: string;
   currency: string;
   dateFormat: string;
@@ -85,7 +87,10 @@ export interface IntegrationSettings {
   azureDiEndpoint: string;
   azureDiKey: string;
   documentExtractionProvider: "azure" | "local" | "auto";
-  azureDiModel: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice";
+  azureDiModel: "prebuilt-layout" | "prebuilt-read" | "prebuilt-document" | "prebuilt-invoice" | "prebuilt-contract";
+  azureDiFeatures: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
+  azureDiQueryFields: string;
+  azureDiOutputFormat: "text" | "markdown";
   agentRuntime?: string | null;
   agentModel?: string | null;
   agentReasoningEffort?: string | null;
@@ -120,6 +125,7 @@ export const DEFAULT_BRAND: BrandProfile = {
 
 export const DEFAULT_SETTINGS: AllSettings = {
   general: {
+    language: "en",
     timezone: "America/New_York",
     currency: "USD",
     dateFormat: "MM/DD/YYYY",
@@ -170,6 +176,9 @@ export const DEFAULT_SETTINGS: AllSettings = {
     azureDiKey: "",
     documentExtractionProvider: "azure",
     azureDiModel: "prebuilt-layout",
+    azureDiFeatures: ["keyValuePairs"],
+    azureDiQueryFields: "",
+    azureDiOutputFormat: "text",
     agentReasoningEffort: "extra_high",
   },
   termsAndConditions: "",

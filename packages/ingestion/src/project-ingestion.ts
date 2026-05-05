@@ -1,5 +1,6 @@
 import type {
   ArchiveEntry,
+  AzureDocumentIntelligenceFeature,
   AzureDocumentIntelligenceModel,
   ChunkStore,
   DocumentClassifier,
@@ -42,6 +43,9 @@ type AzureExtractionConfig = {
   endpoint?: string;
   key?: string;
   model?: AzureDocumentIntelligenceModel;
+  features?: AzureDocumentIntelligenceFeature[];
+  queryFields?: string[];
+  outputContentFormat?: 'text' | 'markdown';
 };
 
 type ExtractionResult = {
@@ -134,6 +138,9 @@ async function extractTextFromEntry(
         azureEndpoint: azureConfig?.endpoint,
         azureKey: azureConfig?.key,
         azureModel: azureConfig?.model ?? 'prebuilt-layout',
+        azureFeatures: azureConfig?.features,
+        azureQueryFields: azureConfig?.queryFields,
+        options: { outputFormat: azureConfig?.outputContentFormat },
       });
       const doc = await parser.parse(Buffer.from(entry.bytes), entry.name);
       const azureNotes = [...notes, 'azure-di'];

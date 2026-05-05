@@ -41,6 +41,7 @@ export const AGENT_TOOL_REGISTRY = {
   listScheduleTasks: { id: "listScheduleTasks", displayName: "List schedule tasks", category: "quote" },
   recalculateTotals: { id: "recalculateTotals", displayName: "Recalculate totals", category: "quote", mutates: true },
   listRateSchedules: { id: "listRateSchedules", displayName: "List rate schedules", category: "resources" },
+  getRateSchedule: { id: "getRateSchedule", displayName: "Read rate schedule", category: "resources" },
   importRateSchedule: { id: "importRateSchedule", displayName: "Import rate schedule", category: "resources", mutates: true },
   listRateScheduleItems: { id: "listRateScheduleItems", displayName: "List rate items", category: "resources" },
   searchItems: { id: "searchItems", displayName: "Search item history", category: "resources" },

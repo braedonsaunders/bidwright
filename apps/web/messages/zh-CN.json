@@ -1,0 +1,729 @@
+{
+  "AppShell": {
+    "nav": {
+      "dashboard": "仪表板",
+      "intake": "录入",
+      "quotes": "报价",
+      "clients": "客户",
+      "library": "资料库",
+      "performance": "绩效",
+      "settings": "设置"
+    },
+    "theme": {
+      "light": "浅色",
+      "dark": "深色",
+      "system": "系统",
+      "label": "主题：{theme}",
+      "labelWithResolved": "主题：{theme}（{resolved}）"
+    },
+    "switchOrganization": "切换组织",
+    "organizations": "组织",
+    "noOtherOrganizations": "没有其他组织",
+    "superAdmin": "超级管理员",
+    "personal": "个人",
+    "adminPanel": "管理面板",
+    "searchTools": "搜索工具",
+    "searchPlaceholder": "搜索...",
+    "toolsCount": "工具（{count}）",
+    "noToolsFound": "未找到与“{query}”匹配的工具",
+    "quotes": "报价",
+    "quotesCount": "报价（{count}）",
+    "activeProject": "当前项目",
+    "activeProjectLabel": "当前项目：{name}",
+    "switchProject": "切换项目",
+    "loading": "正在加载...",
+    "notSignedIn": "未登录",
+    "profile": "个人资料",
+    "signOut": "退出登录",
+    "expandSidebar": "展开侧边栏",
+    "collapseSidebar": "折叠侧边栏"
+  },
+  "Settings": {
+    "title": "设置",
+    "subtitle": "配置你的 Bidwright 工作区",
+    "groups": {
+      "organization": "组织",
+      "data": "数据管理",
+      "importExport": "导入 / 导出",
+      "integrations": "集成",
+      "users": "用户和访问权限"
+    },
+    "orgTabs": {
+      "general": "常规",
+      "brand": "品牌",
+      "departments": "部门",
+      "defaults": "默认值",
+      "terms": "条款与条件",
+      "personas": "角色"
+    },
+    "generalTitle": "常规设置",
+    "language": "语言",
+    "timezone": "时区",
+    "currency": "货币",
+    "dateFormat": "日期格式",
+    "fiscalYearStart": "财年开始",
+    "generalDescription": "设置组织语言、区域格式和报表日历。",
+    "localizationTitle": "本地化",
+    "localizationDescription": "语言对整个组织生效，并会立即更新应用主界面。",
+    "regionalTitle": "区域格式",
+    "regionalDescription": "这些设置会影响货币、日期和默认时间显示。",
+    "fiscalTitle": "财务日历",
+    "fiscalDescription": "选择用于年度汇总和默认报表的月份。"
+  },
+  "Common": {
+    "loading": "正在加载..."
+  },
+  "Auth": {
+    "login": {
+      "title": "登录",
+      "email": "电子邮箱",
+      "emailPlaceholder": "you@company.com",
+      "password": "密码",
+      "passwordPlaceholder": "输入你的密码",
+      "hidePassword": "隐藏密码",
+      "showPassword": "显示密码",
+      "submit": "继续",
+      "submitting": "正在登录",
+      "error": "登录失败，请重试。",
+      "noAccount": "没有账号？",
+      "createAccount": "创建账号"
+    },
+    "signup": {
+      "eyebrow": "创建你的组织",
+      "title": "注册",
+      "organizationName": "组织名称",
+      "organizationNamePlaceholder": "Acme Electrical",
+      "urlSlug": "URL 标识",
+      "urlSlugPlaceholder": "acme-electrical",
+      "yourName": "你的姓名",
+      "yourNamePlaceholder": "Jane Smith",
+      "email": "电子邮箱",
+      "emailPlaceholder": "jane@acme.com",
+      "password": "密码",
+      "passwordPlaceholder": "至少 8 个字符",
+      "confirmPassword": "确认密码",
+      "confirmPasswordPlaceholder": "确认",
+      "passwordMismatch": "两次输入的密码不一致",
+      "passwordTooShort": "密码至少需要 8 个字符",
+      "error": "注册失败",
+      "submit": "创建账号",
+      "submitting": "正在创建账号...",
+      "signInLink": "已有账号？登录"
+    }
+  },
+  "Dashboard": {
+    "stages": {
+      "active": "进行中",
+      "won": "已赢单",
+      "lost": "已丢单",
+      "other": "其他"
+    },
+    "greeting": {
+      "late": "夜间工作中",
+      "morning": "早上好",
+      "afternoon": "下午好",
+      "evening": "晚上好"
+    },
+    "newIntake": "新建录入",
+    "activeValue": "活跃金额",
+    "activeQuoteCount": "{count} 个活跃报价",
+    "averageMargin": "平均利润率",
+    "projectedProfit": "预计利润 {profit}",
+    "winRate": "赢单率",
+    "decidedQuotes": "{count} 个已决报价",
+    "noDecisionsYet": "暂无决策",
+    "exceptions": "异常",
+    "exceptionSummary": "{aging} 个超期，{margin} 个利润率关注",
+    "pipelineTitle": "报价管线图",
+    "trackedValue": "跟踪总额 {value}",
+    "quotes": "报价",
+    "noPipeline": "暂无投标管线。",
+    "noQuotes": "暂无报价",
+    "bidQuality": "投标质量",
+    "watch": "关注",
+    "clear": "正常",
+    "margin": "利润率",
+    "win": "赢单",
+    "operatingSignal": "运营信号",
+    "active": "活跃",
+    "aging": "超期",
+    "won30d": "30 天赢单",
+    "attention": "注意",
+    "agingActiveWork": "超期活跃工作",
+    "oldestDays": "最早 {days} 天",
+    "marginUnder": "利润率低于 12%",
+    "needsPricingReview": "需要价格复核",
+    "wonThisMonth": "本月赢单",
+    "recentDecisions": "近期决策",
+    "noUrgentExceptions": "暂无紧急异常",
+    "quotePulse": "报价动态",
+    "all": "全部",
+    "noRecentQuotes": "暂无近期报价"
+  },
+  "Clients": {
+    "title": "客户",
+    "subtitle": "客户账户、报价历史、管线健康度和客户价值。",
+    "newClient": "新建客户",
+    "searchPlaceholder": "搜索客户、联系人、报价标题、城市...",
+    "resultCount": "{count} 个客户",
+    "filteredResultCount": "{filtered} / {total} 个客户",
+    "noMatches": "没有客户匹配此视图。",
+    "inactive": "停用",
+    "noLocation": "无地点",
+    "noEmail": "无邮箱",
+    "noPhone": "无电话",
+    "filters": {
+      "all": "全部",
+      "active": "活跃管线",
+      "quoted": "已报价",
+      "prospects": "潜在客户",
+      "inactive": "停用"
+    },
+    "table": {
+      "client": "客户",
+      "contact": "联系人",
+      "quotes": "报价",
+      "active": "活跃",
+      "awarded": "已中标",
+      "win": "赢单",
+      "margin": "利润率",
+      "updated": "更新"
+    },
+    "modal": {
+      "title": "新建客户",
+      "description": "在报价前先创建客户账户记录。",
+      "close": "关闭新建客户对话框",
+      "name": "名称",
+      "namePlaceholder": "客户名称",
+      "shortName": "简称",
+      "website": "网站",
+      "email": "邮箱",
+      "phone": "电话",
+      "city": "城市",
+      "provinceState": "省 / 州",
+      "cancel": "取消",
+      "create": "创建客户",
+      "nameRequired": "客户名称为必填项。",
+      "createError": "无法创建客户。"
+    }
+  },
+  "Quotes": {
+    "title": "报价",
+    "subtitle": "管理并跟踪所有报价",
+    "newQuoteButton": "新建报价",
+    "menu": {
+      "aiIntake": "AI 导入",
+      "aiIntakeDescription": "上传投标资料包",
+      "newQuote": "新建报价",
+      "newQuoteDescription": "从空白报价开始",
+      "newSnap": "新建 Snap",
+      "newSnapDescription": "一页快速报价"
+    },
+    "manual": {
+      "snapTitle": "新建 Snap",
+      "quoteTitle": "新建报价",
+      "snapDescription": "用十行估算表创建一页快速报价。",
+      "quoteDescription": "创建空白估算工作区，不运行 AI 导入。",
+      "close": "关闭手动报价对话框",
+      "snapTitleLabel": "Snap 标题",
+      "quoteTitleLabel": "报价标题",
+      "snapTitlePlaceholder": "例如：泵房服务工单",
+      "quoteTitlePlaceholder": "例如：热电联产管架保温",
+      "client": "客户",
+      "newClientName": "新客户名称",
+      "selectClient": "选择客户...",
+      "searchClients": "搜索客户...",
+      "addClient": "添加新客户",
+      "location": "地点",
+      "locationPlaceholder": "待定",
+      "cancel": "取消",
+      "createSnap": "创建 Snap",
+      "createQuote": "创建报价",
+      "failedClient": "创建客户失败。",
+      "titleRequired": "报价标题为必填项。",
+      "unassignedClient": "未分配客户",
+      "snapPackageName": "{title} Snap",
+      "manualPackageName": "{title} 手动报价",
+      "snapSummary": "已创建用于小型工作快速定价的 Snap 报价。",
+      "createError": "无法创建报价。"
+    },
+    "filters": {
+      "searchPlaceholder": "按报价号、标题、客户、项目、地点搜索...",
+      "status": "状态",
+      "client": "客户",
+      "estimator": "估算员",
+      "department": "部门",
+      "clear": "清除",
+      "clearAll": "全部清除",
+      "resultCount": "{count} 个报价",
+      "filteredResultCount": "{total} 个报价中的 {filtered} 个"
+    },
+    "table": {
+      "quoteNumber": "报价 #",
+      "kind": "类型",
+      "title": "标题",
+      "client": "客户",
+      "estimator": "估算员",
+      "status": "状态",
+      "subtotal": "小计",
+      "margin": "利润率",
+      "updated": "更新时间"
+    },
+    "kind": {
+      "snap": "Snap",
+      "full": "完整"
+    },
+    "status": {
+      "Open": "打开",
+      "Pending": "待处理",
+      "Awarded": "已中标",
+      "DidNotGet": "未中标",
+      "Declined": "已拒绝",
+      "Cancelled": "已取消",
+      "Closed": "已关闭",
+      "Other": "其他"
+    },
+    "unassigned": "未分配",
+    "emptyFiltered": "没有符合筛选条件的报价",
+    "empty": "未找到报价"
+  },
+  "Performance": {
+    "eyebrow": "绩效",
+    "title": "管道与报价洞察",
+    "subtitle": "覆盖 {count} 个项目的实时信号",
+    "subtitleFiltered": "覆盖 {count} 个项目的实时信号 · 已筛选视图",
+    "filteredQuoteCount": "{total} 个报价中的 {filtered} 个",
+    "winRateBadge": "中标率 {rate}",
+    "quoteCount": "{count} 个报价",
+    "total": "总计",
+    "unknownClient": "未知",
+    "emptyDistribution": "没有分布数据。",
+    "emptyClientData": "暂无客户数据。",
+    "emptyTimeSeries": "暂无时间序列数据。",
+    "pipelineFunnel": "管道漏斗",
+    "statusMix": "状态构成",
+    "pipelineOverTime": "管道趋势",
+    "last12Months": "最近 12 个月",
+    "marginDistribution": "利润率分布",
+    "topClientsByProfit": "按利润排名的客户",
+    "top8": "前 8",
+    "stages": {
+      "active": "活跃",
+      "won": "已赢单",
+      "lost": "已丢单",
+      "other": "其他"
+    },
+    "status": {
+      "Open": "打开",
+      "Pending": "待处理",
+      "Awarded": "已中标",
+      "DidNotGet": "未中标",
+      "Declined": "已拒绝",
+      "Cancelled": "已取消",
+      "Closed": "已关闭",
+      "Other": "其他"
+    },
+    "filters": {
+      "title": "筛选",
+      "from": "从",
+      "to": "至",
+      "fromDate": "开始日期",
+      "toDate": "结束日期",
+      "stage": "阶段",
+      "status": "状态",
+      "client": "客户",
+      "allStages": "所有阶段",
+      "allStatuses": "所有状态",
+      "allClients": "所有客户",
+      "clear": "清除"
+    },
+    "chips": {
+      "from": "从 {date}",
+      "to": "至 {date}",
+      "status": "状态：{status}",
+      "client": "客户：{client}",
+      "stage": "阶段：{stage}"
+    },
+    "kpi": {
+      "pipelineValue": "管道价值",
+      "estimatedProfit": "预计利润",
+      "averageMargin": "平均利润率",
+      "winRate": "中标率",
+      "decided": "{won}/{decided} 已决策"
+    }
+  },
+  "Intake": {
+    "state": {
+      "uploading": "上传中",
+      "loaded": "资料包已加载",
+      "release": "松开",
+      "waiting": "等待中"
+    },
+    "package": {
+      "title": "导入资料包",
+      "loadedSize": "已加载 {size}"
+    },
+    "selected": {
+      "multipleFiles": "已捕获 {count} 个资料包文件",
+      "totalSize": "总计 {size}",
+      "more": "+{count} 个更多",
+      "clearPackage": "清除资料包"
+    },
+    "drop": {
+      "releaseTitle": "松开以附加资料包",
+      "title": "拖放文件或文件夹",
+      "description": "上传图纸、规格、电子表格、补遗、图片、ZIP 压缩包和 Outlook 邮件。",
+      "selectFiles": "选择文件",
+      "selectFolder": "选择文件夹",
+      "emailFormats": ".msg 和 .eml"
+    },
+    "context": {
+      "title": "项目上下文",
+      "description": "捕获创建估算工作区所需的最少上下文。"
+    },
+    "fields": {
+      "destination": "目标",
+      "newProject": "新项目",
+      "projectName": "项目名称",
+      "projectNamePlaceholder": "例如：北校区锅炉升级",
+      "client": "客户",
+      "newClientName": "新客户名称",
+      "selectClient": "选择客户...",
+      "searchClients": "搜索客户...",
+      "addClient": "添加新客户",
+      "location": "地点",
+      "locationPlaceholder": "城市，州/省",
+      "bidDue": "投标截止",
+      "scope": "范围",
+      "scopePlaceholder": "完整资料包、专业拆分、建筑区域、备选项或专业。",
+      "playbook": "估算手册",
+      "autoDetect": "自动检测",
+      "notes": "备注",
+      "notesPlaceholder": "可选备注"
+    },
+    "actions": {
+      "uploading": "上传中...",
+      "createWorkspace": "创建导入工作区"
+    },
+    "status": {
+      "uploadSuccessSingle": "资料包上传成功。",
+      "uploadSuccessMultiple": "{count} 个文件上传成功。"
+    },
+    "errors": {
+      "noReadableFiles": "拖放的项目没有提供可读取的文件。",
+      "outlookRowOnly": "新版 Outlook 邮件列表拖放使用 Outlook 专用数据（{payloadLabel}），不会向普通网站提供邮件文件。请拖放附件本身，尝试从打开的邮件中拖放，另存为 .eml，或使用经典 Outlook。",
+      "outlookWebLink": "新版 Outlook 提供了网页链接拖放数据（{payloadLabel}），但浏览器无法将其转换为可下载的邮件文件。请将邮件另存为 .eml 后上传，拖放附件本身，或使用经典 Outlook。",
+      "outlookNonFile": "新版 Outlook 提供了非文件拖放数据（{payloadLabel}），不是实际邮件文件。请将邮件另存为 .eml 后上传，拖放附件本身，或使用经典 Outlook。",
+      "failedClient": "创建客户失败。",
+      "selectFile": "请选择至少一个资料包文件。",
+      "uploadFailed": "上传失败。"
+    }
+  },
+  "NotFound": {
+    "title": "页面未找到",
+    "back": "返回仪表盘"
+  },
+  "Profile": {
+    "title": "个人资料",
+    "account": {
+      "title": "账户",
+      "email": "邮箱",
+      "role": "角色",
+      "organization": "组织",
+      "access": "访问权限",
+      "superAdmin": "超级管理员"
+    },
+    "displayName": {
+      "title": "显示名称",
+      "name": "姓名",
+      "placeholder": "你的姓名"
+    },
+    "password": {
+      "title": "更改密码",
+      "current": "当前密码",
+      "currentPlaceholder": "输入当前密码",
+      "new": "新密码",
+      "newPlaceholder": "至少 8 个字符",
+      "confirm": "确认",
+      "confirmPlaceholder": "确认"
+    },
+    "actions": {
+      "saving": "保存中...",
+      "save": "保存",
+      "changing": "更改中...",
+      "changePassword": "更改密码"
+    },
+    "messages": {
+      "nameUpdated": "姓名已更新。",
+      "passwordChanged": "密码已更改。",
+      "updateFailed": "更新失败",
+      "passwordMismatch": "密码不匹配。",
+      "passwordTooShort": "密码至少需要 8 个字符。"
+    }
+  },
+  "Library": {
+    "title": "资料库",
+    "searchPlaceholder": "搜索资料库区域",
+    "refresh": "刷新",
+    "loadingKnowledge": "正在加载知识...",
+    "surfaces": {
+      "overview": {
+        "label": "首页",
+        "description": "用于资料库工作和实时覆盖的启动区域。"
+      },
+      "resources": {
+        "label": "资源",
+        "description": "已编目的材料、服务、设备、分包、消耗品和暂列资源。"
+      },
+      "rates": {
+        "label": "费率表",
+        "description": "客户/资源成本与售价覆盖、分级、差旅、津贴和定价规则。"
+      },
+      "assemblies": {
+        "label": "装配",
+        "description": "可参数化的估算配方，可展开为带价格的资源行。"
+      },
+      "labor_units": {
+        "label": "人工单位",
+        "description": "每安装单位所需工时的生产标准，并关联资源行和费率表。"
+      },
+      "cost": {
+        "label": "成本智能",
+        "description": "供应商账单行证据、观察记录、产品和当前成本基础行。"
+      },
+      "playbooks": {
+        "label": "估算员",
+        "description": "估算员行为、方法、来源绑定和商务策略。"
+      },
+      "knowledge": {
+        "label": "知识",
+        "description": "参考书、数据集、提取证据和代理检索材料。"
+      }
+    },
+    "common": {
+      "close": "关闭",
+      "delete": "删除",
+      "cancel": "取消",
+      "saving": "正在保存",
+      "prev": "上一页",
+      "next": "下一页"
+    },
+    "overview": {
+      "title": "资料库工作区",
+      "subtitle": "从实时资料库覆盖范围打开工作区",
+      "groupCount": "{count} 个分组",
+      "noData": "无数据",
+      "unassigned": "未分配",
+      "other": "其他",
+      "breakdowns": {
+        "resourceRows": "按资源目录类型划分的行",
+        "rateRows": "按费率表类别划分的行",
+        "rateBooks": "按类别划分的费率表",
+        "assemblyComponents": "按装配类别划分的组件",
+        "assemblyCategories": "按类别划分的装配",
+        "laborRows": "按人工单位目录划分的行",
+        "costBasis": "按资源类型划分的成本基础",
+        "resourceTypes": "按类型划分的资源",
+        "sourceBindings": "按类型划分的来源绑定",
+        "estimatorStatus": "按状态划分的估算员",
+        "references": "按来源类型划分的参考资料",
+        "datasetRows": "按数据集类别划分的行"
+      },
+      "fallbacks": {
+        "catalog": "目录",
+        "uncategorized": "未分类",
+        "general": "通用",
+        "unclassified": "未归类",
+        "books": "书籍",
+        "notes": "笔记",
+        "datasetTags": "数据集标签",
+        "active": "启用",
+        "paused": "暂停"
+      },
+      "cards": {
+        "resources": {
+          "title": "资源",
+          "body": "供工作表、费率表和装配使用的基础估算资源。",
+          "metricLabel": "目录项目"
+        },
+        "rates": {
+          "title": "费率表",
+          "body": "带有分级、差旅、津贴和定价规则的客户/资源成本与售价覆盖。",
+          "metricLabel": "资源行"
+        },
+        "assemblies": {
+          "title": "装配",
+          "body": "面向资源、设备、嵌套范围和参数化算量的可复用估算配方。",
+          "metricLabel": "装配"
+        },
+        "laborUnits": {
+          "title": "人工单位",
+          "body": "自有生产标准将安装数量转换为工时，再通过费率表为这些工时定价。",
+          "metricLabel": "生产行"
+        },
+        "cost": {
+          "title": "成本智能",
+          "body": "供应商账单行证据、观察价格、当前成本基础行及其背后的证据链。",
+          "metricLabel": "成本基础行"
+        },
+        "playbooks": {
+          "title": "估算员",
+          "body": "可复用的估算行为，包含方法、来源优先级、商务策略和复核指引。",
+          "metricLabel": "启用估算员"
+        },
+        "books": {
+          "title": "书籍与笔记",
+          "body": "参考书、估算员笔记、提取证据和代理检索材料。",
+          "metricLabel": "参考资料"
+        },
+        "datasets": {
+          "title": "数据集",
+          "body": "代理、估算员和定价流程使用的结构化表格和导入行。",
+          "metricLabel": "数据集"
+        }
+      },
+      "segmentLabels": {
+        "allowance": "暂列项",
+        "allowances": "暂列项",
+        "consumable": "消耗品",
+        "consumables": "消耗品",
+        "dataset": "数据集",
+        "datasets": "数据集",
+        "equipment": "设备",
+        "knowledge": "知识",
+        "knowledgeLibrary": "知识库",
+        "labor": "人工",
+        "manual": "手册",
+        "material": "材料",
+        "materials": "材料",
+        "rateBook": "费率表",
+        "service": "服务",
+        "services": "服务",
+        "subcontract": "分包",
+        "subcontracts": "分包"
+      }
+    },
+    "labor": {
+      "title": "人工单位",
+      "subtitle": "{catalog} / {count} 个生产标准",
+      "allCatalogs": "所有目录",
+      "allCatalogsWithCount": "所有目录（{count}）",
+      "unitsCount": "{count} 个单位",
+      "catalogAria": "人工单位目录",
+      "searchPlaceholder": "搜索代码、类别、分类或描述",
+      "confirmDeleteUnit": "删除 {name}？",
+      "confirmDeleteCatalog": "删除 {name} 及其人工单位？",
+      "groupRowCount": "{count} 行",
+      "avgHours": "平均 {value} 小时",
+      "items": "项目",
+      "sections": "分区",
+      "groupLevels": {
+        "catalog": "目录",
+        "category": "类别",
+        "class": "分类",
+        "subclass": "子分类"
+      },
+      "view": {
+        "groups": "分组",
+        "rows": "行"
+      },
+      "actions": {
+        "collapse": "折叠",
+        "expand": "展开",
+        "manageCatalogs": "管理目录",
+        "newUnit": "新建人工单位"
+      },
+      "stats": {
+        "rows": "行",
+        "catalogs": "目录",
+        "providers": "提供方",
+        "categories": "类别",
+        "avgHrs": "平均小时"
+      },
+      "table": {
+        "code": "代码",
+        "laborUnit": "人工单位",
+        "catalog": "目录",
+        "category": "类别",
+        "class": "分类",
+        "normal": "正常",
+        "difficult": "困难",
+        "veryDifficult": "很困难",
+        "uom": "单位"
+      },
+      "branchLoading": "正在加载分支...",
+      "branchEmpty": "此分支没有行。",
+      "empty": "没有符合此视图的人工单位。",
+      "loading": "正在加载人工单位...",
+      "unitDrawer": {
+        "createTitle": "创建人工单位",
+        "fallbackTitle": "人工单位",
+        "subtitle": "编辑装配和工作表使用的生产标准。",
+        "save": "保存人工单位"
+      },
+      "catalogDrawer": {
+        "title": "人工单位目录",
+        "subtitle": "管理生产标准行的来源分组。",
+        "newCatalog": "新建目录",
+        "org": "组织",
+        "firstParty": "自有",
+        "save": "保存目录",
+        "create": "创建目录"
+      },
+      "fields": {
+        "catalog": "目录",
+        "chooseCatalog": "选择目录",
+        "name": "名称",
+        "code": "代码",
+        "discipline": "专业",
+        "outputUom": "输出单位",
+        "description": "描述",
+        "category": "类别",
+        "class": "分类",
+        "subclass": "子分类",
+        "normalHours": "正常小时",
+        "difficultHours": "困难小时",
+        "veryDifficultHours": "很困难小时",
+        "default": "默认",
+        "tags": "标签",
+        "tagsPlaceholder": "逗号分隔",
+        "provider": "提供方",
+        "sourceNote": "来源说明"
+      },
+      "difficulty": {
+        "normal": "正常",
+        "difficult": "困难",
+        "veryDifficult": "很困难"
+      },
+      "fallbacks": {
+        "internal": "内部",
+        "general": "通用",
+        "manual": "手册",
+        "unknown": "未知"
+      },
+      "errors": {
+        "chooseCatalog": "保存前请选择人工单位目录。",
+        "unitNameRequired": "人工单位名称为必填。",
+        "normalHours": "正常小时必须是非负数。",
+        "difficultyHours": "难度小时必须为空或为非负数。",
+        "saveUnit": "保存人工单位失败。",
+        "deleteUnit": "删除人工单位失败。",
+        "catalogNameRequired": "目录名称为必填。",
+        "saveCatalog": "保存目录失败。",
+        "deleteCatalog": "删除目录失败。"
+      },
+      "footer": {
+        "grouped": "显示 {start}-{end} / {visible} 个可见树行，共 {total} 个人工行",
+        "rows": "显示 {start}-{end} / {total} 行，{indexed} 行已在 {catalogs} 个目录中索引",
+        "firstParty": "{count} 个自有",
+        "topLevelGroups": "{count} 个顶级分组",
+        "page": "第 {page} / {total} 页"
+      },
+      "pageSize": {
+        "visible": "{count} 可见",
+        "rows": "{count} 行",
+        "aria": "人工单位分页大小"
+      }
+    }
+  }
+}

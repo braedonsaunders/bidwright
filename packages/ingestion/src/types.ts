@@ -12,11 +12,10 @@ export type PackageSourceKind = 'project' | 'library';
 
 export type DocumentExtractionProvider = 'azure' | 'local' | 'auto';
 
-export type AzureDocumentIntelligenceModel =
-  | 'prebuilt-layout'
-  | 'prebuilt-document'
-  | 'prebuilt-invoice'
-  | 'prebuilt-read';
+export type {
+  AzureDocumentIntelligenceFeature,
+  AzureDocumentIntelligenceModel,
+} from './azure-di.js';
 
 export interface ArchiveEntry {
   path: string;

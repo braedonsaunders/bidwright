@@ -36,6 +36,7 @@ import {
 import type {
   CreateEstimateFactorInput,
   CreateWorksheetItemInput,
+  Customer,
   EstimateFactor,
   EstimateFactorApplicationScope,
   EstimateFactorConfidence,
@@ -82,14 +83,20 @@ import {
   makeRevisionZero,
   sendQuote,
   updatePhase,
+  updateProject,
   updateProjectStatus,
   updateRevision,
+  updateQuote,
+  updateWorkspaceState,
   updateWorksheet,
   getProjectWorkspace,
+  getCustomers,
   getEntityCategories,
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   deleteEstimateFactor,
+  fetchQuotePdfBlobUrl,
+  importAssignedRateSchedules,
   listModelTakeoffLinks,
   getEstimateFactorLibrary,
   updateWorksheetItem,
@@ -135,6 +142,7 @@ import type {
   BidwrightModelLinkedLineItem,
   BidwrightModelSelectionMessage,
 } from "@/components/workspace/editors/bidwright-model-editor";
+import { SearchablePicker } from "@/components/shared/searchable-picker";
 import {
   Badge,
   Button,
@@ -225,6 +233,19 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
 const estimateSubTabs = ["takeoff", "worksheets", "factors", "phases"] as const;
 
 /* ─── Utilities ─── */
+
+function toDateInput(value: string | null | undefined): string {
+  if (!value) return "";
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+}
+
+function fromDateInput(value: string): string | null {
+  return value || null;
+}
 
 function buildItemDraft(
   ws: WorkspaceWorksheet,
@@ -1083,13 +1104,16 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
+  const initialIsSnap =
+    initialData.workspaceState?.state.quoteMode === "snap" &&
+    initialData.workspaceState?.state.snapUpgraded !== true;
   const [tab, setTab] = useState<WorkspaceTab>(() => {
     const urlTab = searchParams.get("tab");
-    return isWorkspaceTab(urlTab) ? urlTab : "setup";
+    return isWorkspaceTab(urlTab) ? urlTab : initialIsSnap ? "estimate" : "setup";
   });
   const [estimateSubTab, setEstimateSubTab] = useState<EstimateSubTab>(() => {
     const urlSubTab = searchParams.get("subtab");
-    return isEstimateSubTab(urlSubTab) ? urlSubTab : "takeoff";
+    return isEstimateSubTab(urlSubTab) ? urlSubTab : initialIsSnap ? "worksheets" : "takeoff";
   });
   const [data, setData] = useState(initialData);
   const [searchTerm, setSearchTerm] = useState("");
@@ -1113,6 +1137,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, []);
   const modelLineCategory = useMemo(() => pickModelLineCategory(entityCategories), [entityCategories]);
   const [modal, setModal] = useState<ModalState>(null);
+  const [snapPdfDownloading, setSnapPdfDownloading] = useState(false);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
@@ -1179,6 +1204,17 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, [handleEstimateSubTabChange, handleTabChange]);
 
   const workspace = data.workspace;
+  const isSnap =
+    data.workspaceState?.state.quoteMode === "snap" &&
+    data.workspaceState?.state.snapUpgraded !== true;
+  const snapLineLimit =
+    typeof data.workspaceState?.state.snapLineLimit === "number"
+      ? data.workspaceState.state.snapLineLimit
+      : 10;
+  const snapWorksheetId =
+    typeof data.workspaceState?.state.selectedWorksheetId === "string"
+      ? data.workspaceState.state.selectedWorksheetId
+      : workspace.worksheets[0]?.id;
   const revisions = useMemo(() => {
     const byId = new Map<string, QuoteRevision>();
     for (const revision of workspace.revisions ?? []) {
@@ -1237,7 +1273,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // Keep UI state in sync with URL changes/back-forward navigation.
   useEffect(() => {
-    const nextTab = isWorkspaceTab(urlTab) ? urlTab : "setup";
+    const nextTab = isWorkspaceTab(urlTab) ? urlTab : isSnap ? "estimate" : "setup";
     if (nextTab === "estimate" && urlSubTab === "quality") {
       setTab("review");
       updateWorkspaceUrl("review");
@@ -1247,12 +1283,12 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       setTab(nextTab);
     }
     if (nextTab === "estimate") {
-      const nextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : "takeoff";
+      const nextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : isSnap ? "worksheets" : "takeoff";
       if (nextSubTab !== estimateSubTab) {
         setEstimateSubTab(nextSubTab);
       }
     }
-  }, [estimateSubTab, tab, updateWorkspaceUrl, urlSubTab, urlTab]);
+  }, [estimateSubTab, isSnap, tab, updateWorkspaceUrl, urlSubTab, urlTab]);
 
   // Auto-open agent chat when redirected from intake.
   useEffect(() => {
@@ -1403,6 +1439,24 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       return null;
     }
   }, [apply, startTransition, workspace.project.id]);
+
+  const handleUpgradeSnap = useCallback(() => {
+    startTransition(async () => {
+      try {
+        const workspaceState = await updateWorkspaceState(workspace.project.id, {
+          quoteMode: "quote",
+          snapUpgraded: true,
+          snapUpgradedAt: new Date().toISOString(),
+        });
+        apply((current) => ({ ...current, workspaceState }));
+        setTab("estimate");
+        setEstimateSubTab("worksheets");
+        updateWorkspaceUrl("estimate", "worksheets");
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "Could not upgrade Snap.");
+      }
+    });
+  }, [apply, startTransition, updateWorkspaceUrl, workspace.project.id]);
 
   const handleAgentNavigate = useCallback(async (intent: AgentNavigationIntent) => {
     const fresh = await refreshWorkspace();
@@ -1689,6 +1743,24 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // ─── Action handlers ───
 
+  async function handleSnapPdfDownload() {
+    if (snapPdfDownloading) return;
+    setSnapPdfDownloading(true);
+    setError(null);
+    try {
+      const blobUrl = await fetchQuotePdfBlobUrl(workspace.project.id, "snap");
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = `${workspace.quote.quoteNumber || "snap-quote"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "PDF download failed.");
+    } finally {
+      setSnapPdfDownloading(false);
+    }
+  }
+
   function handleAction(action: string) {
     setShowActions(false);
     switch (action) {
@@ -1703,7 +1775,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       case "aiNotes": setModal("aiNotes"); setAiResult(null); break;
       case "aiPhases": setModal("aiPhases"); setAiPhaseResult(null); break;
       case "aiEquipment": setModal("aiEquipment"); setAiEquipResult(null); break;
-      case "pdf": setModal("pdf"); break;
+      case "pdf":
+        if (isSnap) void handleSnapPdfDownload();
+        else setModal("pdf");
+        break;
       case "compare": setModal("compare"); break;
     }
   }
@@ -1845,6 +1920,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
               onChange={handleStatusChange}
               options={QUOTE_STATUSES}
             />
+            {isSnap && <Badge tone="info">Snap</Badge>}
             <Badge tone={statusTone(workspace.currentRevision.status)}>{workspace.currentRevision.type ?? "Firm"}</Badge>
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-fg/40">
@@ -1908,7 +1984,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 <div className="fixed inset-0 z-40" onClick={() => setShowActions(false)} />
                 <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-line bg-panel shadow-lg py-1 text-xs">
                   <MenuSection label="PDF">
-                    <MenuItem onClick={() => handleAction("pdf")}>Generate PDF</MenuItem>
+                    <MenuItem onClick={() => handleAction("pdf")}>
+                      {isSnap && snapPdfDownloading ? "Generating PDF..." : "Generate PDF"}
+                    </MenuItem>
                   </MenuSection>
                   <MenuSection label="Actions">
                     <MenuItem onClick={() => handleAction("sendQuote")}>Send Quote</MenuItem>
@@ -1931,6 +2009,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       </div>
 
       {/* ─── Tab bar ─── */}
+      {!isSnap && (
       <div className="flex items-center gap-1 border-b border-line pb-px overflow-x-auto">
         {tabs.map((t) => {
           const Icon = t.icon;
@@ -1952,11 +2031,24 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           <WorkspaceSearch workspace={workspace} onNavigate={handleSearchNavigate} />
         </div>
       </div>
+      )}
 
       {error && <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       {/* ─── Tab Content ─── */}
       <div className="flex-1 min-h-0 flex flex-col">
+        {isSnap ? (
+          <SnapQuoteSheet
+            workspace={workspace}
+            snapLineLimit={snapLineLimit}
+            snapWorksheetId={snapWorksheetId}
+            onApply={apply}
+            onError={setError}
+            onRefresh={refreshWorkspace}
+            onUpgrade={handleUpgradeSnap}
+            isPending={isPending}
+          />
+        ) : (
         <AnimatePresence mode="wait">
           {tab === "setup" && (
             <motion.div key="setup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
@@ -2095,6 +2187,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </motion.div>
           )}
         </AnimatePresence>
+        )}
       </div>
 
       {/* ─── ALL MODALS ─── */}
@@ -2287,6 +2380,247 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       />
       )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function SnapQuoteSheet({
+  workspace,
+  snapLineLimit,
+  snapWorksheetId,
+  onApply,
+  onError,
+  onRefresh,
+  onUpgrade,
+  isPending,
+}: {
+  workspace: ProjectWorkspaceData;
+  snapLineLimit: number;
+  snapWorksheetId?: string;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
+  onError: (message: string) => void;
+  onRefresh: () => void;
+  onUpgrade: () => void;
+  isPending: boolean;
+}) {
+  const [title, setTitle] = useState(workspace.project.name);
+  const [customerId, setCustomerId] = useState(workspace.quote.customerId ?? "");
+  const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
+  const [location, setLocation] = useState(workspace.project.location);
+  const [description, setDescription] = useState(workspace.currentRevision.description ?? "");
+  const [dateDue, setDateDue] = useState(toDateInput(workspace.currentRevision.dateDue));
+  const [savingField, setSavingField] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCustomers()
+      .then((customers) => {
+        if (!cancelled) setCustomerOptions(customers);
+      })
+      .catch(() => {
+        if (!cancelled) setCustomerOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setTitle(workspace.project.name);
+    setCustomerId(workspace.quote.customerId ?? "");
+    setLocation(workspace.project.location);
+    setDescription(workspace.currentRevision.description ?? "");
+    setDateDue(toDateInput(workspace.currentRevision.dateDue));
+  }, [
+    workspace.project.name,
+    workspace.project.location,
+    workspace.quote.customerId,
+    workspace.currentRevision.description,
+    workspace.currentRevision.dateDue,
+  ]);
+
+  const inferredCustomer = useMemo(() => {
+    if (customerId) return customerOptions.find((customer) => customer.id === customerId) ?? null;
+    const clientLabel = (workspace.quote.customerString || workspace.project.clientName || "").trim().toLowerCase();
+    if (!clientLabel) return null;
+    return customerOptions.find((customer) => {
+      const name = customer.name.trim().toLowerCase();
+      const shortName = (customer.shortName || "").trim().toLowerCase();
+      return name === clientLabel || Boolean(shortName && shortName === clientLabel);
+    }) ?? null;
+  }, [customerId, customerOptions, workspace.project.clientName, workspace.quote.customerString]);
+
+  const customerPickerValue = customerId || inferredCustomer?.id || null;
+  const customerPickerOptions = useMemo(() => {
+    const keepId = inferredCustomer?.id ?? customerId;
+    return customerOptions
+      .filter((customer) => customer.active || customer.id === keepId)
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((customer) => ({
+        id: customer.id,
+        label: customer.name,
+        secondary: customer.shortName || undefined,
+      }));
+  }, [customerId, customerOptions, inferredCustomer?.id]);
+
+  async function saveProjectField(field: "name" | "location", value: string) {
+    const trimmed = value.trim();
+    if (field === "name" && (!trimmed || trimmed === workspace.project.name)) return;
+    if (field === "location" && trimmed === workspace.project.location) return;
+
+    setSavingField(field);
+    try {
+      onApply(await updateProject(workspace.project.id, { [field]: trimmed || "TBD" }));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  async function saveCustomer(nextCustomerId: string) {
+    const selectedCustomer = customerOptions.find((customer) => customer.id === nextCustomerId);
+    if (!selectedCustomer) return;
+
+    const alreadyLinked = nextCustomerId === (workspace.quote.customerId ?? "");
+    const alreadyNamed = selectedCustomer.name === workspace.quote.customerString && selectedCustomer.name === workspace.project.clientName;
+    if (alreadyLinked && alreadyNamed) return;
+
+    setCustomerId(nextCustomerId);
+    setSavingField("customerId");
+    try {
+      await updateQuote(workspace.project.id, {
+        customerExistingNew: "Existing",
+        customerId: selectedCustomer.id,
+        customerString: selectedCustomer.name,
+        customerContactId: null,
+        customerContactString: "",
+        customerContactEmailString: "",
+      });
+      await updateProject(workspace.project.id, { clientName: selectedCustomer.name });
+      onApply(await importAssignedRateSchedules(workspace.project.id));
+    } catch (error) {
+      setCustomerId(workspace.quote.customerId ?? "");
+      onError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  async function saveRevisionField(field: "description" | "dateDue", value: string) {
+    const currentValue = field === "dateDue"
+      ? toDateInput(workspace.currentRevision.dateDue)
+      : String(workspace.currentRevision[field] ?? "");
+    if (value === currentValue) return;
+
+    setSavingField(field);
+    try {
+      const patch = field === "dateDue"
+        ? { dateDue: fromDateInput(value) }
+        : { [field]: value };
+      onApply(await updateRevision(workspace.project.id, workspace.currentRevision.id, patch));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  const snapWorksheet = snapWorksheetId
+    ? workspace.worksheets.find((worksheet) => worksheet.id === snapWorksheetId)
+    : workspace.worksheets[0];
+  const saving = savingField !== null;
+
+  return (
+    <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-sm">
+          <div className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
+              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent/8 text-accent">
+                <Zap className="h-4 w-4" />
+              </span>
+              <input
+                className="h-9 min-w-0 flex-1 bg-transparent text-xl font-semibold tracking-normal text-fg outline-none placeholder:text-fg/25"
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                onBlur={() => saveProjectField("name", title)}
+                disabled={saving}
+                placeholder="Snap title"
+              />
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {savingField && (
+                <span className="text-[11px] text-fg/35">Saving...</span>
+              )}
+              <Button size="sm" variant="secondary" onClick={onUpgrade} disabled={isPending || saving}>
+                <FileText className="h-3 w-3" /> Upgrade to Quote
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid shrink-0 gap-4 border-b border-line px-5 py-3 md:grid-cols-3">
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-normal text-fg/40">Client</span>
+              <SearchablePicker
+                value={customerPickerValue}
+                onSelect={saveCustomer}
+                options={customerPickerOptions}
+                placeholder="Select client..."
+                searchPlaceholder="Search clients..."
+                emptyMessage="No clients found"
+                disabled={saving}
+                triggerClassName="h-9 rounded-lg bg-bg/50 px-3 text-sm"
+                width={420}
+              />
+            </div>
+            <label className="space-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-normal text-fg/40">Site</span>
+              <Input
+                value={location}
+                onChange={(event) => setLocation(event.target.value)}
+                onBlur={() => saveProjectField("location", location)}
+                disabled={saving}
+              />
+            </label>
+            <label className="space-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-normal text-fg/40">Valid Until</span>
+              <Input
+                type="date"
+                value={dateDue}
+                onChange={(event) => setDateDue(event.target.value)}
+                onBlur={() => saveRevisionField("dateDue", dateDue)}
+                disabled={saving}
+              />
+            </label>
+          </div>
+
+          <div className="shrink-0 border-b border-line px-5 py-3">
+            <label className="block space-y-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-normal text-fg/40">Scope</span>
+              <Textarea
+                className="h-16 resize-none overflow-auto"
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                onBlur={() => saveRevisionField("description", description)}
+                disabled={saving}
+                placeholder="Short customer-facing scope summary"
+              />
+            </label>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col border-b border-line px-5 py-3">
+            <EstimateGrid
+              workspace={workspace}
+              onApply={onApply}
+              onError={onError}
+              onRefresh={onRefresh}
+              variant="snap"
+              maxLineItems={snapLineLimit}
+              lockedWorksheetId={snapWorksheet?.id}
+            />
+          </div>
+      </div>
     </div>
   );
 }
