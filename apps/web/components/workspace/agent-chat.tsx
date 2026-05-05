@@ -14,6 +14,7 @@ import {
   getCliPendingQuestion, answerCliQuestion,
   getProjectWorkspace,
   listPersonas, type EstimatorPersona,
+  resolveApiUrl,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
@@ -126,7 +127,6 @@ interface IntakeStatusResult {
 
 // Helpers
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4001";
 const bidwrightOpenUILibrary = createLibrary({
   components: Object.values((openuiLibrary as any).components || {}) as any,
   componentGroups: (openuiLibrary as any).componentGroups,
@@ -2558,7 +2558,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     let active = true;
     const poll = async () => {
       try {
-        const res = await fetch(`${API_BASE}/projects/${projectId}/ingestion-status`, {
+        const res = await fetch(resolveApiUrl(`/projects/${projectId}/ingestion-status`), {
           headers: authHeaders(),
           credentials: "include",
         });
