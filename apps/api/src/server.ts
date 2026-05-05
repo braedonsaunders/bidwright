@@ -11,6 +11,15 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
+import {
+  DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  ingestCustomerPackage,
+  isAzureDocumentIntelligenceModel,
+  normalizeAzureDocumentIntelligenceFeatures,
+  parseAzureDocumentIntelligenceQueryFields,
+  type AzureDocumentIntelligenceModel,
+  type DocumentExtractionProvider,
+} from "@bidwright/ingestion";
 
 import {
   type PrismaApiStore,
@@ -104,6 +113,8 @@ import {
 } from "./services/ai-service.js";
 import { executePluginSearchDataSource } from "./services/plugin-search-data-source.js";
 import { knowledgeService } from "./services/knowledge-service.js";
+import { documentTypeFromIngestion } from "./calc-utils.js";
+import { inferPageCount, knowledgeCategoryFromDocType } from "./store/mappers.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
@@ -2234,13 +2245,170 @@ export function buildServer() {
       .join("/");
     const displayName = folderPath ? `${folderPath}/${safeName}` : safeName;
 
+    const uploadedChecksum = createHash("sha256").update(fileBuffer).digest("hex");
+    const ingestionJobId = `job-${randomUUID()}`;
+    const startedAt = new Date();
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { ingestionStatus: "processing", updatedAt: startedAt },
+    }).catch(() => {});
+    await prisma.ingestionJob.create({
+      data: {
+        id: ingestionJobId,
+        projectId,
+        kind: "package_ingest",
+        status: "processing",
+        progress: 25,
+        input: {
+          source: "manual_document_upload",
+          fileName: displayName,
+          storagePath: relPath,
+          checksum: uploadedChecksum,
+          totalBytes: fileBuffer.byteLength,
+        } as any,
+        output: {
+          stage: "document",
+          message: `Extracting ${displayName}`,
+          documentProgress: [{
+            id: `upload-${ingestionJobId}`,
+            fileName: displayName,
+            sourcePath: displayName,
+            fileType: fileExt,
+            size: fileBuffer.byteLength,
+            status: "extracting",
+            stage: "Extracting text",
+            progress: 0.25,
+            updatedAt: startedAt.toISOString(),
+          }],
+        } as any,
+        createdAt: startedAt,
+        updatedAt: startedAt,
+        startedAt,
+      },
+    }).catch(() => {});
+
+    let extractedText = "";
+    let structuredData: Record<string, unknown> | null = null;
+    let pageCount = 0;
+    let inferredDocumentType: string = "reference";
+    let extractionError: string | null = null;
+
+    try {
+      const settings = await request.store!.getSettings();
+      const integrations = settings.integrations ?? {} as any;
+      const documentExtractionProviderRaw = integrations.documentExtractionProvider;
+      const documentExtractionProvider = typeof documentExtractionProviderRaw === "string" && ["azure", "local", "auto"].includes(documentExtractionProviderRaw)
+        ? documentExtractionProviderRaw as DocumentExtractionProvider
+        : "azure";
+      const azureModelRaw = integrations.azureDiModel;
+      const azureModel: AzureDocumentIntelligenceModel = isAzureDocumentIntelligenceModel(azureModelRaw)
+        ? azureModelRaw
+        : "prebuilt-layout";
+      const azureConfig = (integrations.azureDiEndpoint || integrations.azureDiKey)
+        ? {
+            endpoint: integrations.azureDiEndpoint,
+            key: integrations.azureDiKey,
+            model: azureModel,
+            features: normalizeAzureDocumentIntelligenceFeatures(
+              integrations.azureDiFeatures,
+              DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+            ),
+            queryFields: parseAzureDocumentIntelligenceQueryFields(integrations.azureDiQueryFields),
+            outputContentFormat: integrations.azureDiOutputFormat === "markdown" ? "markdown" as const : "text" as const,
+          }
+        : undefined;
+
+      const zip = new JSZip();
+      zip.file(displayName, fileBuffer);
+      const zipBuffer = await zip.generateAsync({ type: "nodebuffer" });
+      const report = await ingestCustomerPackage({
+        packageId: `manual-${ingestionJobId}`,
+        packageName: displayName,
+        sourceKind: "project",
+        zipInput: zipBuffer,
+      }, { azureConfig, documentExtractionProvider });
+      const extractedDocument = report.documents[0];
+      if (extractedDocument) {
+        extractedText = extractedDocument.text?.replace(/\0/g, "") ?? "";
+        structuredData = extractedDocument.structuredData ? JSON.parse(JSON.stringify(extractedDocument.structuredData).replace(/\0/g, "")) : null;
+        pageCount = inferPageCount(extractedDocument, report.chunks);
+        inferredDocumentType = documentTypeFromIngestion(extractedDocument.kind);
+      }
+    } catch (err) {
+      extractionError = err instanceof Error ? err.message : String(err);
+    }
+
+    const requestedDocumentType = (fields.documentType || "").trim();
+    const documentType = requestedDocumentType && requestedDocumentType !== "reference"
+      ? requestedDocumentType
+      : inferredDocumentType;
     const document = await request.store!.createSourceDocument(projectId, {
       fileName: displayName,
       fileType: fileExt,
-      documentType: fields.documentType || "reference",
-      checksum: createHash("sha256").update(fileBuffer).digest("hex"),
+      documentType,
+      pageCount,
+      checksum: uploadedChecksum,
       storagePath: relPath,
+      extractedText,
+      structuredData,
     });
+
+    const organizationId = request.user?.organizationId;
+    if (extractedText.trim() && organizationId) {
+      void knowledgeService.ingestDocument({
+        content: extractedText,
+        title: displayName,
+        category: knowledgeCategoryFromDocType(documentType),
+        scope: "project",
+        projectId,
+        organizationId,
+        options: { chunkStrategy: "section-aware" },
+      }, request.store!).catch((err: unknown) => {
+        request.log.warn({ err }, `Vector indexing failed for uploaded document ${displayName}`);
+      });
+    }
+
+    const completedAt = new Date();
+    await prisma.ingestionJob.update({
+      where: { id: ingestionJobId },
+      data: {
+        status: extractionError ? "failed" : "complete",
+        progress: 100,
+        output: {
+          source: "manual_document_upload",
+          documentId: document.id,
+          documentCount: 1,
+          stage: extractionError ? "failed" : "complete",
+          message: extractionError
+            ? `Uploaded ${displayName}, but text extraction failed: ${extractionError}`
+            : `Prepared ${displayName}`,
+          documentProgress: [{
+            id: document.id,
+            fileName: displayName,
+            sourcePath: displayName,
+            fileType: fileExt,
+            size: fileBuffer.byteLength,
+            status: extractionError ? "failed" : "complete",
+            stage: extractionError ? "Failed" : "Ready",
+            progress: 1,
+            documentType,
+            pageCount,
+            error: extractionError,
+            updatedAt: completedAt.toISOString(),
+          }],
+        } as any,
+        error: extractionError,
+        updatedAt: completedAt,
+        completedAt,
+      },
+    }).catch(() => {});
+    await prisma.project.update({
+      where: { id: projectId },
+      data: {
+        ingestionStatus: "review",
+        updatedAt: completedAt,
+      },
+    }).catch(() => {});
 
     reply.code(201);
     return document;
