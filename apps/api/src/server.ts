@@ -1656,9 +1656,14 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     };
   }
 
-  // Sync customerId to the Quote so the client dropdown is populated on the quote page
+  // Sync customerId so the project's clientName + quote's customer fields are
+  // populated. Run on both the new-project path (where createProject's
+  // resolveCustomerSelection is the primary applier but can be bypassed if
+  // the customerId is missing from CreateProjectInput) and the existing-
+  // project upload path. assignProjectCustomer is idempotent against a
+  // customer that is already correctly assigned.
   const ingestCustomerId = multipartUpload.fields.customerId?.trim();
-  if (ingestCustomerId && projectId) {
+  if (ingestCustomerId) {
     await store.assignProjectCustomer(targetProjectId, ingestCustomerId);
   }
 
