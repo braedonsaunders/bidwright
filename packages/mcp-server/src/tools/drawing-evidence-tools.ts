@@ -1665,7 +1665,7 @@ function scoreRegion(region: DrawingRegion, query: string, regionTypes?: string[
 }
 
 function snippetFor(region: DrawingRegion, query: string) {
-  const text = region.text.replace(/\s+/g, " ").trim();
+  const text = String(region.text ?? "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   const terms = expandQueryTerms(query);
   const lower = text.toLowerCase();
