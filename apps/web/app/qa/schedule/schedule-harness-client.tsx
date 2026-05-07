@@ -78,7 +78,6 @@ function buildHarnessWorkspace(): ProjectWorkspaceData {
       freightOnBoard: "",
       status: "Open",
       defaultMarkup: 0,
-      laborDifficulty: "",
       followUpNote: "",
       printEmptyNotesColumn: false,
       printCategory: [],
@@ -523,6 +522,27 @@ export function ScheduleHarnessClient() {
 
   const api = useMemo(
     () => ({
+      async getProjectWorkspace() {
+        return responseRef.current;
+      },
+      async getScheduleImportCandidates() {
+        return { candidates: [] };
+      },
+      async importProjectSchedule() {
+        return {
+          imported: {
+            parser: "mspdi" as const,
+            sourceKind: "file_node" as const,
+            sourceId: "qa-schedule-source",
+            fileName: "qa-schedule.xml",
+            taskCount: responseRef.current.workspace.scheduleTasks.length,
+            dependencyCount: responseRef.current.workspace.scheduleDependencies.length,
+            resourceCount: responseRef.current.workspace.scheduleResources.length,
+            assignmentCount: responseRef.current.workspace.scheduleTaskAssignments.length,
+            warnings: ["QA harness does not import external schedule files."],
+          },
+        };
+      },
       async createScheduleTask(projectId: string, input: CreateScheduleTaskInput) {
         const workspace = responseRef.current.workspace;
         const id = `task-${(idCounter.current += 1)}`;

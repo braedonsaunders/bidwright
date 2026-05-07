@@ -15,11 +15,17 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { inspectFileIngest, type FileIngestManifestResponse } from "@/lib/api";
 
 interface ZipViewerProps {
   url: string;
   fileName: string;
+  projectId?: string;
+  sourceKind?: "source_document" | "file_node";
+  sourceId?: string;
 }
+
+type ArchiveManifest = NonNullable<FileIngestManifestResponse["manifest"]["archive"]>;
 
 interface TreeNode {
   name: string;
@@ -185,8 +191,114 @@ function TreeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   );
 }
 
-export function ZipViewer({ url, fileName }: ZipViewerProps) {
+function buildManifestTree(entries: ArchiveManifest["entries"]): TreeNode[] {
+  const root: TreeNode[] = [];
+  const nodeMap = new Map<string, TreeNode>();
+
+  function ensureDir(pathParts: string[]): TreeNode {
+    const key = pathParts.join("/");
+    const existing = nodeMap.get(key);
+    if (existing) return existing;
+
+    const node: TreeNode = {
+      name: pathParts[pathParts.length - 1],
+      path: key,
+      isDir: true,
+      size: 0,
+      children: [],
+    };
+    nodeMap.set(key, node);
+    if (pathParts.length === 1) {
+      root.push(node);
+    } else {
+      ensureDir(pathParts.slice(0, -1)).children.push(node);
+    }
+    return node;
+  }
+
+  for (const entry of [...entries].sort((a, b) => a.path.localeCompare(b.path))) {
+    const parts = entry.path.split("/").filter(Boolean);
+    if (parts.length === 0) continue;
+    const fileNode: TreeNode = {
+      name: parts[parts.length - 1],
+      path: entry.path,
+      isDir: false,
+      size: entry.size,
+      children: [],
+    };
+    if (parts.length === 1) {
+      root.push(fileNode);
+    } else {
+      ensureDir(parts.slice(0, -1)).children.push(fileNode);
+    }
+  }
+
+  function sortNodes(nodes: TreeNode[]) {
+    nodes.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const node of nodes) {
+      if (node.isDir) sortNodes(node.children);
+    }
+  }
+  sortNodes(root);
+  return root;
+}
+
+function ManifestTreeItem({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
+  const [expanded, setExpanded] = useState(depth < 2);
+
+  if (node.isDir) {
+    return (
+      <div>
+        <button
+          className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-sm transition-colors hover:bg-panel"
+          style={{ paddingLeft: `${depth * 16 + 8}px` }}
+          onClick={() => setExpanded(!expanded)}
+          type="button"
+        >
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-text-secondary" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-text-secondary" />
+          )}
+          {expanded ? (
+            <FolderOpen className="h-4 w-4 flex-shrink-0 text-yellow-500" />
+          ) : (
+            <Folder className="h-4 w-4 flex-shrink-0 text-yellow-500" />
+          )}
+          <span className="truncate text-text-primary">{node.name}</span>
+          <span className="ml-auto text-xs text-text-secondary">
+            {node.children.length} item{node.children.length !== 1 ? "s" : ""}
+          </span>
+        </button>
+        {expanded && (
+          <div>
+            {node.children.map((child) => (
+              <ManifestTreeItem key={child.path} node={child} depth={depth + 1} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-1.5 rounded px-2 py-1 text-sm transition-colors hover:bg-panel"
+      style={{ paddingLeft: `${depth * 16 + 24}px` }}
+    >
+      <FileText className="h-4 w-4 flex-shrink-0 text-text-secondary" />
+      <span className="truncate text-text-primary">{node.name}</span>
+      <span className="ml-auto text-xs text-text-secondary">{formatFileSize(node.size)}</span>
+    </div>
+  );
+}
+
+export function ZipViewer({ url, fileName, projectId, sourceKind, sourceId }: ZipViewerProps) {
   const [files, setFiles] = useState<Record<string, Uint8Array> | null>(null);
+  const [manifest, setManifest] = useState<ArchiveManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -198,6 +310,18 @@ export function ZipViewer({ url, fileName }: ZipViewerProps) {
       setError(null);
 
       try {
+        if (projectId && sourceKind && sourceId) {
+          const result = await inspectFileIngest(projectId, { sourceKind, sourceId });
+          if (cancelled) return;
+          const archiveManifest = result.manifest.archive;
+          if (!archiveManifest) {
+            throw new Error("No archive manifest was produced for this file.");
+          }
+          setManifest(archiveManifest);
+          setFiles(null);
+          return;
+        }
+
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to fetch archive: ${response.statusText}`);
 
@@ -229,17 +353,18 @@ export function ZipViewer({ url, fileName }: ZipViewerProps) {
 
     loadZip();
     return () => { cancelled = true; };
-  }, [url]);
+  }, [url, projectId, sourceKind, sourceId]);
 
   const tree = useMemo(() => {
+    if (manifest) return buildManifestTree(manifest.entries);
     if (!files) return [];
     return buildTree(files);
-  }, [files]);
+  }, [files, manifest]);
 
-  const totalFiles = files ? Object.keys(files).filter((p) => !p.endsWith("/")).length : 0;
+  const totalFiles = manifest?.entryCount ?? (files ? Object.keys(files).filter((p) => !p.endsWith("/")).length : 0);
   const totalSize = files
     ? Object.values(files).reduce((sum, data) => sum + data.byteLength, 0)
-    : 0;
+    : manifest?.totalUncompressedSize ?? 0;
 
   if (error) {
     return (
@@ -268,6 +393,11 @@ export function ZipViewer({ url, fileName }: ZipViewerProps) {
       <div className="flex items-center gap-2 border-b border-line px-4 py-2">
         <Archive className="h-4 w-4 text-text-secondary" />
         <span className="text-sm font-medium text-text-primary truncate">{fileName}</span>
+        {manifest?.encrypted && (
+          <span className="rounded bg-yellow-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-yellow-600">
+            Encrypted
+          </span>
+        )}
         <span className="text-xs text-text-secondary ml-auto">
           {totalFiles} file{totalFiles !== 1 ? "s" : ""} | {formatFileSize(totalSize)}
         </span>
@@ -277,6 +407,8 @@ export function ZipViewer({ url, fileName }: ZipViewerProps) {
       <div className="flex-1 overflow-auto p-2">
         {tree.length === 0 ? (
           <p className="text-sm text-text-secondary text-center py-8">Empty archive</p>
+        ) : manifest ? (
+          tree.map((node) => <ManifestTreeItem key={node.path} node={node} />)
         ) : (
           tree.map((node) => <TreeItem key={node.path} node={node} />)
         )}

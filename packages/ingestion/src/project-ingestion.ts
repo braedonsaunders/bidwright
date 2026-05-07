@@ -24,9 +24,9 @@ import { parseFile } from './file-handlers.js';
 
 const PDF_EXTENSIONS = new Set(['pdf']);
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'xml', 'yml', 'yaml', 'log', 'ini', 'toml', 'conf']);
-const EXCEL_EXTENSIONS = new Set(['xlsx', 'xls', 'csv', 'tsv']);
+const EXCEL_EXTENSIONS = new Set(['xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv']);
 const LOCAL_HANDLER_EXTENSIONS = new Set([
-  'xlsx', 'xls', 'csv', 'tsv',
+  'xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv',
   'docx', 'doc', 'rtf',
   'pptx',
   'html', 'htm', 'mhtml', 'mht',

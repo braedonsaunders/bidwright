@@ -52,6 +52,7 @@ interface DocumentationTabProps {
   highlightDocumentId?: string;
   selectedWorksheet?: FileBrowserProps["selectedWorksheet"];
   modelEditorChannelName?: string;
+  onOpenInTakeoff?: FileBrowserProps["onOpenInTakeoff"];
 }
 
 /* ─── Sub-tab config ─── */
@@ -73,6 +74,7 @@ export function DocumentationTab({
   highlightDocumentId,
   selectedWorksheet,
   modelEditorChannelName,
+  onOpenInTakeoff,
 }: DocumentationTabProps) {
   const [activeTab, setActiveTab] = useState<SubTab>("knowledge");
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +126,7 @@ export function DocumentationTab({
             packages={packages}
             selectedWorksheet={selectedWorksheet}
             modelEditorChannelName={modelEditorChannelName}
+            onOpenInTakeoff={onOpenInTakeoff}
           />
         )}
         {activeTab === "schedule" && (

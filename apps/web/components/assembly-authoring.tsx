@@ -621,7 +621,6 @@ export function ComponentsEditor({
         }
         payload.laborUnitId = draftRef;
         payload.rateScheduleItemId = draftLaborRateRef;
-        payload.laborDifficulty = "normal";
       }
       else if (draftType === "cost_intelligence") {
         const cost = effectiveCosts.find((candidate) => candidate.id === draftRef);
@@ -983,17 +982,6 @@ function ComponentRow({
         {isLaborUnit && "rateName" in reference && (
           <div className="flex min-w-0 items-center gap-2">
             <div className="min-w-0 flex-1 truncate text-[10px] text-fg/35">Rate: {reference.rateName}</div>
-            <div className="w-28 shrink-0">
-              <CompactSelect
-                value={component.laborDifficulty ?? "normal"}
-                onValueChange={(value) => onPatch({ laborDifficulty: value as AssemblyComponentRecord["laborDifficulty"] })}
-                options={[
-                  { value: "normal", label: "Normal" },
-                  { value: "difficult", label: "Difficult" },
-                  { value: "very_difficult", label: "Very Diff." },
-                ]}
-              />
-            </div>
           </div>
         )}
         {isSubAssembly && parameters.length === 0 && component.parameterBindings && Object.keys(component.parameterBindings).length === 0 && (

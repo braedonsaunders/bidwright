@@ -117,6 +117,13 @@ import {
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma } from "@bidwright/db";
 import { decodeHtmlEntities } from "./text-utils.js";
+import {
+  attachNativePdfMetadata,
+  choosePdfPageCount,
+  getNativePdfPageCountFromBuffer,
+  getNativePdfPageCountFromFile,
+  isPdfFileNameOrType,
+} from "./services/pdf-native-service.js";
 
 import {
   apiDataRoot,
@@ -308,6 +315,20 @@ function resolveTierUnitKeys(
     resolved[key] = numVal;
   }
   return resolved;
+}
+
+function hasPositiveTierUnits(tierUnits: Record<string, number> | null | undefined) {
+  return !!tierUnits && Object.values(tierUnits).some((value) => Number(value) > 0);
+}
+
+function categoryRequiresRateScheduleItem(category: { itemSource?: string | null; calculationType?: string | null } | null | undefined) {
+  const calcType = normalizeCalculationType(category?.calculationType ?? "manual");
+  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
+}
+
+function categoryOwnsCalculatedPricing(category: { itemSource?: string | null; calculationType?: string | null } | null | undefined) {
+  const calcType = normalizeCalculationType(category?.calculationType ?? "manual");
+  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate" || calcType === "formula";
 }
 
 /**
@@ -630,7 +651,6 @@ export interface RevisionPatchInput {
   freightOnBoard?: string;
   status?: QuoteRevision["status"];
   defaultMarkup?: number;
-  laborDifficulty?: string;
   followUpNote?: string;
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
@@ -695,9 +715,9 @@ export interface CreateWorksheetItemInput {
   description: string;
   quantity: number;
   uom: string;
-  cost: number;
-  markup: number;
-  price: number;
+  cost?: number;
+  markup?: number;
+  price?: number;
   lineOrder?: number;
   rateScheduleItemId?: string | null;
   itemId?: string | null;
@@ -1181,9 +1201,6 @@ export interface CreateLaborUnitInput {
   subClassName?: string;
   outputUom?: string;
   hoursNormal: number;
-  hoursDifficult?: number | null;
-  hoursVeryDifficult?: number | null;
-  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
   entityCategoryType?: string;
   tags?: string[];
   sourceRef?: Record<string, unknown>;
@@ -1202,9 +1219,6 @@ export interface LaborUnitPatchInput {
   subClassName?: string;
   outputUom?: string;
   hoursNormal?: number;
-  hoursDifficult?: number | null;
-  hoursVeryDifficult?: number | null;
-  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
   entityCategoryType?: string;
   tags?: string[];
   sourceRef?: Record<string, unknown>;
@@ -1224,6 +1238,22 @@ export interface LaborUnitTreeGroup {
   subClassName: string;
   unitCount: number;
   normalHoursTotal: number;
+  search?: {
+    score: number;
+    matchedUnitCount: number;
+    matchedTerms: string[];
+    matchedPhrases: string[];
+    representativeUnits: Array<{
+      id: string;
+      code: string;
+      name: string;
+      category: string;
+      className: string;
+      subClassName: string;
+      outputUom: string;
+      hoursNormal: number;
+    }>;
+  };
 }
 
 export interface LaborUnitTreeInput {
@@ -1280,7 +1310,6 @@ export interface AssemblyComponentInput {
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
   laborUnitId?: string | null;
-  laborDifficulty?: "normal" | "difficult" | "very_difficult";
   costResourceId?: string | null;
   effectiveCostId?: string | null;
   subAssemblyId?: string | null;
@@ -1300,7 +1329,6 @@ export interface AssemblyComponentPatchInput {
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
   laborUnitId?: string | null;
-  laborDifficulty?: "normal" | "difficult" | "very_difficult";
   costResourceId?: string | null;
   effectiveCostId?: string | null;
   subAssemblyId?: string | null;
@@ -1551,6 +1579,326 @@ function expandLineItemFtsQuery(value: string) {
   return value
     .replace(/\blabor\b/gi, "labor OR labour")
     .replace(/\blabour\b/gi, "labour OR labor");
+}
+
+const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
+  "catalog_item",
+  "rate_schedule_item",
+  "labor_unit",
+  "effective_cost",
+  "assembly",
+  "plugin_tool",
+  "external_action",
+];
+
+type SearchProfileTerm = {
+  token: string;
+  variants: string[];
+  weight: number;
+  isAnchor: boolean;
+};
+
+type SearchProfile = {
+  raw: string;
+  terms: SearchProfileTerm[];
+  phrases: string[];
+  anchorCount: number;
+  totalWeight: number;
+};
+
+type RankedSearchEntry<T> = {
+  item: T;
+  score: number;
+  matchedTerms: string[];
+  matchedPhrases: string[];
+  coverage: number;
+  anchorMatches: number;
+};
+
+interface SearchDiagnostics {
+  query: string;
+  scoring: "generic_idf_weighted";
+  scoredRows: number;
+  scoredRowsCapped: boolean;
+  terms: Array<{
+    token: string;
+    variants: string[];
+    weight: number;
+    matchedRows: number;
+    corpusShare: number;
+  }>;
+  querySlices: Array<{
+    query: string;
+    tokens: string[];
+    matchedRows: number;
+    corpusShare: number;
+  }>;
+}
+
+const ESTIMATE_SEARCH_STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from", "in", "into", "is", "it",
+  "of", "on", "or", "per", "the", "to", "with", "without", "work", "scope", "item", "items", "unit",
+  "units", "basis", "price", "pricing", "cost", "costs", "estimate", "estimated", "labor", "labour",
+]);
+
+function normalizeEstimatorSearchText(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function estimatorSearchTokens(value: unknown) {
+  const normalized = normalizeEstimatorSearchText(value);
+  if (!normalized) return [];
+  return normalized
+    .split(" ")
+    .filter((token) => token.length > 1 && !ESTIMATE_SEARCH_STOPWORDS.has(token));
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function singularPluralVariants(token: string) {
+  if (token.endsWith("ies") && token.length > 4) return [token, `${token.slice(0, -3)}y`];
+  if (token.endsWith("s") && token.length > 3) return [token, token.slice(0, -1)];
+  return [token, `${token}s`];
+}
+
+function estimatorSearchVariants(token: string) {
+  return uniqueStrings(singularPluralVariants(token));
+}
+
+function estimatorSearchTermWeight(token: string) {
+  if (/\d/.test(token)) return 2;
+  if (token.length >= 8) return 1.5;
+  return 1;
+}
+
+function buildEstimatorSearchProfile(query: string): SearchProfile {
+  const raw = normalizeEstimatorSearchText(query);
+  const tokens = estimatorSearchTokens(query);
+  const terms = uniqueStrings(tokens).map((token) => {
+    const weight = estimatorSearchTermWeight(token);
+    return {
+      token,
+      variants: estimatorSearchVariants(token),
+      weight,
+      isAnchor: weight >= 2 || /\d/.test(token),
+    };
+  });
+  const phrases: string[] = [];
+  for (const width of [3, 2]) {
+    for (let index = 0; index <= tokens.length - width; index += 1) {
+      const phrase = tokens.slice(index, index + width).join(" ");
+      if (phrase.length >= 6) phrases.push(phrase);
+    }
+  }
+  return {
+    raw,
+    terms,
+    phrases: uniqueStrings(phrases),
+    anchorCount: terms.filter((term) => term.isAnchor).length,
+    totalWeight: terms.reduce((sum, term) => sum + term.weight, 0),
+  };
+}
+
+function estimatorTermMatches(haystack: string, term: SearchProfileTerm) {
+  return term.variants.some((variant) => haystack.includes(variant));
+}
+
+function scoreEstimatorSearchText(profile: SearchProfile, textValue: unknown, headingValue: unknown = "") {
+  const haystack = normalizeEstimatorSearchText(textValue);
+  const heading = normalizeEstimatorSearchText(headingValue);
+  if (!haystack && !heading) return null;
+
+  let score = 0;
+  let matchedWeight = 0;
+  let anchorMatches = 0;
+  const matchedTerms: string[] = [];
+  const matchedPhrases: string[] = [];
+  const combined = `${heading} ${haystack}`.trim();
+
+  for (const term of profile.terms) {
+    const inBody = estimatorTermMatches(combined, term);
+    if (!inBody) continue;
+    const inHeading = heading ? estimatorTermMatches(heading, term) : false;
+    const termScore = term.weight * (inHeading ? 2.2 : 1);
+    score += termScore;
+    matchedWeight += term.weight;
+    matchedTerms.push(term.token);
+    if (term.isAnchor) anchorMatches += 1;
+  }
+
+  for (const phrase of profile.phrases) {
+    if (combined.includes(phrase)) {
+      matchedPhrases.push(phrase);
+      score += phrase.split(" ").length * 1.5;
+    }
+  }
+
+  if (profile.raw && combined.includes(profile.raw)) score += 8;
+
+  const coverage = profile.totalWeight > 0 ? matchedWeight / profile.totalWeight : 0;
+  if (score <= 0) return null;
+
+  return {
+    score,
+    matchedTerms,
+    matchedPhrases,
+    coverage,
+    anchorMatches,
+  };
+}
+
+function rankEstimatorSearchItems<T>(
+  items: T[],
+  profile: SearchProfile,
+  getText: (item: T) => unknown,
+  getHeading: (item: T) => unknown = () => "",
+): Array<RankedSearchEntry<T>> {
+  return items
+    .map((item) => {
+      const match = scoreEstimatorSearchText(profile, getText(item), getHeading(item));
+      return match ? { item, ...match } : null;
+    })
+    .filter((entry): entry is RankedSearchEntry<T> => entry !== null)
+    .sort((left, right) =>
+      right.score - left.score ||
+      right.coverage - left.coverage ||
+      right.anchorMatches - left.anchorMatches
+    );
+}
+
+function reweightSearchProfileForCorpus<T>(profile: SearchProfile, items: T[], getText: (item: T) => unknown): SearchProfile {
+  if (items.length === 0 || profile.terms.length === 0) return profile;
+  const texts = items.map((item) => normalizeEstimatorSearchText(getText(item)));
+  const terms = profile.terms.map((term) => {
+    const matchedRows = texts.reduce((count, text) => count + Number(estimatorTermMatches(text, term)), 0);
+    const idf = Math.log((items.length + 1) / (matchedRows + 1)) + 1;
+    return {
+      ...term,
+      weight: Number((term.weight * Math.max(0.25, Math.min(8, idf))).toFixed(4)),
+    };
+  });
+  return {
+    ...profile,
+    terms,
+    totalWeight: terms.reduce((sum, term) => sum + term.weight, 0),
+  };
+}
+
+function buildSearchDiagnostics<T>(
+  query: string,
+  profile: SearchProfile,
+  items: T[],
+  rowsCap: number,
+  getText: (item: T) => unknown,
+): SearchDiagnostics {
+  const texts = items.map((item) => normalizeEstimatorSearchText(getText(item)));
+  const matchedRowsForTerms = (terms: SearchProfileTerm[]) =>
+    texts.reduce((count, text) => count + Number(terms.every((term) => estimatorTermMatches(text, term))), 0);
+  const termDiagnostics = profile.terms.map((term) => {
+    const matchedRows = matchedRowsForTerms([term]);
+    return {
+      token: term.token,
+      variants: term.variants,
+      weight: Number(term.weight.toFixed(4)),
+      matchedRows,
+      corpusShare: items.length > 0 ? Number((matchedRows / items.length).toFixed(4)) : 0,
+    };
+  });
+  const termByToken = new Map(profile.terms.map((term) => [term.token, term]));
+  const sliceTokens: string[][] = [];
+  const tokens = profile.terms.map((term) => term.token);
+  for (const width of [3, 2]) {
+    for (let index = 0; index <= tokens.length - width; index += 1) {
+      sliceTokens.push(tokens.slice(index, index + width));
+    }
+  }
+  for (const token of tokens) sliceTokens.push([token]);
+  const seen = new Set<string>();
+  const querySlices = sliceTokens
+    .map((slice) => slice.filter((token) => termByToken.has(token)))
+    .filter((slice) => slice.length > 0)
+    .filter((slice) => {
+      const key = slice.join(" ");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((slice) => {
+      const sliceTerms = slice.map((token) => termByToken.get(token)).filter((term): term is SearchProfileTerm => !!term);
+      const matchedRows = matchedRowsForTerms(sliceTerms);
+      return {
+        query: slice.join(" "),
+        tokens: slice,
+        matchedRows,
+        corpusShare: items.length > 0 ? Number((matchedRows / items.length).toFixed(4)) : 0,
+      };
+    })
+    .sort((left, right) =>
+      right.tokens.length - left.tokens.length ||
+      left.matchedRows - right.matchedRows ||
+      left.query.localeCompare(right.query),
+    )
+    .slice(0, 20);
+  return {
+    query,
+    scoring: "generic_idf_weighted",
+    scoredRows: items.length,
+    scoredRowsCapped: items.length >= rowsCap,
+    terms: termDiagnostics,
+    querySlices,
+  };
+}
+
+function laborUnitSearchOrFilters(terms: string[]) {
+  return uniqueStrings(terms).flatMap((term) => [
+    { code: { contains: term, mode: "insensitive" } },
+    { name: { contains: term, mode: "insensitive" } },
+    { description: { contains: term, mode: "insensitive" } },
+    { discipline: { contains: term, mode: "insensitive" } },
+    { category: { contains: term, mode: "insensitive" } },
+    { className: { contains: term, mode: "insensitive" } },
+    { subClassName: { contains: term, mode: "insensitive" } },
+  ]);
+}
+
+function laborUnitSearchText(unit: any) {
+  return searchTextFromParts([
+    unit.name,
+    unit.code,
+    unit.description,
+    unit.discipline,
+    unit.category,
+    unit.className,
+    unit.subClassName,
+    unit.outputUom,
+    unit.tags,
+    unit.metadata,
+    unit.library?.name,
+    unit.library?.provider,
+    unit.library?.description,
+  ]);
+}
+
+function laborUnitHeadingText(unit: any) {
+  return searchTextFromParts([unit.name, unit.code, unit.category, unit.className, unit.subClassName]);
+}
+
+function blendLineItemSearchResults(
+  ranked: LineItemSearchResult[],
+  profile: SearchProfile,
+  requestedSourceTypes: LineItemSearchSourceType[],
+  limit: number,
+  offset: number,
+) {
+  void profile;
+  void requestedSourceTypes;
+  return ranked.slice(offset, offset + limit);
 }
 
 function firstPluginSearchField(tool: { ui?: { sections?: Array<{ fields?: Array<Record<string, any>> }> } }) {
@@ -2137,9 +2485,6 @@ export class PrismaApiStore {
             'catalogItemId', lu."catalogItemId",
             'description', lu."description",
             'hoursNormal', lu."hoursNormal",
-            'hoursDifficult', lu."hoursDifficult",
-            'hoursVeryDifficult', lu."hoursVeryDifficult",
-            'defaultDifficulty', lu."defaultDifficulty",
             'resourceComposition', jsonb_build_object(
               'source', 'labor_unit',
               'resources', jsonb_build_array(jsonb_build_object(
@@ -2147,17 +2492,14 @@ export class PrismaApiStore {
                 'laborUnitId', lu."id",
                 'catalogItemId', lu."catalogItemId",
                 'uom', lu."outputUom",
-                'hoursNormal', lu."hoursNormal",
-                'hoursDifficult', lu."hoursDifficult",
-                'hoursVeryDifficult', lu."hoursVeryDifficult"
+                'hoursNormal', lu."hoursNormal"
               ))
             ),
             'sourceEvidence', jsonb_build_object(
               'source', 'labor_unit',
               'laborUnitId', lu."id",
               'libraryId', lu."libraryId",
-              'libraryProvider', lib."provider",
-              'defaultDifficulty', lu."defaultDifficulty"
+              'libraryProvider', lib."provider"
             )
           ),
           CURRENT_TIMESTAMP,
@@ -2276,6 +2618,17 @@ export class PrismaApiStore {
 
     const q = input.q?.trim() ?? "";
     const ftsQuery = expandLineItemFtsQuery(q);
+    const searchProfile = q ? buildEstimatorSearchProfile(q) : null;
+    const tokenLikePatterns = searchProfile?.terms.length
+      ? uniqueStrings(
+          searchProfile.terms
+            .slice()
+            .sort((left, right) => right.weight - left.weight)
+            .slice(0, 10)
+            .flatMap((term) => term.variants.slice(0, 3))
+            .map((term) => `%${term}%`),
+        )
+      : [];
     const preferredCategory = input.preferredCategory?.trim() ?? "";
     const sourceTypes = input.sourceTypes ?? [];
     const disabledSourceTypes = input.disabledSourceTypes ?? [];
@@ -2283,6 +2636,16 @@ export class PrismaApiStore {
     const disabledCatalogIds = input.disabledCatalogIds ?? [];
     const limit = Math.min(100, Math.max(1, input.limit ?? 60));
     const offset = Math.max(0, Math.floor(input.offset ?? 0));
+    const searchableSourceTypes = (sourceTypes.length > 0 ? sourceTypes : LINE_ITEM_SEARCH_SOURCE_TYPES)
+      .filter((sourceType) => !disabledSourceTypes.includes(sourceType));
+    const sourceTypeCount = Math.max(1, new Set(searchableSourceTypes).size);
+    const sourceHarvestLimit = searchProfile?.terms.length
+      ? Math.min(450, Math.max(limit + offset + 120, limit * 35))
+      : limit + offset;
+    const sqlLimit = searchProfile?.terms.length
+      ? sourceHarvestLimit * sourceTypeCount
+      : limit;
+    const sqlOffset = searchProfile?.terms.length ? 0 : offset;
     const rows = await this.db.$queryRawUnsafe<Array<{
       id: string;
       sourceType: LineItemSearchSourceType;
@@ -2300,8 +2663,10 @@ export class PrismaApiStore {
       unitPrice: number | null;
       payload: unknown;
       score: number;
+      searchText: string;
     }>>(
       `
+        WITH scored AS (
         SELECT
           "id",
           "sourceType",
@@ -2318,6 +2683,7 @@ export class PrismaApiStore {
           "unitCost",
           "unitPrice",
           "payload",
+          "searchText",
           (
             CASE
               WHEN $3::text <> '' AND (lower("category") = lower($3::text) OR lower("entityType") = lower($3::text)) THEN 4
@@ -2358,6 +2724,11 @@ export class PrismaApiStore {
               WHEN "vendor" ILIKE '%' || $5::text || '%' THEN 0.5
               ELSE 0
             END
+            + COALESCE((
+              SELECT count(*)::double precision * 0.85
+              FROM unnest($12::text[]) AS token_pattern(pattern)
+              WHERE "searchText" ILIKE token_pattern.pattern
+            ), 0)
           )::double precision AS score
         FROM "LineItemSearchDocument"
         WHERE "organizationId" = $1::text
@@ -2380,11 +2751,39 @@ export class PrismaApiStore {
             $5::text = ''
             OR "sourceType" = 'external_action'
             OR "searchVector" @@ websearch_to_tsquery('english', $6::text)
+            OR (cardinality($12::text[]) > 0 AND "searchText" ILIKE ANY($12::text[]))
             OR "title" ILIKE '%' || $5::text || '%'
             OR "code" ILIKE '%' || $5::text || '%'
             OR "subtitle" ILIKE '%' || $5::text || '%'
             OR "vendor" ILIKE '%' || $5::text || '%'
           )
+        ),
+        source_ranked AS (
+          SELECT
+            scored.*,
+            row_number() OVER (PARTITION BY "sourceType" ORDER BY score DESC, "title" ASC) AS source_rank
+          FROM scored
+        )
+        SELECT
+          "id",
+          "sourceType",
+          "sourceId",
+          "actionType",
+          "projectId",
+          "category",
+          "entityType",
+          "title",
+          "subtitle",
+          "code",
+          "vendor",
+          "uom",
+          "unitCost",
+          "unitPrice",
+          "payload",
+          "searchText",
+          score
+        FROM source_ranked
+        WHERE source_rank <= $13::int
         ORDER BY score DESC, "title" ASC
         LIMIT $7
         OFFSET $8
@@ -2395,14 +2794,16 @@ export class PrismaApiStore {
       sourceTypes,
       q,
       ftsQuery,
-      limit,
-      offset,
+      sqlLimit,
+      sqlOffset,
       disabledSourceTypes,
       disabledLaborLibraryIds,
       disabledCatalogIds,
+      tokenLikePatterns,
+      sourceHarvestLimit,
     );
 
-    return rows.map((row) => ({
+    const mapped = rows.map((row) => ({
       id: row.id,
       sourceType: row.sourceType,
       sourceId: row.sourceId,
@@ -2420,6 +2821,41 @@ export class PrismaApiStore {
       payload: parseSearchDocumentPayload(row.payload),
       score: Number(row.score ?? 0),
     }));
+
+    if (searchProfile?.terms.length) {
+      const ranked = rankEstimatorSearchItems(
+        mapped,
+        searchProfile,
+        (candidate) => searchTextFromParts([
+          candidate.title,
+          candidate.subtitle,
+          candidate.code,
+          candidate.vendor,
+          candidate.category,
+          candidate.entityType,
+          candidate.payload,
+        ]),
+        (candidate) => searchTextFromParts([candidate.title, candidate.code, candidate.category, candidate.entityType]),
+      )
+        .map((entry) => ({
+          ...entry.item,
+          score: Number((entry.item.score + entry.score).toFixed(3)),
+          payload: {
+            ...entry.item.payload,
+            searchMatch: {
+              score: Number(entry.score.toFixed(3)),
+              coverage: Number(entry.coverage.toFixed(3)),
+              matchedTerms: entry.matchedTerms,
+              matchedPhrases: entry.matchedPhrases,
+              anchorMatches: entry.anchorMatches,
+            },
+          },
+        }))
+        .sort((left, right) => right.score - left.score || left.title.localeCompare(right.title));
+      return blendLineItemSearchResults(ranked, searchProfile, sourceTypes, limit, offset);
+    }
+
+    return mapped;
   }
 
   private async requireCatalog(catalogId: string) {
@@ -3705,11 +4141,11 @@ export class PrismaApiStore {
       const bindings = this.asEstimateObject(entry.bindings);
       const fallbackBindings = Object.keys(bindings).length > 0 ? bindings : this.asEstimateObject(entry.binding);
       const worksheetIds = this.asEstimateStringArray(fallbackBindings.worksheetIds);
-      const worksheetNames = this.asEstimateStringArray(fallbackBindings.worksheetNames).map((value) => value.toLowerCase());
+      const worksheetNames = this.asEstimateStringArray(fallbackBindings.worksheetNames).map((value) => this.normalizeEstimateBindingText(value));
       const categories = this.asEstimateStringArray(fallbackBindings.categories ?? fallbackBindings.categoryTargets)
         .map((value) => this.normalizeEstimateCategory(value));
       const textMatchers = this.asEstimateStringArray(fallbackBindings.textMatchers ?? fallbackBindings.descriptionMatchers ?? fallbackBindings.itemMatchers)
-        .map((value) => value.toLowerCase());
+        .map((value) => this.normalizeEstimateBindingText(value));
       const hasBindings = worksheetIds.length > 0 || worksheetNames.length > 0 || categories.length > 0 || textMatchers.length > 0;
 
       if (!hasBindings) {
@@ -3724,15 +4160,19 @@ export class PrismaApiStore {
 
       const matchedItems = worksheetRows
         .filter(({ worksheet, item }) => {
-          const normalizedWorksheetName = String(worksheet.name ?? "").trim().toLowerCase();
-          const textHaystack = `${worksheet.name ?? ""} ${item.entityName ?? ""} ${item.description ?? ""} ${item.vendor ?? ""}`.toLowerCase();
-          const worksheetIdMatch = worksheetIds.length === 0 || worksheetIds.includes(worksheet.id);
-          const worksheetNameMatch = worksheetNames.length === 0 || worksheetNames.some((target) =>
+          const normalizedWorksheetName = this.normalizeEstimateBindingText(worksheet.name);
+          const textHaystack = this.normalizeEstimateBindingText(`${worksheet.name ?? ""} ${item.entityName ?? ""} ${item.description ?? ""} ${item.vendor ?? ""}`);
+          const worksheetIdMatch = worksheetIds.includes(worksheet.id);
+          const worksheetNameMatch = worksheetNames.some((target) =>
             normalizedWorksheetName === target || normalizedWorksheetName.includes(target) || target.includes(normalizedWorksheetName),
           );
+          if (worksheetIds.length > 0) return worksheetIdMatch;
+          const worksheetTargetMatch = worksheetIds.length > 0 || worksheetNames.length > 0
+            ? worksheetIdMatch || worksheetNameMatch
+            : true;
           const categoryMatch = categories.length === 0 || categories.includes(this.normalizeEstimateCategory(item.category, item.entityType));
           const textMatch = textMatchers.length === 0 || textMatchers.some((matcher) => textHaystack.includes(matcher));
-          return worksheetIdMatch && worksheetNameMatch && categoryMatch && textMatch;
+          return worksheetTargetMatch && categoryMatch && textMatch;
         })
         .map(({ item }) => item);
 
@@ -3861,23 +4301,88 @@ export class PrismaApiStore {
     coverageMode: "single_source" | "embedded" | "general_conditions" | "hybrid",
   ) {
     const issues: Array<Record<string, unknown>> = [];
-    const supervisionPattern = /(foreman|superintendent|supervision|supervisor|general foreman|lead hand|leadman)/i;
+    const supervisionRolePattern = /(foreman|superintendent|supervisor|general foreman|lead hand|leadman)/i;
+    const explicitSupervisionPattern = /\b(supervision|field_supervision|site_supervision|site_management|field_management)\b/i;
     const overheadWorksheetPattern = /(general conditions|site overhead|overhead|site services|general condition)/i;
-    const gcSupervisionItems: Array<{ worksheet: string; itemId: string }> = [];
-    const embeddedSupervisionItems: Array<{ worksheet: string; itemId: string }> = [];
+    const itemSupervisionSignals = (item: {
+      entityName?: string | null;
+      description?: string | null;
+      sourceNotes?: string | null;
+      sourceEvidence?: unknown;
+    }) => {
+      const evidenceBasis = this.asEstimateObject(this.asEstimateObject(item.sourceEvidence).evidenceBasis);
+      const quantityBasis = this.asEstimateObject(evidenceBasis.quantity);
+      const pricingBasis = this.asEstimateObject(evidenceBasis.pricing);
+      const structuredRole = [
+        evidenceBasis.lineRole,
+        evidenceBasis.role,
+        quantityBasis.lineRole,
+        quantityBasis.role,
+        pricingBasis.lineRole,
+        pricingBasis.role,
+      ].map((value) => String(value ?? "")).join(" ");
+      const entityName = String(item.entityName ?? "");
+      const description = String(item.description ?? "").trim();
+      const signals: string[] = [];
+      if (explicitSupervisionPattern.test(structuredRole)) signals.push("evidenceBasis.role");
+      if (supervisionRolePattern.test(entityName) || explicitSupervisionPattern.test(entityName)) signals.push("entityName");
+      if (/^(site\s+)?(foreman|superintendent|supervisor|lead hand|leadman)\b/i.test(description)) signals.push("description");
+      return signals;
+    };
+    const describeSupervisionItem = (
+      worksheet: { id?: string; name?: string | null },
+      item: {
+        id: string;
+        entityName?: string | null;
+        description?: string | null;
+        sourceNotes?: string | null;
+        sourceEvidence?: unknown;
+      },
+    ) => {
+      const fields = [
+        ["entityName", item.entityName],
+        ["description", item.description],
+        ["sourceNotes", item.sourceNotes],
+      ] as const;
+      const matchedFields = itemSupervisionSignals(item);
+      const searchableText = fields
+        .map(([field, value]) => `${field}: ${String(value ?? "").trim()}`)
+        .filter((entry) => !entry.endsWith(":"))
+        .join(" | ");
+      return {
+        worksheetId: worksheet.id ?? null,
+        worksheet: worksheet.name ?? "",
+        itemId: item.id,
+        entityName: item.entityName ?? "",
+        matchedFields,
+        textSnippet: searchableText.slice(0, 320),
+      };
+    };
+    const gcSupervisionItems: Array<ReturnType<typeof describeSupervisionItem>> = [];
+    const embeddedSupervisionItems: Array<ReturnType<typeof describeSupervisionItem>> = [];
 
     for (const worksheet of workspace.worksheets ?? []) {
       for (const item of worksheet.items ?? []) {
-      if (this.normalizeEstimateCategory(item.category, item.entityType) !== "Labour") continue;
-        const text = `${item.entityName ?? ""} ${item.description ?? ""}`;
-        if (!supervisionPattern.test(text)) continue;
+        if (this.normalizeEstimateCategory(item.category, item.entityType) !== "Labour") continue;
+        if (itemSupervisionSignals(item).length === 0) continue;
         if (overheadWorksheetPattern.test(String(worksheet.name ?? ""))) {
-          gcSupervisionItems.push({ worksheet: worksheet.name, itemId: item.id });
+          gcSupervisionItems.push(describeSupervisionItem(worksheet, item));
         } else {
-          embeddedSupervisionItems.push({ worksheet: worksheet.name, itemId: item.id });
+          embeddedSupervisionItems.push(describeSupervisionItem(worksheet, item));
         }
       }
     }
+
+    const details = {
+      supervisionSignals: ["evidenceBasis.role", "entityName supervision role", "description starts with explicit supervision role"],
+      gcSupervisionItems,
+      embeddedSupervisionItems,
+      repairOptions: [
+        "Use one coverage model only: keep supervision labour in General Conditions, or embed it in execution worksheets, or set persona/commercial guidance to hybrid when both are intentional.",
+        "When General Conditions carries supervision, remove execution labour rows that are explicitly roles like Foreman/Superintendent/Supervisor, or mark intentional hybrid supervision in the persona/commercial guidance.",
+        "When supervision is embedded, remove General Conditions supervision labour rows or reclassify them as non-labour commercial notes.",
+      ],
+    };
 
     if (coverageMode === "embedded" && gcSupervisionItems.length > 0) {
       issues.push({
@@ -3885,6 +4390,7 @@ export class PrismaApiStore {
         coverageMode,
         gcSupervisionItemCount: gcSupervisionItems.length,
         message: "Persona guidance says supervision should be embedded in execution packages, but General Conditions labour supervision rows were persisted.",
+        details,
       });
     }
 
@@ -3894,6 +4400,7 @@ export class PrismaApiStore {
         coverageMode,
         embeddedSupervisionItemCount: embeddedSupervisionItems.length,
         message: "Persona guidance says supervision should be carried in General Conditions, but package-level supervision rows were persisted.",
+        details,
       });
     }
 
@@ -3904,6 +4411,622 @@ export class PrismaApiStore {
         gcSupervisionItemCount: gcSupervisionItems.length,
         embeddedSupervisionItemCount: embeddedSupervisionItems.length,
         message: "Supervision exists in both General Conditions and execution worksheets. Choose one coverage model unless the persona explicitly allows hybrid supervision.",
+        details,
+      });
+    }
+
+    return issues;
+  }
+
+  private isIgnoredEstimateSourceDocument(fileName: unknown) {
+    const name = String(fileName ?? "").toLowerCase();
+    return /(^|\/)__macosx(\/|$)|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(name);
+  }
+
+  private isDrawingLikeEstimateSourceDocument(doc: { fileName?: string | null; fileType?: string | null; documentType?: string | null }) {
+    if (!doc || this.isIgnoredEstimateSourceDocument(doc.fileName)) return false;
+    const documentType = String(doc.documentType ?? "").trim().toLowerCase();
+    const fileType = String(doc.fileType ?? "").trim().toLowerCase();
+    const fileName = String(doc.fileName ?? "").trim().toLowerCase();
+
+    if (fileType !== "application/pdf" && fileType !== "pdf" && !fileName.endsWith(".pdf")) return false;
+    if (documentType === "drawing") return true;
+
+    return /(p&?id|pid|drawing|\bplan\b|plan[-_ ]?view|sheet|layout|elevation|section|detail|isometric|(?:^|[^a-z])iso(?:[^a-z]|$)|schematic|one[- ]?line|single[- ]?line|riser|reflected ceiling|general arrangement|\bga\b)/.test(fileName);
+  }
+
+  private normalizeAiToolId(toolId: unknown) {
+    return String(toolId ?? "").replace(/^mcp__bidwright__/, "").trim();
+  }
+
+  private collectVisualToolEvidence(workspace: ProjectWorkspace) {
+    const evidence = {
+      renderedPages: 0,
+      zoomedRegions: 0,
+      symbolScans: 0,
+      imageSymbolScans: 0,
+      renderedPageCalls: [] as Array<{ documentId: string; pageNumber: number }>,
+      zoomRegionCalls: [] as Array<{ documentId: string; pageNumber: number; region: Record<string, unknown> }>,
+    };
+
+    for (const run of workspace.aiRuns ?? []) {
+      const events = Array.isArray((run.output as Record<string, unknown> | null)?.events)
+        ? ((run.output as Record<string, unknown>).events as unknown[])
+        : [];
+      for (const eventValue of events) {
+        const event = this.asEstimateObject(eventValue);
+        const type = String(event.type ?? "");
+        if (type !== "tool_call" && type !== "tool") continue;
+        const data = this.asEstimateObject(event.data);
+        const input = this.asEstimateObject(data.input ?? event.input);
+        const toolId = this.normalizeAiToolId(data.toolId ?? event.toolId);
+        if (toolId === "renderDrawingPage") {
+          evidence.renderedPages += 1;
+          const documentId = String(input.documentId ?? "").trim();
+          const pageNumber = Number(input.pageNumber);
+          if (documentId && Number.isFinite(pageNumber)) {
+            evidence.renderedPageCalls.push({ documentId, pageNumber });
+          }
+        }
+        if (toolId === "zoomDrawingRegion") {
+          evidence.zoomedRegions += 1;
+          const documentId = String(input.documentId ?? "").trim();
+          const pageNumber = Number(input.pageNumber);
+          const region = this.asEstimateObject(input.region);
+          if (documentId && Number.isFinite(pageNumber) && Object.keys(region).length > 0) {
+            evidence.zoomRegionCalls.push({ documentId, pageNumber, region });
+          }
+        }
+        if (toolId === "scanDrawingSymbols") {
+          evidence.symbolScans += 1;
+          if (input.includeImage === true || String(input.includeImage ?? "").toLowerCase() === "true") {
+            evidence.imageSymbolScans += 1;
+          }
+        }
+      }
+    }
+
+    return evidence;
+  }
+
+  private estimateEvidenceDocumentIdsMatch(leftValue: unknown, rightValue: unknown) {
+    const left = String(leftValue ?? "").trim();
+    const right = String(rightValue ?? "").trim();
+    if (!left || !right) return false;
+    if (left === right) return true;
+
+    const normalize = (value: string) => value.replace(/\.\.\.|…/g, "");
+    const compactLeft = normalize(left);
+    const compactRight = normalize(right);
+    if (compactLeft.length >= 12 && right.startsWith(compactLeft)) return true;
+    if (compactRight.length >= 12 && left.startsWith(compactRight)) return true;
+    return false;
+  }
+
+  private estimateVisualPageEvidenceMatchesActual(
+    evidence: unknown,
+    actualCalls: Array<{ documentId: string; pageNumber: number }>,
+  ) {
+    const entry = this.asEstimateObject(evidence);
+    const pageNumber = Number(entry.pageNumber);
+    if (!Number.isFinite(pageNumber)) return false;
+    return actualCalls.some((call) =>
+      call.pageNumber === pageNumber &&
+      this.estimateEvidenceDocumentIdsMatch(entry.documentId, call.documentId)
+    );
+  }
+
+  private estimateNumericRegionValue(region: Record<string, unknown>, key: string) {
+    const value = Number(region[key]);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  private estimateIsTargetedZoomRegion(regionValue: unknown) {
+    const region = this.asEstimateObject(regionValue);
+    const width = this.estimateNumericRegionValue(region, "width");
+    const height = this.estimateNumericRegionValue(region, "height");
+    const imageWidth = this.estimateNumericRegionValue(region, "imageWidth");
+    const imageHeight = this.estimateNumericRegionValue(region, "imageHeight");
+    if (!width || !height || width <= 0 || height <= 0) return false;
+    if (!imageWidth || !imageHeight || imageWidth <= 0 || imageHeight <= 0) return true;
+    const areaRatio = (width * height) / (imageWidth * imageHeight);
+    return areaRatio < 0.75 && width < imageWidth * 0.95 && height < imageHeight * 0.95;
+  }
+
+  private estimateRegionsApproximatelyMatch(leftValue: unknown, rightValue: unknown) {
+    const left = this.asEstimateObject(leftValue);
+    const right = this.asEstimateObject(rightValue);
+    return ["x", "y", "width", "height"].every((key) => {
+      const leftNumber = this.estimateNumericRegionValue(left, key);
+      const rightNumber = this.estimateNumericRegionValue(right, key);
+      if (leftNumber === null || rightNumber === null) return false;
+      const tolerance = Math.max(8, Math.abs(rightNumber) * 0.03);
+      return Math.abs(leftNumber - rightNumber) <= tolerance;
+    });
+  }
+
+  private estimateVisualZoomEvidenceMatchesActual(
+    evidence: unknown,
+    actualCalls: Array<{ documentId: string; pageNumber: number; region: Record<string, unknown> }>,
+  ) {
+    const entry = this.asEstimateObject(evidence);
+    const pageNumber = Number(entry.pageNumber);
+    if (!Number.isFinite(pageNumber) || !this.estimateIsTargetedZoomRegion(entry.region)) return false;
+    return actualCalls.some((call) =>
+      call.pageNumber === pageNumber &&
+      this.estimateEvidenceDocumentIdsMatch(entry.documentId, call.documentId) &&
+      this.estimateIsTargetedZoomRegion(call.region) &&
+      this.estimateRegionsApproximatelyMatch(entry.region, call.region)
+    );
+  }
+
+  private estimateVisualAuditHasEvidence(entry: Record<string, unknown>, keys: string[]) {
+    return keys.some((key) => Array.isArray(entry[key]) && (entry[key] as unknown[]).length > 0);
+  }
+
+  private estimateDrawingEvidenceEngine(strategyValue: unknown) {
+    const strategy = this.asEstimateObject(strategyValue);
+    return this.asEstimateObject(this.asEstimateObject(strategy.summary).drawingEvidenceEngine);
+  }
+
+  private normalizeEstimateEvidenceClaimKey(value: unknown) {
+    return String(value ?? "")
+      .toLowerCase()
+      .replace(/\([^)]*\)/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\b(number|qty|quantity|count|total|each|ea|of|the|drawing|source|visual|bom|spec|table|ocr|text|governing|alternate|older|newer|orientation|plan|sheet|shop|schedule|quote|vendor|manufacturer|revision|rev|issued|production|baseline|primary|per|as|built|actual|fabrication|detail|order|line|dated|date|model|document|doc|reference|superseded|supersedes)\b/g, " ")
+      .replace(/\b(?:[a-z]+\d+[a-z0-9]*|\d+[a-z]+[a-z0-9]*)\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private normalizeEstimatePackageEvidenceKey(value: unknown) {
+    return String(value ?? "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token && !["pkg", "package", "scope", "drawing", "visual", "takeoff"].includes(token))
+      .join("-");
+  }
+
+  private normalizeEstimateBindingText(value: unknown) {
+    return String(value ?? "")
+      .toLowerCase()
+      .replace(/&amp;/g, "&")
+      .replace(/&/g, " and ")
+      .replace(/[\u2010-\u2015]/g, "-")
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  private estimatePackageEvidenceKeysMatch(left: string, right: string) {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    if (left.includes(right) || right.includes(left)) return true;
+    const leftTokens = left.split("-").filter((token) => token.length >= 3);
+    const rightTokens = right.split("-").filter((token) => token.length >= 3);
+    if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+    const shared = leftTokens.filter((token) => rightTokens.includes(token)).length;
+    const required = Math.min(2, Math.min(leftTokens.length, rightTokens.length));
+    return shared >= required && shared / Math.min(leftTokens.length, rightTokens.length) >= 0.67;
+  }
+
+  private comparableEstimateEvidenceClaimValue(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const match = value.match(/-?\d[\d,]*(?:\.\d+)?/);
+      if (match) {
+        const parsed = Number(String(match[0]).replace(/,/g, ""));
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return null;
+  }
+
+  private estimateEvidenceClaimGroupKey(claim: Record<string, unknown>) {
+    return [
+      String(claim.packageId ?? claim.packageName ?? "unknown").toLowerCase(),
+      this.normalizeEstimateEvidenceClaimKey(claim.quantityName ?? claim.claim),
+      String(claim.unit ?? "").toLowerCase(),
+    ].join("|");
+  }
+
+  private isHighAuthorityEstimateEvidenceClaim(claim: Record<string, unknown>) {
+    const method = String(claim.method ?? "").trim().toLowerCase();
+    const evidence = Array.isArray(claim.evidence)
+      ? claim.evidence.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    const text = [
+      claim.quantityName,
+      claim.claim,
+      claim.rationale,
+      claim.assumption,
+      claim.method,
+      claim.packageName,
+      ...evidence.flatMap((entry) => [
+        entry.result,
+        entry.sourceText,
+        entry.quotedText,
+        entry.quote,
+        entry.ocrText,
+        entry.rawText,
+        entry.tool,
+        entry.regionType,
+        entry.fileName,
+        entry.documentTitle,
+      ]),
+    ].join(" ");
+    const normalizedText = ` ${text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim()} `;
+    const sourceTerms = [
+      "bill of material",
+      "bill of materials",
+      "bom",
+      "parts list",
+      "part list",
+      "schedule",
+      "spec sheet",
+      "specification sheet",
+      "accessories quantity description",
+      "vendor quote",
+      "vendor quotation",
+      "model bom",
+      "model quantity",
+      "quantity table",
+      "material table",
+    ];
+    if (method === "vendor_quote") return true;
+    return sourceTerms.some((term) => normalizedText.includes(` ${term} `));
+  }
+
+  private estimateClaimHasExplicitOverrideEvidence(entries: Array<Record<string, unknown>>) {
+    const evidenceText = entries.flatMap((claim) => {
+      const evidence = Array.isArray(claim.evidence)
+        ? claim.evidence.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+        : [];
+      return evidence.flatMap((entry) => [entry.result, entry.sourceText]);
+    }).join(" ").trim().toLowerCase();
+    return [
+      "supersedes",
+      "superseded by",
+      "replaces",
+      "replaced by",
+      "obsolete",
+      "void",
+      "addendum",
+      "revision history",
+      "order of precedence",
+      "client confirmed",
+      "vendor confirmed",
+      "approved submittal",
+    ].some((term) => evidenceText.includes(term));
+  }
+
+  private estimateResolutionKeepsHighAuthority(entries: Array<Record<string, unknown>>) {
+    const resolutionText = entries.map((claim) =>
+      String(this.asEstimateObject(claim.reconciliation).resolution ?? "")
+    ).join(" ").trim().toLowerCase();
+    if (!resolutionText) return false;
+    if (!["bom", "bill of material", "parts list", "schedule", "spec sheet", "vendor quote", "table"].some((term) => resolutionText.includes(term))) {
+      return false;
+    }
+    return !(
+      ["drawing governs", "new drawing governs", "newer drawing", "visual governs", "supersedes older", "drawing supersedes", "superseded by drawing"].some((term) =>
+        resolutionText.includes(term)
+      ) || [/drawing.{0,90}supersed/, /supersed.{0,90}drawing/, /as\s*built\s+drawing/].some((pattern) => pattern.test(resolutionText))
+    );
+  }
+
+  private estimateEvidenceContradictionIsResolved(entries: Array<Record<string, unknown>>) {
+    const hasCarriedAssumption = entries.some((claim) => {
+      const status = String(this.asEstimateObject(claim.reconciliation).status ?? "").trim().toLowerCase();
+      return status === "carried_assumption";
+    });
+    if (hasCarriedAssumption) {
+      const hasHighAuthority = entries.some((claim) => this.isHighAuthorityEstimateEvidenceClaim(claim));
+      const hasLowerAuthority = entries.some((claim) => !this.isHighAuthorityEstimateEvidenceClaim(claim));
+      if (!hasHighAuthority || !hasLowerAuthority) return true;
+      return this.estimateResolutionKeepsHighAuthority(entries) || this.estimateClaimHasExplicitOverrideEvidence(entries);
+    }
+
+    const hasResolved = entries.some((claim) => {
+      const status = String(this.asEstimateObject(claim.reconciliation).status ?? "").trim().toLowerCase();
+      return status === "resolved";
+    });
+    if (!hasResolved) return false;
+
+    const hasHighAuthority = entries.some((claim) => this.isHighAuthorityEstimateEvidenceClaim(claim));
+    const hasLowerAuthority = entries.some((claim) => !this.isHighAuthorityEstimateEvidenceClaim(claim));
+    if (!hasHighAuthority || !hasLowerAuthority) return true;
+
+    return this.estimateResolutionKeepsHighAuthority(entries) || this.estimateClaimHasExplicitOverrideEvidence(entries);
+  }
+
+  private detectEstimateDrawingEvidenceContradictions(claimsValue: unknown) {
+    const claims = Array.isArray(claimsValue)
+      ? claimsValue.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    const groups = new Map<string, Array<Record<string, unknown>>>();
+    for (const claim of claims) {
+      const key = this.estimateEvidenceClaimGroupKey(claim);
+      if (!this.normalizeEstimateEvidenceClaimKey(claim.quantityName ?? claim.claim)) continue;
+      groups.set(key, [...(groups.get(key) ?? []), claim]);
+    }
+
+    const contradictions: string[] = [];
+    for (const [key, entries] of groups.entries()) {
+      const values = entries
+        .map((claim) => this.comparableEstimateEvidenceClaimValue(claim.value))
+        .filter((value): value is number => value !== null);
+      const distinct = [...new Set(values)];
+      if (distinct.length <= 1) continue;
+      if (!this.estimateEvidenceContradictionIsResolved(entries)) {
+        const authorityConflict = entries.some((claim) => this.isHighAuthorityEstimateEvidenceClaim(claim)) &&
+          entries.some((claim) => !this.isHighAuthorityEstimateEvidenceClaim(claim));
+        contradictions.push(
+          authorityConflict
+            ? `${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. BOM/spec/schedule/vendor-table conflict needs explicit supersession/order-of-precedence evidence or high-authority table selection. A carried assumption cannot price the lower-context drawing value unless an explicit override is cited.`
+            : `${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}`
+        );
+      }
+    }
+    return contradictions;
+  }
+
+  private estimatePackageMatchesEvidenceClaim(entry: Record<string, unknown>, claim: Record<string, unknown>) {
+    const packageKeys = [entry.packageId, entry.packageName].map((value) => this.normalizeEstimatePackageEvidenceKey(value)).filter(Boolean);
+    const claimKeys = [claim.packageId, claim.packageName].map((value) => this.normalizeEstimatePackageEvidenceKey(value)).filter(Boolean);
+    return packageKeys.some((left) => claimKeys.some((right) => this.estimatePackageEvidenceKeysMatch(left, right)));
+  }
+
+  private estimateClaimHasUsableDrawingEvidence(claimValue: unknown) {
+    const claim = this.asEstimateObject(claimValue);
+    const method = String(claim.method ?? "").trim().toLowerCase();
+    const evidence = Array.isArray(claim.evidence)
+      ? claim.evidence.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    if (!this.normalizeEstimateEvidenceClaimKey(claim.quantityName ?? claim.claim)) return false;
+    if (claim.value === undefined || claim.value === null || claim.value === "") return false;
+    if (method === "assumption") return String(claim.assumption ?? claim.rationale ?? "").trim().length >= 20;
+    if (evidence.length === 0) return false;
+    if (method === "visual_count" || method === "takeoff") {
+      return evidence.some((entry) =>
+        (entry.regionId || Object.keys(this.asEstimateObject(entry.bbox)).length > 0) &&
+        String(entry.imageHash ?? "").trim().length >= 16 &&
+        ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols"].some((name) =>
+          this.normalizeEstimateBindingText(entry.tool).replace(/\s+/g, "").includes(name)
+        )
+      );
+    }
+    if (method === "bom_table" || method === "drawing_table" || method === "ocr_text") {
+      return evidence.some((entry) => entry.regionId || String(entry.sourceText ?? "").trim().length >= 20);
+    }
+    return evidence.length > 0 || String(claim.rationale ?? "").trim().length >= 20;
+  }
+
+  private validateDrawingEvidenceEngineCoverage(strategyValue: unknown, drawingDrivenPackages: Array<Record<string, unknown>>) {
+    const issues: Array<Record<string, unknown>> = [];
+    if (drawingDrivenPackages.length === 0) return issues;
+    const engine = this.estimateDrawingEvidenceEngine(strategyValue);
+    const atlas = this.asEstimateObject(engine.atlas);
+    const claims = Array.isArray(engine.claims)
+      ? engine.claims.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    const verifications = Array.isArray(engine.verifications) ? engine.verifications : [];
+    const latestVerification = this.asEstimateObject(verifications[0]);
+    const storedContradictions = Array.isArray(engine.contradictions)
+      ? engine.contradictions
+        .map((entry) => this.asEstimateObject(entry))
+        .filter((entry) => !["resolved", "carried_assumption"].includes(String(entry.status ?? "").trim().toLowerCase()))
+      : [];
+    const detectedContradictions = this.detectEstimateDrawingEvidenceContradictions(claims);
+
+    const details = {
+      atlas: Object.keys(atlas).length ? {
+        status: atlas.status,
+        builtAt: atlas.builtAt,
+        documentCount: atlas.documentCount,
+        pageCount: atlas.pageCount,
+        regionCount: atlas.regionCount,
+      } : null,
+      claimCount: claims.length,
+      latestVerification,
+      requiredWorkflow: [
+        "buildDrawingAtlas",
+        "searchDrawingRegions for each quantity/scope claim",
+        "inspectDrawingRegion for selected high-res crops",
+        "saveDrawingEvidenceClaim for every drawing-driven quantity",
+        "verifyDrawingEvidenceLedger before pricing/finalize",
+      ],
+    };
+
+    if (Object.keys(atlas).length === 0 || Number(atlas.regionCount ?? 0) <= 0) {
+      issues.push({
+        code: "drawing_evidence_atlas_missing",
+        message: "Drawing Evidence Engine atlas is missing or empty.",
+        details,
+      });
+    }
+
+    if (claims.length === 0) {
+      issues.push({
+        code: "drawing_evidence_claims_missing",
+        message: "Drawing evidence ledger has no saved claims for drawing-driven quantities.",
+        details,
+      });
+    }
+
+    const packagesWithoutClaims = drawingDrivenPackages.filter((entry) =>
+      !claims.some((claim) => this.estimatePackageMatchesEvidenceClaim(entry, claim) && this.estimateClaimHasUsableDrawingEvidence(claim)),
+    );
+    if (packagesWithoutClaims.length > 0) {
+      issues.push({
+        code: "drawing_evidence_package_claim_missing",
+        message: "One or more drawing-driven packages lack usable drawing evidence ledger claims.",
+        details: {
+          ...details,
+          packagesWithoutClaims: packagesWithoutClaims.map((entry) => ({
+            packageId: entry.packageId ?? null,
+            packageName: entry.packageName ?? null,
+          })),
+        },
+      });
+    }
+
+    if (storedContradictions.length > 0 || detectedContradictions.length > 0) {
+      issues.push({
+        code: "drawing_evidence_contradiction_unresolved",
+        message: "Drawing evidence ledger has unresolved contradictions.",
+        details: {
+          ...details,
+          storedContradictions: storedContradictions.slice(0, 10),
+          detectedContradictions,
+        },
+      });
+    }
+
+    if (!latestVerification.status) {
+      issues.push({
+        code: "drawing_evidence_verifier_missing",
+        message: "Independent drawing evidence verifier has not run.",
+        details,
+      });
+    } else if (String(latestVerification.status ?? "").trim().toLowerCase() === "failed") {
+      issues.push({
+        code: "drawing_evidence_verifier_failed",
+        message: "Independent drawing evidence verifier failed.",
+        details,
+      });
+    }
+
+    return issues;
+  }
+
+  private validateVisualTakeoffCoverage(scopeGraphValue: unknown, workspace: ProjectWorkspace) {
+    const issues: Array<Record<string, unknown>> = [];
+    const drawingDocs = (workspace.sourceDocuments ?? []).filter((doc) => this.isDrawingLikeEstimateSourceDocument(doc));
+    if (drawingDocs.length === 0) return issues;
+
+    const strategy = this.asEstimateObject((workspace as unknown as Record<string, unknown>).estimateStrategy);
+    const engine = this.estimateDrawingEvidenceEngine(strategy);
+    const hasLedgerEvidence = Object.keys(this.asEstimateObject(engine.atlas)).length > 0 &&
+      (Array.isArray(engine.claims) ? engine.claims.some((claim) => this.estimateClaimHasUsableDrawingEvidence(claim)) : false);
+    const scopeGraph = this.asEstimateObject(scopeGraphValue);
+    const audit = this.asEstimateObject(scopeGraph.visualTakeoffAudit);
+    const evidence = this.collectVisualToolEvidence(workspace);
+    const sampleDocuments = drawingDocs.slice(0, 8).map((doc) => ({
+      id: doc.id,
+      fileName: doc.fileName,
+      documentType: doc.documentType,
+      pageCount: doc.pageCount,
+    }));
+    const baseDetails = {
+      drawingDocumentCount: drawingDocs.length,
+      sampleDocuments,
+      actualToolEvidence: evidence,
+      requiredWorkflow: [
+        "buildDrawingAtlas",
+        "searchDrawingRegions on the exact object/detail/BOM/count to prove",
+        "inspectDrawingRegion for targeted high-res crop evidence",
+        "saveDrawingEvidenceClaim for every drawing-driven quantity",
+        "verifyDrawingEvidenceLedger before pricing/finalizing",
+        "renderDrawingPage/zoomDrawingRegion only as lower-level fallback evidence",
+        "countSymbols/countSymbolsAllPages only after a tight representative symbol bounding box has been identified",
+        "saveEstimateScopeGraph.visualTakeoffAudit before pricing/finalizing",
+      ],
+    };
+
+    if (Object.keys(audit).length === 0) {
+      issues.push({
+        code: "visual_takeoff_audit_missing",
+        message: "Drawing-style PDFs exist, but saveEstimateScopeGraph.visualTakeoffAudit is missing.",
+        details: baseDetails,
+      });
+      return issues;
+    }
+
+    if (!hasLedgerEvidence && evidence.renderedPages === 0) {
+      issues.push({
+        code: "visual_takeoff_no_rendered_pages",
+        message: "Drawing-style PDFs exist, but no actual renderDrawingPage tool call is recorded for this AI run/project.",
+        details: baseDetails,
+      });
+    }
+
+    if (!hasLedgerEvidence && evidence.zoomedRegions === 0) {
+      issues.push({
+        code: "visual_takeoff_no_deep_evidence",
+        message: "Full-page drawing renders are only overview evidence. No actual zoomDrawingRegion tool call is recorded for the specific drawing details that drive scope.",
+        details: baseDetails,
+      });
+    }
+
+    if (audit.completedBeforePricing !== true) {
+      issues.push({
+        code: "visual_takeoff_not_marked_complete_before_pricing",
+        message: "visualTakeoffAudit.completedBeforePricing must be true before finalize.",
+        details: baseDetails,
+      });
+    }
+
+    const drawingDrivenPackages = Array.isArray(audit.drawingDrivenPackages)
+      ? audit.drawingDrivenPackages.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
+      : [];
+    const notDrawingDrivenReason = String(audit.notDrawingDrivenReason ?? "").trim();
+
+    if (drawingDrivenPackages.length === 0 && notDrawingDrivenReason.length < 40) {
+      issues.push({
+        code: "visual_takeoff_scope_unclassified",
+        message: "Drawing PDFs exist, but visualTakeoffAudit does not identify drawing-driven packages or explain why drawings do not drive scope/quantity.",
+        details: baseDetails,
+      });
+      return issues;
+    }
+
+    issues.push(...this.validateDrawingEvidenceEngineCoverage(strategy, drawingDrivenPackages));
+
+    const missingOverview = drawingDrivenPackages.filter((entry) =>
+      !hasLedgerEvidence && !this.estimateVisualAuditHasEvidence(entry, ["renderedPages"]),
+    );
+    const missingDeepEvidence = drawingDrivenPackages.filter((entry) =>
+      !hasLedgerEvidence && !this.estimateVisualAuditHasEvidence(entry, ["zoomEvidence"]),
+    );
+    const missingActualOverview = drawingDrivenPackages.filter((entry) =>
+      !hasLedgerEvidence &&
+      Array.isArray(entry.renderedPages) &&
+      entry.renderedPages.length > 0 &&
+      !entry.renderedPages.some((page) => this.estimateVisualPageEvidenceMatchesActual(page, evidence.renderedPageCalls)),
+    );
+    const missingActualZoom = drawingDrivenPackages.filter((entry) =>
+      !hasLedgerEvidence &&
+      Array.isArray(entry.zoomEvidence) &&
+      entry.zoomEvidence.length > 0 &&
+      !entry.zoomEvidence.some((zoom) => this.estimateVisualZoomEvidenceMatchesActual(zoom, evidence.zoomRegionCalls)),
+    );
+
+    if (missingOverview.length > 0 || missingDeepEvidence.length > 0 || missingActualOverview.length > 0 || missingActualZoom.length > 0) {
+      issues.push({
+        code: "visual_takeoff_package_evidence_incomplete",
+        message: "One or more drawing-driven packages lack renderedPages/targeted zoomEvidence, or the audit evidence does not match recorded visual tool calls.",
+        details: {
+          ...baseDetails,
+          packagesMissingRenderedPages: missingOverview.map((entry) => ({
+            packageId: entry.packageId ?? null,
+            packageName: entry.packageName ?? null,
+          })),
+          packagesMissingDeepEvidence: missingDeepEvidence.map((entry) => ({
+            packageId: entry.packageId ?? null,
+            packageName: entry.packageName ?? null,
+          })),
+          packagesMissingActualRenderEvidence: missingActualOverview.map((entry) => ({
+            packageId: entry.packageId ?? null,
+            packageName: entry.packageName ?? null,
+          })),
+          packagesMissingActualTargetedZoom: missingActualZoom.map((entry) => ({
+            packageId: entry.packageId ?? null,
+            packageName: entry.packageName ?? null,
+          })),
+        },
       });
     }
 
@@ -4226,23 +5349,9 @@ export class PrismaApiStore {
     await writeJsonAtomic(reportPath, report);
     await writeJsonAtomic(chunksPath, report.chunks);
 
-    for (const document of report.documents) {
-      const storagePath = relativePackageDocumentArtifact(packageId, document.id, document.title);
-      const absoluteDocumentPath = resolveApiPath(storagePath);
-      const payload = {
-        ...document,
-        packageId,
-        checksum: checksumForDocument(packageChecksum, document),
-        storagePath,
-        createdAt: isoNow(),
-        updatedAt: isoNow(),
-        pageCount: inferPageCount(document, report.chunks),
-      };
-      await writeJsonAtomic(absoluteDocumentPath, payload);
-    }
-
     // Save original binary files from the zip so they can be previewed/downloaded
     const binaryPathMap = new Map<string, string>();
+    const nativePdfPageCountByDocumentId = new Map<string, Awaited<ReturnType<typeof getNativePdfPageCountFromBuffer>>>();
     if (zipPath) {
       try {
         const originalsDir = resolveApiPath(relativePackageRoot(packageId), "originals");
@@ -4259,10 +5368,37 @@ export class PrismaApiStore {
           await mkdir(path.dirname(absPath), { recursive: true });
           await writeFile(absPath, Buffer.from(entry.bytes));
           binaryPathMap.set(document.id, relPath);
+          if (isPdfFileNameOrType(document.sourcePath || document.title, path.extname(document.sourcePath || document.title).replace(/^\./, ""))) {
+            nativePdfPageCountByDocumentId.set(document.id, await getNativePdfPageCountFromBuffer(Buffer.from(entry.bytes)));
+          }
         }
       } catch {
         // Non-fatal: previews won't work but ingestion continues
       }
+    }
+
+    for (const document of report.documents) {
+      const storagePath = relativePackageDocumentArtifact(packageId, document.id, document.title);
+      const absoluteDocumentPath = resolveApiPath(storagePath);
+      const extractionPageCount = inferPageCount(document, report.chunks);
+      const nativePdfPageCount = nativePdfPageCountByDocumentId.get(document.id);
+      const fileType = path.extname(document.sourcePath || document.title).replace(/^\./, "") || "txt";
+      const payload = {
+        ...document,
+        packageId,
+        checksum: checksumForDocument(packageChecksum, document),
+        storagePath,
+        createdAt: isoNow(),
+        updatedAt: isoNow(),
+        structuredData: attachNativePdfMetadata(document.structuredData ?? null, nativePdfPageCount, extractionPageCount),
+        pageCount: choosePdfPageCount({
+          fileName: document.sourcePath || document.title,
+          fileType,
+          extractionPageCount,
+          nativePageCount: nativePdfPageCount?.pageCount,
+        }),
+      };
+      await writeJsonAtomic(absoluteDocumentPath, payload);
     }
 
     return binaryPathMap;
@@ -4317,7 +5453,6 @@ export class PrismaApiStore {
         type: "Firm",
         status: "Open",
         defaultMarkup,
-        laborDifficulty: "Normal",
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -4536,7 +5671,7 @@ export class PrismaApiStore {
       packagePlan: "packaging",
       adjustmentPlan: "benchmark",
       reconcileReport: "reconcile",
-      summary: existing?.currentStage ?? "reconcile",
+      summary: existing?.currentStage ?? "scope",
     };
 
     const nextStage = this.advanceStrategyStage(existing?.currentStage, stageBySection[input.section]);
@@ -4583,7 +5718,7 @@ export class PrismaApiStore {
     };
 
     return {
-      benchmarkingEnabled: defaults.benchmarkingEnabled !== false,
+      benchmarkingEnabled: defaults.benchmarkingEnabled === true,
       benchmarkMinimumSimilarity: Math.min(0.99, Math.max(0, asNumber(defaults.benchmarkMinimumSimilarity, 0.55))),
       benchmarkMaximumComparables: Math.max(1, Math.min(10, Math.round(asNumber(defaults.benchmarkMaximumComparables, 5)))),
       benchmarkLowerHoursRatio: Math.max(0.1, asNumber(defaults.benchmarkLowerHoursRatio, 0.75)),
@@ -4709,6 +5844,66 @@ export class PrismaApiStore {
     }
     if (!existing || !existing.reconcileReport || Object.keys(asObject(existing.reconcileReport)).length === 0) {
       validationIssues.push({ code: "missing_reconcile_report", message: "Reconcile report must be saved before finalize." });
+    } else {
+      // Pre-finalize specialty-coverage audit: require the agent to enumerate every contractor-responsible
+      // package identified from the source documents and either bind it to a plan entry (packageId/worksheetIds)
+      // or carry an explicit assumption (assumptionId) saying why it is not in the plan. This is domain-
+      // agnostic: the agent decides what counts as a specialty package from the spec/scope-table, the system
+      // enforces only that the audit is structured and complete.
+      const reconcileObj = asObject(existing.reconcileReport);
+      const checksRaw = Array.isArray(reconcileObj.coverageChecks) ? (reconcileObj.coverageChecks as unknown[]) : [];
+      if (checksRaw.length === 0) {
+        validationIssues.push({
+          code: "missing_coverage_audit",
+          message: "Specialty-coverage audit is required: populate reconcileReport.coverageChecks with one entry per contractor-responsible package identified from the spec/scope-table/RFQ. Each entry must include name, sourceRef (where in the documents this was identified), status ('ok' once it is resolved), and either coveredBy.packageId/coveredBy.worksheetIds linking it to the plan or coveredBy.assumptionId tied to a saved assumption explaining why it is not a dedicated plan entry. If no specialty packages exist for this project, add a single 'no specialty packages identified' entry citing the spec section that confirms it.",
+        });
+      } else {
+        const blockingChecks: string[] = [];
+        const unresolvedChecks: string[] = [];
+        for (const checkRaw of checksRaw) {
+          const check = asObject(checkRaw);
+          const name = String(check.name ?? "").trim();
+          const status = String(check.status ?? "").trim().toLowerCase();
+          const notes = String(check.notes ?? "").trim();
+          if (!name) {
+            blockingChecks.push("(unnamed entry)");
+            continue;
+          }
+          if (status === "missing" || status === "warning") {
+            blockingChecks.push(`'${name}' has status='${status}' — convert to status='ok' after binding the package or recording an assumption, or remove if out of scope`);
+            continue;
+          }
+          if (status !== "ok") {
+            blockingChecks.push(`'${name}' has unsupported status='${status || "(empty)"}' — must be 'ok', 'warning', or 'missing'`);
+            continue;
+          }
+          const coveredBy = asObject(check.coveredBy);
+          const packageId = String(coveredBy.packageId ?? "").trim();
+          const worksheetIdsArr = asArray(coveredBy.worksheetIds);
+          const assumptionId = String(coveredBy.assumptionId ?? "").trim();
+          const linkedToPackage = packageId.length > 0 || worksheetIdsArr.length > 0;
+          const linkedToAssumption = assumptionId.length > 0;
+          if (!linkedToPackage && !linkedToAssumption) {
+            unresolvedChecks.push(`'${name}' is status='ok' but has no coveredBy.packageId / coveredBy.worksheetIds / coveredBy.assumptionId — bind it to a package plan entry or a saved assumption`);
+            continue;
+          }
+          if (notes.length < 10) {
+            unresolvedChecks.push(`'${name}' needs notes describing how it is covered (commercial treatment, vendor/sub vs self-perform, allowance basis, etc.)`);
+          }
+        }
+        if (blockingChecks.length > 0) {
+          validationIssues.push({
+            code: "coverage_audit_unresolved_status",
+            message: `Specialty-coverage audit has unresolved status entries: ${blockingChecks.join("; ")}. Every coverageCheck must reach status='ok' before finalize.`,
+          });
+        }
+        if (unresolvedChecks.length > 0) {
+          validationIssues.push({
+            code: "coverage_audit_missing_link",
+            message: `Specialty-coverage audit entries lack a structural binding: ${unresolvedChecks.join("; ")}.`,
+          });
+        }
+      }
     }
 
     const packageValidationIssues = this.validatePackagePlanAgainstWorkspace(existing?.packagePlan, workspace);
@@ -4720,6 +5915,9 @@ export class PrismaApiStore {
     );
     const supervisionCoverageIssues = this.validateSupervisionCoverage(workspace, supervisionCoverageMode);
     validationIssues.push(...supervisionCoverageIssues);
+
+    const visualTakeoffIssues = this.validateVisualTakeoffCoverage(existing?.scopeGraph, workspace);
+    validationIssues.push(...visualTakeoffIssues);
 
     const readinessValidation = validateEstimateWorkspace(workspace as any, {
       ruleSetIds: ["readiness"],
@@ -6163,9 +7361,11 @@ export class PrismaApiStore {
     });
     const lineOrder = normalizedInput.lineOrder ?? ((maxOrder._max.lineOrder ?? 0) + 1);
     let linkedCatalogClassification: Record<string, unknown> = {};
+    let linkedCatalogUnitCost: number | null = null;
     if (normalizedInput.itemId) {
       const linkedCatalogItem = await this.requireCatalogItem(normalizedInput.itemId);
       linkedCatalogClassification = catalogClassificationFromMetadata(linkedCatalogItem.metadata);
+      linkedCatalogUnitCost = linkedCatalogItem.unitCost ?? null;
     }
     const classification = mergeWorksheetClassifications(linkedCatalogClassification, normalizedInput.classification);
     const costCode = stringValue(normalizedInput.costCode) ?? costCodeFromClassification(classification);
@@ -6184,9 +7384,9 @@ export class PrismaApiStore {
       description: normalizedInput.description,
       quantity: normalizedInput.quantity,
       uom: normalizedInput.uom,
-      cost: normalizedInput.cost,
-      markup: normalizedInput.markup,
-      price: normalizedInput.price,
+      cost: normalizedInput.cost ?? linkedCatalogUnitCost ?? 0,
+      markup: normalizedInput.markup ?? 0,
+      price: normalizedInput.price ?? 0,
       lineOrder,
       rateScheduleItemId: normalizedInput.rateScheduleItemId ?? null,
       itemId: normalizedInput.itemId ?? null,
@@ -6207,7 +7407,8 @@ export class PrismaApiStore {
     const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
-    const itemSource = catDef?.itemSource ?? "freeform";
+    const calcType = normalizeCalculationType(catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    const requiresRateScheduleItem = categoryRequiresRateScheduleItem(catDef);
 
     if (item.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
@@ -6221,12 +7422,24 @@ export class PrismaApiStore {
             : ` No rate schedule items exist. Import a rate schedule first via importRateSchedule.`)
         );
       }
-
-    } else if (itemSource === "rate_schedule") {
+    } else if (requiresRateScheduleItem) {
       throw new Error(
-        `Category "${item.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
+        `Category "${item.category}" requires a rateScheduleItemId (${calcType}/rate-schedule calculated). ` +
         `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
       );
+    }
+
+    if (requiresRateScheduleItem && !hasPositiveTierUnits(item.tierUnits)) {
+      throw new Error(
+        `Category "${item.category}" is calculated from a rate schedule, so positive tierUnits are required. ` +
+        `Provide only rateScheduleItemId, quantity, and tierUnits; Bidwright calculates cost and price.`
+      );
+    }
+
+    if (categoryOwnsCalculatedPricing(catDef)) {
+      item.cost = 0;
+      item.markup = 0;
+      item.price = 0;
     }
 
     // ── Resolve tierUnit keys to full tier IDs ────────────
@@ -6242,7 +7455,6 @@ export class PrismaApiStore {
     // instead of asking each caller to pre-look-up the cost id.
     await this.autoResolveEffectiveCost(item);
 
-    const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(item, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(item, calculated);
 
@@ -6592,7 +7804,8 @@ export class PrismaApiStore {
     domainItem.categoryId = updateCatDef.id;
     domainItem.category = updateCatDef.name;
     domainItem.entityType = updateCatDef.entityType;
-    const updateItemSource = updateCatDef?.itemSource ?? "freeform";
+    const updateCalcType = normalizeCalculationType(updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    const updateRequiresRateScheduleItem = categoryRequiresRateScheduleItem(updateCatDef);
 
     if (domainItem.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
@@ -6606,10 +7819,9 @@ export class PrismaApiStore {
             : ` No rate schedule items exist. Import a rate schedule first via importRateSchedule.`)
         );
       }
-    } else if (updateItemSource === "rate_schedule" && normalizedPatch.rateScheduleItemId === null) {
-      // Only reject if explicitly clearing the ID on a rate_schedule category
+    } else if (updateRequiresRateScheduleItem) {
       throw new Error(
-        `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
+        `Category "${domainItem.category}" requires a rateScheduleItemId (${updateCalcType}/rate-schedule calculated). ` +
         `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
       );
     }
@@ -6669,6 +7881,13 @@ export class PrismaApiStore {
       domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
     }
 
+    if (updateRequiresRateScheduleItem && !hasPositiveTierUnits(domainItem.tierUnits)) {
+      throw new Error(
+        `Category "${domainItem.category}" is calculated from a rate schedule, so positive tierUnits are required. ` +
+        `Provide only rateScheduleItemId, quantity, and tierUnits; Bidwright calculates cost and price.`
+      );
+    }
+
     // ── Auto-resolve EffectiveCost on cost-resource changes ──────────
     // If the caller cleared `costResourceId` (set to null), drop the
     // associated `effectiveCostId` too so the row no longer claims to
@@ -6684,7 +7903,12 @@ export class PrismaApiStore {
       await this.autoResolveEffectiveCost(domainItem);
     }
 
-    const updateCalcType = (updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+    if (categoryOwnsCalculatedPricing(updateCatDef)) {
+      domainItem.cost = 0;
+      domainItem.markup = 0;
+      domainItem.price = 0;
+    }
+
     const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
 
@@ -7134,7 +8358,6 @@ export class PrismaApiStore {
           type: "Firm",
           status: "Open",
           defaultMarkup,
-          laborDifficulty: "Normal",
           createdAt: now,
           updatedAt: now,
         },
@@ -7428,20 +8651,35 @@ export class PrismaApiStore {
       const timestamp = new Date();
       const timestampISO = timestamp.toISOString();
 
-      const sourceDocuments: SourceDocument[] = report.documents.map((document) => ({
-        id: document.id,
-        projectId: project.id,
-        fileName: normalizeStoredSourcePath(document.sourcePath, document.title),
-        fileType: path.extname(document.sourcePath || document.title).replace(/^\./, "") || "txt",
-        documentType: documentTypeFromIngestion(document.kind),
-        pageCount: inferPageCount(document, report.chunks),
-        checksum: checksumForDocument(checksum, document),
-        storagePath: binaryPathMap.get(document.id) ?? relativePackageDocumentArtifact(packageId, document.id, document.title),
-        extractedText: document.text?.replace(/\0/g, "") ?? null,
-        structuredData: document.structuredData ?? null,
-        createdAt: timestampISO,
-        updatedAt: timestampISO,
-      }));
+      const sourceDocuments: SourceDocument[] = [];
+      for (const document of report.documents) {
+        const storagePath = binaryPathMap.get(document.id) ?? relativePackageDocumentArtifact(packageId, document.id, document.title);
+        const fileName = normalizeStoredSourcePath(document.sourcePath, document.title);
+        const fileType = path.extname(document.sourcePath || document.title).replace(/^\./, "") || "txt";
+        const extractionPageCount = inferPageCount(document, report.chunks);
+        const nativePdfPageCount = isPdfFileNameOrType(fileName, fileType)
+          ? await getNativePdfPageCountFromFile(resolveApiPath(storagePath))
+          : null;
+        sourceDocuments.push({
+          id: document.id,
+          projectId: project.id,
+          fileName,
+          fileType,
+          documentType: documentTypeFromIngestion(document.kind),
+          pageCount: choosePdfPageCount({
+            fileName,
+            fileType,
+            extractionPageCount,
+            nativePageCount: nativePdfPageCount?.pageCount,
+          }),
+          checksum: checksumForDocument(checksum, document),
+          storagePath,
+          extractedText: document.text?.replace(/\0/g, "") ?? null,
+          structuredData: attachNativePdfMetadata(document.structuredData ?? null, nativePdfPageCount, extractionPageCount) as SourceDocument["structuredData"],
+          createdAt: timestampISO,
+          updatedAt: timestampISO,
+        });
+      }
 
       await this.db.$transaction(async (tx) => {
         // Remove old documents for this package
@@ -9687,7 +10925,6 @@ export class PrismaApiStore {
           freightOnBoard: revData.freightOnBoard,
           status: revData.status,
           defaultMarkup: revData.defaultMarkup,
-          laborDifficulty: revData.laborDifficulty,
           followUpNote: revData.followUpNote,
           printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory,
@@ -10021,7 +11258,7 @@ export class PrismaApiStore {
     return mapRevision(revision);
   }
 
-  async copyQuote(projectId: string) {
+  async copyQuote(projectId: string, options: { resetEstimate?: boolean } = {}) {
     await this.requireProject(projectId);
     const sourceProject = await this.db.project.findFirst({ where: { id: projectId, organizationId: this.organizationId } });
     const sourceQuote = await this.db.quote.findFirst({ where: { projectId } });
@@ -10029,6 +11266,7 @@ export class PrismaApiStore {
 
     const sourceRevision = await this.db.quoteRevision.findFirst({ where: { id: sourceQuote.currentRevisionId } });
     if (!sourceRevision) throw new Error(`Current revision not found for project ${projectId}`);
+    const resetEstimate = options.resetEstimate === true;
 
     return await this.db.$transaction(async (tx) => {
       const timestamp = new Date();
@@ -10090,186 +11328,202 @@ export class PrismaApiStore {
           dateWorkStart: revData.dateWorkStart, dateWorkEnd: revData.dateWorkEnd,
           shippingMethod: revData.shippingMethod, shippingTerms: revData.shippingTerms,
           freightOnBoard: revData.freightOnBoard, status: revData.status,
-          defaultMarkup: revData.defaultMarkup, laborDifficulty: revData.laborDifficulty,
+          defaultMarkup: revData.defaultMarkup,
           followUpNote: revData.followUpNote, printEmptyNotesColumn: revData.printEmptyNotesColumn,
           printCategory: revData.printCategory, printPhaseTotalOnly: revData.printPhaseTotalOnly,
-          grandTotal: revData.grandTotal, regHours: revData.regHours, overHours: revData.overHours, doubleHours: revData.doubleHours,
-          subtotal: revData.subtotal, cost: revData.cost, estimatedProfit: revData.estimatedProfit, estimatedMargin: revData.estimatedMargin,
-          calculatedTotal: revData.calculatedTotal ?? 0, totalHours: revData.totalHours,
-          breakoutPackage: revData.breakoutPackage as any,
-          calculatedCategoryTotals: revData.calculatedCategoryTotals as any,
-          pricingLadder: revData.pricingLadder as any,
+          grandTotal: resetEstimate ? 0 : revData.grandTotal,
+          regHours: resetEstimate ? 0 : revData.regHours,
+          overHours: resetEstimate ? 0 : revData.overHours,
+          doubleHours: resetEstimate ? 0 : revData.doubleHours,
+          subtotal: resetEstimate ? 0 : revData.subtotal,
+          cost: resetEstimate ? 0 : revData.cost,
+          estimatedProfit: resetEstimate ? 0 : revData.estimatedProfit,
+          estimatedMargin: resetEstimate ? 0 : revData.estimatedMargin,
+          calculatedTotal: resetEstimate ? 0 : revData.calculatedTotal ?? 0,
+          totalHours: resetEstimate ? 0 : revData.totalHours,
+          breakoutPackage: (resetEstimate ? {} : revData.breakoutPackage) as any,
+          calculatedCategoryTotals: (resetEstimate ? {} : revData.calculatedCategoryTotals) as any,
+          pricingLadder: (resetEstimate ? {} : revData.pricingLadder) as any,
           summaryLayoutPreset: revData.summaryLayoutPreset,
           pdfPreferences: revData.pdfPreferences as any,
           createdAt: timestamp, updatedAt: timestamp,
         },
       });
 
-      // Build phase ID map
       const phaseIdMap = new Map<string, string>();
-      const oldPhases = await tx.phase.findMany({ where: { revisionId: sourceRevision.id } });
-      for (const p of oldPhases) {
-        phaseIdMap.set(p.id, createId("phase"));
-      }
-      for (const p of oldPhases) {
-        const newId = phaseIdMap.get(p.id)!;
-        await tx.phase.create({
-          data: {
-            id: newId,
-            revisionId: newRevisionId,
-            parentId: p.parentId ? (phaseIdMap.get(p.parentId) ?? null) : null,
-            number: p.number,
-            name: p.name,
-            description: p.description,
-            order: p.order,
-            startDate: p.startDate,
-            endDate: p.endDate,
-            color: p.color,
-          },
-        });
-      }
-
-      // Copy worksheets and items
       let firstWorksheetId: string | null = null;
       const worksheetIdMap = new Map<string, string>();
       const worksheetItemIdMap = new Map<string, string>();
-      const oldWorksheets = await tx.worksheet.findMany({ where: { revisionId: sourceRevision.id } });
-      for (const ws of oldWorksheets) {
-        const newWsId = createId("worksheet");
-        worksheetIdMap.set(ws.id, newWsId);
-        if (!firstWorksheetId) firstWorksheetId = newWsId;
-        await tx.worksheet.create({ data: { id: newWsId, revisionId: newRevisionId, name: ws.name, order: ws.order } });
-        const oldItems = await tx.worksheetItem.findMany({ where: { worksheetId: ws.id } });
-        for (const it of oldItems) {
-          const newItemId = createId("li");
-          worksheetItemIdMap.set(it.id, newItemId);
-          await tx.worksheetItem.create({
+
+      if (!resetEstimate) {
+        // Build phase ID map
+        const oldPhases = await tx.phase.findMany({ where: { revisionId: sourceRevision.id } });
+        for (const p of oldPhases) {
+          phaseIdMap.set(p.id, createId("phase"));
+        }
+        for (const p of oldPhases) {
+          const newId = phaseIdMap.get(p.id)!;
+          await tx.phase.create({
             data: {
-              id: newItemId, worksheetId: newWsId,
-              phaseId: it.phaseId ? (phaseIdMap.get(it.phaseId) ?? null) : it.phaseId,
-	              categoryId: it.categoryId,
-	              category: it.category, entityType: it.entityType, entityName: it.entityName,
-              classification: it.classification ?? {},
-              costCode: it.costCode ?? null,
-              vendor: it.vendor, description: it.description, quantity: it.quantity,
-              uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
-              lineOrder: it.lineOrder,
-              rateScheduleItemId: it.rateScheduleItemId ?? null,
-              itemId: it.itemId ?? null,
-              tierUnits: it.tierUnits ?? {},
-              rateResolution: toPrismaJson((it as any).rateResolution ?? {}),
-              sourceNotes: it.sourceNotes ?? "",
-              costResourceId: (it as any).costResourceId ?? null,
-              effectiveCostId: (it as any).effectiveCostId ?? null,
-              laborUnitId: (it as any).laborUnitId ?? null,
-              resourceComposition: toPrismaJson((it as any).resourceComposition ?? {}),
-              sourceEvidence: toPrismaJson((it as any).sourceEvidence ?? {}),
-            } as any,
+              id: newId,
+              revisionId: newRevisionId,
+              parentId: p.parentId ? (phaseIdMap.get(p.parentId) ?? null) : null,
+              number: p.number,
+              name: p.name,
+              description: p.description,
+              order: p.order,
+              startDate: p.startDate,
+              endDate: p.endDate,
+              color: p.color,
+            },
           });
+        }
+
+        // Copy worksheets and items
+        const oldWorksheets = await tx.worksheet.findMany({ where: { revisionId: sourceRevision.id } });
+        for (const ws of oldWorksheets) {
+          const newWsId = createId("worksheet");
+          worksheetIdMap.set(ws.id, newWsId);
+          if (!firstWorksheetId) firstWorksheetId = newWsId;
+          await tx.worksheet.create({ data: { id: newWsId, revisionId: newRevisionId, name: ws.name, order: ws.order } });
+          const oldItems = await tx.worksheetItem.findMany({ where: { worksheetId: ws.id } });
+          for (const it of oldItems) {
+            const newItemId = createId("li");
+            worksheetItemIdMap.set(it.id, newItemId);
+            await tx.worksheetItem.create({
+              data: {
+                id: newItemId, worksheetId: newWsId,
+                phaseId: it.phaseId ? (phaseIdMap.get(it.phaseId) ?? null) : it.phaseId,
+                categoryId: it.categoryId,
+                category: it.category, entityType: it.entityType, entityName: it.entityName,
+                classification: it.classification ?? {},
+                costCode: it.costCode ?? null,
+                vendor: it.vendor, description: it.description, quantity: it.quantity,
+                uom: it.uom, cost: it.cost, markup: it.markup, price: it.price,
+                lineOrder: it.lineOrder,
+                rateScheduleItemId: it.rateScheduleItemId ?? null,
+                itemId: it.itemId ?? null,
+                tierUnits: it.tierUnits ?? {},
+                rateResolution: toPrismaJson((it as any).rateResolution ?? {}),
+                sourceNotes: it.sourceNotes ?? "",
+                costResourceId: (it as any).costResourceId ?? null,
+                effectiveCostId: (it as any).effectiveCostId ?? null,
+                laborUnitId: (it as any).laborUnitId ?? null,
+                resourceComposition: toPrismaJson((it as any).resourceComposition ?? {}),
+                sourceEvidence: toPrismaJson((it as any).sourceEvidence ?? {}),
+              } as any,
+            });
+          }
         }
       }
 
       // Copy canonical adjustments
       const adjustmentIdMap = new Map<string, string>();
-      for (const adjustment of await tx.adjustment.findMany({
-        where: { revisionId: sourceRevision.id },
-        orderBy: [{ order: "asc" }, { name: "asc" }],
-      })) {
-        const newAdjustmentId = createId("adj");
-        adjustmentIdMap.set(adjustment.id, newAdjustmentId);
-        await tx.adjustment.create({
-          data: {
-            id: newAdjustmentId,
-            revisionId: newRevisionId,
-            order: adjustment.order,
-            kind: adjustment.kind,
-            pricingMode: adjustment.pricingMode,
-            name: adjustment.name,
-            description: adjustment.description,
-            type: adjustment.type,
-            financialCategory: adjustment.financialCategory,
-            calculationBase: adjustment.calculationBase,
-            active: adjustment.active,
-            appliesTo: adjustment.appliesTo,
-            percentage: adjustment.percentage,
-            amount: adjustment.amount,
-            show: adjustment.show,
-          },
-        });
+      if (!resetEstimate) {
+        for (const adjustment of await tx.adjustment.findMany({
+          where: { revisionId: sourceRevision.id },
+          orderBy: [{ order: "asc" }, { name: "asc" }],
+        })) {
+          const newAdjustmentId = createId("adj");
+          adjustmentIdMap.set(adjustment.id, newAdjustmentId);
+          await tx.adjustment.create({
+            data: {
+              id: newAdjustmentId,
+              revisionId: newRevisionId,
+              order: adjustment.order,
+              kind: adjustment.kind,
+              pricingMode: adjustment.pricingMode,
+              name: adjustment.name,
+              description: adjustment.description,
+              type: adjustment.type,
+              financialCategory: adjustment.financialCategory,
+              calculationBase: adjustment.calculationBase,
+              active: adjustment.active,
+              appliesTo: adjustment.appliesTo,
+              percentage: adjustment.percentage,
+              amount: adjustment.amount,
+              show: adjustment.show,
+            },
+          });
+        }
       }
 
       // Copy estimate productivity factors with phase/worksheet scope remapping
-      for (const factor of await tx.estimateFactor.findMany({
-        where: { revisionId: sourceRevision.id },
-        orderBy: [{ order: "asc" }, { name: "asc" }],
-      })) {
-        await tx.estimateFactor.create({
-          data: {
-            id: createId("factor"),
-            revisionId: newRevisionId,
-            order: factor.order,
-            name: factor.name,
-            code: factor.code,
-            description: factor.description,
-            category: factor.category,
-            impact: factor.impact,
-            value: factor.value,
-            active: factor.active,
-            appliesTo: factor.appliesTo,
-            applicationScope: (factor as any).applicationScope ?? "global",
-            scope: remapEstimateFactorScope(factor.scope, phaseIdMap, worksheetIdMap, worksheetItemIdMap) as any,
-            formulaType: (factor as any).formulaType ?? "fixed_multiplier",
-            parameters: ((factor as any).parameters ?? {}) as any,
-            confidence: factor.confidence,
-            sourceType: factor.sourceType,
-            sourceId: factor.sourceId,
-            sourceRef: (factor.sourceRef ?? {}) as any,
-            tags: factor.tags,
-          },
-        });
+      if (!resetEstimate) {
+        for (const factor of await tx.estimateFactor.findMany({
+          where: { revisionId: sourceRevision.id },
+          orderBy: [{ order: "asc" }, { name: "asc" }],
+        })) {
+          await tx.estimateFactor.create({
+            data: {
+              id: createId("factor"),
+              revisionId: newRevisionId,
+              order: factor.order,
+              name: factor.name,
+              code: factor.code,
+              description: factor.description,
+              category: factor.category,
+              impact: factor.impact,
+              value: factor.value,
+              active: factor.active,
+              appliesTo: factor.appliesTo,
+              applicationScope: (factor as any).applicationScope ?? "global",
+              scope: remapEstimateFactorScope(factor.scope, phaseIdMap, worksheetIdMap, worksheetItemIdMap) as any,
+              formulaType: (factor as any).formulaType ?? "fixed_multiplier",
+              parameters: ((factor as any).parameters ?? {}) as any,
+              confidence: factor.confidence,
+              sourceType: factor.sourceType,
+              sourceId: factor.sourceId,
+              sourceRef: (factor.sourceRef ?? {}) as any,
+              tags: factor.tags,
+            },
+          });
+        }
       }
 
       // Copy presentation-only summary rows with stable source remapping
-      for (const sourceRow of (await tx.summaryRow.findMany({
-        where: { revisionId: sourceRevision.id },
-        orderBy: { order: "asc" },
-      })).map(mapSummaryRow)) {
-        await tx.summaryRow.create({
-          data: {
-            id: createId("sr"),
-            revisionId: newRevisionId,
-            type: sourceRow.type,
-            label: sourceRow.label,
-            order: sourceRow.order,
-            visible: sourceRow.visible,
-            style: sourceRow.style,
-            sourceCategory: sourceRow.sourceCategoryLabel ?? null,
-            sourcePhase: null,
-            sourceCategoryId: sourceRow.sourceCategoryId ?? null,
-            sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
-            sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
-            sourceWorksheetId: sourceRow.sourceWorksheetId ? (worksheetIdMap.get(sourceRow.sourceWorksheetId) ?? null) : null,
-            sourceWorksheetLabel: sourceRow.sourceWorksheetLabel ?? null,
-            sourceClassificationId: sourceRow.sourceClassificationId ?? null,
-            sourceClassificationLabel: sourceRow.sourceClassificationLabel ?? null,
-            sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
-          },
-        });
-      }
+      if (!resetEstimate) {
+        for (const sourceRow of (await tx.summaryRow.findMany({
+          where: { revisionId: sourceRevision.id },
+          orderBy: { order: "asc" },
+        })).map(mapSummaryRow)) {
+          await tx.summaryRow.create({
+            data: {
+              id: createId("sr"),
+              revisionId: newRevisionId,
+              type: sourceRow.type,
+              label: sourceRow.label,
+              order: sourceRow.order,
+              visible: sourceRow.visible,
+              style: sourceRow.style,
+              sourceCategory: sourceRow.sourceCategoryLabel ?? null,
+              sourcePhase: null,
+              sourceCategoryId: sourceRow.sourceCategoryId ?? null,
+              sourceCategoryLabel: sourceRow.sourceCategoryLabel ?? null,
+              sourcePhaseId: sourceRow.sourcePhaseId ? (phaseIdMap.get(sourceRow.sourcePhaseId) ?? null) : null,
+              sourceWorksheetId: sourceRow.sourceWorksheetId ? (worksheetIdMap.get(sourceRow.sourceWorksheetId) ?? null) : null,
+              sourceWorksheetLabel: sourceRow.sourceWorksheetLabel ?? null,
+              sourceClassificationId: sourceRow.sourceClassificationId ?? null,
+              sourceClassificationLabel: sourceRow.sourceClassificationLabel ?? null,
+              sourceAdjustmentId: sourceRow.sourceAdjustmentId ? (adjustmentIdMap.get(sourceRow.sourceAdjustmentId) ?? null) : null,
+            },
+          });
+        }
 
-      for (const c of await tx.condition.findMany({ where: { revisionId: sourceRevision.id } })) {
-        await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
-      }
-      const sectionIdMap = new Map<string, string>();
-      for (const s of await tx.reportSection.findMany({ where: { revisionId: sourceRevision.id } })) {
-        const newSId = createId("section");
-        sectionIdMap.set(s.id, newSId);
-        await tx.reportSection.create({ data: { id: newSId, revisionId: newRevisionId, sectionType: s.sectionType, title: s.title, content: s.content, order: s.order, parentSectionId: s.parentSectionId } });
-      }
-      for (const [oldId, newId] of sectionIdMap) {
-        const oldSection = await tx.reportSection.findFirst({ where: { id: newId } });
-        if (oldSection?.parentSectionId && sectionIdMap.has(oldSection.parentSectionId)) {
-          await tx.reportSection.update({ where: { id: newId }, data: { parentSectionId: sectionIdMap.get(oldSection.parentSectionId) } });
+        for (const c of await tx.condition.findMany({ where: { revisionId: sourceRevision.id } })) {
+          await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
+        }
+        const sectionIdMap = new Map<string, string>();
+        for (const s of await tx.reportSection.findMany({ where: { revisionId: sourceRevision.id } })) {
+          const newSId = createId("section");
+          sectionIdMap.set(s.id, newSId);
+          await tx.reportSection.create({ data: { id: newSId, revisionId: newRevisionId, sectionType: s.sectionType, title: s.title, content: s.content, order: s.order, parentSectionId: s.parentSectionId } });
+        }
+        for (const newId of sectionIdMap.values()) {
+          const oldSection = await tx.reportSection.findFirst({ where: { id: newId } });
+          if (oldSection?.parentSectionId && sectionIdMap.has(oldSection.parentSectionId)) {
+            await tx.reportSection.update({ where: { id: newId }, data: { parentSectionId: sectionIdMap.get(oldSection.parentSectionId) } });
+          }
         }
       }
 
@@ -10280,7 +11534,9 @@ export class PrismaApiStore {
           data: {
             id: createId("doc"), projectId: newProjectId, fileName: doc.fileName, fileType: doc.fileType,
             documentType: doc.documentType, pageCount: doc.pageCount, checksum: doc.checksum,
-            storagePath: doc.storagePath, extractedText: doc.extractedText, createdAt: timestamp, updatedAt: timestamp,
+            storagePath: doc.storagePath, extractedText: doc.extractedText,
+            structuredData: toPrismaJson((doc as any).structuredData ?? null),
+            createdAt: timestamp, updatedAt: timestamp,
           },
         });
       }
@@ -11112,15 +12368,38 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
+  private async findLaborUnitSearchCandidates(
+    baseWhere: Record<string, unknown>,
+    searchProfile: SearchProfile,
+    options: { perTermLimit?: number } = {},
+  ) {
+    const perTermLimit = Math.min(5000, Math.max(100, options.perTermLimit ?? 2000));
+    const rowsById = new Map<string, any>();
+    for (const term of searchProfile.terms) {
+      const rows = await (this.db as any).laborUnit.findMany({
+        where: {
+          ...baseWhere,
+          OR: laborUnitSearchOrFilters(term.variants.slice(0, 3)),
+        },
+        include: { library: true },
+        orderBy: [{ category: "asc" }, { className: "asc" }, { subClassName: "asc" }, { sortOrder: "asc" }],
+        take: perTermLimit,
+      });
+      for (const row of rows) rowsById.set(row.id, row);
+    }
+    return [...rowsById.values()];
+  }
+
   async listLaborUnits(input: {
     libraryId?: string;
     q?: string;
     provider?: string;
     category?: string;
     className?: string;
+    subClassName?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<{ units: LaborUnit[]; total: number }> {
+  } = {}): Promise<{ units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
     const accessibleLibrary =
       input.libraryId
         ? {
@@ -11139,21 +12418,59 @@ export class PrismaApiStore {
     const where: any = {
       library: accessibleLibrary,
     };
+    const andFilters: any[] = [];
     if (input.provider?.trim()) {
       where.library = { ...accessibleLibrary, provider: input.provider.trim() };
     }
-    if (input.category?.trim()) where.category = input.category.trim();
-    if (input.className?.trim()) where.className = input.className.trim();
-    if (input.q?.trim()) {
-      const q = input.q.trim();
-      where.OR = [
-        { code: { contains: q, mode: "insensitive" } },
-        { name: { contains: q, mode: "insensitive" } },
-        { description: { contains: q, mode: "insensitive" } },
-        { category: { contains: q, mode: "insensitive" } },
-        { className: { contains: q, mode: "insensitive" } },
-        { subClassName: { contains: q, mode: "insensitive" } },
-      ];
+    if (input.category?.trim()) {
+      const category = input.category.trim();
+      if (/^labou?r$/i.test(category)) {
+        andFilters.push({
+          OR: [
+            { entityCategoryType: { contains: "lab", mode: "insensitive" } },
+            { category: { contains: category, mode: "insensitive" } },
+          ],
+        });
+      } else {
+        andFilters.push({ category });
+      }
+    }
+    if (input.className?.trim()) andFilters.push({ className: input.className.trim() });
+    if (input.subClassName?.trim()) andFilters.push({ subClassName: input.subClassName.trim() });
+
+    const searchProfile = input.q?.trim() ? buildEstimatorSearchProfile(input.q) : null;
+    if (andFilters.length > 0) where.AND = andFilters;
+
+    if (searchProfile && searchProfile.terms.length > 0) {
+      const candidateRowLimit = 2000 * searchProfile.terms.length;
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000 });
+      const searchText = laborUnitSearchText;
+      const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
+      const ranked = rankEstimatorSearchItems<any>(
+        candidateRows,
+        weightedProfile,
+        searchText,
+        laborUnitHeadingText,
+      );
+      const offset = Math.max(0, input.offset ?? 0);
+      const limit = Math.min(1000, Math.max(1, input.limit ?? 250));
+      return {
+        units: ranked.slice(offset, offset + limit).map((entry) => mapLaborUnit({
+          ...entry.item,
+          metadata: {
+            ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
+            searchMatch: {
+              score: Number(entry.score.toFixed(3)),
+              coverage: Number(entry.coverage.toFixed(3)),
+              matchedTerms: entry.matchedTerms,
+              matchedPhrases: entry.matchedPhrases,
+              anchorMatches: entry.anchorMatches,
+            },
+          },
+        })),
+        total: ranked.length,
+        diagnostics: buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText),
+      };
     }
 
     const [total, rows] = await Promise.all([
@@ -11169,7 +12486,7 @@ export class PrismaApiStore {
     return { units: rows.map(mapLaborUnit), total };
   }
 
-  async listLaborUnitTree(input: LaborUnitTreeInput = {}): Promise<{ nodes: LaborUnitTreeGroup[]; units: LaborUnit[]; total: number }> {
+  async listLaborUnitTree(input: LaborUnitTreeInput = {}): Promise<{ nodes: LaborUnitTreeGroup[]; units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
     const parentType = input.parentType ?? "root";
     const accessibleLibrary =
       input.libraryId
@@ -11193,23 +12510,136 @@ export class PrismaApiStore {
     if (input.category != null) where.category = input.category;
     if (input.className != null) where.className = input.className;
     if (input.subClassName != null) where.subClassName = input.subClassName;
-    if (input.q?.trim()) {
-      const q = input.q.trim();
-      where.OR = [
-        { code: { contains: q, mode: "insensitive" } },
-        { name: { contains: q, mode: "insensitive" } },
-        { description: { contains: q, mode: "insensitive" } },
-        { category: { contains: q, mode: "insensitive" } },
-        { className: { contains: q, mode: "insensitive" } },
-        { subClassName: { contains: q, mode: "insensitive" } },
-      ];
-    }
+    const searchProfile = input.q?.trim() ? buildEstimatorSearchProfile(input.q) : null;
 
     const countOf = (row: any) => row._count?._all ?? 0;
     const hoursOf = (row: any) => Number(row._sum?.hoursNormal ?? 0);
     const groupId = (parts: Array<string | null | undefined>) =>
       `labor-unit-tree:${parts.map((part) => encodeURIComponent(part ?? "")).join("/")}`;
     const labelFor = (value: string | null | undefined, fallback: string) => value?.trim() || fallback;
+
+    if (searchProfile && searchProfile.terms.length > 0) {
+      const candidateRowLimit = 2000 * searchProfile.terms.length;
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000 });
+      const searchText = laborUnitSearchText;
+      const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
+      const ranked = rankEstimatorSearchItems<any>(
+        candidateRows,
+        weightedProfile,
+        searchText,
+        laborUnitHeadingText,
+      );
+      const diagnostics = buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText);
+      const offset = Math.max(0, input.offset ?? 0);
+      const limit = Math.min(parentType === "subclass" ? 1000 : 200, Math.max(1, input.limit ?? (parentType === "subclass" ? 250 : 50)));
+      const unitWithSearch = (entry: RankedSearchEntry<any>) => mapLaborUnit({
+        ...entry.item,
+        metadata: {
+          ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
+          searchMatch: {
+            score: Number(entry.score.toFixed(3)),
+            coverage: Number(entry.coverage.toFixed(3)),
+            matchedTerms: entry.matchedTerms,
+            matchedPhrases: entry.matchedPhrases,
+            anchorMatches: entry.anchorMatches,
+          },
+        },
+      });
+
+      if (parentType === "subclass") {
+        return {
+          nodes: [],
+          units: ranked.slice(offset, offset + limit).map(unitWithSearch),
+          total: ranked.length,
+          diagnostics,
+        };
+      }
+
+      const nextLevel =
+        parentType === "root" ? "catalog" :
+        parentType === "catalog" ? "category" :
+        parentType === "category" ? "class" :
+        "subclass";
+      const groups = new Map<string, {
+        node: LaborUnitTreeGroup;
+        score: number;
+        matchedTerms: string[];
+        matchedPhrases: string[];
+        representativeUnits: NonNullable<LaborUnitTreeGroup["search"]>["representativeUnits"];
+      }>();
+
+      for (const entry of ranked) {
+        const unit = entry.item;
+        const libraryId = unit.libraryId ?? input.libraryId ?? null;
+        const category = nextLevel === "catalog" ? "" : nextLevel === "category" ? unit.category ?? "" : input.category ?? unit.category ?? "";
+        const className = nextLevel === "class" ? unit.className ?? "" : nextLevel === "subclass" ? input.className ?? unit.className ?? "" : "";
+        const subClassName = nextLevel === "subclass" ? unit.subClassName ?? "" : "";
+        const key = groupId([nextLevel, libraryId, category, className, subClassName]);
+        const existing = groups.get(key);
+        const label = nextLevel === "catalog"
+          ? labelFor(unit.library?.name, "Unknown catalog")
+          : nextLevel === "category"
+            ? labelFor(category, "Uncategorized")
+            : nextLevel === "class"
+              ? labelFor(className, "Unclassified")
+              : labelFor(subClassName, "No subclass");
+        const representative = {
+          id: unit.id,
+          code: unit.code ?? "",
+          name: unit.name ?? "",
+          category: unit.category ?? "",
+          className: unit.className ?? "",
+          subClassName: unit.subClassName ?? "",
+          outputUom: unit.outputUom ?? "",
+          hoursNormal: Number(unit.hoursNormal ?? 0),
+        };
+        if (existing) {
+          existing.node.unitCount += 1;
+          existing.node.normalHoursTotal += Number(unit.hoursNormal ?? 0);
+          existing.score = Math.max(existing.score, entry.score);
+          existing.matchedTerms.push(...entry.matchedTerms);
+          existing.matchedPhrases.push(...entry.matchedPhrases);
+          if (existing.representativeUnits.length < 3) existing.representativeUnits.push(representative);
+          continue;
+        }
+        groups.set(key, {
+          node: {
+            id: key,
+            level: nextLevel,
+            label,
+            libraryId,
+            category,
+            className,
+            subClassName,
+            unitCount: 1,
+            normalHoursTotal: Number(unit.hoursNormal ?? 0),
+          },
+          score: entry.score,
+          matchedTerms: [...entry.matchedTerms],
+          matchedPhrases: [...entry.matchedPhrases],
+          representativeUnits: [representative],
+        });
+      }
+
+      const nodes = [...groups.values()]
+        .map((group) => ({
+          ...group.node,
+          normalHoursTotal: Number(group.node.normalHoursTotal.toFixed(4)),
+          search: {
+            score: Number(group.score.toFixed(3)),
+            matchedUnitCount: group.node.unitCount,
+            matchedTerms: uniqueStrings(group.matchedTerms).slice(0, 12),
+            matchedPhrases: uniqueStrings(group.matchedPhrases).slice(0, 8),
+            representativeUnits: group.representativeUnits,
+          },
+        }))
+        .sort((left, right) =>
+          (right.search?.score ?? 0) - (left.search?.score ?? 0) ||
+          right.unitCount - left.unitCount ||
+          left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: "base" }),
+        );
+      return { nodes: nodes.slice(offset, offset + limit), units: [], total: nodes.length, diagnostics };
+    }
 
     if (parentType === "subclass") {
       const [total, rows] = await Promise.all([
@@ -11331,9 +12761,6 @@ export class PrismaApiStore {
         subClassName: input.subClassName ?? "",
         outputUom: input.outputUom ?? "EA",
         hoursNormal: input.hoursNormal,
-        hoursDifficult: input.hoursDifficult ?? null,
-        hoursVeryDifficult: input.hoursVeryDifficult ?? null,
-        defaultDifficulty: input.defaultDifficulty ?? "normal",
         entityCategoryType: input.entityCategoryType ?? "Labour",
         tags: input.tags ?? [],
         sourceRef: (input.sourceRef ?? {}) as any,
@@ -11361,9 +12788,6 @@ export class PrismaApiStore {
     if (patch.subClassName !== undefined) data.subClassName = patch.subClassName;
     if (patch.outputUom !== undefined) data.outputUom = patch.outputUom;
     if (patch.hoursNormal !== undefined) data.hoursNormal = patch.hoursNormal;
-    if (patch.hoursDifficult !== undefined) data.hoursDifficult = patch.hoursDifficult ?? null;
-    if (patch.hoursVeryDifficult !== undefined) data.hoursVeryDifficult = patch.hoursVeryDifficult ?? null;
-    if (patch.defaultDifficulty !== undefined) data.defaultDifficulty = patch.defaultDifficulty;
     if (patch.entityCategoryType !== undefined) data.entityCategoryType = patch.entityCategoryType;
     if (patch.tags !== undefined) data.tags = patch.tags;
     if (patch.sourceRef !== undefined) data.sourceRef = { ...((existing.sourceRef as any) ?? {}), ...patch.sourceRef };
@@ -11570,7 +12994,6 @@ export class PrismaApiStore {
         catalogItemId: input.catalogItemId ?? null,
         rateScheduleItemId: input.rateScheduleItemId ?? null,
         laborUnitId: input.laborUnitId ?? null,
-        laborDifficulty: input.laborDifficulty ?? "normal",
         costResourceId: input.costResourceId ?? null,
         effectiveCostId: input.effectiveCostId ?? null,
         subAssemblyId: input.subAssemblyId ?? null,
@@ -11624,7 +13047,6 @@ export class PrismaApiStore {
     if (patch.catalogItemId !== undefined) data.catalogItemId = patch.catalogItemId ?? null;
     if (patch.rateScheduleItemId !== undefined) data.rateScheduleItemId = patch.rateScheduleItemId ?? null;
     if (patch.laborUnitId !== undefined) data.laborUnitId = patch.laborUnitId ?? null;
-    if (patch.laborDifficulty !== undefined) data.laborDifficulty = patch.laborDifficulty;
     if (patch.costResourceId !== undefined) data.costResourceId = patch.costResourceId ?? null;
     if (patch.effectiveCostId !== undefined) data.effectiveCostId = patch.effectiveCostId ?? null;
     if (patch.subAssemblyId !== undefined) data.subAssemblyId = patch.subAssemblyId ?? null;
@@ -11794,7 +13216,6 @@ export class PrismaApiStore {
           catalogItemId: c.catalogItemId,
           rateScheduleItemId: c.rateScheduleItemId,
           laborUnitId: c.laborUnitId,
-          laborDifficulty: c.laborDifficulty,
           costResourceId: c.costResourceId,
           effectiveCostId: c.effectiveCostId,
           subAssemblyId: c.subAssemblyId,
@@ -11907,9 +13328,6 @@ export class PrismaApiStore {
           subClassName: unit.subClassName,
           outputUom: unit.outputUom,
           hoursNormal: unit.hoursNormal,
-          hoursDifficult: unit.hoursDifficult ?? null,
-          hoursVeryDifficult: unit.hoursVeryDifficult ?? null,
-          defaultDifficulty: unit.defaultDifficulty,
           entityCategoryType: unit.entityCategoryType,
         },
       ]),
@@ -13323,7 +14741,6 @@ export class PrismaApiStore {
       toolId,
       input,
       formState: opts?.formState,
-      revisionDifficulty: revision?.laborDifficulty ?? undefined,
       lookupDatasetRows: async (datasetRef) => {
         const resolved = await this._resolveDatasetRecordForRead(datasetRef);
         if (!resolved) {
@@ -14034,8 +15451,8 @@ export class PrismaApiStore {
   }
 
   async searchKnowledgeChunks(query: string, bookId?: string, limit = 20): Promise<KnowledgeChunk[]> {
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (terms.length === 0) return [];
+    const profile = buildEstimatorSearchProfile(query);
+    if (profile.terms.length === 0) return [];
 
     const where: any = {};
     if (bookId) {
@@ -14048,19 +15465,26 @@ export class PrismaApiStore {
     }
 
     const chunks = await this.db.knowledgeChunk.findMany({ where });
+    const ranked = rankEstimatorSearchItems(
+      chunks,
+      profile,
+      (chunk) => chunk.text,
+      (chunk) => chunk.sectionTitle,
+    ).slice(0, limit);
 
-    // Score chunks by how many query terms they contain
-    const scored = chunks
-      .map((c) => {
-        const lower = c.text.toLowerCase() + " " + c.sectionTitle.toLowerCase();
-        const matchCount = terms.filter((t) => lower.includes(t)).length;
-        return { chunk: c, matchCount };
-      })
-      .filter((s) => s.matchCount > 0)
-      .sort((a, b) => b.matchCount - a.matchCount)
-      .slice(0, limit);
-
-    return scored.map((s) => mapKnowledgeChunk(s.chunk));
+    return ranked.map((entry) => mapKnowledgeChunk({
+      ...entry.item,
+      metadata: {
+        ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
+        searchMatch: {
+          score: Number(entry.score.toFixed(3)),
+          coverage: Number(entry.coverage.toFixed(3)),
+          matchedTerms: entry.matchedTerms,
+          matchedPhrases: entry.matchedPhrases,
+          anchorMatches: entry.anchorMatches,
+        },
+      },
+    }));
   }
 
   // ── Datasets ───────────────────────────────────────────────────────────
@@ -14329,8 +15753,8 @@ export class PrismaApiStore {
   }
 
   async searchKnowledgeDocumentChunks(query: string, documentId?: string, limit = 20): Promise<KnowledgeDocumentChunk[]> {
-    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (terms.length === 0) return [];
+    const profile = buildEstimatorSearchProfile(query);
+    if (profile.terms.length === 0) return [];
 
     const where: any = {};
     if (documentId) {
@@ -14345,17 +15769,26 @@ export class PrismaApiStore {
     }
 
     const chunks = await this.db.knowledgeDocumentChunk.findMany({ where });
-    const scored = chunks
-      .map((chunk) => {
-        const lower = `${chunk.text} ${chunk.sectionTitle}`.toLowerCase();
-        const matchCount = terms.filter((term) => lower.includes(term)).length;
-        return { chunk, matchCount };
-      })
-      .filter((entry) => entry.matchCount > 0)
-      .sort((a, b) => b.matchCount - a.matchCount)
-      .slice(0, limit);
+    const ranked = rankEstimatorSearchItems(
+      chunks,
+      profile,
+      (chunk) => chunk.text,
+      (chunk) => chunk.sectionTitle,
+    ).slice(0, limit);
 
-    return scored.map((entry) => mapKnowledgeDocumentChunk(entry.chunk));
+    return ranked.map((entry) => mapKnowledgeDocumentChunk({
+      ...entry.item,
+      metadata: {
+        ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
+        searchMatch: {
+          score: Number(entry.score.toFixed(3)),
+          coverage: Number(entry.coverage.toFixed(3)),
+          matchedTerms: entry.matchedTerms,
+          matchedPhrases: entry.matchedPhrases,
+          anchorMatches: entry.anchorMatches,
+        },
+      },
+    }));
   }
 
   private _normalizeDatasetReference(value: string) {
@@ -14713,10 +16146,26 @@ export class PrismaApiStore {
       return [];
     }
     const rows = await resolved.client.datasetRow.findMany({ where: { datasetId: resolved.dataset.id } });
-    const lowerQuery = query.toLowerCase();
-    return rows
-      .filter((r) => JSON.stringify(r.data).toLowerCase().includes(lowerQuery))
-      .map(mapDatasetRow);
+    const profile = buildEstimatorSearchProfile(query);
+    if (profile.terms.length === 0) return rows.map(mapDatasetRow);
+    return rankEstimatorSearchItems(
+      rows,
+      profile,
+      (row) => JSON.stringify(row.data ?? {}),
+    )
+      .map((entry) => mapDatasetRow({
+        ...entry.item,
+        data: {
+          ...((entry.item.data as Record<string, unknown> | null) ?? {}),
+          _searchMatch: {
+            score: Number(entry.score.toFixed(3)),
+            coverage: Number(entry.coverage.toFixed(3)),
+            matchedTerms: entry.matchedTerms,
+            matchedPhrases: entry.matchedPhrases,
+            anchorMatches: entry.anchorMatches,
+          },
+        },
+      }));
   }
 
   async queryDataset(datasetId: string, filters: Array<{ column: string; op: "eq" | "gt" | "lt" | "gte" | "lte" | "contains"; value: unknown }>): Promise<DatasetRow[]> {

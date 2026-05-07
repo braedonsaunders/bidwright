@@ -31,6 +31,8 @@ export interface RenderPageResult {
   pageHeight?: number;
   pageCount?: number;
   error?: string;
+  code?: string;
+  requestedPage?: number;
   duration_ms: number;
 }
 

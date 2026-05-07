@@ -60,6 +60,10 @@ function mimeTypeForFilename(filename: string): string {
       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     case 'xlsx':
       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xlsm':
+      return 'application/vnd.ms-excel.sheet.macroEnabled.12';
+    case 'ods':
+      return 'application/vnd.oasis.opendocument.spreadsheet';
     case 'pptx':
       return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
     case 'html':
@@ -72,6 +76,13 @@ function mimeTypeForFilename(filename: string): string {
 
 function azureDiSupportsAddOnFeatures(mimeType: string): boolean {
   return mimeType === 'application/pdf' || mimeType.startsWith('image/');
+}
+
+function fetchTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs);
+  }
+  return undefined;
 }
 
 function resolveAzureAnalyzeRequest(
@@ -630,6 +641,7 @@ async function azureParsePdf(
       'Content-Type': mimeType,
     },
     body: new Uint8Array(input),
+    signal: fetchTimeoutSignal(120_000),
   });
 
   if (!submitRes.ok) {
@@ -657,6 +669,7 @@ async function azureParsePdf(
 
     const pollRes = await fetch(operationLocation, {
       headers: { 'Ocp-Apim-Subscription-Key': apiKey },
+      signal: fetchTimeoutSignal(30_000),
     });
 
     if (!pollRes.ok) {

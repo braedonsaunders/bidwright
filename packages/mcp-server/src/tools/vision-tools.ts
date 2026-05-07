@@ -16,13 +16,24 @@ import { apiPost, getProjectId } from "../api-client.js";
  */
 
 const boundingBoxSchema = {
-  x: z.number().describe("X coordinate of top-left corner (pixels from left, in the rendered image coordinate space)"),
-  y: z.number().describe("Y coordinate of top-left corner (pixels from top)"),
-  width: z.number().describe("Width of region in pixels"),
-  height: z.number().describe("Height of region in pixels"),
-  imageWidth: z.number().describe("Total width of the rendered image this bbox refers to"),
-  imageHeight: z.number().describe("Total height of the rendered image this bbox refers to"),
+  x: z.coerce.number().describe("X coordinate of top-left corner (pixels from left, in the rendered image coordinate space)"),
+  y: z.coerce.number().describe("Y coordinate of top-left corner (pixels from top)"),
+  width: z.coerce.number().describe("Width of region in pixels"),
+  height: z.coerce.number().describe("Height of region in pixels"),
+  imageWidth: z.coerce.number().describe("Total width of the rendered image this bbox refers to"),
+  imageHeight: z.coerce.number().describe("Total height of the rendered image this bbox refers to"),
 };
+
+function isIgnoredSourceDocument(fileName: unknown) {
+  const name = String(fileName ?? "").toLowerCase();
+  return /(^|\/)__macosx(\/|$)|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(name);
+}
+
+function isPdfSourceDocument(doc: any) {
+  const fileType = String(doc?.fileType ?? "").trim().toLowerCase();
+  const fileName = String(doc?.fileName ?? doc?.name ?? "").trim().toLowerCase();
+  return !isIgnoredSourceDocument(fileName) && (fileType === "application/pdf" || fileType === "pdf" || fileName.endsWith(".pdf"));
+}
 
 /** Helper: save an array of matches as TakeoffAnnotation records via the API */
 async function saveMatchesAsAnnotations(opts: {
@@ -86,7 +97,7 @@ COMMON PITFALLS:
       const { apiGet } = await import("../api-client.js");
       const workspace = await apiGet(`/projects/${getProjectId()}/workspace`);
       const docs = (workspace.sourceDocuments ?? workspace.documents ?? [])
-        .filter((d: any) => d.fileType === "application/pdf" || d.fileType === "pdf" || d.documentType === "drawing")
+        .filter((d: any) => isPdfSourceDocument(d))
         .map((d: any) => ({
           id: d.id,
           fileName: d.fileName ?? d.name,
@@ -117,11 +128,12 @@ OUTPUT: Returns the page as a viewable PNG image, plus metadata JSON with imageW
 COMMON PITFALLS:
 - Always note the imageWidth and imageHeight from the response — you need these for bounding box coordinates
 - Start with dpi=150 to get an overview, then zoom into specific areas with zoomDrawingRegion for detail
+- A full-page render is only the overview. If this drawing drives scope or quantity, follow it with zoomDrawingRegion on the exact detail, symbol, schedule, dimension, or dense table area before you mark visual takeoff complete
 - Large pages at 300 DPI produce very large images — only use high DPI when you need to see fine detail`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing (from listDrawingPages)"),
-      pageNumber: z.number().min(1).default(1).describe("Page number (1-based)"),
-      dpi: z.number().min(72).max(300).default(150).describe("Resolution — 150 for overview, 200-300 for detail"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
+      dpi: z.coerce.number().min(72).max(300).default(150).describe("Resolution — 150 for overview, 200-300 for detail"),
     },
     async ({ documentId, pageNumber, dpi }) => {
       const result = await apiPost("/api/vision/render-page", {
@@ -158,7 +170,7 @@ COMMON PITFALLS:
               pageCount: result.pageCount,
               pageNumber,
               dpi,
-              note: "Use imageWidth and imageHeight as the coordinate space for bounding boxes in zoomDrawingRegion and countSymbols tools.",
+              note: "Use imageWidth and imageHeight as the coordinate space for bounding boxes in zoomDrawingRegion and countSymbols tools. If this sheet affects scope or quantity, follow this overview with a targeted zoomDrawingRegion before marking visual inspection complete. Use countSymbols only after identifying a tight representative symbol box.",
             }, null, 2),
           },
         ],
@@ -186,7 +198,7 @@ COMMON PITFALLS:
 - Make the region large enough to see context around the symbol (add 20-30% padding)`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.number().min(1).default(1).describe("Page number (1-based)"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
       region: z.object(boundingBoxSchema).describe("Region to zoom into — coordinates from a previous renderDrawingPage result"),
     },
     async ({ documentId, pageNumber, region }) => {
@@ -269,9 +281,9 @@ COMMON PITFALLS:
 - Without crossScale, a template from one CAD source may not match a different source's rendering of the same symbol`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.number().min(1).describe("Page number to search (1-based)"),
+      pageNumber: z.coerce.number().min(1).describe("Page number to search (1-based)"),
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box around ONE example of the symbol to find — in renderDrawingPage coordinate space"),
-      threshold: z.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
+      threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
       crossScale: z.boolean().default(false).describe("Enable cross-scale matching (0.75x-1.25x). ESSENTIAL for cross-document searches. ~6x slower but catches different-sized renderings of the same symbol"),
       autoSave: z.boolean().default(false).describe("If true, automatically persist all matches as TakeoffAnnotation records"),
     },
@@ -355,15 +367,15 @@ COMMON PITFALLS:
 - Annotations are marked with metadata.createdBy = "agent" so users can distinguish them from manual annotations`,
     {
       documentId: z.string().describe("Document ID where matches were found"),
-      pageNumber: z.number().min(1).describe("Page number where matches were found"),
+      pageNumber: z.coerce.number().min(1).describe("Page number where matches were found"),
       matches: z.array(z.object({
         rect: z.object({
-          x: z.number().describe("X coordinate of the match"),
-          y: z.number().describe("Y coordinate of the match"),
-          width: z.number().optional().describe("Width of the matched region"),
-          height: z.number().optional().describe("Height of the matched region"),
+          x: z.coerce.number().describe("X coordinate of the match"),
+          y: z.coerce.number().describe("Y coordinate of the match"),
+          width: z.coerce.number().optional().describe("Width of the matched region"),
+          height: z.coerce.number().optional().describe("Height of the matched region"),
         }),
-        confidence: z.number().describe("Match confidence (0-1)"),
+        confidence: z.coerce.number().describe("Match confidence (0-1)"),
         text: z.string().optional().describe("Detected text content if applicable"),
         method: z.string().optional().describe("Detection method used"),
       })).describe("Array of match results from countSymbols"),
@@ -426,7 +438,7 @@ EXAMPLE USE CASES:
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box of the symbol template — in renderDrawingPage coordinate space"),
-      threshold: z.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold (0.75 optimal)"),
+      threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold (0.75 optimal)"),
       crossScale: z.boolean().default(false).describe("Enable cross-scale matching for different-sized renderings"),
     },
     async ({ documentId, boundingBox, threshold, crossScale }) => {
@@ -491,9 +503,9 @@ TIPS:
 - Cluster candidates by size bucket to identify symbol types (e.g. all ~80x80 candidates are likely the same symbol type)`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.number().min(1).default(1).describe("Page number (1-based)"),
-      minSize: z.number().default(20).describe("Minimum symbol dimension in pixels. Set to 40+ to skip text characters"),
-      maxSize: z.number().default(150).describe("Maximum symbol dimension in pixels"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
+      minSize: z.coerce.number().default(20).describe("Minimum symbol dimension in pixels. Set to 40+ to skip text characters"),
+      maxSize: z.coerce.number().default(150).describe("Maximum symbol dimension in pixels"),
     },
     async ({ documentId, pageNumber, minSize, maxSize }) => {
       const result = await apiPost("/api/vision/find-symbols", {
@@ -526,15 +538,15 @@ TIPS:
   // ── scanDrawingSymbols ────────────────────────────────────
   server.tool(
     "scanDrawingSymbols",
-    `Scan a drawing page to discover repeating symbol types automatically. Returns a compact structured inventory of symbol clusters with counts and locations.
+    `Scan a drawing page to discover repeating symbol candidates automatically. Returns a compact structured inventory of candidate clusters with counts and locations.
 
-WHEN TO USE: Use this only when a project document/RFQ/spec makes a specific drawing sheet relevant to a quantity or coverage question. Do NOT run it once on a random drawing just to satisfy a workflow checkbox. First identify the drawing/purpose with readDocumentText, schedules, title blocks, or listDrawingPages, then scan the relevant page.
+WHEN TO USE: Use this only after renderDrawingPage/zoomDrawingRegion has shown that a specific drawing sheet is symbol-heavy and the quantity question depends on small repeated symbols. Do NOT use it as a general page overview, and do NOT run it once on a random drawing just to satisfy a workflow checkbox. For precise counts, prefer countSymbols with a tight representative bounding box around one clean symbol.
 
 INPUTS:
 - documentId: Document ID from listDrawingPages
 - pageNumber: Page to scan (1-based, default 1)
 - maxClusters: Limit returned clusters. Default 20 keeps responses small.
-- includeImage: Default false. Set true only when you need the rendered page image in the tool response.
+- includeImage: Default false. Avoid true unless a human-visible image is essential; prefer renderDrawingPage + zoomDrawingRegion for visual inspection.
 
 OUTPUT: A structured inventory with:
 - clusters: Array of symbol types found, each containing:
@@ -551,22 +563,16 @@ OUTPUT: A structured inventory with:
 
 WORKFLOW:
 1. Choose a relevant sheet/page based on the scope question.
-2. Call scanDrawingSymbols with includeImage=false for a compact inventory.
-3. Interpret each cluster: "Cluster 0 is valve tags (medium, 110x42, 46 found)" etc.
-4. If the user asked about specific symbols, find the matching cluster and report its count.
-5. If you need to refine a count (different threshold, cross-scale, etc.), call countSymbols with that cluster's representativeBox.
-6. If you need visual confirmation, call renderDrawingPage or scanDrawingSymbols with includeImage=true for the specific page only.
-
-WHAT THIS REPLACES:
-- You no longer need to: renderDrawingPage → zoom → zoom → zoom → zoom → countSymbols
-- Instead: scanDrawingSymbols → done (or → countSymbols for refinement)
-- This is 10x faster and finds symbols you might miss visually
+2. Call renderDrawingPage and targeted zoomDrawingRegion first so you understand the visual context and the symbol/region you are trying to count.
+3. Use this tool only as optional discovery on the already-relevant sheet; interpret clusters cautiously.
+4. If a cluster matches the specific symbol, refine with countSymbols using the representativeBox or a tighter box from renderDrawingPage coordinates.
+5. Do not treat this tool as proof of visual takeoff by itself; visual takeoff proof comes from rendered-page inspection plus targeted zooms.
 
 Avg scan time 2-5 seconds per page.`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.number().min(1).default(1).describe("Page number to scan (1-based)"),
-      maxClusters: z.number().min(1).max(100).default(20).describe("Maximum number of clusters to return; keeps tool output compact"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number to scan (1-based)"),
+      maxClusters: z.coerce.number().min(1).max(100).default(20).describe("Maximum number of clusters to return; keeps tool output compact"),
       includeImage: z.boolean().default(false).describe("Include the rendered page image. Defaults false to avoid huge base64/image payloads."),
     },
     async ({ documentId, pageNumber, maxClusters, includeImage }) => {
@@ -637,7 +643,7 @@ Avg scan time 2-5 seconds per page.`,
           clusters,
           note: includeImage
             ? "Each cluster represents a distinct symbol type. Use representativeBox with countSymbols if you need to refine the count."
-            : "Compact response: no page image returned. Set includeImage=true or call renderDrawingPage only when visual confirmation is necessary. Use representativeBox with countSymbols if you need to refine a count.",
+            : "Compact response: no page image returned. Use renderDrawingPage plus zoomDrawingRegion for visual inspection. Use representativeBox with countSymbols only if a cluster matches the specific symbol you need to count.",
         }, null, 2),
       });
 
@@ -669,7 +675,7 @@ COMMON PITFALLS:
 - The scale may be for the original print size (e.g. "24x36") — the DPI factor matters`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.number().min(1).default(1).describe("Page number (1-based)"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
     },
     async ({ documentId, pageNumber }) => {
       // Render the bottom-right quadrant at high DPI (title blocks are typically there)
@@ -761,9 +767,9 @@ COMMON PITFALLS:
 - For angled measurements, the tool calculates the true hypotenuse distance, not just horizontal or vertical
 - Double-check calibration by measuring a known dimension first (e.g. a labeled wall length)`,
     {
-      pointA: z.object({ x: z.number(), y: z.number() }).describe("Start point in image coordinates"),
-      pointB: z.object({ x: z.number(), y: z.number() }).describe("End point in image coordinates"),
-      pixelsPerUnit: z.number().positive().describe("Calibration: how many pixels per real-world unit"),
+      pointA: z.object({ x: z.coerce.number(), y: z.coerce.number() }).describe("Start point in image coordinates"),
+      pointB: z.object({ x: z.coerce.number(), y: z.coerce.number() }).describe("End point in image coordinates"),
+      pixelsPerUnit: z.coerce.number().positive().describe("Calibration: how many pixels per real-world unit"),
       unit: z.string().default("ft").describe("Real-world unit (ft, in, m, etc.)"),
     },
     async ({ pointA, pointB, pixelsPerUnit, unit }) => {

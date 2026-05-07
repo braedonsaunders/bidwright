@@ -4,6 +4,7 @@ import {
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   getModelBom,
+  getProjectModelIngestCapabilities,
   getProjectModelAsset,
   listModelTakeoffLinks,
   listProjectModelAssets,
@@ -48,6 +49,16 @@ function routeError(reply: any, error: unknown) {
 }
 
 export async function modelRoutes(app: FastifyInstance) {
+  app.get("/api/models/:projectId/ingest-capabilities", async (request, reply) => {
+    const query = request.query as { format?: string };
+    try {
+      const settings = await request.store!.getSettings();
+      return await getProjectModelIngestCapabilities(query.format, { integrations: settings.integrations });
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
   app.get("/api/models/:projectId/assets", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const query = request.query as { refresh?: string };

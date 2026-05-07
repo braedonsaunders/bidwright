@@ -13,6 +13,23 @@ const sourceTypeSchema = z.enum([
 ]);
 
 const takeoffQuantityFieldSchema = z.enum(["value", "area", "volume", "count"]);
+const lineEvidenceBasisTypeSchema = z.enum([
+  "drawing_quantity",
+  "visual_takeoff",
+  "drawing_table",
+  "drawing_note",
+  "document_quantity",
+  "vendor_quote",
+  "knowledge_labor",
+  "rate_schedule",
+  "allowance",
+  "indirect",
+  "subcontract",
+  "equipment_rental",
+  "material_quote",
+  "assumption",
+  "mixed",
+]);
 
 type SearchCandidate = {
   id?: string;
@@ -75,6 +92,29 @@ type EnrichedLaborUnit = Record<string, unknown> & {
   sourceQuality?: SourceQuality;
 };
 
+type CompactLaborUnit = {
+  id?: string;
+  libraryId?: string;
+  catalogItemId?: string;
+  code?: string;
+  name?: string;
+  description?: string;
+  discipline?: string;
+  category?: string;
+  className?: string;
+  subClassName?: string;
+  outputUom?: string;
+  hoursNormal?: number;
+  hoursPerOutput?: string;
+  entityCategoryType?: string;
+  tags?: unknown;
+  sourceRef?: unknown;
+  search?: unknown;
+  basis: SourceBasis;
+  matchType?: BasisMatchType;
+  sourceQuality?: SourceQuality;
+};
+
 type EntityCategoryRecord = {
   id: string;
   name: string;
@@ -103,6 +143,48 @@ function numberValue(value: unknown): number | undefined {
   return undefined;
 }
 
+function compactText(value: unknown, maxLength = 220): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 15)).trimEnd()}...[truncated]`;
+}
+
+function compactUnknownValue(value: unknown, options: { depth?: number; maxString?: number; maxArray?: number; maxKeys?: number } = {}): unknown {
+  const depth = options.depth ?? 2;
+  const maxString = options.maxString ?? 180;
+  const maxArray = options.maxArray ?? 8;
+  const maxKeys = options.maxKeys ?? 12;
+  if (typeof value === "string") return compactText(value, maxString) ?? "";
+  if (value === null || value === undefined || typeof value !== "object") return value;
+  if (depth <= 0) {
+    if (Array.isArray(value)) return { count: value.length };
+    return { keys: Object.keys(value as Record<string, unknown>).slice(0, maxKeys) };
+  }
+  if (Array.isArray(value)) {
+    const compacted = value.slice(0, maxArray).map((entry) => compactUnknownValue(entry, {
+      depth: depth - 1,
+      maxString,
+      maxArray,
+      maxKeys,
+    }));
+    if (value.length > maxArray) compacted.push(`[${value.length - maxArray} more]`);
+    return compacted;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, child]) => child !== undefined && child !== null && child !== "")
+      .slice(0, maxKeys)
+      .map(([key, child]) => [key, compactUnknownValue(child, {
+        depth: depth - 1,
+        maxString,
+        maxArray,
+        maxKeys,
+      })]),
+  );
+}
+
 function normalizeMarkup(markup: number | undefined, fallback = 0): number {
   const raw = Number.isFinite(markup) ? markup! : fallback;
   return raw > 1 ? raw / 100 : raw;
@@ -112,10 +194,57 @@ function normalizeKey(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
 function workspaceCategories(workspacePayload: any): EntityCategoryRecord[] {
   const workspace = workspacePayload?.workspace ?? workspacePayload ?? {};
   const categories = workspace.entityCategories ?? workspace.workspace?.entityCategories ?? [];
   return Array.isArray(categories) ? categories : [];
+}
+
+function workspaceSourceDocuments(workspacePayload: any): Record<string, unknown>[] {
+  const workspace = workspacePayload?.workspace ?? workspacePayload ?? {};
+  const docs = workspace.sourceDocuments ?? workspace.workspace?.sourceDocuments ?? [];
+  return Array.isArray(docs) ? docs.filter((doc) => doc && typeof doc === "object" && !Array.isArray(doc)) as Record<string, unknown>[] : [];
+}
+
+function isDrawingLikeSourceDocument(doc: Record<string, unknown>) {
+  const documentType = normalizeKey(doc.documentType);
+  const fileType = normalizeKey(doc.fileType);
+  const fileName = normalizeKey(doc.fileName);
+  if (/^__macosx\/|\/__macosx\/|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(fileName)) return false;
+  if (fileType !== "application/pdf" && fileType !== "pdf" && !fileName.endsWith(".pdf")) return false;
+  return documentType === "drawing";
+}
+
+function evidenceBasisRequiresDrawing(evidenceBasis: Record<string, unknown>) {
+  const quantityBasis = asObject(evidenceBasis.quantity);
+  return ["drawing_quantity", "visual_takeoff", "drawing_table", "drawing_note"].includes(
+    normalizeKey(quantityBasis.type ?? evidenceBasis.quantityType ?? evidenceBasis.type),
+  );
+}
+
+function evidenceBasisClaimIds(evidenceBasis: Record<string, unknown>) {
+  const quantityBasis = asObject(evidenceBasis.quantity);
+  return [
+    ...asArray(evidenceBasis.drawingClaimIds),
+    ...asArray(quantityBasis.drawingClaimIds),
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+}
+
+function claimIdsMentionedInCandidateLine(input: Record<string, unknown>, evidenceBasis: Record<string, unknown>) {
+  const text = [
+    input.entityName,
+    input.description,
+    input.sourceNotes,
+    JSON.stringify(input.candidate ?? {}),
+    JSON.stringify(evidenceBasis),
+  ].join("\n");
+  return [...new Set([...text.matchAll(/\bclaim-[0-9a-f]{12}\b/gi)].map((match) => match[0]))];
 }
 
 function sortedEnabledCategories(categories: EntityCategoryRecord[]) {
@@ -265,6 +394,12 @@ function candidateHaystack(candidate: SearchCandidate) {
     payload.vendor,
     payload.manufacturer,
     payload.model,
+    payload.category,
+    payload.laborCategory,
+    payload.className,
+    payload.subClassName,
+    payload.libraryName,
+    payload.tags,
   ].map((value) => typeof value === "string" ? value : "").join(" ");
 }
 
@@ -499,6 +634,9 @@ async function searchCandidates(input: {
   category?: string;
   worksheetId?: string;
   sourceTypes?: string[];
+  disabledSourceTypes?: string[];
+  disabledLaborLibraryIds?: string[];
+  disabledCatalogIds?: string[];
   limit?: number;
   offset?: number;
   refresh?: boolean;
@@ -509,6 +647,9 @@ async function searchCandidates(input: {
       category: input.category,
       worksheetId: input.worksheetId,
       sourceTypes: input.sourceTypes,
+      disabledSourceTypes: input.disabledSourceTypes,
+      disabledLaborLibraryIds: input.disabledLaborLibraryIds,
+      disabledCatalogIds: input.disabledCatalogIds,
       limit: input.limit,
       offset: input.offset,
       refresh: input.refresh,
@@ -551,7 +692,6 @@ function laborUnitBasis(unit: Record<string, unknown>, q?: string): SourceBasis 
     payload: {
       laborUnitId: stringValue(unit.id),
       hoursNormal: numberValue(unit.hoursNormal),
-      defaultDifficulty: stringValue(unit.defaultDifficulty),
     },
     score: undefined,
   };
@@ -568,6 +708,73 @@ function enrichLaborUnits(payload: unknown, q?: string): EnrichedLaborUnit[] {
       sourceQuality: basis.sourceQuality,
     };
   });
+}
+
+function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLaborUnit {
+  const basis = laborUnitBasis(unit, q);
+  const metadata = asObject(unit.metadata);
+  const searchMatch = asObject(metadata.searchMatch);
+  const outputUom = stringValue(unit.outputUom);
+  const hoursNormal = numberValue(unit.hoursNormal);
+  const compactSearch = Object.keys(searchMatch).length > 0
+    ? {
+        score: numberValue(searchMatch.score),
+        coverage: numberValue(searchMatch.coverage),
+        matchedTerms: compactUnknownValue(searchMatch.matchedTerms, { maxArray: 10, maxString: 80 }),
+        matchedPhrases: compactUnknownValue(searchMatch.matchedPhrases, { maxArray: 8, maxString: 120 }),
+        anchorMatches: compactUnknownValue(searchMatch.anchorMatches, { maxArray: 8, maxString: 120 }),
+      }
+    : undefined;
+  return {
+    id: stringValue(unit.id),
+    libraryId: stringValue(unit.libraryId),
+    catalogItemId: stringValue(unit.catalogItemId),
+    code: stringValue(unit.code),
+    name: compactText(unit.name, 160),
+    description: compactText(unit.description, 280),
+    discipline: stringValue(unit.discipline),
+    category: stringValue(unit.category),
+    className: stringValue(unit.className),
+    subClassName: stringValue(unit.subClassName),
+    outputUom,
+    hoursNormal,
+    hoursPerOutput: hoursNormal !== undefined && outputUom ? `${hoursNormal} HR/${outputUom}` : undefined,
+    entityCategoryType: stringValue(unit.entityCategoryType),
+    tags: compactUnknownValue(unit.tags, { maxArray: 8, maxString: 80 }),
+    sourceRef: compactUnknownValue(unit.sourceRef, { depth: 2, maxString: 120, maxArray: 4, maxKeys: 8 }),
+    search: compactSearch,
+    basis: {
+      ...basis,
+      description: compactText(basis.description, 220),
+      notes: compactText(basis.notes, 220),
+      metadata: basis.metadata ? asObject(compactUnknownValue(basis.metadata, { depth: 1, maxString: 140, maxArray: 5, maxKeys: 8 })) : undefined,
+    },
+    matchType: basis.matchType,
+    sourceQuality: basis.sourceQuality,
+  };
+}
+
+function compactLaborUnitsPayload(payload: unknown, q?: string) {
+  const object = asObject(payload);
+  const units = unitsFromPayload(payload);
+  const total = numberValue(object.total) ?? units.length;
+  const offset = numberValue(object.offset) ?? 0;
+  const diagnostics = object.diagnostics
+    ? compactUnknownValue(object.diagnostics, { depth: 3, maxString: 240, maxArray: 10, maxKeys: 14 })
+    : undefined;
+  return {
+    total,
+    offset,
+    returned: units.length,
+    hasMore: offset + units.length < total,
+    units: units.map((unit) => compactLaborUnit(unit, q)),
+    diagnostics,
+    guidance: [
+      "Results are compact candidate rows; the estimator decides exact/similar/context/unusable.",
+      "Use libraryId/category/className/subClassName from listLaborUnitTree to narrow broad searches.",
+      "Use getLaborUnit with a laborUnitId when one compact row needs deeper sourceRef/metadata inspection.",
+    ],
+  };
 }
 
 function annotationsFromPayload(payload: unknown): Record<string, unknown>[] {
@@ -664,8 +871,11 @@ export function registerResourceTools(server: McpServer) {
       category: z.string().optional().describe("Preferred worksheet category/entity type, e.g. Labour, Material, Equipment."),
       worksheetId: z.string().optional(),
       sourceTypes: z.array(sourceTypeSchema).optional(),
-      limit: z.number().int().positive().max(100).default(20),
-      offset: z.number().int().min(0).optional(),
+      disabledSourceTypes: z.array(sourceTypeSchema).optional().describe("Optional UI search setting: source types disabled for this quote."),
+      disabledLaborLibraryIds: z.array(z.string()).optional().describe("Optional UI search setting: labor-unit libraries disabled for this quote."),
+      disabledCatalogIds: z.array(z.string()).optional().describe("Optional UI search setting: catalogs disabled for this quote."),
+      limit: z.coerce.number().int().positive().max(100).default(20),
+      offset: z.coerce.number().int().min(0).optional(),
       refresh: z.boolean().default(false).describe("Rebuild the search index before searching."),
     },
     async (input) => {
@@ -688,9 +898,12 @@ export function registerResourceTools(server: McpServer) {
       category: z.string().optional().describe("Preferred worksheet category/entity type."),
       worksheetId: z.string().optional(),
       sourceTypes: z.array(sourceTypeSchema).optional(),
-      limit: z.number().int().positive().max(50).default(12),
-      quantity: z.number().positive().optional(),
-      markup: z.number().optional().describe("Markup as decimal or percent. 0.15 and 15 both mean 15%."),
+      disabledSourceTypes: z.array(sourceTypeSchema).optional().describe("Optional UI search setting: source types disabled for this quote."),
+      disabledLaborLibraryIds: z.array(z.string()).optional().describe("Optional UI search setting: labor-unit libraries disabled for this quote."),
+      disabledCatalogIds: z.array(z.string()).optional().describe("Optional UI search setting: catalogs disabled for this quote."),
+      limit: z.coerce.number().int().positive().max(50).default(12),
+      quantity: z.coerce.number().positive().optional(),
+      markup: z.coerce.number().optional().describe("Markup as decimal or percent. 0.15 and 15 both mean 15%."),
       refresh: z.boolean().default(false),
     },
     async (input) => {
@@ -751,9 +964,12 @@ export function registerResourceTools(server: McpServer) {
       category: z.string().optional().describe("Preferred worksheet category/entity type, e.g. Labour, Material, Equipment."),
       worksheetId: z.string().optional(),
       sourceTypes: z.array(sourceTypeSchema).optional(),
-      limit: z.number().int().positive().max(50).default(12),
-      quantity: z.number().positive().optional(),
-      markup: z.number().optional().describe("Markup as decimal or percent. 0.15 and 15 both mean 15%."),
+      disabledSourceTypes: z.array(sourceTypeSchema).optional().describe("Optional UI search setting: source types disabled for this quote."),
+      disabledLaborLibraryIds: z.array(z.string()).optional().describe("Optional UI search setting: labor-unit libraries disabled for this quote."),
+      disabledCatalogIds: z.array(z.string()).optional().describe("Optional UI search setting: catalogs disabled for this quote."),
+      limit: z.coerce.number().int().positive().max(50).default(12),
+      quantity: z.coerce.number().positive().optional(),
+      markup: z.coerce.number().optional().describe("Markup as decimal or percent. 0.15 and 15 both mean 15%."),
       includeLabor: z.boolean().default(true).describe("Also search labor-unit productivity libraries for hours/unit context."),
       includeTakeoff: z.boolean().default(true).describe("Also surface existing PDF/DWG takeoff annotations that may support quantity."),
       documentId: z.string().optional().describe("Optional drawing/document id to narrow takeoff annotation hints."),
@@ -833,76 +1049,14 @@ export function registerResourceTools(server: McpServer) {
   );
 
   server.tool(
-    "recommendLaborBasis",
-    "Search labor productivity units plus labor/rate cost sources for a scope phrase. Use this before creating labour rows so hours/unit and pricing basis are both defensible.",
-    {
-      q: z.string().describe("Labor activity, crew task, material install activity, or trade phrase."),
-      category: z.string().optional().describe("Labor unit category to prefer."),
-      className: z.string().optional().describe("Labor unit class to prefer."),
-      provider: z.string().optional(),
-      libraryId: z.string().optional(),
-      quantity: z.number().positive().optional(),
-      limit: z.number().int().positive().max(50).default(12),
-    },
-    async (input) => {
-      const [laborPayload, rateCandidates] = await Promise.all([
-        apiGet(`/api/labor-units/units${queryString({
-          q: input.q,
-          category: input.category,
-          className: input.className,
-          provider: input.provider,
-          libraryId: input.libraryId,
-          limit: input.limit,
-        })}`).catch(() => null),
-        searchCandidates({
-          q: input.q,
-          category: input.category ?? "Labour",
-          sourceTypes: ["rate_schedule_item", "labor_unit"],
-          limit: input.limit,
-        }).catch(() => []),
-      ]);
-
-      const laborUnits = laborPayload ? enrichLaborUnits(laborPayload, input.q) : [];
-      const rateSources = enrichCandidatesWithBasis(rateCandidates, { q: input.q });
-      const bestUnit = laborUnits[0] ?? null;
-      const bestRate = rateSources.find((candidate) => candidate.sourceType === "rate_schedule_item")
-        ?? rateSources.find(isDirectlyCreateableCandidate)
-        ?? null;
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            query: input.q,
-            recommendation: {
-              laborUnit: bestUnit,
-              rateSource: bestRate,
-              estimatedHours: bestUnit && input.quantity
-                ? Number(bestUnit.hoursNormal ?? 0) * input.quantity
-                : null,
-            },
-            laborUnits,
-            rateSources,
-            guidance: [
-              "Use the laborUnitId/hoursNormal as productivity evidence for hours per unit.",
-              "Use a rateScheduleItemId or other structured cost source to price the labor row; a labor unit alone is not a fully priced line.",
-              "Record both pieces in sourceEvidence/sourceNotes so reviewers can see productivity basis and pricing basis separately.",
-            ],
-          }, null, 2),
-        }],
-      };
-    },
-  );
-
-  server.tool(
     "listTakeoffAnnotations",
     "List saved PDF/DWG takeoff annotations so an estimate row can cite or link drawing quantity evidence.",
     {
       q: z.string().optional().describe("Optional scope/symbol/label search to filter annotations."),
       documentId: z.string().optional().describe("Optional drawing/document id."),
-      page: z.number().int().positive().optional().describe("Optional 1-based page number."),
-      limit: z.number().int().positive().max(100).default(25),
-      offset: z.number().int().min(0).default(0),
+      page: z.coerce.number().int().positive().optional().describe("Optional 1-based page number."),
+      limit: z.coerce.number().int().positive().max(40).default(20),
+      offset: z.coerce.number().int().min(0).default(0),
     },
     async (input) => {
       const projectId = getProjectId();
@@ -965,7 +1119,7 @@ export function registerResourceTools(server: McpServer) {
       annotationId: z.string(),
       worksheetItemId: z.string(),
       quantityField: takeoffQuantityFieldSchema.default("value").describe("Measurement field to use from the annotation."),
-      multiplier: z.number().finite().default(1).describe("Multiplier applied to the annotation measurement."),
+      multiplier: z.coerce.number().finite().default(1).describe("Multiplier applied to the annotation measurement."),
     },
     async (input) => {
       const projectId = getProjectId();
@@ -1002,7 +1156,7 @@ export function registerResourceTools(server: McpServer) {
 
   server.tool(
     "createWorksheetItemFromCandidate",
-    "Create a worksheet item from a candidate returned by searchLineItemCandidates, recommendCostSource, or recommendEstimateBasis, preserving structured cost-resource provenance and source-basis evidence.",
+    "Create a worksheet item from a candidate returned by searchLineItemCandidates, recommendCostSource, or recommendEstimateBasis, preserving structured cost-resource provenance and source-basis evidence. When drawings exist, include evidenceBasis so this helper cannot bypass the line-level evidence contract.",
     {
       worksheetId: z.string(),
       candidate: z.record(z.unknown()).optional().describe("A candidate object returned by searchLineItemCandidates/recommendCostSource."),
@@ -1010,15 +1164,37 @@ export function registerResourceTools(server: McpServer) {
       q: z.string().optional(),
       categoryId: z.string().optional(),
       category: z.string().optional(),
-      quantity: z.number().positive().default(1),
-      markup: z.number().optional(),
+      quantity: z.coerce.number().positive().default(1),
+      markup: z.coerce.number().optional(),
       entityName: z.string().optional(),
       description: z.string().optional(),
       uom: z.string().optional(),
-      cost: z.number().optional(),
-      price: z.number().optional(),
+      cost: z.coerce.number().optional(),
+      price: z.coerce.number().optional(),
       sourceNotes: z.string().optional(),
       phaseId: z.string().nullable().optional(),
+      evidenceBasis: z.object({
+        type: lineEvidenceBasisTypeSchema.optional().describe("Legacy single-source shorthand. Prefer quantity.type plus pricing.type when quantity and price/rate come from different sources."),
+        quantity: z.object({
+          type: lineEvidenceBasisTypeSchema.describe("Source class that justifies the row quantity, hours, duration, or count."),
+          drawingClaimIds: z.array(z.string()).default([]),
+          quantityDriver: z.string().optional(),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        pricing: z.object({
+          type: lineEvidenceBasisTypeSchema.describe("Source class that justifies unit cost, rate, productivity, or allowance value."),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        quantityDriver: z.string().optional(),
+        drawingClaimIds: z.array(z.string()).default([]),
+        sourceRefs: z.array(z.string()).default([]),
+        assumptionIds: z.array(z.string()).default([]),
+        rationale: z.string().optional(),
+      }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Prefer quantity/pricing axes. Drawing/takeoff quantity basis needs quantity.drawingClaimIds; pricing can separately be rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed."),
     },
     async (input) => {
       let candidate = input.candidate as SearchCandidate | undefined;
@@ -1043,12 +1219,70 @@ export function registerResourceTools(server: McpServer) {
       }
 
       const ws = await apiGet<any>(projectPath("/workspace")).catch(() => null);
+      const drawingDocs = workspaceSourceDocuments(ws).filter(isDrawingLikeSourceDocument);
+      const evidenceBasis = asObject(input.evidenceBasis);
+      const declaredClaimIds = evidenceBasisClaimIds(evidenceBasis);
+      const mentionedClaimIds = claimIdsMentionedInCandidateLine(input, evidenceBasis);
+      const missingDeclaredClaimIds = mentionedClaimIds.filter((id) => !declaredClaimIds.includes(id));
+      if (drawingDocs.length > 0 && Object.keys(evidenceBasis).length === 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Line evidence basis is required because this project contains drawings. Prefer evidenceBasis.quantity.type plus evidenceBasis.pricing.type. Use drawing_quantity/visual_takeoff/drawing_table/drawing_note with quantity.drawingClaimIds only when the row quantity is drawing-derived; otherwise declare the non-drawing quantity and pricing source classes such as rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed.",
+          }],
+          isError: true,
+        };
+      }
+      if (missingDeclaredClaimIds.length > 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Drawing evidence claim id(s) are mentioned but not attached to evidenceBasis.quantity.drawingClaimIds: ${missingDeclaredClaimIds.join(", ")}. Split the row provenance into evidenceBasis.quantity for quantity evidence and evidenceBasis.pricing for cost/rate evidence.`,
+          }],
+          isError: true,
+        };
+      }
+      if (declaredClaimIds.length > 0 && !evidenceBasisRequiresDrawing(evidenceBasis)) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Drawing claim IDs belong under evidenceBasis.quantity. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and move claim IDs to evidenceBasis.quantity.drawingClaimIds. Put candidate/library/material/rate support under evidenceBasis.pricing.",
+          }],
+          isError: true,
+        };
+      }
+      const pricingBasis = asObject(evidenceBasis.pricing);
+      const pricingType = normalizeKey(pricingBasis.type ?? evidenceBasis.pricingType);
+      if (evidenceBasisRequiresDrawing(evidenceBasis) && (!pricingType || ["drawing_quantity", "visual_takeoff", "drawing_table", "drawing_note"].includes(pricingType))) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Drawing quantity evidence proves count/measurement, not price/rate/productivity. Add evidenceBasis.pricing.type with the candidate/library/material/rate/vendor/subcontract/allowance source that supports cost or productivity.",
+          }],
+          isError: true,
+        };
+      }
+      if (evidenceBasisRequiresDrawing(evidenceBasis) && declaredClaimIds.length === 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "This candidate row is marked as drawing/takeoff quantity driven, so evidenceBasis.quantity.drawingClaimIds must name the Drawing Evidence Engine claim(s) that prove the quantity. Use evidenceBasis.pricing for the candidate/library source that supports pricing.",
+          }],
+          isError: true,
+        };
+      }
       const categories = workspaceCategories(ws);
       const defaultMarkup = Number(ws?.workspace?.currentRevision?.defaultMarkup ?? ws?.currentRevision?.defaultMarkup ?? 0);
       const body = worksheetItemFromCandidate(candidate, {
         ...input,
         defaultMarkup,
       }, categories);
+      if (Object.keys(evidenceBasis).length > 0) {
+        (body as any).sourceEvidence = {
+          ...asObject(body.sourceEvidence),
+          evidenceBasis,
+        };
+      }
       const data = await apiPost(projectPath(`/worksheets/${input.worksheetId}/items`), body);
       const created = (data as any)?.item ?? (data as any)?.workspace?.worksheets
         ?.flatMap((worksheet: any) => worksheet.items ?? [])
@@ -1064,23 +1298,76 @@ export function registerResourceTools(server: McpServer) {
 
   server.tool(
     "listLaborUnits",
-    "List labor-productivity units from the labor-unit libraries. Use this when a labour row needs hours/unit, difficulty basis, or a laborUnitId.",
+    "List compact labor-productivity candidate units from the labor-unit libraries. Use this when a labour row needs hours/unit, a productivity analog, or a laborUnitId. Search results are deliberately compact and include diagnostics so the agent can refine deliberately; call getLaborUnit for focused details on one candidate.",
     {
       q: z.string().optional(),
       provider: z.string().optional(),
       category: z.string().optional(),
       className: z.string().optional(),
+      subClassName: z.string().optional(),
       libraryId: z.string().optional(),
-      limit: z.number().int().positive().max(100).default(25),
-      offset: z.number().int().min(0).optional(),
+      limit: z.coerce.number().int().positive().max(100).default(25),
+      offset: z.coerce.number().int().min(0).optional(),
     },
     async (input) => {
       const data = await apiGet(`/api/labor-units/units${queryString(input)}`);
-      const object = asObject(data);
-      const enriched = Array.isArray(data)
-        ? enrichLaborUnits(data, input.q)
-        : { ...object, units: enrichLaborUnits(data, input.q) };
-      return { content: [{ type: "text" as const, text: JSON.stringify(enriched, null, 2) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify(compactLaborUnitsPayload(data, input.q), null, 2) }] };
+    },
+  );
+
+  server.tool(
+    "getLaborUnit",
+    "Fetch one labor-productivity unit by ID for focused source/metadata inspection after listLaborUnits returns a candidate. Use this for sourceRef details, not broad searches.",
+    {
+      laborUnitId: z.string().min(1),
+    },
+    async (input) => {
+      const unit = await apiGet(`/api/labor-units/units/${encodeURIComponent(input.laborUnitId)}`);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            unit: compactLaborUnit(asObject(unit)),
+            rawDetails: {
+              sourceRef: compactUnknownValue(asObject(unit).sourceRef, { depth: 4, maxString: 500, maxArray: 20, maxKeys: 30 }),
+              metadata: compactUnknownValue(asObject(unit).metadata, { depth: 4, maxString: 500, maxArray: 20, maxKeys: 30 }),
+            },
+            guidance: "Use this labor unit only if the operation and output unit are defensible for the worksheet row; otherwise treat it as context or reject it.",
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  server.tool(
+    "listLaborUnitTree",
+    "Browse labor-unit libraries by catalog, category, class, and subclass. Use this before repeated listLaborUnits searches so the agent can refine with the library's actual taxonomy instead of guessing terms.",
+    {
+      parentType: z.enum(["root", "catalog", "category", "class", "subclass"]).default("root"),
+      libraryId: z.string().optional(),
+      q: z.string().optional().describe("Optional text search applied while building the tree."),
+      category: z.string().optional(),
+      className: z.string().optional(),
+      subClassName: z.string().optional(),
+      limit: z.coerce.number().int().positive().max(200).default(50),
+      offset: z.coerce.number().int().min(0).optional(),
+    },
+    async (input) => {
+      const data = await apiGet(`/api/labor-units/tree${queryString(input)}`);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            ...asObject(data),
+            guidance: [
+              "This is taxonomy/navigation data only. When q is present, nodes are ranked by generic text matches inside that branch and include representative units.",
+              "Read diagnostics.term hit counts and diagnostics.querySlices: if multi-term slices have zero matches, treat separate-token hits as analog candidates rather than exact basis.",
+              "Use libraryId/category/className/subClassName from nodes to narrow listLaborUnits.",
+              "Do not treat high unit counts as recommendations; the estimator agent still decides relevance from the returned labor units and source context.",
+            ],
+          }, null, 2),
+        }],
+      };
     },
   );
 
@@ -1089,8 +1376,8 @@ export function registerResourceTools(server: McpServer) {
     "Preview an assembly expansion and resource rollup before inserting it into a worksheet. Use this for assembly-backed scope instead of hand-building all child rows.",
     {
       assemblyId: z.string(),
-      quantity: z.number().positive().default(1),
-      parameterValues: z.record(z.union([z.number(), z.string()])).optional(),
+      quantity: z.coerce.number().positive().default(1),
+      parameterValues: z.record(z.union([z.coerce.number(), z.string()])).optional(),
     },
     async (input) => {
       const data = await apiPost("/api/assemblies/preview", input);

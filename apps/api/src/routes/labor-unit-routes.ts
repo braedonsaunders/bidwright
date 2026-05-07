@@ -25,9 +25,6 @@ const unitSchema = z.object({
   subClassName: z.string().optional(),
   outputUom: z.string().optional(),
   hoursNormal: z.coerce.number().finite().nonnegative(),
-  hoursDifficult: z.coerce.number().finite().nonnegative().nullable().optional(),
-  hoursVeryDifficult: z.coerce.number().finite().nonnegative().nullable().optional(),
-  defaultDifficulty: z.enum(["normal", "difficult", "very_difficult"]).optional(),
   entityCategoryType: z.string().optional(),
   tags: z.array(z.string()).optional(),
   sourceRef: z.record(z.unknown()).optional(),
@@ -103,6 +100,7 @@ export async function laborUnitRoutes(app: FastifyInstance): Promise<void> {
       provider?: string;
       category?: string;
       className?: string;
+      subClassName?: string;
       limit?: string;
       offset?: string;
     };
@@ -113,12 +111,25 @@ export async function laborUnitRoutes(app: FastifyInstance): Promise<void> {
         provider: query.provider,
         category: query.category,
         className: query.className,
+        subClassName: query.subClassName,
         limit: query.limit ? Number(query.limit) : undefined,
         offset: query.offset ? Number(query.offset) : undefined,
       });
     } catch (err: any) {
       reply.code(statusForError(err?.message ?? ""));
       return { error: err?.message ?? "Failed to list labor units" };
+    }
+  });
+
+  app.get("/api/labor-units/units/:unitId", async (request, reply) => {
+    const { unitId } = request.params as { unitId: string };
+    try {
+      const unit = await request.store!.getLaborUnit(unitId);
+      if (!unit) return reply.code(404).send({ error: `Labor unit ${unitId} not found` });
+      return unit;
+    } catch (err: any) {
+      reply.code(statusForError(err?.message ?? ""));
+      return { error: err?.message ?? "Failed to fetch labor unit" };
     }
   });
 

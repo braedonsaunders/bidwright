@@ -984,13 +984,19 @@ export class KnowledgeService {
       const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
       for (const chunk of filteredChunks) {
         const book = bookMap.get(chunk.bookId);
-        const lowerText = chunk.text.toLowerCase();
-        let score = 0;
-        for (const term of queryTerms) {
-          const occurrences = lowerText.split(term).length - 1;
-          score += occurrences;
+        const match = (chunk.metadata as Record<string, any> | undefined)?.searchMatch;
+        let score = typeof match?.coverage === "number"
+          ? Math.min(1, Math.max(0, match.coverage))
+          : 0;
+        if (score === 0) {
+          const lowerText = chunk.text.toLowerCase();
+          for (const term of queryTerms) {
+            const occurrences = lowerText.split(term).length - 1;
+            score += occurrences;
+          }
+          score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
         }
-        score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
+        if (typeof match?.score === "number") score += Math.min(0.25, match.score / 100);
 
         keywordResults.push({
           id: chunk.id,
@@ -1030,13 +1036,19 @@ export class KnowledgeService {
       for (const chunk of filteredDocumentChunks) {
         const document = documentMap.get(chunk.documentId);
         const page = chunk.pageId ? pageMap.get(chunk.pageId) : undefined;
-        const lowerText = chunk.text.toLowerCase();
-        let score = 0;
-        for (const term of queryTerms) {
-          const occurrences = lowerText.split(term).length - 1;
-          score += occurrences;
+        const match = (chunk.metadata as Record<string, any> | undefined)?.searchMatch;
+        let score = typeof match?.coverage === "number"
+          ? Math.min(1, Math.max(0, match.coverage))
+          : 0;
+        if (score === 0) {
+          const lowerText = chunk.text.toLowerCase();
+          for (const term of queryTerms) {
+            const occurrences = lowerText.split(term).length - 1;
+            score += occurrences;
+          }
+          score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
         }
-        score = Math.min(1, score / Math.max(queryTerms.length * 3, 1));
+        if (typeof match?.score === "number") score += Math.min(0.25, match.score / 100);
 
         keywordResults.push({
           id: chunk.id,

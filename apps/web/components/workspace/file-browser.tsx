@@ -26,6 +26,7 @@ import {
   Minus,
   MoreHorizontal,
   Plus,
+  Ruler,
   Scaling,
   Search,
   Table2,
@@ -93,6 +94,10 @@ const DxfViewer = dynamic(
 );
 const ZipViewer = dynamic(
   () => import("./viewers/zip-viewer").then((m) => ({ default: m.ZipViewer })),
+  { ssr: false }
+);
+const BluebeamMarkupsViewer = dynamic(
+  () => import("./viewers/bluebeam-markups-viewer").then((m) => ({ default: m.BluebeamMarkupsViewer })),
   { ssr: false }
 );
 const RtfViewer = dynamic(
@@ -166,6 +171,7 @@ export interface FileBrowserProps {
   packages?: PackageRecord[];
   selectedWorksheet?: WorkspaceWorksheet | null;
   modelEditorChannelName?: string;
+  onOpenInTakeoff?: (documentId: string) => void;
 }
 
 /* ─── Constants ─── */
@@ -194,11 +200,22 @@ const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv"]);
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "log", "cfg", "ini", "html", "css", "js", "ts"]);
 const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
 const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
-const XLSX_EXTENSIONS = new Set(["xlsx", "xls"]);
+const XLSX_EXTENSIONS = new Set(["xlsx", "xls", "xlsm", "ods"]);
 const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
 const DXF_EXTENSIONS = new Set(["dxf", "dwg"]);
-const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz"]);
+const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz", "tgz"]);
+const MARKUP_CANDIDATE_EXTENSIONS = new Set(["csv", "tsv", "xml", "xlsx", "xls", "xlsm", "ods"]);
 const RTF_EXTENSIONS = new Set(["rtf"]);
+const FILE_UPLOAD_ACCEPT = [
+  ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz",
+  ".pdf",
+  ".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv",
+  ".doc", ".docx", ".rtf", ".pptx",
+  ".html", ".htm", ".mhtml", ".mht", ".txt", ".xml",
+  ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp",
+  ".dwg", ".dxf", ".msg", ".eml",
+  ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml",
+].join(",");
 const FILE_NODE_DND_TYPE = "application/x-bidwright-file-node";
 const ROOT_PARENT_VALUE = "__root__";
 
@@ -218,6 +235,18 @@ function formatBytes(bytes: number): string {
 
 function getFileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function isTakeoffOpenableFileName(name: string) {
+  const ext = getFileExtension(name);
+  return PDF_EXTENSIONS.has(ext) || DXF_EXTENSIONS.has(ext) || CAD_EXTENSIONS.has(ext);
+}
+
+function getTakeoffDocumentIdForItem(item: TreeItem): string | null {
+  if (item.type !== "file" || !isTakeoffOpenableFileName(item.name)) return null;
+  if (item.fileNode) return `file-${item.fileNode.id}`;
+  if (item.sourceDocument) return item.sourceDocument.id;
+  return null;
 }
 
 function ensureModelDocumentName(name?: string | null): string {
@@ -269,6 +298,17 @@ function getDownloadUrl(item: TreeItem, projectId: string, inline = false): stri
     return getDocumentDownloadUrl(projectId, item.sourceDocument.id, inline);
   }
   return null;
+}
+
+function getIngestSourceReference(item?: TreeItem | null): { sourceKind: "source_document" | "file_node"; sourceId: string } | null {
+  if (!item || item.type !== "file") return null;
+  if (item.fileNode) return { sourceKind: "file_node", sourceId: item.fileNode.id };
+  if (item.sourceDocument) return { sourceKind: "source_document", sourceId: item.sourceDocument.id };
+  return null;
+}
+
+function isMarkupCandidate(item?: TreeItem | null) {
+  return Boolean(item && item.type === "file" && MARKUP_CANDIDATE_EXTENSIONS.has(getFileExtension(item.name)));
 }
 
 function findModelAssetForItem(assets: ModelAsset[], item?: TreeItem | null) {
@@ -1469,16 +1509,18 @@ function TreeNode({
   );
 }
 
-type FileContextAction = "open" | "new-folder" | "upload" | "rename" | "move" | "delete";
+type FileContextAction = "open" | "open-takeoff" | "new-folder" | "upload" | "rename" | "move" | "delete";
 
 function FileTreeContextMenu({
   menu,
   projectId,
+  canOpenInTakeoff,
   onClose,
   onAction,
 }: {
   menu: { item: TreeItem; x: number; y: number } | null;
   projectId: string;
+  canOpenInTakeoff?: boolean;
   onClose: () => void;
   onAction: (action: FileContextAction, item: TreeItem) => void;
 }) {
@@ -1523,6 +1565,7 @@ function FileTreeContextMenu({
   const canUploadInside = item.type === "directory" && Boolean(item.fileNode || item.isAutoFolder);
   const canCreateInside = item.type === "directory" && Boolean(item.fileNode);
   const downloadUrl = item.type === "file" ? getDownloadUrl(item, projectId, false) : null;
+  const takeoffDocumentId = canOpenInTakeoff ? getTakeoffDocumentIdForItem(item) : null;
   const menuItemClass =
     "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/70 outline-none transition-colors hover:bg-panel2 hover:text-fg";
 
@@ -1553,6 +1596,7 @@ function FileTreeContextMenu({
       onPointerDown={(e) => e.stopPropagation()}
     >
       {button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
+      {takeoffDocumentId && button("open-takeoff", "Open in Takeoff", <Ruler className="h-3.5 w-3.5" />)}
       {downloadUrl && (
         <a
           href={downloadUrl}
@@ -1672,7 +1716,7 @@ function DeleteFileModal({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingUploadParentIdRef = useRef<string | null | undefined>(undefined);
@@ -2005,6 +2049,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       if (item.type === "directory") {
         setExpandedFolders((prev) => new Set([...prev, item.id]));
       }
+    } else if (action === "open-takeoff") {
+      const takeoffDocumentId = getTakeoffDocumentIdForItem(item);
+      if (takeoffDocumentId) {
+        onOpenInTakeoff?.(takeoffDocumentId);
+      }
     } else if (action === "new-folder" && item.fileNode && item.type === "directory") {
       setCreatingFolder(true);
       setNewFolderParentId(item.fileNode.id);
@@ -2023,7 +2072,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } else if (action === "delete") {
       setDeletingItem(item);
     }
-  }, [handleSelect, openFilePickerForParent]);
+  }, [handleSelect, onOpenInTakeoff, openFilePickerForParent]);
 
   const handleConfirmMove = useCallback(() => {
     if (movingItem?.fileNode) {
@@ -2048,6 +2097,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     return getDownloadUrl(selectedItem, projectId, false);
   }, [selectedItem, projectId]);
 
+  const ingestSourceRef = useMemo(() => getIngestSourceReference(selectedItem), [selectedItem]);
   const filePreviewType = selectedItem ? getFilePreviewType(selectedItem) : "none";
   const isEmbeddedModelEditorPreview =
     selectedItem?.type === "file" && filePreviewType === "cad" && isBidwrightEditableModel(selectedItem.name);
@@ -2369,7 +2419,19 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           <>
             {filePreviewType === "pdf" && previewUrl && <PdfPreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "image" && previewUrl && <ImagePreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
-            {filePreviewType === "text" && <TextPreview key={selectedItem.id} url={previewUrl} extractedText={!hasExtracted ? selectedItem.extractedText : undefined} />}
+            {filePreviewType === "text" && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {ingestSourceRef && isMarkupCandidate(selectedItem) && (
+                  <BluebeamMarkupsViewer
+                    key={`markups-${ingestSourceRef.sourceKind}-${ingestSourceRef.sourceId}`}
+                    projectId={projectId}
+                    sourceKind={ingestSourceRef.sourceKind}
+                    sourceId={ingestSourceRef.sourceId}
+                  />
+                )}
+                <TextPreview key={selectedItem.id} url={previewUrl} extractedText={!hasExtracted ? selectedItem.extractedText : undefined} />
+              </div>
+            )}
             {filePreviewType === "cad" && previewUrl && (
               <div className="flex-1 min-h-[400px]">
                 {isBidwrightEditableModel(selectedItem.name) ? (
@@ -2394,10 +2456,42 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               </div>
             )}
             {filePreviewType === "docx" && previewUrl && <DocxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
-            {filePreviewType === "xlsx" && previewUrl && <div className="flex-1 min-h-0"><XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
-            {filePreviewType === "email" && previewUrl && <EmailViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "xlsx" && previewUrl && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {ingestSourceRef && isMarkupCandidate(selectedItem) && (
+                  <BluebeamMarkupsViewer
+                    key={`markups-${ingestSourceRef.sourceKind}-${ingestSourceRef.sourceId}`}
+                    projectId={projectId}
+                    sourceKind={ingestSourceRef.sourceKind}
+                    sourceId={ingestSourceRef.sourceId}
+                  />
+                )}
+                <div className="min-h-0 flex-1">
+                  <XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />
+                </div>
+              </div>
+            )}
+            {filePreviewType === "email" && previewUrl && (
+              <EmailViewer
+                key={previewUrl}
+                url={previewUrl}
+                fileName={selectedItem.name}
+                projectId={projectId}
+                sourceKind={ingestSourceRef?.sourceKind}
+                sourceId={ingestSourceRef?.sourceId}
+              />
+            )}
             {filePreviewType === "dxf" && previewUrl && <div className="flex-1 min-h-[400px]"><DxfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
-            {filePreviewType === "zip" && previewUrl && <ZipViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "zip" && previewUrl && (
+              <ZipViewer
+                key={previewUrl}
+                url={previewUrl}
+                fileName={selectedItem.name}
+                projectId={projectId}
+                sourceKind={ingestSourceRef?.sourceKind}
+                sourceId={ingestSourceRef?.sourceId}
+              />
+            )}
             {filePreviewType === "rtf" && previewUrl && <RtfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "none" && (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
@@ -2538,6 +2632,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept={FILE_UPLOAD_ACCEPT}
                 className="hidden"
                 onChange={(e) => {
                   const parentId = pendingUploadParentIdRef.current;
@@ -2799,6 +2894,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       <FileTreeContextMenu
         menu={contextMenu}
         projectId={projectId}
+        canOpenInTakeoff={Boolean(onOpenInTakeoff)}
         onClose={() => setContextMenu(null)}
         onAction={handleContextAction}
       />

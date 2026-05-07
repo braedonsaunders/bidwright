@@ -395,6 +395,25 @@ export function SettingsPage({
               : prev.integrations.azureDiFeatures,
             azureDiQueryFields: (apiSettings.integrations as any).azureDiQueryFields ?? prev.integrations.azureDiQueryFields,
             azureDiOutputFormat: (apiSettings.integrations as any).azureDiOutputFormat || prev.integrations.azureDiOutputFormat,
+            drawingExtractionProvider: ((apiSettings.integrations as any).drawingExtractionProvider as IntegrationSettings["drawingExtractionProvider"])
+              || (((apiSettings.integrations as any).landingAiDrawingExtractionEnabled === true) ? "landingAi" : prev.integrations.drawingExtractionProvider),
+            drawingExtractionEnabled: typeof (apiSettings.integrations as any).drawingExtractionEnabled === "boolean"
+              ? Boolean((apiSettings.integrations as any).drawingExtractionEnabled)
+              : Boolean((apiSettings.integrations as any).landingAiDrawingExtractionEnabled ?? prev.integrations.drawingExtractionEnabled),
+            landingAiDrawingExtractionEnabled: Boolean((apiSettings.integrations as any).landingAiDrawingExtractionEnabled ?? prev.integrations.landingAiDrawingExtractionEnabled),
+            landingAiApiKey: (apiSettings.integrations as any).landingAiApiKey || prev.integrations.landingAiApiKey,
+            landingAiEndpoint: (apiSettings.integrations as any).landingAiEndpoint || prev.integrations.landingAiEndpoint,
+            landingAiParseModel: (apiSettings.integrations as any).landingAiParseModel || prev.integrations.landingAiParseModel,
+            landingAiExtractModel: (apiSettings.integrations as any).landingAiExtractModel || prev.integrations.landingAiExtractModel,
+            geminiProModel: (apiSettings.integrations as any).geminiProModel || prev.integrations.geminiProModel,
+            geminiFlashModel: (apiSettings.integrations as any).geminiFlashModel || prev.integrations.geminiFlashModel,
+            geminiThinkingEnabled: typeof (apiSettings.integrations as any).geminiThinkingEnabled === "boolean"
+              ? Boolean((apiSettings.integrations as any).geminiThinkingEnabled)
+              : prev.integrations.geminiThinkingEnabled,
+            autodeskClientId: (apiSettings.integrations as any).autodeskClientId ?? prev.integrations.autodeskClientId,
+            autodeskClientSecret: (apiSettings.integrations as any).autodeskClientSecret ?? prev.integrations.autodeskClientSecret,
+            autodeskApsRevitActivityId: (apiSettings.integrations as any).autodeskApsRevitActivityId ?? prev.integrations.autodeskApsRevitActivityId,
+            autodeskApsAutocadActivityId: (apiSettings.integrations as any).autodeskApsAutocadActivityId ?? prev.integrations.autodeskApsAutocadActivityId,
             agentRuntime: (apiSettings.integrations as any).agentRuntime || prev.integrations.agentRuntime,
             agentModel: (apiSettings.integrations as any).agentModel || prev.integrations.agentModel,
             agentReasoningEffort: (apiSettings.integrations as any).agentReasoningEffort || prev.integrations.agentReasoningEffort,
@@ -671,6 +690,20 @@ export function SettingsPage({
         azureDiFeatures: settings.integrations.azureDiFeatures,
         azureDiQueryFields: settings.integrations.azureDiQueryFields,
         azureDiOutputFormat: settings.integrations.azureDiOutputFormat,
+        drawingExtractionProvider: settings.integrations.drawingExtractionProvider,
+        drawingExtractionEnabled: settings.integrations.drawingExtractionEnabled,
+        landingAiDrawingExtractionEnabled: settings.integrations.landingAiDrawingExtractionEnabled,
+        landingAiApiKey: settings.integrations.landingAiApiKey,
+        landingAiEndpoint: settings.integrations.landingAiEndpoint,
+        landingAiParseModel: settings.integrations.landingAiParseModel,
+        landingAiExtractModel: settings.integrations.landingAiExtractModel,
+        geminiProModel: settings.integrations.geminiProModel,
+        geminiFlashModel: settings.integrations.geminiFlashModel,
+        geminiThinkingEnabled: settings.integrations.geminiThinkingEnabled,
+        autodeskClientId: settings.integrations.autodeskClientId,
+        autodeskClientSecret: settings.integrations.autodeskClientSecret,
+        autodeskApsRevitActivityId: settings.integrations.autodeskApsRevitActivityId,
+        autodeskApsAutocadActivityId: settings.integrations.autodeskApsAutocadActivityId,
         agentRuntime: (settings.integrations as any).agentRuntime ?? null,
         agentModel: (settings.integrations as any).agentModel ?? null,
         agentReasoningEffort: (settings.integrations as any).agentReasoningEffort ?? "extra_high",
@@ -841,6 +874,10 @@ export function SettingsPage({
     }
     setTimeout(() => setEmailTestStatus({ loading: false }), 5000);
   }, []);
+
+  const autodeskCredentialsConfigured = Boolean(settings.integrations.autodeskClientId && settings.integrations.autodeskClientSecret);
+  const autodeskActivitiesConfigured = Boolean(settings.integrations.autodeskApsRevitActivityId && settings.integrations.autodeskApsAutocadActivityId);
+  const autodeskReady = autodeskCredentialsConfigured && autodeskActivitiesConfigured;
 
   return (
     <div className="space-y-5">
@@ -1270,7 +1307,7 @@ export function SettingsPage({
                     <div>
                       <Label className="mb-1 block">Historical Benchmarking</Label>
                       <p className="text-xs text-fg/40">
-                        Controls whether AI estimates can use organization quote history as a benchmark input.
+                        Off by default. Only turn this on once you have a meaningful library of verified, accurate prior quotes for similar work. With too few comparables (or noisy ones) the agent will be steered toward the wrong totals. When disabled, the agent skips the benchmark pass and relies on documents, specs, line lists, and labor units instead.
                       </p>
                     </div>
                     <Toggle
@@ -1278,6 +1315,11 @@ export function SettingsPage({
                       onChange={(val) => updateDefaults({ benchmarkingEnabled: val })}
                     />
                   </div>
+                  {!settings.defaults.benchmarkingEnabled && (
+                    <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300/90">
+                      Benchmarking is currently disabled organization-wide. Recompute and similarity gates will not block estimates and the agent will not consult prior quote history.
+                    </p>
+                  )}
 
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                     <div>
@@ -1541,7 +1583,7 @@ export function SettingsPage({
                     <p className="text-xs font-medium text-fg/60 mb-2">Azure Document Intelligence</p>
                     <p className="text-[10px] text-fg/40 mb-3">Primary extraction for PDFs, Office files, images, HTML, structured tables, and form key-value pairs.</p>
                     <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
                           <Label>Document extraction</Label>
                           <Select
@@ -1615,6 +1657,202 @@ export function SettingsPage({
                           <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
                         )}
                       </div>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Autodesk APS CAD/BIM Ingest */}
+                  <div>
+                    <div className="mb-3 flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-medium text-fg/60 mb-1">Autodesk APS CAD/BIM Ingest</p>
+                        <p className="text-[10px] text-fg/40">Native RVT/DWG extraction through Autodesk APS only.</p>
+                      </div>
+                      <Badge tone={autodeskReady ? "success" : autodeskCredentialsConfigured ? "warning" : "default"}>
+                        {autodeskReady ? "Ready" : autodeskCredentialsConfigured ? "Partial" : "Missing"}
+                      </Badge>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <Label>Client ID</Label>
+                          <Input
+                            type="text"
+                            value={settings.integrations.autodeskClientId}
+                            onChange={(e) => updateIntegrations({ autodeskClientId: e.target.value })}
+                            placeholder="APS client ID"
+                          />
+                        </div>
+                        <div>
+                          <Label>Client Secret</Label>
+                          <Input
+                            type="password"
+                            value={settings.integrations.autodeskClientSecret}
+                            onChange={(e) => updateIntegrations({ autodeskClientSecret: e.target.value })}
+                            placeholder="APS client secret"
+                          />
+                          {settings.integrations.autodeskClientSecret && (
+                            <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.autodeskClientSecret)}</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <Label>Revit activity ID</Label>
+                          <Input
+                            type="text"
+                            value={settings.integrations.autodeskApsRevitActivityId}
+                            onChange={(e) => updateIntegrations({ autodeskApsRevitActivityId: e.target.value })}
+                            placeholder="nickname.activity+alias"
+                          />
+                        </div>
+                        <div>
+                          <Label>AutoCAD activity ID</Label>
+                          <Input
+                            type="text"
+                            value={settings.integrations.autodeskApsAutocadActivityId}
+                            onChange={(e) => updateIntegrations({ autodeskApsAutocadActivityId: e.target.value })}
+                            placeholder="nickname.activity+alias"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Separator />
+
+                  {/* Drawing extraction provider */}
+                  <div>
+                    <div className="flex items-center justify-between gap-4 mb-3">
+                      <div>
+                        <p className="text-xs font-medium text-fg/60 mb-1">Drawing Extraction</p>
+                        <p className="text-[10px] text-fg/40">
+                          Optional verbose drawing-evidence enrichment for drawing PDFs. Picks one provider; Azure structured extraction always runs in parallel.
+                        </p>
+                      </div>
+                      <Toggle
+                        checked={settings.integrations.drawingExtractionEnabled}
+                        onChange={(drawingExtractionEnabled) => updateIntegrations({
+                          drawingExtractionEnabled,
+                          landingAiDrawingExtractionEnabled: drawingExtractionEnabled && settings.integrations.drawingExtractionProvider === "landingAi",
+                        })}
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <div>
+                        <Label>Provider</Label>
+                        <select
+                          className="block w-full rounded-md border border-line bg-panel2 px-2 py-1.5 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+                          value={settings.integrations.drawingExtractionProvider}
+                          onChange={(e) => {
+                            const drawingExtractionProvider = e.target.value as IntegrationSettings["drawingExtractionProvider"];
+                            updateIntegrations({
+                              drawingExtractionProvider,
+                              landingAiDrawingExtractionEnabled: settings.integrations.drawingExtractionEnabled && drawingExtractionProvider === "landingAi",
+                            });
+                          }}
+                        >
+                          <option value="none">None — disable drawing enrichment</option>
+                          <option value="landingAi">LandingAI ADE — proven on drawings, ~$0.027/page parse</option>
+                          <option value="geminiPro">Gemini 2.5 Pro — best quality, scales w/ doc complexity (~$0.04–0.13/pg)</option>
+                          <option value="geminiFlash">Gemini 2.5 Flash — production sweet spot (~$0.013–0.022/pg)</option>
+                        </select>
+                      </div>
+
+                      {settings.integrations.drawingExtractionProvider === "landingAi" && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <Label>LandingAI endpoint</Label>
+                              <Input
+                                type="text"
+                                value={settings.integrations.landingAiEndpoint}
+                                onChange={(e) => updateIntegrations({ landingAiEndpoint: e.target.value })}
+                                placeholder="https://api.va.landing.ai"
+                              />
+                            </div>
+                            <div>
+                              <Label>LandingAI API key</Label>
+                              <Input
+                                type="password"
+                                value={settings.integrations.landingAiApiKey}
+                                onChange={(e) => updateIntegrations({ landingAiApiKey: e.target.value })}
+                                placeholder="Enter LandingAI key..."
+                              />
+                              {settings.integrations.landingAiApiKey && (
+                                <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.landingAiApiKey)}</p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <Label>Parse model</Label>
+                              <Input
+                                type="text"
+                                value={settings.integrations.landingAiParseModel}
+                                onChange={(e) => updateIntegrations({ landingAiParseModel: e.target.value })}
+                                placeholder="dpt-2-latest"
+                              />
+                            </div>
+                            <div>
+                              <Label>Extract model</Label>
+                              <Input
+                                type="text"
+                                value={settings.integrations.landingAiExtractModel}
+                                onChange={(e) => updateIntegrations({ landingAiExtractModel: e.target.value })}
+                                placeholder="extract-latest"
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {(settings.integrations.drawingExtractionProvider === "geminiPro" || settings.integrations.drawingExtractionProvider === "geminiFlash") && (
+                        <>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <Label>Gemini API key</Label>
+                              <Input
+                                type="password"
+                                value={settings.integrations.geminiApiKey}
+                                onChange={(e) => updateIntegrations({ geminiApiKey: e.target.value })}
+                                placeholder="AIza..."
+                              />
+                              {settings.integrations.geminiApiKey && (
+                                <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.geminiApiKey)}</p>
+                              )}
+                            </div>
+                            <div>
+                              <Label>Model id</Label>
+                              <Input
+                                type="text"
+                                value={settings.integrations.drawingExtractionProvider === "geminiPro"
+                                  ? settings.integrations.geminiProModel
+                                  : settings.integrations.geminiFlashModel}
+                                onChange={(e) => updateIntegrations(
+                                  settings.integrations.drawingExtractionProvider === "geminiPro"
+                                    ? { geminiProModel: e.target.value }
+                                    : { geminiFlashModel: e.target.value }
+                                )}
+                                placeholder={settings.integrations.drawingExtractionProvider === "geminiPro" ? "gemini-2.5-pro" : "gemini-2.5-flash"}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-4">
+                            <div>
+                              <Label>Thinking mode</Label>
+                              <p className="text-[10px] text-fg/40">
+                                When enabled, Gemini plans before responding (better quality on dense drawings, higher cost). Disable for cheaper, faster output on simple drawings.
+                              </p>
+                            </div>
+                            <Toggle
+                              checked={settings.integrations.geminiThinkingEnabled}
+                              onChange={(geminiThinkingEnabled) => updateIntegrations({ geminiThinkingEnabled })}
+                            />
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 </CardBody>
@@ -2976,8 +3214,9 @@ const SETTINGS_FACTOR_SOURCE_OPTIONS: Array<{ value: EstimateFactorSourceType; l
   { value: "knowledge", label: "Knowledge book" },
   { value: "library", label: "Library" },
   { value: "labor_unit", label: "Labor unit" },
-  { value: "condition_difficulty", label: "Condition difficulty" },
-  { value: "neca_difficulty", label: "Legacy condition difficulty" },
+  { value: "project_condition", label: "Project condition" },
+  { value: "condition_difficulty", label: "Legacy condition source" },
+  { value: "neca_difficulty", label: "Legacy condition score" },
   { value: "agent", label: "Agent" },
   { value: "custom", label: "Custom" },
 ];
@@ -3051,9 +3290,12 @@ function settingsFactorSourceLabel(value: EstimateFactorSourceType | string | un
       return "Library";
     case "labor_unit":
       return "Labor unit";
+    case "project_condition":
+      return "Project condition";
     case "condition_difficulty":
+      return "Project condition";
     case "neca_difficulty":
-      return "Condition difficulty";
+      return "Condition score";
     case "agent":
       return "Agent";
     default:

@@ -87,6 +87,8 @@ import { datasetRoutes } from "./routes/dataset-routes.js";
 import { takeoffRoutes } from "./routes/takeoff-routes.js";
 import { visionRoutes } from "./routes/vision-routes.js";
 import { modelRoutes } from "./routes/model-routes.js";
+import { fileIngestRoutes } from "./routes/file-ingest-routes.js";
+import { scheduleImportRoutes } from "./routes/schedule-import-routes.js";
 import { authPlugin } from "./middleware/auth.js";
 import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
@@ -115,6 +117,13 @@ import { executePluginSearchDataSource } from "./services/plugin-search-data-sou
 import { knowledgeService } from "./services/knowledge-service.js";
 import { documentTypeFromIngestion } from "./calc-utils.js";
 import { inferPageCount, knowledgeCategoryFromDocType } from "./store/mappers.js";
+import {
+  attachNativePdfMetadata,
+  choosePdfPageCount,
+  getNativePdfPageCountFromBuffer,
+  isPdfFileNameOrType,
+  type NativePdfPageCountResult,
+} from "./services/pdf-native-service.js";
 
 const createProjectSchema = z.object({
   name: z.string().min(1),
@@ -150,7 +159,6 @@ const revisionPatchSchema = z.object({
   freightOnBoard: z.string().optional(),
   status: z.enum(["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"]).optional(),
   defaultMarkup: z.number().finite().optional(),
-  laborDifficulty: z.string().optional(),
   followUpNote: z.string().optional(),
   printEmptyNotesColumn: z.boolean().optional(),
   printCategory: z.array(z.string()).optional(),
@@ -211,9 +219,9 @@ const createWorksheetItemSchema = z.object({
   description: z.string().default(""),
   quantity: z.coerce.number().finite(),
   uom: z.string().min(1),
-  cost: z.coerce.number().finite(),
-  markup: z.coerce.number().finite(),
-  price: z.coerce.number().finite(),
+  cost: z.coerce.number().finite().optional(),
+  markup: z.coerce.number().finite().optional(),
+  price: z.coerce.number().finite().optional(),
   lineOrder: z.coerce.number().int().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   itemId: z.string().nullable().optional(),
@@ -441,7 +449,7 @@ const createEstimateFactorSchema = z.object({
   formulaType: z.enum(["fixed_multiplier", "per_unit_scale", "condition_score", "temperature_productivity", "neca_condition_score", "extended_duration"]).optional(),
   parameters: z.record(z.unknown()).optional(),
   confidence: z.enum(["high", "medium", "low"]).optional(),
-  sourceType: z.enum(["library", "knowledge", "labor_unit", "condition_difficulty", "neca_difficulty", "custom", "agent"]).optional(),
+  sourceType: z.enum(["library", "knowledge", "labor_unit", "project_condition", "condition_difficulty", "neca_difficulty", "custom", "agent"]).optional(),
   sourceId: z.string().nullable().optional(),
   sourceRef: z.record(z.unknown()).optional(),
   tags: z.array(z.string()).optional(),
@@ -708,16 +716,32 @@ function inferFallbackExtension(mimeType?: string) {
       return ".pdf";
     case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
       return ".xlsx";
+    case "application/vnd.ms-excel.sheet.macroenabled.12":
+      return ".xlsm";
     case "application/vnd.ms-excel":
       return ".xls";
+    case "application/vnd.oasis.opendocument.spreadsheet":
+      return ".ods";
     case "text/csv":
       return ".csv";
+    case "text/tab-separated-values":
+      return ".tsv";
     case "application/msword":
       return ".doc";
     case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
       return ".docx";
     case "message/rfc822":
       return ".eml";
+    case "application/x-7z-compressed":
+      return ".7z";
+    case "application/vnd.rar":
+    case "application/x-rar-compressed":
+      return ".rar";
+    case "application/x-tar":
+      return ".tar";
+    case "application/gzip":
+    case "application/x-gzip":
+      return ".gz";
     case "image/png":
       return ".png";
     case "image/jpeg":
@@ -741,6 +765,24 @@ function inferMultipartFileName(fileName: string | undefined, mimeType: string |
 function isZipUpload(fileName: string, mimeType?: string) {
   const ext = path.extname(fileName).toLowerCase();
   return ext === ".zip" || ["application/zip", "application/x-zip-compressed"].includes((mimeType ?? "").toLowerCase());
+}
+
+const EXPANDABLE_ARCHIVE_EXTENSIONS = new Set([".zip", ".7z", ".rar", ".tar", ".gz", ".tgz"]);
+const EXPANDABLE_ARCHIVE_MIME_TYPES = new Set([
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-7z-compressed",
+  "application/vnd.rar",
+  "application/x-rar-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-gzip",
+]);
+
+function isExpandableArchiveUpload(fileName: string, mimeType?: string) {
+  const lower = fileName.toLowerCase();
+  const ext = lower.endsWith(".tar.gz") ? ".tgz" : path.extname(lower);
+  return EXPANDABLE_ARCHIVE_EXTENSIONS.has(ext) || EXPANDABLE_ARCHIVE_MIME_TYPES.has((mimeType ?? "").toLowerCase());
 }
 
 function isMsgUpload(fileName: string, mimeType?: string) {
@@ -882,6 +924,10 @@ function addArchiveBuffer(zip: JSZip, usedPaths: Set<string>, desiredPath: strin
 
 function toDataView(buffer: Buffer) {
   return new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+function toArrayBuffer(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 }
 
 function stripHtmlTags(value: string) {
@@ -1157,6 +1203,70 @@ async function appendEmlBufferToArchive(
   }
 }
 
+interface LibarchiveFileEntry {
+  path?: string;
+  file?: {
+    name?: string;
+    size?: number;
+    extract?: () => Promise<File>;
+  };
+}
+
+function libarchiveEntryPath(entry: LibarchiveFileEntry) {
+  const directory = entry.path ?? "";
+  const name = entry.file?.name ?? "file";
+  return normalizeArchiveEntryPath(`${directory}${name}`);
+}
+
+async function appendExpandedLibarchiveToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
+  const bytes = await readFile(file.stagingPath);
+  const { Archive } = await import("libarchive.js/dist/libarchive-node.mjs");
+  const sourceArchive = await Archive.open(new Blob([toArrayBuffer(bytes)]));
+  const archiveFolder = sanitizeFileName(path.basename(file.originalFileName, path.extname(file.originalFileName))) || "archive";
+  const archiveParent = archiveFileDirectory(file.relativePath);
+  const archiveRoot = archiveParent ? path.posix.join(archiveParent, archiveFolder) : archiveFolder;
+
+  try {
+    const encrypted = await sourceArchive.hasEncryptedData();
+    if (encrypted) {
+      addArchiveBuffer(
+        zip,
+        usedPaths,
+        `${archiveRoot}/ARCHIVE-ENCRYPTED.txt`,
+        `Source archive ${file.originalFileName} appears to be encrypted and could not be expanded without a password.`
+      );
+      addArchiveBuffer(zip, usedPaths, archiveOriginalSourcePath(file.relativePath, file.safeFileName), bytes);
+      return;
+    }
+
+    const entries = await sourceArchive.getFilesArray() as LibarchiveFileEntry[];
+    for (const entry of entries.sort((a, b) => libarchiveEntryPath(a).localeCompare(libarchiveEntryPath(b)))) {
+      const entryPath = libarchiveEntryPath(entry);
+      if (!entryPath || isIgnoredArchivePath(entryPath) || !entry.file?.extract) {
+        continue;
+      }
+
+      const extracted = await entry.file.extract();
+      const entryBuffer = Buffer.from(await extracted.arrayBuffer());
+      const expandedEntryPath = path.posix.join(archiveRoot, entryPath);
+
+      if (isMsgUpload(entryPath)) {
+        await appendMsgBufferToArchive(zip, usedPaths, entryBuffer, expandedEntryPath);
+        continue;
+      }
+
+      if (isEmlUpload(entryPath)) {
+        await appendEmlBufferToArchive(zip, usedPaths, entryBuffer, expandedEntryPath);
+        continue;
+      }
+
+      addArchiveBuffer(zip, usedPaths, expandedEntryPath, entryBuffer);
+    }
+  } finally {
+    await sourceArchive.close().catch(() => undefined);
+  }
+}
+
 async function appendExpandedZipToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
   const bytes = await readFile(file.stagingPath);
   const sourceZip = await JSZip.loadAsync(bytes);
@@ -1188,9 +1298,31 @@ async function appendExpandedZipToArchive(zip: JSZip, usedPaths: Set<string>, fi
   }
 }
 
-async function appendUploadedFileToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
+async function appendExpandedArchiveToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
   if (isZipUpload(file.originalFileName, file.mimeType)) {
     await appendExpandedZipToArchive(zip, usedPaths, file);
+    return;
+  }
+
+  await appendExpandedLibarchiveToArchive(zip, usedPaths, file);
+}
+
+async function appendUploadedFileToArchive(zip: JSZip, usedPaths: Set<string>, file: StagedMultipartFile) {
+  if (isExpandableArchiveUpload(file.originalFileName, file.mimeType)) {
+    try {
+      await appendExpandedArchiveToArchive(zip, usedPaths, file);
+    } catch (error) {
+      const buffer = await readFile(file.stagingPath);
+      const message = error instanceof Error ? error.message : String(error);
+      const fallbackRoot = archiveDerivedFolderPath(file.relativePath, 0);
+      addArchiveBuffer(
+        zip,
+        usedPaths,
+        `${fallbackRoot}/ARCHIVE-EXPANSION-FAILED.txt`,
+        `Source archive ${file.originalFileName} could not be expanded.\n${message}`
+      );
+      addArchiveBuffer(zip, usedPaths, archiveOriginalSourcePath(file.relativePath, file.safeFileName), buffer);
+    }
     return;
   }
 
@@ -1415,12 +1547,18 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
 
   const rateSchedules = await store.listRevisionRateSchedules(projectId);
   const entityCategories = await store.listEntityCategories();
+  const settings = await store.getSettings();
+  const orgDefaults = (settings?.defaults ?? {}) as Record<string, unknown>;
+  const meta = {
+    benchmarkingEnabled: orgDefaults.benchmarkingEnabled === true,
+  };
 
   return {
     workspace: {
       ...workspace,
       rateSchedules,
       entityCategories,
+      meta,
     },
     workspaceState: await store.getWorkspaceState(projectId),
     summaryMetrics: summaryMetrics(workspace),
@@ -1557,7 +1695,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     zip.forEach((relativePath, entry) => {
       if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
         const ext = path.extname(relativePath).toLowerCase();
-        if ([".pdf", ".xlsx", ".xls", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".txt"].includes(ext)) {
+        if ([".pdf", ".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".msg", ".eml", ".txt", ".xml", ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml"].includes(ext)) {
           entries.push(relativePath);
         }
       }
@@ -2290,6 +2428,8 @@ export function buildServer() {
     let extractedText = "";
     let structuredData: Record<string, unknown> | null = null;
     let pageCount = 0;
+    let extractionPageCount = 0;
+    let nativePdfPageCount: NativePdfPageCountResult | null = null;
     let inferredDocumentType: string = "reference";
     let extractionError: string | null = null;
 
@@ -2331,11 +2471,23 @@ export function buildServer() {
       if (extractedDocument) {
         extractedText = extractedDocument.text?.replace(/\0/g, "") ?? "";
         structuredData = extractedDocument.structuredData ? JSON.parse(JSON.stringify(extractedDocument.structuredData).replace(/\0/g, "")) : null;
-        pageCount = inferPageCount(extractedDocument, report.chunks);
+        extractionPageCount = inferPageCount(extractedDocument, report.chunks);
+        pageCount = extractionPageCount;
         inferredDocumentType = documentTypeFromIngestion(extractedDocument.kind);
       }
     } catch (err) {
       extractionError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (isPdfFileNameOrType(displayName, fileExt)) {
+      nativePdfPageCount = await getNativePdfPageCountFromBuffer(fileBuffer);
+      pageCount = choosePdfPageCount({
+        fileName: displayName,
+        fileType: fileExt,
+        extractionPageCount: pageCount || 1,
+        nativePageCount: nativePdfPageCount.pageCount,
+      });
+      structuredData = attachNativePdfMetadata(structuredData, nativePdfPageCount, extractionPageCount || pageCount);
     }
 
     const requestedDocumentType = (fields.documentType || "").trim();
@@ -2542,8 +2694,8 @@ export function buildServer() {
       const calcType = (matchedCategory as any).calculationType;
       const itemSrc = (matchedCategory as any).itemSource;
 
-      // Rate schedule categories MUST have a valid rateScheduleItemId
-      if (calcType === "tiered_rate" || itemSrc === "rate_schedule") {
+      // Rate/tier categories are system-calculated and MUST link to a concrete rate item.
+      if (calcType === "tiered_rate" || calcType === "duration_rate" || itemSrc === "rate_schedule") {
         if (!parsed.data.rateScheduleItemId) {
           // Check if rate schedules exist for this project
           const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
@@ -2576,6 +2728,15 @@ export function buildServer() {
             message: `rateScheduleItemId "${parsed.data.rateScheduleItemId}" does not exist. Choose from the available rate schedule items.`,
             availableItems: relevantItems.slice(0, 20),
             hint: "Call quote.getItemConfig to see all available rate schedule items.",
+          });
+        }
+
+        const hasPositiveTierUnits =
+          !!parsed.data.tierUnits && Object.values(parsed.data.tierUnits).some((value) => Number(value) > 0);
+        if (!hasPositiveTierUnits) {
+          return reply.code(400).send({
+            message: `Category "${parsed.data.category}" is calculated from a rate schedule and requires positive tierUnits.`,
+            hint: "Pass rateScheduleItemId, quantity, and tierUnits only. The system calculates cost and price.",
           });
         }
       }
@@ -3864,7 +4025,16 @@ export function buildServer() {
 
   app.post("/projects/:projectId/copy", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const result = await request.store!.copyQuote(projectId);
+    const parsed = z.object({
+      resetEstimate: z.boolean().optional(),
+    }).safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid project copy payload",
+        issues: parsed.error.flatten(),
+      });
+    }
+    const result = await request.store!.copyQuote(projectId, { resetEstimate: parsed.data.resetEstimate === true });
     const payload = await buildWorkspaceResponse(request.store!, result.project.id);
     if (!payload) {
       return reply.code(404).send({ message: "Project workspace not found" });
@@ -4518,6 +4688,8 @@ export function buildServer() {
     igs: "model/iges",
     xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     xls: "application/vnd.ms-excel",
+    xlsm: "application/vnd.ms-excel.sheet.macroEnabled.12",
+    ods: "application/vnd.oasis.opendocument.spreadsheet",
     doc: "application/msword",
     docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -4527,6 +4699,19 @@ export function buildServer() {
     mhtml: "multipart/related",
     mht: "multipart/related",
     zip: "application/zip",
+    "7z": "application/x-7z-compressed",
+    rar: "application/vnd.rar",
+    tar: "application/x-tar",
+    gz: "application/gzip",
+    tgz: "application/gzip",
+    msg: "application/vnd.ms-outlook",
+    eml: "message/rfc822",
+    mpp: "application/vnd.ms-project",
+    mpt: "application/vnd.ms-project",
+    mpx: "application/x-project",
+    xer: "text/plain",
+    p6xml: "application/xml",
+    pmxml: "application/xml",
   };
 
   app.get("/projects/:projectId/files/:nodeId/download", async (request, reply) => {
@@ -5666,6 +5851,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.get("/knowledge/search", async (request) => {
     const { q, bookId, documentId, limit, scope } = (request.query ?? {}) as { q?: string; bookId?: string; documentId?: string; limit?: string; scope?: string };
     const fetchLimit = limit ? parseInt(limit, 10) * 3 : 60;
+    const normalizedScope = scope === "library" ? "global" : scope;
     const [chunks, documentChunks] = await Promise.all([
       documentId ? Promise.resolve([]) : request.store!.searchKnowledgeChunks(q ?? "", bookId, fetchLimit),
       bookId ? Promise.resolve([]) : request.store!.searchKnowledgeDocumentChunks(q ?? "", documentId, fetchLimit),
@@ -5683,8 +5869,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
       if (!book) continue;
 
       // Scope filtering
-      if (scope === "global" && book.scope !== "global") continue;
-      if (scope === "project" && book.scope !== "project") continue;
+      if (normalizedScope === "global" && book.scope !== "global") continue;
+      if (normalizedScope === "project" && book.scope !== "project") continue;
 
       enriched.push({
         ...chunk,
@@ -5707,8 +5893,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
         }
       }
       if (!doc) continue;
-      if (scope === "global" && doc.scope !== "global") continue;
-      if (scope === "project" && doc.scope !== "project") continue;
+      if (normalizedScope === "global" && doc.scope !== "global") continue;
+      if (normalizedScope === "project" && doc.scope !== "project") continue;
       const page = chunk.pageId ? pageCache.get(chunk.pageId) : null;
 
       enriched.push({
@@ -5721,7 +5907,13 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     }
 
     const finalLimit = limit ? parseInt(limit, 10) : 20;
-    return enriched.slice(0, finalLimit);
+    return enriched
+      .sort((left, right) => {
+        const leftScore = Number(left.metadata?.searchMatch?.score ?? 0);
+        const rightScore = Number(right.metadata?.searchMatch?.score ?? 0);
+        return rightScore - leftScore;
+      })
+      .slice(0, finalLimit);
   });
 
   // ── Knowledge Book File Serving ────────────────────────────────────
@@ -5929,8 +6121,14 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const { q, limit: limitStr } = (request.query ?? {}) as { q?: string; limit?: string };
     if (!q) return { results: [] };
     const limit = parseInt(limitStr || "20");
-    const query = q.toLowerCase();
-    const words = query.split(/\s+/).filter(Boolean);
+    const stop = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "per", "the", "to", "with", "unit", "units", "row", "rows", "data", "dataset", "table"]);
+    const words = q
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter((word) => word.length > 1 && !stop.has(word));
+    const anchorWords = words.filter((word) => /\d/.test(word) || word.length >= 6);
 
     // Get all datasets
     const allDatasets = await request.store!.listDatasets();
@@ -5941,22 +6139,35 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
       const nameL = (d.name || "").toLowerCase();
       const descL = (d.description || "").toLowerCase();
       const tagsL = (d.tags || []).map((t: string) => t.toLowerCase());
+      const columnsL = Array.isArray(d.columns)
+        ? d.columns.map((column: any) => `${column.name ?? ""} ${column.label ?? ""} ${column.key ?? ""}`.toLowerCase())
+        : [];
+      let anchorMatches = 0;
 
       for (const w of words) {
-        if (nameL.includes(w)) score += 3;
-        if (descL.includes(w)) score += 1;
-        if (tagsL.some((t: string) => t.includes(w))) score += 2;
+        const isAnchor = anchorWords.includes(w);
+        let matched = false;
+        if (nameL.includes(w)) { score += isAnchor ? 5 : 3; matched = true; }
+        if (descL.includes(w)) { score += isAnchor ? 2 : 1; matched = true; }
+        if (tagsL.some((t: string) => t.includes(w))) { score += isAnchor ? 4 : 2; matched = true; }
+        if (columnsL.some((c: string) => c.includes(w))) { score += isAnchor ? 3 : 1.5; matched = true; }
+        if (matched && isAnchor) anchorMatches += 1;
       }
-      return { dataset: d, score };
+      return { dataset: d, score, anchorMatches };
     });
 
     // Filter to those with score > 0, sort by score
-    const matched = scored.filter((s: any) => s.score > 0).sort((a: any, b: any) => b.score - a.score);
+    const matched = scored
+      .filter((s: any) => s.score > 0 && (anchorWords.length === 0 || s.anchorMatches > 0))
+      .sort((a: any, b: any) => b.score - a.score || b.anchorMatches - a.anchorMatches);
 
     // For top matches, fetch sample rows
     const results: any[] = [];
     for (const m of matched.slice(0, Math.min(limit, 10))) {
-      const rows = await request.store!.listDatasetRows(m.dataset.id, undefined, undefined, 5, 0);
+      const rowMatches = await request.store!.searchDatasetRows(m.dataset.id, q);
+      const rows = rowMatches.length > 0
+        ? { rows: rowMatches.slice(0, 5) }
+        : await request.store!.listDatasetRows(m.dataset.id, undefined, undefined, 5, 0);
       results.push({
         datasetId: m.dataset.id,
         datasetName: m.dataset.name,
@@ -5965,6 +6176,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
         columns: m.dataset.columns,
         rowCount: m.dataset.rowCount,
         score: m.score,
+        anchorMatches: m.anchorMatches,
+        matchedRows: rowMatches.length,
         sampleRows: rows.rows?.map((r: any) => r.data) || [],
       });
     }
@@ -5997,6 +6210,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(takeoffRoutes);
   app.register(visionRoutes);
   app.register(modelRoutes);
+  app.register(fileIngestRoutes);
+  app.register(scheduleImportRoutes);
   app.register(rateScheduleRoutes);
   app.register(settingsRoutes);
   app.register(integrationsRoutes);

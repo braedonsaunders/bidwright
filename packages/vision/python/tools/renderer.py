@@ -20,9 +20,16 @@ MAX_DIMENSION = 8000
 def render_page(pdf_path: str, page: int = 1, dpi: int = 150) -> dict:
     """Render a full PDF page to PNG. Returns dict with image (data URL), dimensions, page info."""
     doc = fitz.open(pdf_path, filetype="pdf")
-    if page < 1 or page > doc.page_count:
+    page_count = doc.page_count
+    if page < 1 or page > page_count:
         doc.close()
-        return {"success": False, "error": f"Page {page} out of range (1-{doc.page_count})"}
+        return {
+            "success": False,
+            "error": f"Page {page} out of range (1-{page_count})",
+            "code": "page_out_of_range",
+            "requestedPage": page,
+            "pageCount": page_count,
+        }
 
     pg = doc.load_page(page - 1)
     zoom = min(dpi / 72.0, MAX_DIMENSION / pg.rect.width, MAX_DIMENSION / pg.rect.height)
@@ -36,7 +43,7 @@ def render_page(pdf_path: str, page: int = 1, dpi: int = 150) -> dict:
         "height": pix.height,
         "pageWidth": pg.rect.width,
         "pageHeight": pg.rect.height,
-        "pageCount": doc.page_count,
+        "pageCount": page_count,
         "dpi": round(zoom * 72),
     }
     doc.close()
@@ -47,9 +54,16 @@ def render_region(pdf_path: str, page: int, x: float, y: float, w: float, h: flo
                   img_w: float, img_h: float, dpi: int = 300) -> dict:
     """Render a cropped region at high DPI. Coordinates are in rendered-image pixel space."""
     doc = fitz.open(pdf_path, filetype="pdf")
-    if page < 1 or page > doc.page_count:
+    page_count = doc.page_count
+    if page < 1 or page > page_count:
         doc.close()
-        return {"success": False, "error": f"Page {page} out of range"}
+        return {
+            "success": False,
+            "error": f"Page {page} out of range (1-{page_count})",
+            "code": "page_out_of_range",
+            "requestedPage": page,
+            "pageCount": page_count,
+        }
 
     pg = doc.load_page(page - 1)
 

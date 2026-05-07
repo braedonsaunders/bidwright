@@ -226,6 +226,18 @@ function inferredExtensionFromMimeType(mimeType?: string) {
       return ".rtf";
     case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
       return ".pptx";
+    case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+      return ".xlsx";
+    case "application/vnd.ms-excel.sheet.macroenabled.12":
+      return ".xlsm";
+    case "application/vnd.ms-excel":
+      return ".xls";
+    case "application/vnd.oasis.opendocument.spreadsheet":
+      return ".ods";
+    case "text/csv":
+      return ".csv";
+    case "text/tab-separated-values":
+      return ".tsv";
     case "text/html":
       return ".html";
     case "multipart/related":
@@ -234,6 +246,16 @@ function inferredExtensionFromMimeType(mimeType?: string) {
     case "application/zip":
     case "application/x-zip-compressed":
       return ".zip";
+    case "application/x-7z-compressed":
+      return ".7z";
+    case "application/vnd.rar":
+    case "application/x-rar-compressed":
+      return ".rar";
+    case "application/x-tar":
+      return ".tar";
+    case "application/gzip":
+    case "application/x-gzip":
+      return ".gz";
     default:
       return "";
   }
@@ -1034,7 +1056,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             ref={fileInputRef}
             className="hidden"
             type="file"
-            accept=".zip,.pdf,.xlsx,.xls,.csv,.tsv,.doc,.docx,.rtf,.pptx,.html,.htm,.mhtml,.mht,.txt,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dwg,.dxf,.msg,.eml,application/zip,application/vnd.ms-outlook,message/rfc822"
+            accept=".zip,.7z,.rar,.tar,.gz,.tgz,.pdf,.xlsx,.xls,.xlsm,.ods,.csv,.tsv,.doc,.docx,.rtf,.pptx,.html,.htm,.mhtml,.mht,.txt,.xml,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dwg,.dxf,.msg,.eml,.mpp,.mpt,.mpx,.xer,.p6xml,.pmxml,application/zip,application/x-7z-compressed,application/vnd.rar,application/x-rar-compressed,application/x-tar,application/gzip,application/vnd.ms-outlook,message/rfc822"
             multiple
             onChange={(e) => handleFiles(e.target.files, { append: true })}
           />

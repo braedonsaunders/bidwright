@@ -28,7 +28,6 @@ function revision(): QuoteRevision {
     freightOnBoard: "",
     status: "Open",
     defaultMarkup: 0,
-    laborDifficulty: "",
     followUpNote: "",
     printEmptyNotesColumn: false,
     printCategory: [],

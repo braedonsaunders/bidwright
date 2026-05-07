@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { prisma } from "@bidwright/db";
-import { resolveApiPath } from "../paths.js";
+import { generateModelIngestManifest, getModelIngestCapabilities } from "./model-ingest/orchestrator.js";
+import { MODEL_INGEST_FORMATS, isModelIngestFileName } from "./model-ingest/registry.js";
+import type { ModelIngestSettings } from "./model-ingest/types.js";
 
-const MODEL_EXTENSIONS = new Set([
-  "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "dwg", "dxf", "rvt",
-]);
+const MODEL_EXTENSIONS = MODEL_INGEST_FORMATS;
 const MODEL_EDITOR_EDITABLE_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl"]);
 const MAX_TEXT_BYTES = 12 * 1024 * 1024;
 const MAX_GEOMETRY_BYTES = 80 * 1024 * 1024;
@@ -38,6 +38,8 @@ interface GeneratedElement {
   level?: string;
   material?: string;
   bbox?: unknown;
+  geometryRef?: string;
+  estimateRelevant?: boolean;
   properties?: Record<string, unknown>;
 }
 
@@ -119,7 +121,7 @@ function getExt(fileName: string) {
 }
 
 export function isModelFileName(fileName: string) {
-  return MODEL_EXTENSIONS.has(getExt(fileName));
+  return isModelIngestFileName(fileName);
 }
 
 async function sha256File(absPath: string) {
@@ -781,142 +783,24 @@ function parseGlb(buffer: Buffer): GeneratedManifest {
   return parseGltf(buffer.toString("utf8", 20, 20 + jsonLength));
 }
 
-async function generateManifest(source: ModelSource): Promise<GeneratedManifest & { checksum: string; size: number }> {
-  if (!source.storagePath) {
-    return {
-      status: "failed",
-      units: "",
-      checksum: source.checksum ?? "",
-      size: 0,
-      manifest: { parser: "none", error: "Source has no storagePath" },
-      elementStats: {},
-      elements: [],
-      quantities: [],
-      bomRows: [],
-      issues: [{ severity: "error", code: "missing_storage_path", message: "Source model has no stored file path." }],
-    };
-  }
+async function getProjectModelIngestSettings(projectId: string): Promise<ModelIngestSettings> {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { organizationId: true },
+  });
+  if (!project) return {};
+  const settings = await prisma.organizationSettings.findUnique({
+    where: { organizationId: project.organizationId },
+    select: { integrations: true },
+  });
+  const integrations = settings?.integrations;
+  return integrations && typeof integrations === "object" && !Array.isArray(integrations)
+    ? { integrations: integrations as Record<string, unknown> }
+    : {};
+}
 
-  const absPath = resolveApiPath(source.storagePath);
-  let fileStat: Awaited<ReturnType<typeof stat>>;
-  try {
-    fileStat = await stat(absPath);
-  } catch {
-    return {
-      status: "failed",
-      units: "",
-      checksum: source.checksum ?? "",
-      size: source.size ?? 0,
-      manifest: { parser: "none", error: `Source file not found: ${source.storagePath}` },
-      elementStats: {},
-      elements: [],
-      quantities: [],
-      bomRows: [],
-      issues: [{ severity: "error", code: "missing_source_file", message: "Source model file was not found on disk." }],
-    };
-  }
-  const checksum = source.checksum || await sha256File(absPath);
-  const ext = getExt(source.fileName);
-
-  try {
-    if (ext === "stl") {
-      if (fileStat.size > MAX_GEOMETRY_BYTES) {
-        throw new Error(`STL is too large for synchronous geometry indexing (${fileStat.size} bytes)`);
-      }
-      return { ...parseStl(await readFile(absPath)), checksum, size: fileStat.size };
-    }
-
-    if (ext === "obj") {
-      const text = await readTextIfReasonable(absPath, fileStat.size);
-      if (!text) throw new Error("OBJ is too large for synchronous text indexing");
-      return { ...parseObj(text), checksum, size: fileStat.size };
-    }
-
-    if (ext === "ifc") {
-      const text = await readTextIfReasonable(absPath, fileStat.size);
-      if (!text) throw new Error("IFC is too large for synchronous text indexing");
-      return { ...parseIfc(text), checksum, size: fileStat.size };
-    }
-
-    if (ext === "gltf") {
-      const text = await readTextIfReasonable(absPath, fileStat.size);
-      if (!text) throw new Error("glTF is too large for synchronous JSON indexing");
-      return { ...parseGltf(text), checksum, size: fileStat.size };
-    }
-
-    if (ext === "glb") {
-      if (fileStat.size > MAX_GEOMETRY_BYTES) {
-        throw new Error(`GLB is too large for synchronous manifest indexing (${fileStat.size} bytes)`);
-      }
-      return { ...parseGlb(await readFile(absPath)), checksum, size: fileStat.size };
-    }
-
-    if (CAD_GEOMETRY_EXTENSIONS.has(ext)) {
-      if (fileStat.size <= MAX_GEOMETRY_BYTES) {
-        try {
-          return { ...(await parseCadWithOcct(await readFile(absPath), ext, source.fileName)), checksum, size: fileStat.size };
-        } catch (error) {
-          const text = await readTextIfReasonable(absPath, fileStat.size);
-          if (text) {
-            const fallback = parseStepLike(text, ext);
-            fallback.issues.unshift({
-              severity: "warning",
-              code: "occt_import_failed",
-              message: error instanceof Error ? error.message : "OpenCascade CAD import failed.",
-            });
-            return { ...fallback, checksum, size: fileStat.size };
-          }
-          throw error;
-        }
-      }
-      const text = await readTextIfReasonable(absPath, fileStat.size);
-      if (!text) throw new Error(`${ext.toUpperCase()} is too large for synchronous geometry or entity indexing`);
-      const fallback = parseStepLike(text, ext);
-      fallback.issues.unshift({
-        severity: "warning",
-        code: "occt_file_too_large",
-        message: `${ext.toUpperCase()} is too large for synchronous OpenCascade extraction (${fileStat.size} bytes).`,
-      });
-      return { ...fallback, checksum, size: fileStat.size };
-    }
-
-    return {
-      status: "partial",
-      units: "",
-      checksum,
-      size: fileStat.size,
-      manifest: {
-        parser: "file-manifest",
-        note: "Format is viewable in BidWright but does not yet have server-side quantity extraction.",
-      },
-      elementStats: {},
-      elements: [],
-      quantities: [],
-      bomRows: [],
-      issues: [{
-        severity: "info",
-        code: "server_extractor_not_available",
-        message: `Server-side model extraction is not implemented for .${ext} yet.`,
-      }],
-    };
-  } catch (error) {
-    return {
-      status: "failed",
-      units: "",
-      checksum,
-      size: fileStat.size,
-      manifest: { parser: "failed", error: error instanceof Error ? error.message : String(error) },
-      elementStats: {},
-      elements: [],
-      quantities: [],
-      bomRows: [],
-      issues: [{
-        severity: "error",
-        code: "manifest_generation_failed",
-        message: error instanceof Error ? error.message : "Model manifest generation failed.",
-      }],
-    };
-  }
+async function generateManifest(source: ModelSource, settings?: ModelIngestSettings): Promise<GeneratedManifest & { checksum: string; size: number }> {
+  return generateModelIngestManifest(source, settings);
 }
 
 function modelAssetPayload(source: ModelSource, generated: GeneratedManifest & { checksum: string; size: number }) {
@@ -1030,8 +914,11 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
         level: element.level ?? "",
         material: element.material ?? "",
         bbox: (element.bbox ?? {}) as any,
-        geometryRef: "",
-        properties: (element.properties ?? {}) as any,
+        geometryRef: element.geometryRef ?? "",
+        properties: {
+          ...(element.properties ?? {}),
+          estimateRelevant: element.estimateRelevant ?? undefined,
+        } as any,
       })),
     });
   }
@@ -1140,9 +1027,10 @@ export async function syncProjectModelAssets(projectId: string) {
 
   const sources = await collectProjectModelSources(projectId);
   const syncedIds: string[] = [];
+  const ingestSettings = await getProjectModelIngestSettings(projectId);
 
   for (const source of sources) {
-    const generated = await generateManifest(source);
+    const generated = await generateManifest(source, ingestSettings);
     const payload = modelAssetPayload(source, generated);
     const existing = await prisma.modelAsset.findFirst({
       where: source.source === "source_document"
@@ -1162,6 +1050,13 @@ export async function syncProjectModelAssets(projectId: string) {
     assets: await listProjectModelAssets(projectId, { discover: false }),
     syncedIds,
     sourceCount: sources.length,
+  };
+}
+
+export async function getProjectModelIngestCapabilities(format?: string, settings?: ModelIngestSettings) {
+  return {
+    formats: Array.from(MODEL_EXTENSIONS).sort(),
+    capabilities: await getModelIngestCapabilities(format, settings),
   };
 }
 

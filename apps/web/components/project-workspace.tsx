@@ -116,7 +116,7 @@ import {
   type WorkspaceSyncMessage,
 } from "@/lib/workspace-sync";
 import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
-import { AgentChat, type AgentNavigationIntent } from "@/components/workspace/agent-chat";
+import { AgentChat, type AgentNavigationIntent, type AgentRunState } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
 import { SetupTab } from "@/components/workspace/setup-tab";
@@ -1149,11 +1149,20 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [agentPrefill, setAgentPrefill] = useState<string | null>(null);
+  const [agentRunState, setAgentRunState] = useState<AgentRunState>({
+    active: false,
+    waitingForUser: false,
+    pendingQuestion: false,
+    status: "idle",
+    toolCount: 0,
+    messageCount: 0,
+  });
   const [autoIntake, setAutoIntake] = useState(false);
   const [intakePersonaId, setIntakePersonaId] = useState<string | null>(null);
   const [pluginToolsOpen, setPluginToolsOpen] = useState(false);
   const [pluginToolsTarget, setPluginToolsTarget] = useState<PluginToolsTarget | null>(null);
   const [revisionDiffOpen, setRevisionDiffOpen] = useState(false);
+  const [takeoffDocumentId, setTakeoffDocumentId] = useState<string | null>(null);
   const intakeInitRef = useRef(false);
   const workspaceSyncOriginRef = useRef(`workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
   const [isPending, startTransition] = useTransition();
@@ -1204,6 +1213,19 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     setEstimateSubTab(nextSubTab);
     updateWorkspaceUrl("estimate", nextSubTab);
   }, [updateWorkspaceUrl]);
+
+  const handleOpenFileInTakeoff = useCallback((documentId: string) => {
+    setTakeoffDocumentId(documentId);
+    handleEstimateSubTabChange("takeoff");
+  }, [handleEstimateSubTabChange]);
+
+  const handleOpenTakeoffForLineItem = useCallback((worksheetItemId: string) => {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("bidwright:pending-takeoff-worksheet-item-id", worksheetItemId);
+    }
+    setTakeoffDocumentId(null);
+    handleEstimateSubTabChange("takeoff");
+  }, [handleEstimateSubTabChange]);
 
   const handleSearchNavigate = useCallback((target: SearchNavigationTarget) => {
     if (target.tab === "estimate" && "subTab" in target) {
@@ -1967,8 +1989,38 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             </Button>
           </ToolbarTooltip>
 
-          <Button size="sm" variant="accent" onClick={() => openAgentChat()}>
-            <Sparkles className="h-3 w-3" /> AI
+          <Button
+            size="sm"
+            variant={agentRunState.active && !chatOpen ? "secondary" : "accent"}
+            onClick={() => openAgentChat()}
+            className={cn(
+              "relative",
+              agentRunState.active && !chatOpen && "border-success/35 bg-success/[0.12] text-success shadow-[0_0_0_1px_rgba(34,197,94,0.16),0_0_24px_rgba(34,197,94,0.20)] hover:bg-success/[0.16]",
+              agentRunState.waitingForUser && !chatOpen && "border-warning/40 bg-warning/[0.10] text-warning shadow-[0_0_0_1px_rgba(245,158,11,0.18),0_0_24px_rgba(245,158,11,0.18)] hover:bg-warning/[0.14]",
+            )}
+            aria-label={agentRunState.active && !chatOpen ? "Open AI agent, currently working" : "Open AI agent"}
+            title={
+              agentRunState.pendingQuestion && !chatOpen
+                ? "Agent is waiting for your input"
+                : agentRunState.active && !chatOpen
+                  ? "Agent is working"
+                  : "Open AI agent"
+            }
+          >
+            {agentRunState.active && !chatOpen && (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "pointer-events-none absolute inset-[-4px] rounded-xl border opacity-60 animate-ping",
+                  agentRunState.waitingForUser ? "border-warning/40" : "border-success/35",
+                )}
+              />
+            )}
+            <Sparkles className={cn("h-3 w-3", agentRunState.active && !chatOpen && "animate-pulse")} />
+            AI
+            {agentRunState.pendingQuestion && !chatOpen && (
+              <span aria-hidden="true" className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border border-panel bg-warning shadow-sm" />
+            )}
           </Button>
 
           {/* Actions dropdown */}
@@ -2095,8 +2147,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                       onRefresh={refreshWorkspace}
 	                      highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
 	                      activeWorksheetId={selectedWsId}
-	                      onActiveWorksheetChange={setSelectedWsId}
-	                      onOpenPluginTools={openPluginTools}
+                      onActiveWorksheetChange={setSelectedWsId}
+                      onOpenPluginTools={openPluginTools}
+                      onOpenTakeoffLink={handleOpenTakeoffForLineItem}
 	                    />
                   </motion.div>
                 )}
@@ -2116,15 +2169,14 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 {estimateSubTab === "takeoff" && (
                   <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
                     <TakeoffTab
+                      key={takeoffDocumentId ?? "takeoff"}
                       workspace={workspace}
                       onOpenAgentChat={openAgentChat}
-                      onOpenImportLineItems={() => setModal("importBOM")}
-                      onOpenDocuments={() => handleTabChange("documents")}
-                      onOpenPluginTools={() => openPluginTools()}
                       onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
                       onWorkspaceMutated={refreshWorkspace}
                       workspaceSyncOriginId={workspaceSyncOriginRef.current}
                       selectedWorksheetId={selectedModelWorksheet?.id}
+                      initialDocumentId={takeoffDocumentId}
                     />
                   </motion.div>
                 )}
@@ -2151,6 +2203,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}
                 selectedWorksheet={selectedModelWorksheet}
                 modelEditorChannelName={modelEditorSyncChannelName}
+                onOpenInTakeoff={handleOpenFileInTakeoff}
               />
             </motion.div>
           )}
@@ -2348,6 +2401,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         onIntakeStarted={() => setAutoIntake(false)}
         onWorkspaceMutated={refreshWorkspace}
         onAgentNavigate={handleAgentNavigate}
+        onRunStateChange={setAgentRunState}
       />
 
       <RevisionDiffModal
@@ -2855,8 +2909,9 @@ const FACTOR_SOURCE_OPTIONS: Array<{ value: EstimateFactorSourceType; label: str
   { value: "knowledge", label: "Knowledge book" },
   { value: "library", label: "Library" },
   { value: "labor_unit", label: "Labor unit" },
-  { value: "condition_difficulty", label: "Condition difficulty" },
-  { value: "neca_difficulty", label: "Legacy condition difficulty" },
+  { value: "project_condition", label: "Project condition" },
+  { value: "condition_difficulty", label: "Legacy condition source" },
+  { value: "neca_difficulty", label: "Legacy condition score" },
   { value: "agent", label: "Agent" },
   { value: "custom", label: "Custom" },
 ];
@@ -2884,8 +2939,9 @@ function sourceTypeLabel(value: string | undefined) {
   switch (value) {
     case "knowledge": return "Knowledge";
     case "labor_unit": return "Labor unit";
-    case "condition_difficulty": return "Condition difficulty";
-    case "neca_difficulty": return "Condition difficulty";
+    case "project_condition": return "Project condition";
+    case "condition_difficulty": return "Project condition";
+    case "neca_difficulty": return "Condition score";
     case "agent": return "Agent";
     case "library": return "Library";
     default: return "Custom";

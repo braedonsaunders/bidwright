@@ -42,6 +42,27 @@ function enrichCliToolEvent(evt: any) {
   };
 }
 
+function sanitizeCliEventForPersistence(value: unknown): unknown {
+  if (typeof value === "string") {
+    const redacted = value.replace(/[A-Za-z0-9+/=]{2000,}/g, "[large encoded payload omitted]");
+    return redacted.length > 120_000 ? `${redacted.slice(0, 120_000)}\n[truncated]` : redacted;
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeCliEventForPersistence(item));
+  if (value && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(source)) {
+      if (key === "data" && source.type === "base64" && typeof entry === "string") {
+        next[key] = "[large encoded payload omitted]";
+      } else {
+        next[key] = sanitizeCliEventForPersistence(entry);
+      }
+    }
+    return next;
+  }
+  return value;
+}
+
 function buildSyntheticCompletionEvents(summary: any, updatedAt: Date | string | null | undefined) {
   const timestamp = updatedAt instanceof Date
     ? updatedAt.toISOString()
@@ -508,11 +529,12 @@ async function appendCliEventsToLatestRun(
   await withCliRunWriteLock(targetRun.id, async () => {
     const freshRun = await getCliRunById(projectId, targetRun.id);
     const existing = freshRun?.events ?? [];
+    const sanitizedIncoming = incoming.map((event) => sanitizeCliEventForPersistence(event) as PersistedCliEvent);
     await prisma.aiRun.update({
       where: { id: targetRun.id },
       data: {
         output: {
-          events: mergeCliEvents(existing, incoming),
+          events: mergeCliEvents(existing, sanitizedIncoming),
         } as any,
       },
     });
@@ -1029,7 +1051,7 @@ function attachCliRunPersistence(
             where: { id: runId },
             data: {
               output: {
-                events: mergeCliEvents(existing, toSave),
+                events: mergeCliEvents(existing, toSave.map((event) => sanitizeCliEventForPersistence(event) as PersistedCliEvent)),
               } as any,
             },
           });
@@ -1049,7 +1071,7 @@ function attachCliRunPersistence(
   };
 
   session.events.on("event", (evt: any) => {
-    const enriched = enrichCliToolEvent(evt);
+    const enriched = sanitizeCliEventForPersistence(enrichCliToolEvent(evt)) as PersistedCliEvent;
     eventBuffer.push({ ...enriched, timestamp: enriched?.timestamp || new Date().toISOString() });
     scheduleFlush();
   });
@@ -1345,19 +1367,40 @@ export function registerCliRoutes(app: FastifyInstance) {
       ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${effectiveScope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
       : "";
 
-    const startupDirective = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md before pricing anything. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads.${scopeDirective}`;
+    const startupDirective = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md before pricing anything. Bidwright has dropped first-party library text corpora into library-snapshots/search in this runtime folder; use rg/grep or searchLibraryCorpus for fast retrieval across cost intelligence, catalogs, rates, labour units, assemblies, datasets, and knowledge indexes. Do not read large JSONL snapshots, all-library.search.txt, or files-manifest.jsonl wholesale; search them and use MCP tools for focused reads. Search/recommendation tools retrieve candidates only; the agent is responsible for relevance and source authority decisions. If you use TodoWrite, every todo object must include status exactly "pending", "in_progress", or "completed"; do not omit status on pending items. Use only Bidwright readMemory/writeMemory for project memory. Do not read, grep, inspect, write, or edit Claude global/project memory files under ~/.claude, previous-run memory folders, prior harness summaries, or files outside the project workspace unless the user explicitly provided them as current project inputs or asked for file edits.
+
+BOM/SPREADSHEET REQUIREMENT: Before visual takeoff, inventory spreadsheet, CSV, BOM, bill-of-materials, parts-list, schedule, quote-sheet, and takeoff artifacts. Read spreadsheets with readSpreadsheet. For table-heavy PDF BOMs/parts lists, use getDocumentStructured plus focused readDocumentText. Treat those tables as high-authority quantity sources unless explicit source evidence proves they are superseded. A later drawing date or an isolated drawing callout is not enough by itself: it may have missing context. If BOM/spec/schedule values and drawing values disagree, record both source values in the Drawing Evidence Engine ledger when possible, then either use the BOM/spec/schedule baseline, attach explicit supersession/order-of-precedence/client-or-vendor confirmation evidence, or carry an assumption/ask the user. A carried assumption is not permission to price the lower-context drawing value as baseline when a BOM/spec/table carries the higher value; use the high-authority baseline plus a clarification/alternate unless the user/vendor/client explicitly confirms otherwise. For high-risk vendor/component/accessory counts, save dedicated quantity claims. Do not bury counts inside dimensions, weights, or source-note prose. Search both formal tables and relevant drawings when both exist; if they differ, save separate claims for both values before pricing.
+When saving Drawing Evidence Engine claims, use method "bom_table" only for actual BOM, parts-list, schedule, spec-sheet, vendor-quote, model-BOM, or comparable quantity-table evidence. Use "ocr_text" for ordinary drawing notes, lift-plan text, general callouts, or OCR snippets that are not a formal quantity table/source.
+
+VISUAL DRAWING REQUIREMENT: If the project contains drawings, build the Drawing Evidence Engine before saving drawing-driven scope/quantity decisions or pricing rows that depend on drawings. Azure/local extraction and PDF-native evidence are available immediately; LandingAI enrichment is optional background evidence and must not block your first estimating pass. Completed cached LandingAI regions may be reused when present. If one or more relevant PDFs are missing from the atlas, call addSourceToDrawingAtlas for each with a rationale and leave rebuildAtlas false unless you are adding a single urgent source; then call buildDrawingAtlas({ force: true }) once or let the next searchDrawingRegions perform a single lazy rebuild. When LandingAI finishes, you may be interrupted/resumed with a background evidence update; then rebuild/search the atlas and incorporate the new regions without duplicating existing worksheets, rows, packages, or claims. Call buildDrawingAtlas once, use searchDrawingRegions for the exact object/detail/BOM/count you need to prove, then inspectDrawingRegion on selected regions to get targeted high-res crop evidence. Prioritize high-authority table/spec/schedule matches returned by searchDrawingRegions before accepting a lower-context visual count. Only call concrete tools returned by ToolSearch; a server namespace without a concrete tool suffix is not callable and counts as a failed tool call. Use the actual returned drawing tools, such as searchDrawingRegions, inspectDrawingRegion, and saveDrawingEvidenceClaim. Do not guess random page crops and do not mark drawing inspection complete after full-page renders alone. readDocumentText/OCR from a drawing is useful context, not a visual takeoff. Before pricing drawing-derived quantities or finalizing, deliberately probe high-risk visual facts the way an estimator would: repeated components, connection counts, dimensions, equipment data, BOM/table quantities, and sheet conflicts. For structural/member takeoff, distinguish physical placements from unique mark IDs; price physical occurrences unless a schedule/BOM explicitly says marks are already totals. For every drawing-driven quantity claim, call saveDrawingEvidenceClaim with doc/page/region/bbox/tool/result/imageHash. If another source gives a different value, save the competing claim too or carry an explicit reconciled assumption; do not hide the conflict only in sourceNotes. Worksheet rows use evidenceBasis as a two-axis contract: evidenceBasis.quantity explains where the quantity/hours/duration came from, and evidenceBasis.pricing explains where the unit cost/rate/productivity came from. Put drawing_quantity/visual_takeoff/drawing_table/drawing_note and Drawing Evidence Engine claim IDs under evidenceBasis.quantity when the quantity is drawing-derived; put rate/manual/vendor/material/equipment/subcontract/document/allowance/indirect/assumption/mixed support under evidenceBasis.pricing. Run verifyDrawingEvidenceLedger before pricing drawing-driven rows and before finalize; reconcile contradictions or carry an explicit assumption. renderDrawingPage/zoomDrawingRegion are lower-level fallbacks for additional evidence, and symbol/count tools belong only after a specific tiny symbol has been visually identified. Persist the pass in saveEstimateScopeGraph.visualTakeoffAudit with completedBeforePricing:true only after ledger-backed visual evidence exists for drawing-driven packages. Use zoomEvidence only for targeted inspected crops; record BOM/schedule/parts-list extraction in tableEvidence unless you inspected a targeted table region.${scopeDirective}`;
     const userPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : "";
     const initialPrompt = userPrompt
       ? `${startupDirective}\n\nThen follow this user request:\n${userPrompt}`
       : `${startupDirective} Then execute the staged estimate workflow in order:
 
-1. Read the documents and save the structured scope graph with saveEstimateScopeGraph.
-2. Search library-snapshots plus MCP knowledge/dataset/cost/labour tools for relevant books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books.
+1. Read the documents, build/search/inspect the drawing atlas when drawings exist, save ledger claims for drawing-driven quantities, verify the ledger, and save the structured scope graph with saveEstimateScopeGraph including visualTakeoffAudit.
+2. Search the runtime first-party text corpora in library-snapshots/search with rg/searchLibraryCorpus plus MCP knowledge/dataset/cost/labour tools for relevant books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. The tools retrieve candidates only; the agent decides relevance, source authority, exact/similar/context/manual basis, and final worksheet rationale.
 3. Lock the execution model with saveEstimateExecutionPlan and saveEstimateAssumptions.
-4. Define the commercial/package structure with saveEstimatePackagePlan.
-5. ${benchmarkingEnabled ? "Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours." : "Skip recomputeEstimateBenchmarks because organization benchmarking is disabled, and record the top-down sanity checks you used in saveEstimateAdjustments."}
-6. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items.
-7. Build the quote summary breakout with applySummaryPreset using the most appropriate preset for the actual worksheet/phase structure, then perform the final self-review with saveEstimateReconcile and finalizeEstimateStrategy.
+4. Define the commercial/package structure with saveEstimatePackagePlan. Every package must include explicit planned worksheetName/textMatcher bindings; after worksheets exist, re-save the package plan with exact worksheetIds before finalize. Package bindings must be exclusive. Subcontract/allowance packages must not bind labour rows; put self-perform supervision/coordination in a separate detailed/general-conditions package. If supervision is carried in General Conditions/single-source mode, avoid foreman/superintendent/supervision/supervisor/general foreman/lead hand/leadman wording in execution worksheet labour row names, descriptions, and source notes.
+5. ${benchmarkingEnabled ? "Run recomputeEstimateBenchmarks and review the historical comparison before creating labour hours, then run it again after worksheets/items and recalculateTotals before final reconcile." : "Skip recomputeEstimateBenchmarks because organization benchmarking is disabled. Without historical comparables, project an expected envelope from the source documents (line lists, BOMs, schedules, vendor quotes, scope tables, spec narratives, knowledge books, datasets) before pricing, record that projection and its evidence in saveEstimateAdjustments, and after worksheets/items exist recompare the built subtotal package-by-package against the projection so any package that materially exceeds or undershoots its projected envelope is caught and revised."}
+
+EVIDENCE DISCIPLINE (mandatory, domain-agnostic):
+- Every productivity-derived Labour row (any row whose hours come from quantity × rate, per-unit duration, or 'blended' productivity) MUST cite EITHER (a) a concrete laborUnitId from listLaborUnits/listLaborUnitTree/getLaborUnit with the source rate and any difficulty/condition multipliers reproduced in sourceNotes, OR (b) a specific source-document citation (spreadsheet sheet+row/cell, BOM/schedule line, knowledge-book table+row, dataset row) that supplies the hours/duration directly. Inventing productivity numbers without one of those references is forbidden in any trade or scope.
+- Every Material and Subcontractor row MUST start with a cost-intelligence search via searchLineItemCandidates/recommendCostSource using the row's scope/SKU/equipment phrase before any price is written. Each priced Material/Subcontractor row resolves to one of these citations: (a) a structured cost-intelligence link — preserve costResourceId, effectiveCostId, or itemId on the row and reproduce the matched vendor/SKU/observation/source in sourceNotes; an exact match is preferred, a similar/analog match is acceptable as a ballpark with the analog rationale and confidence noted; (b) a vendor-quote document with specific document + page/section reference; (c) a knowledge-book/dataset/catalog citation with row/page; (d) an explicit assumption recording that cost-intelligence and the document set were searched and produced no usable match, including the search terms tried and a flag that vendor finalization is required. "Estimator allocation", "lump-sum allowance", or "industry-typical" alone — without a search-attempted record — is not acceptable on any priced row.
+- If the source documents already contain hours/durations or vendor pricing for a package, prefer those over derived numbers; only derive when the source is silent and record the gap explicitly.
+- Cost-intelligence is a per-organization corpus of prior-invoice/observation data — exact matches are most authoritative, similar matches are useful for triangulation, and a recorded "no match found" assumption is the right answer when the corpus does not cover this scope. Treat similar matches as ballpark figures (the human reviewer will refine with vendor quotes), not as final pricing.
+
+SCOPE-TABLE COVERAGE (mandatory, domain-agnostic):
+- Most RFQs/specs include a contractor-responsibility table or equivalent narrative. Read it before writing the package plan. Every scope item flagged as contractor-responsible must appear in the package plan as a Subcontractor line, an Allowance, an Equipment Rental line, or a Labour package with an explicit self-perform assumption documenting why.
+- For specialty packages mentioned in the spec narrative but not in a formal scope table, decide subcontract vs self-perform from spec wording (third-party qualifications, certifications, vendor turnkey language, registration/inspection authority) and from rate-schedule availability; record the decision and rationale.
+- Coverage is enforced at finalize through reconcileReport.coverageChecks: enumerate every contractor-responsible package you identified from the spec/scope-table/RFQ. Each coverageCheck must include name (the package as it appears in the source), sourceRef (document + page/section), status ('ok' once resolved), and either coveredBy.packageId/coveredBy.worksheetIds linking it to the plan, or coveredBy.assumptionId tied to a saved assumption that documents why it is not a dedicated plan entry. Entries with status='warning' or status='missing' will block finalize. If you genuinely identify no contractor-responsible specialty packages, add a single coverageCheck saying so and cite the spec section that confirms it.
+
+CATEGORIZATION (use the system, not gut feel):
+- Categorize every row using the entityCategories returned by getItemConfig and the imported rate schedule's category mapping. If an item matches a Rental Equipment / Equipment / Subcontractor rate-schedule item, use createRateScheduleWorksheetItem against that linked id; do not place it under Material because the row also has a price.
+- Rentals (returned at end of project, weekly/monthly rate, vendor-owned) → Rental Equipment. Vendor turnkey packages → Subcontractor. Owned consumed-on-job small-tools/consumables → Consumables or Material per category definitions. Supervisory and trade hours → Labour with the matching rate-schedule tier.
+
+6. Call updateQuote, getItemConfig, import needed rate schedules, then create worksheets/items. Before creating priced rows, use rg/searchLibraryCorpus and the authoritative MCP tools to gather first-party candidates; use searchLineItemCandidates/recommendEstimateBasis/recommendCostSource/listLaborUnitTree/listLaborUnits/getLaborUnit as candidate retrieval, not as source-selection authority. For labour productivity, browse the tree, use compact listLaborUnits for candidate search, and call getLaborUnit only for focused details on a shortlisted unit. Use queryKnowledge/queryDatasets when productivity, crew logic, standards, or estimator-book support would materially change the answer. If you use a labor unit as an analog, the agent must explain why the operation/unit/context is defensible and record the limitation in sourceNotes. For rate_schedule labour/equipment/general-conditions rows, prefer createRateScheduleWorksheetItem: provide the linked rateScheduleItemId and positive tierUnits/quantities only; the tool derives category/name and the system calculates cost/sell from the rate item. Use estimate factors for productivity, access, weather, safety, schedule, method, condition, escalation, or other multiplicative adjustments. Use global/scoped factors for broad impacts, and after worksheet items exist use line-level factors with applicationScope:"line" and scope:{mode:"line",worksheetItemIds:[...]} for row-specific impacts. Call listEstimateFactorLibrary with q/category filters, then listEstimateFactors/create/update factors with sourceRef evidence, then recalculateTotals/getWorkspace to verify factor totals and affected target lines. Do not hide factor effects inside quantities, tierUnits, unit costs, or hand-calculated labour values. Every worksheet row needs evidenceBasis when drawings exist. Prefer evidenceBasis.quantity.type for quantity provenance and evidenceBasis.pricing.type for cost/rate/productivity provenance. If a row has quantity from a drawing/model/takeoff and pricing from a material quote, use separate quantity and pricing basis fields; do not collapse both into one misleading type. For every rate_schedule category, including Rental Equipment, Labour, Equipment, and General Conditions resources, fetch a concrete rateScheduleItemId with listRateScheduleItems and preserve positive tierUnits as a JSON object, never a quoted/stringified value; do not pass cost, price, or markup for those rows because the system calculates them from the linked rate item; do not create or "clean up" those rows by omitting, nulling, or zeroing rateScheduleItemId/tierUnits.
+7. Build the quote summary breakout with applySummaryPreset using the most appropriate preset for the actual worksheet/phase structure, re-save package bindings against the actual worksheets, then perform a fresh post-build evidence falsification pass before saveEstimateReconcile/finalizeEstimateStrategy. This is not a prose-only checklist: after worksheet items exist, call concrete source tools again. Re-search/inspect at least one drawing region or re-read the governing BOM/spec for drawing quantities, and re-search library/knowledge/rate evidence for the largest labour or priced rows. Use those fresh post-build source-return calls to look for contradictions, missing scope, or unsupported unit prices/hours. If you cannot make those calls, do not finalize; ask the user or state the blocker. If finalizeEstimateStrategy returns validation issues, repair them and retry until it succeeds or ask the user about a true blocker. When fixing supervision/package validation, choose one coverage model and move/relabel rows with valid positive rate-schedule tiers; do not zero out tierUnits to remove supervision.
 
 CRITICAL: Do not jump from document facts straight into line-item hours. The estimate is only valid after the scope graph, execution plan, package plan, ${benchmarkingEnabled ? "benchmark pass, " : ""}adjustment pass, and reconcile pass are all saved.`;
 
@@ -1591,9 +1634,9 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       personaId,
     });
     const adapter = getAdapter(runtime);
-    const questionPrompt = `Read ${adapter.primaryInstructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md if the question needs project documents, estimating references, datasets, cost intelligence, labour units, assemblies, catalogs, or rate books. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads.
+    const questionPrompt = `Read ${adapter.primaryInstructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md if the question needs project documents, estimating references, datasets, cost intelligence, labour units, assemblies, catalogs, or rate books. Search first-party library corpora in library-snapshots/search with rg/grep or searchLibraryCorpus. Do not read large JSONL snapshots, all-library.search.txt, or files-manifest.jsonl wholesale; search them and use MCP tools for focused reads.
 
-This is a user chat question, not a full intake run. Answer the question against the current quote/workspace/documents. Call getWorkspace and getEstimateStrategy before making claims about the quote. Use readDocumentText/readSpreadsheet/getDocumentStructured only for the specific documents or page ranges needed. Do not execute the full staged estimate workflow, create worksheets/items, or finalize strategy unless the user explicitly asks you to do that.
+This is a user chat question, not a full intake run. Answer the question against the current quote/workspace/documents. Call getWorkspace and getEstimateStrategy before making claims about the quote. Use readDocumentText/readSpreadsheet/getDocumentStructured only for the specific documents or page ranges needed. If the question needs drawing evidence, you may build/reuse the drawing atlas, searchDrawingRegions, and inspectDrawingRegion for targeted crops; do not execute the full staged estimate workflow, create worksheets/items, or finalize strategy unless the user explicitly asks you to do that.
 
 User question:
 ${message}`;
@@ -1644,6 +1687,7 @@ ${message}`;
         customCliPath: resolveCliPathOverride(runtime, prepared.integrations),
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
+        emitCompletionMessage: false,
       });
 
       attachCliRunPersistence(sessionId, session);
@@ -1809,9 +1853,15 @@ ${message}`;
       }
     }
 
-    // Determine current status: live session takes priority
-    const persistedStatus = latestRun?.status === "running" && !session
-      ? "stopped"
+    // Determine current status: live session takes priority. If the API lost
+    // the in-memory child-process handle but the latest run has no terminal
+    // status event, keep reporting it as running so monitors can continue
+    // polling persisted events and can still answer askUser prompts. A truly
+    // dead orphan will be handled by the monitor's stall timeout instead of
+    // being misreported as a clean stop.
+    const latestStatusEvent = [...latestRunEvents].reverse().find((event) => event?.type === "status");
+    const persistedStatus = latestRun?.status === "running" && latestRunClosed
+      ? normalizeCliEventText((latestStatusEvent?.data as any)?.status) || latestRun.status
       : latestRun?.status;
     const currentStatus = session?.status === "running"
       ? "running"

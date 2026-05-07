@@ -23,6 +23,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { prisma } from "@bidwright/db";
 
 // Side-effect import: registers all known adapters into the registry.
 import "./cli-adapters/index.js";
@@ -71,11 +72,16 @@ export interface CliSession {
   _spawnOpts?: Record<string, unknown>;
   /** How many times the watchdog has restarted this session. */
   _recoveryCount?: number;
+  /** Suppress the next child-exit assistant message when the process is intentionally interrupted/resumed. */
+  _suppressNextExitMessage?: boolean;
 }
 
 // ── Module state ──────────────────────────────────────────────────
 
 const sessions = new Map<string, CliSession>();
+const interruptingProjects = new Set<string>();
+const lastBackgroundInterruptAtByProject = new Map<string, number>();
+const BACKGROUND_INTERRUPT_COOLDOWN_MS = 2 * 60_000;
 /**
  * Tool-call timing state shared across sessions (preserves prior behavior
  * where the original `toolStartTimes` was a module-level Map).
@@ -83,6 +89,79 @@ const sessions = new Map<string, CliSession>();
 const parserState: ParserState = { toolStartTimes: new Map() };
 
 // ── Helpers ───────────────────────────────────────────────────────
+
+function cliRunId(prefix = "cli") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+}
+
+function sanitizeRuntimeEventForPersistence(value: unknown): unknown {
+  if (typeof value === "string") {
+    const redacted = value.replace(/[A-Za-z0-9+/=]{2000,}/g, "[large encoded payload omitted]");
+    return redacted.length > 120_000 ? `${redacted.slice(0, 120_000)}\n[truncated]` : redacted;
+  }
+  if (Array.isArray(value)) return value.map((item) => sanitizeRuntimeEventForPersistence(item));
+  if (value && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(source)) {
+      if (key === "data" && source.type === "base64" && typeof entry === "string") {
+        next[key] = "[large encoded payload omitted]";
+      } else {
+        next[key] = sanitizeRuntimeEventForPersistence(entry);
+      }
+    }
+    return next;
+  }
+  return value;
+}
+
+function attachRuntimeRunPersistence(runId: string, session: Pick<CliSession, "events">) {
+  let eventBuffer: any[] = [];
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushEvents = async () => {
+    if (eventBuffer.length === 0) return;
+    const toSave = [...eventBuffer];
+    eventBuffer = [];
+    try {
+      const run = await prisma.aiRun.findFirst({ where: { id: runId } });
+      const output = run?.output && typeof run.output === "object" && !Array.isArray(run.output)
+        ? run.output as Record<string, any>
+        : {};
+      const existing = Array.isArray(output.events) ? output.events : [];
+      await prisma.aiRun.update({
+        where: { id: runId },
+        data: {
+          output: {
+            ...output,
+            events: [...existing, ...toSave],
+          } as any,
+        },
+      });
+    } catch {
+      eventBuffer.unshift(...toSave);
+    }
+  };
+
+  session.events.on("event", (evt: any) => {
+    eventBuffer.push(sanitizeRuntimeEventForPersistence({ ...evt, timestamp: evt?.timestamp || new Date().toISOString() }));
+    if (!saveTimer) {
+      saveTimer = setTimeout(async () => {
+        saveTimer = null;
+        await flushEvents();
+      }, 1000);
+    }
+  });
+
+  session.events.on("done", async (finalStatus: string) => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    await flushEvents();
+    await prisma.aiRun.update({ where: { id: runId }, data: { status: finalStatus } }).catch(() => null);
+  });
+}
 
 function normalizeAgentReasoningEffort(value: unknown): AgentReasoningEffort {
   if (
@@ -287,6 +366,10 @@ export interface SpawnSessionOpts {
   googleApiKey?: string;
   openrouterApiKey?: string;
   reasoningEffort?: string;
+  completionMessage?: string;
+  stoppedMessage?: string;
+  failedMessagePrefix?: string;
+  emitCompletionMessage?: boolean;
 }
 
 export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
@@ -385,7 +468,13 @@ function wireChildProcess(
   session: CliSession,
   adapter: RegisteredCliAdapter,
   events: EventEmitter,
-  opts?: { onActivity?: () => void },
+  opts?: {
+    onActivity?: () => void;
+    completionMessage?: string;
+    stoppedMessage?: string;
+    failedMessagePrefix?: string;
+    emitCompletionMessage?: boolean;
+  },
 ): void {
   let stderrSuppressing = false;
 
@@ -446,14 +535,16 @@ function wireChildProcess(
 
     const completionMsg =
       session.status === "completed"
-        ? "Intake complete. Review the estimate worksheets and adjust pricing as needed."
+        ? opts?.completionMessage ?? "Intake complete. Review the estimate worksheets and adjust pricing as needed."
         : session.status === "stopped"
-          ? "Intake stopped."
-          : `Intake failed (exit code ${code}).`;
-    events.emit("event", {
-      type: "message",
-      data: { role: "assistant", content: completionMsg },
-    });
+          ? opts?.stoppedMessage ?? "Intake stopped."
+          : `${opts?.failedMessagePrefix ?? "Intake failed"} (exit code ${code}).`;
+    if (opts?.emitCompletionMessage !== false && !session._suppressNextExitMessage) {
+      events.emit("event", {
+        type: "message",
+        data: { role: "assistant", content: completionMsg },
+      });
+    }
     events.emit("event", {
       type: "status",
       data: { status: session.status, exitCode: code, signal },
@@ -646,7 +737,13 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   };
   resetInactivityTimer();
 
-  wireChildProcess(child, session, adapter, events, { onActivity: resetInactivityTimer });
+  wireChildProcess(child, session, adapter, events, {
+    onActivity: resetInactivityTimer,
+    completionMessage: opts.completionMessage,
+    stoppedMessage: opts.stoppedMessage,
+    failedMessagePrefix: opts.failedMessagePrefix,
+    emitCompletionMessage: opts.emitCompletionMessage,
+  });
   child.on("exit", () => {
     if (inactivityTimer) clearTimeout(inactivityTimer);
   });
@@ -774,11 +871,12 @@ async function spawnResumedSession(
 }
 
 /** Stop a running session. */
-export function stopSession(projectId: string): boolean {
+export function stopSession(projectId: string, options?: { suppressCompletionMessage?: boolean }): boolean {
   const session = sessions.get(projectId);
   if (!session || session.status !== "running") return false;
 
   console.log(`[cli:stop:${projectId}] Killing process pid=${session.process.pid}`);
+  if (options?.suppressCompletionMessage) session._suppressNextExitMessage = true;
   killProcess(session.process, "SIGINT");
 
   // Force-kill if it doesn't exit within 3s.
@@ -800,6 +898,99 @@ export function stopSession(projectId: string): boolean {
 
 export function getSession(projectId: string): CliSession | undefined {
   return sessions.get(projectId);
+}
+
+export function emitSessionEvent(projectId: string, event: { type: string; data: unknown; timestamp?: string }): boolean {
+  const session = sessions.get(projectId);
+  if (!session) return false;
+  session.events.emit("event", {
+    ...event,
+    timestamp: event.timestamp ?? new Date().toISOString(),
+  });
+  return true;
+}
+
+export async function interruptAndResumeSession(projectId: string, prompt: string, reason = "Background evidence update"): Promise<{ interrupted: boolean; resumed: boolean; runId?: string; reason?: string }> {
+  let session = sessions.get(projectId);
+  if (!session || session.status !== "running") return { interrupted: false, resumed: false, reason: "no_running_session" };
+  if (!session.sessionId) return { interrupted: false, resumed: false, reason: "missing_cli_session_id" };
+  if (interruptingProjects.has(projectId)) return { interrupted: false, resumed: false, reason: "interrupt_already_in_progress" };
+  const lastInterruptAt = lastBackgroundInterruptAtByProject.get(projectId) ?? 0;
+  if (Date.now() - lastInterruptAt < BACKGROUND_INTERRUPT_COOLDOWN_MS) {
+    return { interrupted: false, resumed: false, reason: "interrupt_recently_sent" };
+  }
+  let spawnOpts = session._spawnOpts as Partial<SpawnSessionOpts> | undefined;
+  if (!spawnOpts?.projectDir) return { interrupted: false, resumed: false, reason: "missing_spawn_options" };
+
+  interruptingProjects.add(projectId);
+  const runId = cliRunId("cli-background");
+  try {
+    session = sessions.get(projectId);
+    if (!session || session.status !== "running") return { interrupted: false, resumed: false, reason: "session_finished_before_notification" };
+    if (!session.sessionId) return { interrupted: false, resumed: false, reason: "missing_cli_session_id" };
+    spawnOpts = session._spawnOpts as Partial<SpawnSessionOpts> | undefined;
+    if (!spawnOpts?.projectDir) return { interrupted: false, resumed: false, reason: "missing_spawn_options" };
+    lastBackgroundInterruptAtByProject.set(projectId, Date.now());
+
+    session.events.emit("event", {
+      type: "progress",
+      data: {
+        phase: "Interrupt",
+        detail: reason,
+        source: "background-interrupt",
+      },
+      timestamp: new Date().toISOString(),
+    });
+    session.events.emit("event", {
+      type: "message",
+      data: {
+        role: "system",
+        content: `${reason}. This update has been queued without interrupting the active agent turn; use the refreshed Drawing Evidence Engine on the next evidence pass.`,
+        source: "background-evidence-ready",
+      },
+      timestamp: new Date().toISOString(),
+    });
+
+    await prisma.aiRun.create({
+      data: {
+        id: runId,
+        projectId,
+        revisionId: String(spawnOpts.revisionId ?? ""),
+        kind: "cli-intake",
+        status: "completed",
+        model: String(spawnOpts.model ?? ""),
+        input: {
+          runtime: spawnOpts.runtime ?? session.runtime,
+          prompt,
+          resumed: false,
+          backgroundInterrupt: false,
+          nonBlockingBackgroundNotification: true,
+          reason,
+          cliSessionId: session.sessionId,
+        } as any,
+        output: { events: [{
+          type: "message",
+          data: { role: "system", content: reason, source: "background-evidence-ready" },
+          timestamp: new Date().toISOString(),
+        }] } as any,
+      },
+    }).catch(() => null);
+
+    return { interrupted: false, resumed: false, runId, reason: "background_update_recorded_without_interrupt" };
+  } catch (error) {
+    await prisma.aiRun.update({
+      where: { id: runId },
+      data: { status: "failed" },
+    }).catch(() => null);
+    return {
+      interrupted: false,
+      resumed: false,
+      runId,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    interruptingProjects.delete(projectId);
+  }
 }
 
 export function listSessions(): Array<{

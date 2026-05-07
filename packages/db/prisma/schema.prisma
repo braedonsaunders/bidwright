@@ -265,7 +265,6 @@ model QuoteRevision {
   freightOnBoard           String   @default("")
   status                   String   @default("Open")
   defaultMarkup            Float    @default(0)
-  laborDifficulty           String   @default("")
   followUpNote             String   @default("")
   printEmptyNotesColumn    Boolean  @default(false)
   printCategory            String[] @default([])
@@ -1537,7 +1536,6 @@ model AssemblyComponent {
   rateScheduleItem   RateScheduleItem? @relation(fields: [rateScheduleItemId], references: [id], onDelete: SetNull)
   laborUnitId        String?
   laborUnit          LaborUnit?        @relation(fields: [laborUnitId], references: [id], onDelete: SetNull)
-  laborDifficulty    String            @default("normal")
   costResourceId     String?
   costResource       ResourceCatalogItem? @relation(fields: [costResourceId], references: [id], onDelete: SetNull)
   effectiveCostId    String?
@@ -1877,9 +1875,6 @@ model LaborUnit {
   subClassName       String           @default("")
   outputUom          String           @default("EA")
   hoursNormal        Float            @default(0)
-  hoursDifficult     Float?
-  hoursVeryDifficult Float?
-  defaultDifficulty  String           @default("normal")
   entityCategoryType String           @default("Labour")
   tags               String[]         @default([])
   sourceRef          Json             @default("{}")

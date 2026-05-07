@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
     python3-pip \
+    openjdk-17-jdk-headless \
     poppler-utils \
     tesseract-ocr \
     libgl1 \
@@ -39,8 +40,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     git \
     wget \
+    unzip \
     ripgrep \
   && rm -rf /var/lib/apt/lists/*
+RUN wget -q -O /tmp/mpxj.zip "https://downloads.sourceforge.net/project/mpxj/mpxj/Version%2016.1.0/mpxj-16.1.0.zip" \
+  && mkdir -p /opt/mpxj-dist /opt/mpxj \
+  && unzip -q /tmp/mpxj.zip -d /opt/mpxj-dist \
+  && find /opt/mpxj-dist -mindepth 1 -maxdepth 1 -type d -exec cp -R {}/. /opt/mpxj/ \; \
+  && rm -rf /tmp/mpxj.zip /opt/mpxj-dist
 ENV VIRTUAL_ENV=/opt/vision-venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PYTHON_PATH="${VIRTUAL_ENV}/bin/python"
@@ -52,6 +59,7 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 WORKDIR /app
 COPY --from=builder /app .
+RUN javac -cp "/opt/mpxj/*:/opt/mpxj/lib/*" apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java
 RUN pnpm --filter @bidwright/api exec playwright install --with-deps chromium
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@bidwright/api", "exec", "tsx", "src/index.ts"]

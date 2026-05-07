@@ -58,6 +58,16 @@ interface AgentChatProps {
   onIntakeStarted?: () => void;
   onWorkspaceMutated?: () => void;
   onAgentNavigate?: (intent: AgentNavigationIntent) => void | Promise<void>;
+  onRunStateChange?: (state: AgentRunState) => void;
+}
+
+export interface AgentRunState {
+  active: boolean;
+  waitingForUser: boolean;
+  pendingQuestion: boolean;
+  status: "idle" | "starting" | "running" | "waiting_for_user" | "completed" | "failed" | "stopped";
+  toolCount: number;
+  messageCount: number;
 }
 
 export type AgentNavigationIntent =
@@ -2292,7 +2302,7 @@ function AgentSetupDropdown({
   );
 }
 
-export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated, onAgentNavigate }: AgentChatProps) {
+export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, initialPersonaId, onIntakeStarted, onWorkspaceMutated, onAgentNavigate, onRunStateChange }: AgentChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -3348,6 +3358,31 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     intakeStatus?.messageCount ?? 0,
     timelineEvents.filter((event) => event?.type === "message").length,
   );
+  useEffect(() => {
+    const active = isRunStarting || isIntakeRunning || isLoading;
+    onRunStateChange?.({
+      active,
+      waitingForUser: isWaitingForUser,
+      pendingQuestion: Boolean(cliPendingQuestion),
+      status: isRunStarting
+        ? "starting"
+        : isWaitingForUser
+          ? "waiting_for_user"
+          : intakeStatus?.status ?? (isLoading ? "running" : "idle"),
+      toolCount: statusToolCount,
+      messageCount: statusMessageCount,
+    });
+  }, [
+    cliPendingQuestion,
+    intakeStatus?.status,
+    isIntakeRunning,
+    isLoading,
+    isRunStarting,
+    isWaitingForUser,
+    onRunStateChange,
+    statusMessageCount,
+    statusToolCount,
+  ]);
   const streamRevision = useMemo(() => {
     const lastEvent = timelineEvents[timelineEvents.length - 1];
     const lastMessage = messages[messages.length - 1];

@@ -26,6 +26,8 @@ import PostalMime from 'postal-mime';
 
 const EXCEL_MIMES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel.sheet.macroEnabled.12',
+  'application/vnd.oasis.opendocument.spreadsheet',
   'application/vnd.ms-excel',
 ]);
 
@@ -423,7 +425,7 @@ function wordDocumentPart(
   const fn = document[method];
   if (typeof fn !== 'function') return '';
   try {
-    return (fn as (options?: Record<string, unknown>) => string)(options).trim();
+    return (fn as (options?: Record<string, unknown>) => string).call(document, options).trim();
   } catch {
     return '';
   }
@@ -790,7 +792,7 @@ const excelCsvHandler: FileHandler = {
   canHandle(mimeType: string, filename: string): boolean {
     if (EXCEL_MIMES.has(mimeType) || CSV_MIMES.has(mimeType)) return true;
     const ext = extOf(filename);
-    return ['xlsx', 'xls', 'csv', 'tsv'].includes(ext);
+    return ['xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv'].includes(ext);
   },
 
   async parse(input: Buffer, filename: string): Promise<ParsedDocument> {
@@ -867,7 +869,7 @@ const excelCsvHandler: FileHandler = {
     }
 
     const ext = extOf(filename);
-    const mimeType = ['xlsx', 'xls'].includes(ext)
+    const mimeType = ['xlsx', 'xls', 'xlsm', 'ods'].includes(ext)
       ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       : 'text/csv';
 
@@ -959,7 +961,7 @@ const textMarkdownHandler: FileHandler = {
   canHandle(mimeType: string, filename: string): boolean {
     if (TEXT_MIMES.has(mimeType)) return true;
     const ext = extOf(filename);
-    return ['txt', 'md', 'markdown', 'json', 'xml', 'yaml', 'yml', 'log', 'cfg', 'ini'].includes(ext);
+    return ['txt', 'md', 'markdown', 'json', 'xml', 'yaml', 'yml', 'log', 'cfg', 'ini', 'toml', 'conf'].includes(ext);
   },
 
   async parse(input: Buffer, filename: string): Promise<ParsedDocument> {

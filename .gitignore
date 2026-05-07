@@ -13,7 +13,10 @@ test-results/
 .turbo
 .prisma
 .codex/
+.bidwright/
+.bidwright-*/
 .playwright-cli/
+.claude/
 *.log
 *.tsbuildinfo
 *-extract-output.txt
@@ -31,7 +34,27 @@ packages/db/.tmp/
 venv/
 __pycache__/
 *.pyc
-# Local Claude Code scratch state (lock files, scheduled task scratch)
-.claude/scheduled_tasks.lock
-.claude/scheduled_tasks/
+
+# Local agent/runtime scratch state
+.bidwright-mcp-config.json
+.bidwright-prompt.txt
+.bidwright-*.bat
+library-snapshots/
+**/library-snapshots/
+**/.bidwright/
+**/.bidwright-mcp-config.json
+**/.bidwright-prompt.txt
+**/.bidwright-*.bat
+
 # Client RFQ packages and test data — never commit
+eval-cases/
+eval-cases*/
+.eval-cases/
+client-packages/
+customer-packages/
+test-packages/
+fixtures/local/
+*.eval.local.json
+*.quote-package.zip
+*.intake-package.zip
+*.rfq.zip
