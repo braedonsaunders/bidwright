@@ -1754,11 +1754,17 @@ ${message}`;
     const { projectId } = request.params as { projectId: string };
     const session = getSession(projectId);
 
-    // Get ALL intake runs for this project, oldest first
-    const runs = await prisma.aiRun.findMany({
+    // Get ALL intake runs for this project, oldest first.
+    // Background runs (id prefix "cli-background-") capture interrupt-style
+    // notifications and are not meant for display — their events are already
+    // mirrored into the main run's transcript via SSE. Filter them out before
+    // merging or picking latestRun so chronological ordering, latestRun
+    // selection, and completion derivation are based on real interactive runs.
+    const runsRaw = await prisma.aiRun.findMany({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "asc" },
     });
+    const runs = runsRaw.filter((run) => !(typeof run.id === "string" && run.id.startsWith("cli-background-")));
 
     if (runs.length === 0 && !session) {
       return { status: "none" };
@@ -1821,7 +1827,8 @@ ${message}`;
       }
     }
 
-    // Merge all runs into a single chronological event stream with run dividers
+    // Merge all runs into a single chronological event stream with run
+    // dividers. Background runs are already filtered out of `runs` above.
     const mergedEvents: any[] = [];
     for (const run of runs) {
       const runEvents = (run.output as any)?.events || [];
