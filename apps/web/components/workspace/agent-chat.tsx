@@ -2669,7 +2669,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     }
   }, [messages, liveToolCalls, isUserScrolledUp, cliPendingQuestion, intakeStatus]);
 
-  // Track user scroll position
+  // Track user scroll position. Re-evaluated on scroll events AND on content
+  // resize via the ResizeObserver below, so isUserScrolledUp stays accurate
+  // when streaming content grows scrollHeight without firing a scroll event.
   const handleScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -2679,10 +2681,33 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     if (!scrolledUp) setHasUnseenMessages(false);
   }, []);
 
+  // Re-check distance-from-bottom whenever the scroll container's content
+  // resizes (e.g. streaming text, new messages, tool result blocks), since
+  // scrollHeight changes alone do not fire 'scroll' events.
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => handleScroll());
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [handleScroll]);
+
   const scrollToBottom = useCallback(() => {
     const el = scrollContainerRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
-    else messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      // Content can grow on the next frame while a streaming message is
+      // mid-render; re-snap so the user actually lands at the bottom and
+      // the ResizeObserver-driven handleScroll sees distanceFromBottom ~ 0.
+      requestAnimationFrame(() => {
+        const live = scrollContainerRef.current;
+        if (!live) return;
+        live.scrollTop = live.scrollHeight;
+      });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    }
     setIsUserScrolledUp(false);
     setHasUnseenMessages(false);
   }, []);
@@ -3157,12 +3182,19 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           setLiveToolCalls(tools);
 
           const msgs = events.filter((e: any) => e.type === "message");
-          setMessages(msgs.map((e: any, i: number) => ({
+          const polled: ChatMessage[] = msgs.map((e: any, i: number) => ({
             id: `poll-msg-${i}`,
             role: e.data?.role || "assistant",
             content: e.data?.content || "",
             timestamp: e.timestamp || "",
-          })));
+          }));
+          // Don't let the DB poll shrink the local message list. SSE 'message'
+          // events deliver optimistic appends that are persisted to the DB
+          // asynchronously; if a poll lands before the DB write, replacing
+          // wholesale would cause the just-rendered message to flicker out
+          // and then back in on the next poll. Only adopt the polled list
+          // when it has caught up with (or surpassed) what we already show.
+          setMessages((prev) => (polled.length >= prev.length ? polled : prev));
 
           setIntakeStatus((prev) => prev ? {
             ...prev,
