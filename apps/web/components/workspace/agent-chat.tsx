@@ -3179,7 +3179,13 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           // Update tool calls from persisted events
           const toolEvents = events.filter((e: any) => e.type === "tool_call");
           const tools = pairToolEvents(events);
-          setLiveToolCalls(tools);
+          // Same SSE-vs-DB race as messages: optimistic tool_call/tool_result
+          // events render inline widgets immediately, but the DB write may
+          // not have landed by the time the next 5s poll runs. Wholesale
+          // replacing here would cause the inline widget to flicker out
+          // and then back in. Adopt the polled list only when it has caught
+          // up; otherwise keep the local optimistic state.
+          setLiveToolCalls((prev) => (tools.length >= prev.length ? tools : prev));
 
           const msgs = events.filter((e: any) => e.type === "message");
           const polled: ChatMessage[] = msgs.map((e: any, i: number) => ({
