@@ -1916,6 +1916,10 @@ function firstPluginSearchField(tool: { ui?: { sections?: Array<{ fields?: Array
 
 export class PrismaApiStore {
   private static lineItemSearchInfrastructureReady = false;
+  // Single-flight in-flight rebuilds keyed by `${organizationId}|${projectId ?? ""}` so concurrent
+  // searchLineItemCandidates callers on a cold index don't trigger N redundant full rebuilds racing
+  // each other through Postgres locks.
+  private static lineItemSearchRebuildInFlight = new Map<string, Promise<{ indexed: number }>>();
   private importCache = new Map<string, { headers: string[]; rows: string[][] }>();
   private _userId: string | null = null;
   private _activityActor: { id: string; name: string; type: "user" | "super_admin" | "ai" | "system" } | null = null;
@@ -2130,6 +2134,19 @@ export class PrismaApiStore {
   }
 
   async rebuildLineItemSearchIndex(projectId?: string): Promise<{ indexed: number }> {
+    const inflightKey = `${this.organizationId}|${projectId ?? ""}`;
+    const inflight = PrismaApiStore.lineItemSearchRebuildInFlight.get(inflightKey);
+    if (inflight) return inflight;
+    const promise = this.runLineItemSearchIndexRebuild(projectId);
+    PrismaApiStore.lineItemSearchRebuildInFlight.set(inflightKey, promise);
+    try {
+      return await promise;
+    } finally {
+      PrismaApiStore.lineItemSearchRebuildInFlight.delete(inflightKey);
+    }
+  }
+
+  private async runLineItemSearchIndexRebuild(projectId?: string): Promise<{ indexed: number }> {
     if (projectId) {
       await this.requireProject(projectId);
     }
