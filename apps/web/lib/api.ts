@@ -89,7 +89,6 @@ export interface QuoteRevision {
   freightOnBoard: string;
   status: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup: number;
-  laborDifficulty: string;
   followUpNote: string;
   printEmptyNotesColumn: boolean;
   printCategory: string[];
@@ -391,7 +390,7 @@ export interface ProjectAdjustment {
 
 export type EstimateFactorImpact = "labor_hours" | "resource_units" | "direct_cost" | "sell_price";
 export type EstimateFactorConfidence = "high" | "medium" | "low";
-export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
+export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "project_condition" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
 export type EstimateFactorApplicationScope = "global" | "line" | "both";
 export type EstimateFactorFormulaType =
   | "fixed_multiplier"
@@ -653,9 +652,6 @@ export interface LaborUnitRecord {
   subClassName: string;
   outputUom: string;
   hoursNormal: number;
-  hoursDifficult: number | null;
-  hoursVeryDifficult: number | null;
-  defaultDifficulty: "normal" | "difficult" | "very_difficult";
   entityCategoryType: string;
   tags: string[];
   sourceRef: Record<string, unknown>;
@@ -675,6 +671,22 @@ export interface LaborUnitTreeGroupRecord {
   subClassName: string;
   unitCount: number;
   normalHoursTotal: number;
+  search?: {
+    score: number;
+    matchedUnitCount: number;
+    matchedTerms: string[];
+    matchedPhrases: string[];
+    representativeUnits: Array<{
+      id: string;
+      code: string;
+      name: string;
+      category: string;
+      className: string;
+      subClassName: string;
+      outputUom: string;
+      hoursNormal: number;
+    }>;
+  };
 }
 
 export interface FileNode {
@@ -692,6 +704,88 @@ export interface FileNode {
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
+}
+
+export interface FileIngestManifestResponse {
+  status: "indexed" | "partial" | "failed";
+  family: "document" | "model" | "spreadsheet" | "image" | "email" | "archive" | "text" | "unknown";
+  checksum: string;
+  size: number;
+  manifest: {
+    summary?: Record<string, unknown>;
+    email?: {
+      subject: string;
+      from?: string;
+      to: string[];
+      cc: string[];
+      bcc: string[];
+      replyTo: string[];
+      sentAt?: string | null;
+      receivedAt?: string | null;
+      messageId?: string | null;
+      bodyTextLength: number;
+      bodyPreview?: string;
+      hasHtml: boolean;
+      attachmentCount: number;
+      attachments: Array<{ fileName: string; mimeType?: string | null; size?: number | null; checksum?: string | null }>;
+    };
+    archive?: {
+      format: string;
+      encrypted: boolean | null;
+      entryCount: number;
+      totalUncompressedSize: number;
+      entries: Array<{ path: string; fileName: string; extension: string; size: number; modifiedAt?: string | null }>;
+    };
+    markups?: {
+      source: "bluebeam-markups";
+      rowCount: number;
+      quantityCount: number;
+      units: string[];
+      subjects: string[];
+      pages: string[];
+      quantities: Array<{
+        id: string;
+        pageLabel?: string | null;
+        subject?: string | null;
+        label?: string | null;
+        layer?: string | null;
+        space?: string | null;
+        measurementType?: string | null;
+        quantity: number;
+        unit?: string | null;
+        comment?: string | null;
+        raw: Record<string, string>;
+      }>;
+    };
+    issues?: Array<{ severity: "info" | "warning" | "error"; code: string; message: string }>;
+  };
+}
+
+export interface ScheduleImportCandidate {
+  sourceKind: "source_document" | "file_node";
+  sourceId: string;
+  fileName: string;
+  fileType?: string | null;
+  format: string;
+  size?: number | null;
+  storagePath?: string | null;
+  provider: "mpxj" | "embedded";
+  status: "available" | "missing" | "unsupported" | "degraded" | "failed";
+  message: string;
+}
+
+export interface ScheduleImportResult {
+  imported: {
+    parser: "mpxj" | "mspdi" | "p6xml" | "xer";
+    sourceKind: "source_document" | "file_node";
+    sourceId: string;
+    fileName: string;
+    taskCount: number;
+    dependencyCount: number;
+    resourceCount: number;
+    assignmentCount: number;
+    warnings: string[];
+  };
 }
 
 export interface Citation {
@@ -1505,7 +1599,6 @@ export interface RevisionPatchInput {
   freightOnBoard?: string;
   status?: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup?: number;
-  laborDifficulty?: string;
   followUpNote?: string;
   printEmptyNotesColumn?: boolean;
   printCategory?: string[];
@@ -3273,6 +3366,7 @@ export async function listLaborUnits(input: {
   provider?: string;
   category?: string;
   className?: string;
+  subClassName?: string;
   limit?: number;
   offset?: number;
 } = {}) {
@@ -3282,10 +3376,11 @@ export async function listLaborUnits(input: {
   if (input.provider) params.set("provider", input.provider);
   if (input.category) params.set("category", input.category);
   if (input.className) params.set("className", input.className);
+  if (input.subClassName) params.set("subClassName", input.subClassName);
   if (input.limit != null) params.set("limit", String(input.limit));
   if (input.offset != null) params.set("offset", String(input.offset));
   const query = params.toString();
-  return apiRequest<{ units: LaborUnitRecord[]; total: number }>(`/api/labor-units/units${query ? `?${query}` : ""}`);
+  return apiRequest<{ units: LaborUnitRecord[]; total: number; diagnostics?: Record<string, unknown> }>(`/api/labor-units/units${query ? `?${query}` : ""}`);
 }
 
 export async function listLaborUnitTree(input: {
@@ -3308,7 +3403,7 @@ export async function listLaborUnitTree(input: {
   if (input.limit != null) params.set("limit", String(input.limit));
   if (input.offset != null) params.set("offset", String(input.offset));
   const query = params.toString();
-  return apiRequest<{ nodes: LaborUnitTreeGroupRecord[]; units: LaborUnitRecord[]; total: number }>(`/api/labor-units/tree${query ? `?${query}` : ""}`);
+  return apiRequest<{ nodes: LaborUnitTreeGroupRecord[]; units: LaborUnitRecord[]; total: number; diagnostics?: Record<string, unknown> }>(`/api/labor-units/tree${query ? `?${query}` : ""}`);
 }
 
 export async function createLaborUnit(libraryId: string, input: {
@@ -3322,9 +3417,6 @@ export async function createLaborUnit(libraryId: string, input: {
   subClassName?: string;
   outputUom?: string;
   hoursNormal: number;
-  hoursDifficult?: number | null;
-  hoursVeryDifficult?: number | null;
-  defaultDifficulty?: "normal" | "difficult" | "very_difficult";
   entityCategoryType?: string;
   tags?: string[];
   sourceRef?: Record<string, unknown>;
@@ -3652,6 +3744,32 @@ export async function updateSourceDocument(
 export async function deleteSourceDocument(projectId: string, docId: string) {
   return apiRequest<{ deleted: boolean }>(`/projects/${projectId}/documents/${docId}`, {
     method: "DELETE",
+  });
+}
+
+export async function inspectFileIngest(
+  projectId: string,
+  input: { sourceKind: "source_document" | "file_node"; sourceId: string }
+) {
+  return apiRequest<FileIngestManifestResponse>(`/api/files/${projectId}/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getScheduleImportCandidates(projectId: string) {
+  return apiRequest<{ candidates: ScheduleImportCandidate[] }>(`/projects/${projectId}/schedule/import-candidates`);
+}
+
+export async function importProjectSchedule(
+  projectId: string,
+  input: { sourceKind: "source_document" | "file_node"; sourceId: string; mode?: "replace" }
+) {
+  return apiRequest<ScheduleImportResult>(`/projects/${projectId}/schedule/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "replace", ...input }),
   });
 }
 
@@ -5431,7 +5549,6 @@ export interface AssemblyComponentRecord {
   catalogItemId: string | null;
   rateScheduleItemId: string | null;
   laborUnitId: string | null;
-  laborDifficulty: "normal" | "difficult" | "very_difficult";
   costResourceId: string | null;
   effectiveCostId: string | null;
   subAssemblyId: string | null;
@@ -5569,7 +5686,6 @@ export async function createAssemblyComponent(
     catalogItemId?: string | null;
     rateScheduleItemId?: string | null;
     laborUnitId?: string | null;
-    laborDifficulty?: "normal" | "difficult" | "very_difficult";
     costResourceId?: string | null;
     effectiveCostId?: string | null;
     subAssemblyId?: string | null;
@@ -5599,7 +5715,6 @@ export async function updateAssemblyComponent(
     catalogItemId: string | null;
     rateScheduleItemId: string | null;
     laborUnitId: string | null;
-    laborDifficulty: "normal" | "difficult" | "very_difficult";
     costResourceId: string | null;
     effectiveCostId: string | null;
     subAssemblyId: string | null;

@@ -140,7 +140,6 @@ async function main() {
           freightOnBoard: r.freightOnBoard,
           status: r.status,
           defaultMarkup: r.defaultMarkup,
-          laborDifficulty: r.laborDifficulty,
           followUpNote: r.followUpNote,
           printEmptyNotesColumn: r.printEmptyNotesColumn,
           printCategory: r.printCategory,

@@ -808,9 +808,6 @@ type LaborUnitFormState = {
   subClassName: string;
   outputUom: string;
   hoursNormal: string;
-  hoursDifficult: string;
-  hoursVeryDifficult: string;
-  defaultDifficulty: LaborUnitRecord["defaultDifficulty"];
   entityCategoryType: string;
   tags: string;
 };
@@ -840,9 +837,6 @@ function emptyLaborUnitForm(catalogId = ""): LaborUnitFormState {
     subClassName: "",
     outputUom: "EA",
     hoursNormal: "0",
-    hoursDifficult: "",
-    hoursVeryDifficult: "",
-    defaultDifficulty: "normal",
     entityCategoryType: "Labour",
     tags: "",
   };
@@ -860,9 +854,6 @@ function laborUnitFormFromRecord(unit: LaborUnitRecord): LaborUnitFormState {
     subClassName: unit.subClassName ?? "",
     outputUom: unit.outputUom || "EA",
     hoursNormal: String(unit.hoursNormal ?? 0),
-    hoursDifficult: unit.hoursDifficult == null ? "" : String(unit.hoursDifficult),
-    hoursVeryDifficult: unit.hoursVeryDifficult == null ? "" : String(unit.hoursVeryDifficult),
-    defaultDifficulty: unit.defaultDifficulty ?? "normal",
     entityCategoryType: unit.entityCategoryType || "Labour",
     tags: unit.tags?.join(", ") ?? "",
   };
@@ -895,13 +886,6 @@ function splitTags(value: string) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
-}
-
-function optionalNumber(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : Number.NaN;
 }
 
 type LaborUnitGroupLevel = LaborUnitTreeGroupRecord["level"];
@@ -955,7 +939,7 @@ function LaborUnitGroupRow({
 
   return (
     <tr className={cn("border-b border-line/55 transition-colors", rowTone)} style={{ borderLeft: `3px solid ${accent}` }}>
-      <td colSpan={9} className="p-0">
+      <td colSpan={7} className="p-0">
         <button
           type="button"
           aria-expanded={expanded}
@@ -1274,18 +1258,12 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       return;
     }
     const hoursNormal = Number(unitForm.hoursNormal);
-    const hoursDifficult = optionalNumber(unitForm.hoursDifficult);
-    const hoursVeryDifficult = optionalNumber(unitForm.hoursVeryDifficult);
     if (!unitForm.name.trim()) {
       setDrawerError(t("labor.errors.unitNameRequired"));
       return;
     }
     if (!Number.isFinite(hoursNormal) || hoursNormal < 0) {
       setDrawerError(t("labor.errors.normalHours"));
-      return;
-    }
-    if (Number.isNaN(hoursDifficult) || Number.isNaN(hoursVeryDifficult)) {
-      setDrawerError(t("labor.errors.difficultyHours"));
       return;
     }
 
@@ -1302,9 +1280,6 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
         subClassName: unitForm.subClassName.trim(),
         outputUom: unitForm.outputUom.trim() || "EA",
         hoursNormal,
-        hoursDifficult,
-        hoursVeryDifficult,
-        defaultDifficulty: unitForm.defaultDifficulty,
         entityCategoryType: unitForm.entityCategoryType.trim() || "Labour",
         tags: splitTags(unitForm.tags),
       };
@@ -1498,30 +1473,10 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                     </label>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <label className="grid gap-1 text-[11px] font-medium text-fg/55">
                       {t("labor.fields.normalHours")}
                       <Input value={unitForm.hoursNormal} onChange={(event) => updateUnitForm("hoursNormal", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.difficultHours")}
-                      <Input value={unitForm.hoursDifficult} onChange={(event) => updateUnitForm("hoursDifficult", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.veryDifficultHours")}
-                      <Input value={unitForm.hoursVeryDifficult} onChange={(event) => updateUnitForm("hoursVeryDifficult", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.default")}
-                      <CompactSelect
-                        value={unitForm.defaultDifficulty}
-                        onValueChange={(value) => updateUnitForm("defaultDifficulty", value as LaborUnitRecord["defaultDifficulty"])}
-                        options={[
-                          { value: "normal", label: t("labor.difficulty.normal") },
-                          { value: "difficult", label: t("labor.difficulty.difficult") },
-                          { value: "very_difficult", label: t("labor.difficulty.veryDifficult") },
-                        ]}
-                      />
                     </label>
                   </div>
 
@@ -1769,14 +1724,12 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
         <table className="w-full table-fixed text-left text-xs">
           <colgroup>
             <col className="w-[8%]" />
-            <col className="w-[27%]" />
+            <col className="w-[31%]" />
             <col className="w-[15%]" />
-            <col className="w-[13%]" />
-            <col className="w-[18%]" />
-            <col className="w-[6%]" />
-            <col className="w-[5%]" />
-            <col className="w-[5%]" />
-            <col className="w-[3%]" />
+            <col className="w-[14%]" />
+            <col className="w-[20%]" />
+            <col className="w-[8%]" />
+            <col className="w-[4%]" />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-panel text-[10px] uppercase tracking-wide text-fg/35">
             <tr className="border-b border-line">
@@ -1786,8 +1739,6 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
               <th className="px-2 py-2 font-medium">{t("labor.table.category")}</th>
               <th className="px-2 py-2 font-medium">{t("labor.table.class")}</th>
               <th className="px-2 py-2 text-right font-medium">{t("labor.table.normal")}</th>
-              <th className="px-2 py-2 text-right font-medium">{t("labor.table.difficult")}</th>
-              <th className="px-2 py-2 text-right font-medium">{t("labor.table.veryDifficult")}</th>
               <th className="px-2 py-2 font-medium">{t("labor.table.uom")}</th>
             </tr>
           </thead>
@@ -1808,7 +1759,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                   if (row.kind === "loading" || row.kind === "empty") {
                     return (
                       <tr key={row.id} className="border-b border-line/55 bg-bg/35">
-                        <td colSpan={9} className="px-2 py-2 text-[11px] text-fg/38">
+                        <td colSpan={7} className="px-2 py-2 text-[11px] text-fg/38">
                           <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 18 }}>
                             <span className="h-px w-5 bg-line" />
                             {row.kind === "loading" ? t("labor.branchLoading") : t("labor.branchEmpty")}
@@ -1847,8 +1798,6 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         <div className="truncate">{[unit.className, unit.subClassName].filter(Boolean).join(" / ") || "-"}</div>
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/55">{unit.hoursDifficult == null ? "-" : formatNumber(unit.hoursDifficult)}</td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/55">{unit.hoursVeryDifficult == null ? "-" : formatNumber(unit.hoursVeryDifficult)}</td>
                       <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></td>
                     </tr>
                   );
@@ -1878,22 +1827,20 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                         <div className="truncate">{[unit.className, unit.subClassName].filter(Boolean).join(" / ") || "-"}</div>
                       </td>
                       <td className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/55">{unit.hoursDifficult == null ? "-" : formatNumber(unit.hoursDifficult)}</td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/55">{unit.hoursVeryDifficult == null ? "-" : formatNumber(unit.hoursVeryDifficult)}</td>
                       <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></td>
                     </tr>
                   );
                 })}
             {!loading && (!groupedView ? units.length === 0 : visibleTreeRows.length === 0 && !rootTreePayload?.loading) && (
               <tr>
-                <td colSpan={9} className="px-3 py-10 text-center text-sm text-fg/40">
+                <td colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
                   {t("labor.empty")}
                 </td>
               </tr>
             )}
             {(loading || (groupedView && rootTreePayload?.loading)) && (
               <tr>
-                <td colSpan={9} className="px-3 py-10 text-center text-sm text-fg/40">
+                <td colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
                   {t("labor.loading")}
                 </td>
               </tr>

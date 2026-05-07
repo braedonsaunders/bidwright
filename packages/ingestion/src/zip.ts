@@ -23,6 +23,10 @@ function inferMimeType(extension: string): string | undefined {
       return 'application/msword';
     case 'xlsx':
       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xlsm':
+      return 'application/vnd.ms-excel.sheet.macroEnabled.12';
+    case 'ods':
+      return 'application/vnd.oasis.opendocument.spreadsheet';
     case 'xls':
       return 'application/vnd.ms-excel';
     case 'pptx':
@@ -44,6 +48,21 @@ function inferMimeType(extension: string): string | undefined {
       return 'text/plain';
     case 'json':
       return 'application/json';
+    case 'xml':
+    case 'p6xml':
+    case 'pmxml':
+      return 'application/xml';
+    case 'msg':
+      return 'application/vnd.ms-outlook';
+    case 'eml':
+      return 'message/rfc822';
+    case 'mpp':
+    case 'mpt':
+      return 'application/vnd.ms-project';
+    case 'mpx':
+      return 'application/x-project';
+    case 'xer':
+      return 'text/plain';
     case 'png':
       return 'image/png';
     case 'jpg':

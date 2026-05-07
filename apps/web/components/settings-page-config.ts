@@ -91,6 +91,25 @@ export interface IntegrationSettings {
   azureDiFeatures: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
   azureDiQueryFields: string;
   azureDiOutputFormat: "text" | "markdown";
+  /** Active drawing-extraction provider for drawing PDFs. `none` disables enrichment. */
+  drawingExtractionProvider: "landingAi" | "geminiPro" | "geminiFlash" | "none";
+  /** Master enable for the configured provider. */
+  drawingExtractionEnabled: boolean;
+  /** @deprecated kept for backward compatibility — use drawingExtractionProvider/drawingExtractionEnabled. */
+  landingAiDrawingExtractionEnabled: boolean;
+  landingAiApiKey: string;
+  landingAiEndpoint: string;
+  landingAiParseModel: string;
+  landingAiExtractModel: string;
+  /** Gemini drawing extraction model ids. (geminiApiKey is already declared above.) */
+  geminiProModel: string;
+  geminiFlashModel: string;
+  /** When false, disables Gemini "thinking" mode (faster + cheaper). */
+  geminiThinkingEnabled: boolean;
+  autodeskClientId: string;
+  autodeskClientSecret: string;
+  autodeskApsRevitActivityId: string;
+  autodeskApsAutocadActivityId: string;
   agentRuntime?: string | null;
   agentModel?: string | null;
   agentReasoningEffort?: string | null;
@@ -148,7 +167,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
     defaultBreakoutStyle: "category",
     defaultQuoteType: "Firm",
     uoms: DEFAULT_UOMS,
-    benchmarkingEnabled: true,
+    benchmarkingEnabled: false,
     benchmarkMinimumSimilarity: 0.55,
     benchmarkMaximumComparables: 5,
     benchmarkLowerHoursRatio: 0.75,
@@ -179,6 +198,20 @@ export const DEFAULT_SETTINGS: AllSettings = {
     azureDiFeatures: ["keyValuePairs"],
     azureDiQueryFields: "",
     azureDiOutputFormat: "text",
+    drawingExtractionProvider: "none",
+    drawingExtractionEnabled: false,
+    landingAiDrawingExtractionEnabled: false,
+    landingAiApiKey: "",
+    landingAiEndpoint: "https://api.va.landing.ai",
+    landingAiParseModel: "dpt-2-latest",
+    landingAiExtractModel: "extract-latest",
+    geminiProModel: "gemini-2.5-pro",
+    geminiFlashModel: "gemini-2.5-flash",
+    geminiThinkingEnabled: true,
+    autodeskClientId: "",
+    autodeskClientSecret: "",
+    autodeskApsRevitActivityId: "",
+    autodeskApsAutocadActivityId: "",
     agentReasoningEffort: "extra_high",
   },
   termsAndConditions: "",

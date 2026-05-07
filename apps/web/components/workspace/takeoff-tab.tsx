@@ -50,8 +50,7 @@ import {
   Highlighter,
   StretchHorizontal,
   Trash2,
-  Puzzle,
-  UploadCloud,
+  Box,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -101,8 +100,6 @@ import {
   suggestLineItemsForAnnotation,
   getFileTree,
   importPreview,
-  importProcess,
-  uploadFile,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type EntityCategory,
@@ -302,9 +299,6 @@ interface TakeoffDocument {
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
-  onOpenImportLineItems?: () => void;
-  onOpenDocuments?: () => void;
-  onOpenPluginTools?: () => void;
   onOpenRevisionDiff?: () => void;
   onWorkspaceMutated?: () => void;
   initialDocumentId?: string | null;
@@ -342,8 +336,12 @@ function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
   return isCadFile(fileName) ? "model" : "pdf";
 }
 
+function takeoffDisplayFileName(fileName: string) {
+  return fileName.split(/[\\/]/).filter(Boolean).pop() ?? fileName;
+}
+
 function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
-  if (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name)) {
+  if (node.type !== "file" || (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name))) {
     return null;
   }
   return {
@@ -367,44 +365,7 @@ function sourceCountText(count: number, singular: string, plural = `${singular}s
   return count ? `${count} ${count === 1 ? singular : plural}` : null;
 }
 
-const SPREADSHEET_IMPORT_TARGETS = [
-  { value: "skip", label: "Skip" },
-  { value: "entityName", label: "Item name" },
-  { value: "description", label: "Description" },
-  { value: "quantity", label: "Quantity" },
-  { value: "uom", label: "UOM" },
-  { value: "cost", label: "Unit cost" },
-  { value: "markup", label: "Markup" },
-  { value: "price", label: "Unit price" },
-  { value: "category", label: "Category" },
-  { value: "entityType", label: "Type" },
-  { value: "vendor", label: "Vendor" },
-  { value: "lineOrder", label: "Line order" },
-] as const;
-
-type SpreadsheetImportTarget = typeof SPREADSHEET_IMPORT_TARGETS[number]["value"];
-type SpreadsheetPanelView = "preview" | "pivot" | "map";
-
-function inferSpreadsheetImportTarget(header: string): SpreadsheetImportTarget {
-  const normalized = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
-  if (!normalized) return "skip";
-  if (/(^|\s)(item|item name|name|material|part|line item|scope)(\s|$)/.test(normalized)) return "entityName";
-  if (/desc|scope|notes|work description/.test(normalized)) return "description";
-  if (/(^|\s)(qty|quantity|count|hours|hrs)(\s|$)/.test(normalized)) return "quantity";
-  if (/(^|\s)(uom|unit of measure|unit)(\s|$)/.test(normalized)) return "uom";
-  if (/unit cost|cost each|cost|material cost|labou?r cost/.test(normalized)) return "cost";
-  if (/markup|margin|gross margin/.test(normalized)) return "markup";
-  if (/unit price|sell|price|extension|amount|total/.test(normalized)) return "price";
-  if (/category|class|division/.test(normalized)) return "category";
-  if (/type|resource/.test(normalized)) return "entityType";
-  if (/vendor|supplier|manufacturer/.test(normalized)) return "vendor";
-  if (/order|line no|line number|sequence/.test(normalized)) return "lineOrder";
-  return "skip";
-}
-
-function buildInitialSpreadsheetMapping(headers: string[]) {
-  return Object.fromEntries(headers.map((header) => [header, inferSpreadsheetImportTarget(header)]));
-}
+type SpreadsheetPanelView = "preview" | "pivot";
 
 function numericFormat(value: number) {
   return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
@@ -713,8 +674,6 @@ function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Ca
 export function TakeoffTab({
   workspace,
   onOpenAgentChat,
-  onOpenDocuments,
-  onOpenPluginTools,
   onOpenRevisionDiff,
   onWorkspaceMutated,
   initialDocumentId,
@@ -753,7 +712,7 @@ export function TakeoffTab({
     .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
     .map((d) => ({
       id: d.id,
-      label: d.fileName,
+      label: takeoffDisplayFileName(d.fileName),
       fileName: d.fileName,
       kind: getTakeoffDocumentKind(d.fileName),
       source: "project" as const,
@@ -793,19 +752,12 @@ export function TakeoffTab({
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
   const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
-  type IntakeOptionId = "spreadsheet" | "source" | "extract" | "tools";
-  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId>("source");
-  const sourceUploadInputRef = useRef<HTMLInputElement>(null);
-  const spreadsheetUploadInputRef = useRef<HTMLInputElement>(null);
-  const [uploadedTakeoffDocuments, setUploadedTakeoffDocuments] = useState<TakeoffDocument[]>([]);
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "model";
+  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId>("pdf");
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
-  const [uploadingTakeoffSource, setUploadingTakeoffSource] = useState(false);
-  const [uploadingSpreadsheetSource, setUploadingSpreadsheetSource] = useState(false);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
-  const [spreadsheetImporting, setSpreadsheetImporting] = useState(false);
   const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
   const [spreadsheetPreview, setSpreadsheetPreview] = useState<(ImportPreviewResponse & { sourceName: string; sourceNodeId?: string }) | null>(null);
-  const [spreadsheetMapping, setSpreadsheetMapping] = useState<Record<string, SpreadsheetImportTarget>>({});
   const [spreadsheetPanelView, setSpreadsheetPanelView] = useState<SpreadsheetPanelView>("preview");
   const [pivotGroupBy, setPivotGroupBy] = useState("");
   const [pivotMeasure, setPivotMeasure] = useState("__count");
@@ -999,9 +951,22 @@ export function TakeoffTab({
         })),
     [modelAssets, projectId, projectPdfs],
   );
+  const projectFileTakeoffDocuments = useMemo<TakeoffDocument[]>(
+    () =>
+      fileTreeNodes
+        .map((node) => fileNodeToTakeoffDocument(projectId, node))
+        .filter((doc): doc is TakeoffDocument => Boolean(doc)),
+    [fileTreeNodes, projectId],
+  );
   const takeoffDocuments = useMemo(
-    () => [...drawings, ...fileManagerModelDocuments, ...uploadedTakeoffDocuments],
-    [drawings, fileManagerModelDocuments, uploadedTakeoffDocuments],
+    () => {
+      const byId = new Map<string, TakeoffDocument>();
+      for (const doc of [...drawings, ...projectFileTakeoffDocuments, ...fileManagerModelDocuments]) {
+        byId.set(doc.id, doc);
+      }
+      return Array.from(byId.values());
+    },
+    [drawings, fileManagerModelDocuments, projectFileTakeoffDocuments],
   );
   const selectedDoc = takeoffDocuments.find((d) => d.id === selectedDocId);
   const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
@@ -2832,16 +2797,7 @@ export function TakeoffTab({
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
   const dwgDocumentCount = dwgDocuments.length;
-  const sourceCountLabel = [
-    sourceCountText(pdfDocuments.length, "PDF", "PDFs"),
-    sourceCountText(dwgDocumentCount, "DWG/DXF", "DWG/DXF files"),
-    sourceCountText(modelDocuments.length, "model", "models"),
-  ].filter(Boolean).join(" · ");
-  const selectedSourceLabel = selectedDoc?.label ?? takeoffDocuments[0]?.label ?? "";
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
-  const extractableDocuments = (workspace.sourceDocuments ?? [])
-    .filter((doc) => !isCadFile(doc.fileName))
-    .slice(0, 8);
   const spreadsheetProfiles = spreadsheetPreview?.columnProfiles?.length
     ? spreadsheetPreview.columnProfiles
     : (spreadsheetPreview?.headers ?? []).map((header, index) => {
@@ -2874,7 +2830,6 @@ export function TakeoffTab({
     spreadsheetPreview?.pivotSummaries?.find((summary) => summary.groupBy === pivotGroupBy) ??
     spreadsheetPreview?.pivotSummaries?.[0];
   const maxPivotTotal = Math.max(...(activePivotSummary?.rows.map((row) => row.total) ?? [0]), 1);
-  const mappedTargetCount = Object.values(spreadsheetMapping).filter((target) => target !== "skip").length;
 
   async function previewSpreadsheetFile(file: File, source: { nodeId?: string; name: string }) {
     setSpreadsheetPreviewLoading(true);
@@ -2883,7 +2838,6 @@ export function TakeoffTab({
       const preview = await importPreview(projectId, file);
       const nextPreview = { ...preview, sourceName: source.name, sourceNodeId: source.nodeId };
       setSpreadsheetPreview(nextPreview);
-      setSpreadsheetMapping(buildInitialSpreadsheetMapping(preview.headers));
       setSpreadsheetPanelView("preview");
       const firstPivot = preview.pivotSummaries?.[0];
       setPivotGroupBy(firstPivot?.groupBy ?? preview.headers[0] ?? "");
@@ -2920,163 +2874,136 @@ export function TakeoffTab({
     }
   }
 
-  async function handleSpreadsheetSourceUpload(files: FileList | null) {
-    const spreadsheetFiles = Array.from(files ?? []).filter((file) => isSpreadsheetFile(file.name));
-    if (spreadsheetUploadInputRef.current) spreadsheetUploadInputRef.current.value = "";
-    if (spreadsheetFiles.length === 0) {
-      setToastType("error");
-      setToastMessage("Choose a CSV, XLS, or XLSX file.");
-      return;
-    }
-
-    setUploadingSpreadsheetSource(true);
-    try {
-      const nodes = await Promise.all(spreadsheetFiles.map((file) => uploadFile(projectId, file)));
-      setFileTreeNodes((current) => mergeFileNodes(current, nodes));
-      setToastType("success");
-      setToastMessage(`Uploaded ${nodes.length} spreadsheet source${nodes.length === 1 ? "" : "s"} to Documents.`);
-      const firstNode = nodes.find((node) => isSpreadsheetFile(node.name));
-      if (firstNode) {
-        await previewSpreadsheetNode(firstNode);
-      }
-      void refreshFileTree();
-    } catch (error) {
-      console.error("[takeoff] Spreadsheet upload failed:", error);
-      setToastType("error");
-      setToastMessage("Could not upload that spreadsheet or CSV.");
-    } finally {
-      setUploadingSpreadsheetSource(false);
-    }
-  }
-
-  async function handleImportSpreadsheetPreview() {
-    if (!spreadsheetPreview || !selectedWorksheet) return;
-    const fieldMapping = Object.fromEntries(
-      Object.entries(spreadsheetMapping)
-        .filter(([, target]) => target && target !== "skip")
-        .map(([header, target]) => [target, header])
-    );
-    if (!fieldMapping.entityName && !fieldMapping.description) {
-      setToastType("error");
-      setToastMessage("Map at least an item name or description column before importing.");
-      setSpreadsheetPanelView("map");
-      return;
-    }
-
-    setSpreadsheetImporting(true);
-    try {
-      await importProcess(projectId, {
-        fileId: spreadsheetPreview.fileId,
-        worksheetId: selectedWorksheet.id,
-        mapping: fieldMapping,
-      });
-      setToastType("success");
-      setToastMessage(`Imported ${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows into ${selectedWorksheet.name}.`);
-      notifyWorkspaceMutated();
-    } catch (error) {
-      console.error("[takeoff] Spreadsheet import failed:", error);
-      setToastType("error");
-      setToastMessage("Could not import that spreadsheet.");
-    } finally {
-      setSpreadsheetImporting(false);
-    }
-  }
-
   function openTakeoffSurface(docId?: string) {
     const nextDocId = docId ?? selectedDocId ?? takeoffDocuments[0]?.id;
     if (nextDocId) {
       setSelectedDocId(nextDocId);
     }
     if (!nextDocId) {
-      onOpenDocuments?.();
+      setToastType("error");
+      setToastMessage("No takeoff source selected.");
       return;
     }
     setShowLanding(false);
   }
 
-  function openDocumentExtractor(sourceName?: string) {
-    onOpenAgentChat?.(
-      [
-        sourceName ? `Use ${sourceName} as the starting source.` : "Review the project documents.",
-        "Extract estimate-ready line items, quantities, vendor BOM rows, equipment schedules, alternates, and allowances.",
-        "Stage the results by worksheet with source references before applying anything.",
-      ].join(" ")
-    );
-  }
-
-  async function handleTakeoffSourceUpload(files: FileList | null) {
-    const sourceFiles = Array.from(files ?? []).filter((file) => file.name.toLowerCase().endsWith(".pdf") || isCadFile(file.name));
-    if (sourceUploadInputRef.current) sourceUploadInputRef.current.value = "";
-    if (sourceFiles.length === 0) {
-      setToastType("error");
-      setToastMessage("Choose a PDF, DWG/DXF, or model file.");
-      return;
-    }
-
-    setUploadingTakeoffSource(true);
-    try {
-      const nodes = await Promise.all(sourceFiles.map((file) => uploadFile(projectId, file)));
-      const docs = nodes
-        .map((node) => fileNodeToTakeoffDocument(projectId, node))
-        .filter((doc): doc is TakeoffDocument => Boolean(doc));
-      if (docs.length === 0) {
-        setToastType("error");
-        setToastMessage("No takeoff-ready source was uploaded.");
-        return;
-      }
-      setUploadedTakeoffDocuments((current) => [...current, ...docs]);
-      setSelectedDocId(docs[0]!.id);
-      setShowLanding(false);
-      setToastType("success");
-      setToastMessage(`Uploaded ${docs.length} takeoff source${docs.length === 1 ? "" : "s"}.`);
-      if (docs.some((doc) => doc.kind === "model")) {
-        void refreshModelAssets(true);
-      }
-    } catch (error) {
-      console.error("[takeoff] Source upload failed:", error);
-      setToastType("error");
-      setToastMessage("Could not upload that takeoff source.");
-    } finally {
-      setUploadingTakeoffSource(false);
-    }
-  }
+  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "model";
+  const intakeToneClasses: Record<
+    IntakeOptionTone,
+    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string }
+  > = {
+    spreadsheet: {
+      accent: "text-emerald-600",
+      active: "border-emerald-600/45 ring-2 ring-emerald-600/10",
+      hover: "hover:border-emerald-600/45",
+      icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
+      rail: "bg-emerald-600",
+      wash: "bg-emerald-600/5",
+    },
+    pdf: {
+      accent: "text-sky-500",
+      active: "border-sky-500/45 ring-2 ring-sky-500/10",
+      hover: "hover:border-sky-500/45",
+      icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
+      rail: "bg-sky-500",
+      wash: "bg-sky-500/5",
+    },
+    dwg: {
+      accent: "text-amber-500",
+      active: "border-amber-500/45 ring-2 ring-amber-500/10",
+      hover: "hover:border-amber-500/45",
+      icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
+      rail: "bg-amber-500",
+      wash: "bg-amber-500/5",
+    },
+    model: {
+      accent: "text-violet-500",
+      active: "border-violet-500/45 ring-2 ring-violet-500/10",
+      hover: "hover:border-violet-500/45",
+      icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
+      rail: "bg-violet-500",
+      wash: "bg-violet-500/5",
+    },
+  };
 
   const intakeOptions = [
     {
       id: "spreadsheet",
-      title: "Import Spreadsheet/CSV",
-      detail: spreadsheetSources.length ? `${spreadsheetSources.length} file${spreadsheetSources.length === 1 ? "" : "s"} found` : "CSV, XLSX, XLS",
+      title: "Spreadsheet / CSV",
+      detail: "Preview tabular quantity and cost sources.",
+      metric: spreadsheetSources.length.toLocaleString(),
+      metricLabel: "sources",
       icon: FileSpreadsheet,
+      tone: "spreadsheet",
       disabled: false,
     },
     {
-      id: "source",
-      title: "Use Drawing or Model",
-      detail: sourceCountLabel || "PDF, DWG/DXF, 3D model",
+      id: "pdf",
+      title: "PDF",
+      detail: "Measure drawings, calibrate scale, and count symbols.",
+      metric: pdfDocuments.length.toLocaleString(),
+      metricLabel: "drawings",
       icon: Files,
+      tone: "pdf",
       disabled: false,
     },
     {
-      id: "extract",
-      title: "Extract From Document",
-      detail: extractableDocuments.length ? `${extractableDocuments.length} source${extractableDocuments.length === 1 ? "" : "s"} available` : "Specs, RFQs, quotes",
-      icon: FolderOpen,
-      disabled: !onOpenAgentChat,
+      id: "dwg",
+      title: "DWG",
+      detail: "Open CAD sheets on the dedicated takeoff surface.",
+      metric: dwgDocumentCount.toLocaleString(),
+      metricLabel: "CAD files",
+      icon: FileJson,
+      tone: "dwg",
+      disabled: false,
     },
     {
-      id: "tools",
-      title: "Use Trade Tool",
-      detail: "Configured calculators and plugins",
-      icon: Puzzle,
-      disabled: !onOpenPluginTools,
+      id: "model",
+      title: "3D / Model",
+      detail: "Inspect model geometry and linked quantities.",
+      metric: modelDocuments.length.toLocaleString(),
+      metricLabel: "models",
+      icon: Box,
+      tone: "model",
+      disabled: false,
     },
   ] satisfies Array<{
     id: IntakeOptionId;
     title: string;
     detail: string;
+    metric: string;
+    metricLabel: string;
     icon: typeof Ruler;
+    tone: IntakeOptionTone;
     disabled: boolean;
   }>;
+
+  const activeSourcePanel =
+    activeIntakeOption === "pdf"
+      ? {
+          title: "PDF sources",
+          detail: sourceCountText(pdfDocuments.length, "PDF", "PDFs") || "Drawing sheets ready for takeoff",
+          emptyLabel: "No PDF sources",
+          docs: pdfDocuments,
+          icon: Files,
+        }
+      : activeIntakeOption === "dwg"
+        ? {
+            title: "DWG sources",
+            detail: sourceCountText(dwgDocumentCount, "DWG/DXF", "DWG/DXF files") || "CAD drawings ready for takeoff",
+            emptyLabel: "No DWG sources",
+            docs: dwgDocuments,
+            icon: FileJson,
+          }
+        : activeIntakeOption === "model"
+          ? {
+              title: "3D / Model sources",
+              detail: sourceCountText(modelDocuments.length, "model", "models") || "Model files ready for takeoff",
+              emptyLabel: "No model sources",
+              docs: modelDocuments,
+              icon: Box,
+            }
+          : null;
 
   /* ─── Render ─── */
 
@@ -3088,54 +3015,20 @@ export function TakeoffTab({
       >
         <div className="border-b border-line px-5 py-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg/35">Takeoff</p>
-              <h2 className="mt-1 text-lg font-semibold text-fg">Choose intake source</h2>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {onOpenRevisionDiff && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={onOpenRevisionDiff}
-                  title="Compare drawing revisions and re-takeoff"
-                >
-                  <GitCompare className="h-3.5 w-3.5" />
-                  Compare Drawings
-                </Button>
-              )}
-              {selectedSourceLabel && (
-                <Button variant="secondary" size="sm" onClick={() => openTakeoffSurface()}>
-                  <Ruler className="h-3.5 w-3.5" />
-                  Open Current Source
-                </Button>
-              )}
+              <h2 className="mt-1 text-lg font-semibold text-fg">Intake workspace</h2>
+              <p className="mt-1 max-w-2xl text-xs text-fg/45">Source files and takeoff workflows for the active estimate.</p>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">
-          <input
-            ref={sourceUploadInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.dwg,.dxf,.ifc,.rvt,.step,.stp,.iges,.igs,.brep,.stl,.obj,.fbx,.gltf,.glb,.3ds,.dae"
-            className="hidden"
-            onChange={(event) => void handleTakeoffSourceUpload(event.target.files)}
-          />
-          <input
-            ref={spreadsheetUploadInputRef}
-            type="file"
-            multiple
-            accept=".csv,.tsv,.xls,.xlsx,.xlsm"
-            className="hidden"
-            onChange={(event) => void handleSpreadsheetSourceUpload(event.target.files)}
-          />
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
             {intakeOptions.map((option) => {
               const Icon = option.icon;
               const active = activeIntakeOption === option.id;
+              const tone = intakeToneClasses[option.tone];
               return (
                 <button
                   key={option.id}
@@ -3143,29 +3036,32 @@ export function TakeoffTab({
                   disabled={option.disabled}
                   onClick={() => setActiveIntakeOption(option.id)}
                   className={cn(
-                    "group relative flex min-h-20 items-center gap-3 overflow-hidden rounded-lg border p-3 text-left transition-colors",
-                    active
-                      ? "border-accent/45 bg-accent/8"
-                      : "border-line bg-bg/45 hover:border-accent/40 hover:bg-accent/5",
+                    "group/card relative z-0 flex min-h-[112px] min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 xl:min-h-[132px]",
+                    active ? tone.active : tone.hover,
                     "disabled:cursor-not-allowed disabled:opacity-50"
                   )}
                 >
-                  {active && (
-                    <motion.span
-                      layoutId="takeoff-intake-card"
-                      className="absolute inset-x-0 top-0 h-0.5 bg-accent"
-                      transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                    />
-                  )}
-                  <span className={cn(
-                    "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-panel2 transition-colors",
-                    active ? "border-accent/35 text-accent" : "border-line text-fg/60 group-hover:border-accent/30 group-hover:text-accent"
-                  )}>
-                    <Icon className="h-4 w-4" />
+                  <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash, active && "opacity-100")} />
+                  <motion.span
+                    layoutId={`takeoff-intake-rail-${option.id}`}
+                    className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
+                    transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                  />
+                  <span className="relative flex items-start justify-between gap-3">
+                    <span className="flex min-w-0 items-start gap-2.5">
+                      <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
+                        <Icon className="h-[18px] w-[18px]" />
+                      </span>
+                      <span className="min-w-0 pt-0.5">
+                        <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
+                        <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
+                      </span>
+                    </span>
+                    <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
                   </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-fg">{option.title}</span>
-                    <span className="mt-0.5 block truncate text-xs text-fg/45">{option.detail}</span>
+                  <span className="relative mt-auto pt-3">
+                    <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
+                    <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
                   </span>
                 </button>
               );
@@ -3175,27 +3071,24 @@ export function TakeoffTab({
           <AnimatePresence mode="wait">
             <motion.div
               key={activeIntakeOption}
-              initial={{ opacity: 0, y: -8, height: 0 }}
-              animate={{ opacity: 1, y: 0, height: "auto" }}
-              exit={{ opacity: 0, y: -6, height: 0 }}
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.22, ease: "easeOut" }}
-              className="mt-4 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm"
+              className="mt-4 flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm"
             >
               {activeIntakeOption === "spreadsheet" && (
-                <div className="grid gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
-                  <div className="min-w-0 rounded-md border border-line bg-panel/65 p-3">
+                <div className="grid h-full min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
+                  <div className="flex min-w-0 min-h-0 flex-col rounded-md border border-line bg-panel/65 p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div>
-                        <p className="text-xs font-semibold text-fg/75">Spreadsheet/CSV sources</p>
-                        <p className="mt-1 text-xs text-fg/40">Persisted in Documents.</p>
+                        <p className="text-xs font-semibold text-fg/75">Spreadsheet sources</p>
+                        <p className="mt-1 text-xs text-fg/40">Available CSV, XLS, and workbook files.</p>
                       </div>
-                      <Button variant="accent" size="sm" onClick={() => spreadsheetUploadInputRef.current?.click()} disabled={uploadingSpreadsheetSource}>
-                        {uploadingSpreadsheetSource ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
-                        Upload
-                      </Button>
+                      <Badge tone="default" className="shrink-0 text-[10px]">{spreadsheetSources.length}</Badge>
                     </div>
 
-                    <div className="mt-3 max-h-80 space-y-1.5 overflow-y-auto pr-1">
+                    <div className="mt-3 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
                       {spreadsheetSources.length > 0 ? spreadsheetSources.map((node) => {
                         const active = selectedSpreadsheetNodeId === node.id;
                         return (
@@ -3223,31 +3116,23 @@ export function TakeoffTab({
                           </button>
                         );
                       }) : (
-                        <button
-                          type="button"
-                          onClick={() => spreadsheetUploadInputRef.current?.click()}
-                          className="flex w-full flex-col items-center justify-center rounded-md border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/40 transition-colors hover:border-accent/30 hover:text-accent"
-                        >
-                          <UploadCloud className="mb-2 h-5 w-5" />
-                          Add a CSV, XLS, or XLSX file
-                        </button>
+                        <div className="flex w-full flex-col items-center justify-center rounded-md border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/40">
+                          <FileSpreadsheet className="mb-2 h-5 w-5" />
+                          No spreadsheet sources yet
+                          <span className="mt-1 text-[11px] text-fg/30">CSV and workbook files appear here.</span>
+                        </div>
                       )}
                     </div>
-
-                    <Button variant="ghost" size="sm" className="mt-3 w-full justify-center" onClick={onOpenDocuments}>
-                      <FolderOpen className="h-3.5 w-3.5" />
-                      Open Documents
-                    </Button>
                   </div>
 
-                  <div className="relative min-w-0 overflow-hidden rounded-md border border-line bg-panel/70">
+                  <div className="relative flex min-w-0 min-h-0 flex-col overflow-hidden rounded-md border border-line bg-panel/70">
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-fg">{spreadsheetPreview?.sourceName ?? "Select a spreadsheet or CSV"}</p>
                         <p className="mt-1 text-xs text-fg/40">
-                          {spreadsheetPreview
-                            ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
-                            : "Preview, pivot, summarize, then import into the active worksheet."}
+	                          {spreadsheetPreview
+	                            ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
+	                            : "Preview, pivot, and summarize selected source files."}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -3256,24 +3141,20 @@ export function TakeoffTab({
                             variant="ghost"
                             size="sm"
                             onClick={() => onOpenAgentChat?.(
-                              `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks before import.`
+                              `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks.`
                             )}
                           >
                             <BrainCircuit className="h-3.5 w-3.5" />
                             Summarize
                           </Button>
                         )}
-                        <Button variant="accent" size="sm" onClick={() => void handleImportSpreadsheetPreview()} disabled={!spreadsheetPreview || spreadsheetImporting}>
-                          {spreadsheetImporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
-                          Import
-                        </Button>
                       </div>
                     </div>
 
                     {spreadsheetPreview ? (
-                      <div className="p-4">
+                      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
                         <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-bg/40 p-1">
-                          {(["preview", "pivot", "map"] as const).map((view) => (
+                          {(["preview", "pivot"] as const).map((view) => (
                             <button
                               key={view}
                               type="button"
@@ -3286,14 +3167,11 @@ export function TakeoffTab({
                               {view}
                             </button>
                           ))}
-                          <div className="ml-auto px-2 text-[10px] text-fg/35">
-                            Target: {selectedWorksheet?.name ?? "first worksheet"}
-                          </div>
                         </div>
 
                         {spreadsheetPanelView === "preview" && (
-                          <div className="mt-4 space-y-4">
-                            <div className="grid gap-2 md:grid-cols-3">
+                          <div className="mt-4 flex min-h-0 flex-1 flex-col space-y-4">
+                            <div className="grid gap-2 md:grid-cols-2">
                               <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
                                 <p className="text-[10px] uppercase tracking-wide text-fg/35">Rows</p>
                                 <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length}</p>
@@ -3302,13 +3180,9 @@ export function TakeoffTab({
                                 <p className="text-[10px] uppercase tracking-wide text-fg/35">Numeric Fields</p>
                                 <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetProfiles.filter((profile) => profile.numericCount > 0).length}</p>
                               </div>
-                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Mapped Fields</p>
-                                <p className="mt-1 text-lg font-semibold text-fg">{mappedTargetCount}</p>
-                              </div>
                             </div>
 
-                            <div className="max-h-56 overflow-auto rounded-md border border-line">
+                            <div className="min-h-0 flex-1 overflow-auto rounded-md border border-line">
                               <table className="min-w-full text-left text-xs">
                                 <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">
                                   <tr>
@@ -3334,7 +3208,7 @@ export function TakeoffTab({
                         )}
 
                         {spreadsheetPanelView === "pivot" && (
-                          <div className="mt-4 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+                          <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
                             <div className="space-y-3 rounded-md border border-line bg-bg/35 p-3">
                               <div>
                                 <Label>Group by</Label>
@@ -3357,7 +3231,7 @@ export function TakeoffTab({
                               <p className="text-xs text-fg/40">Pivot is built from the parsed file, not just the visible sample rows.</p>
                             </div>
 
-                            <div className="max-h-72 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
+                            <div className="min-h-0 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
                               {activePivotSummary?.rows.length ? activePivotSummary.rows.map((row) => (
                                 <div key={row.label} className="mb-1.5 rounded-md bg-panel/70 p-2 last:mb-0">
                                   <div className="flex items-center justify-between gap-3 text-xs">
@@ -3379,50 +3253,15 @@ export function TakeoffTab({
                           </div>
                         )}
 
-                        {spreadsheetPanelView === "map" && (
-                          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                            <div className="max-h-72 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
-                              {spreadsheetPreview.headers.map((header) => (
-                                <div key={header} className="grid gap-2 border-b border-line/60 px-2 py-2 last:border-b-0 md:grid-cols-[minmax(0,1fr)_210px]">
-                                  <div className="min-w-0">
-                                    <p className="truncate text-xs font-medium text-fg/75">{header}</p>
-                                    <p className="mt-0.5 truncate text-[10px] text-fg/35">
-                                      {spreadsheetProfiles.find((profile) => profile.header === header)?.sampleValues.join(", ") || "No sample values"}
-                                    </p>
-                                  </div>
-                                  <Select
-                                    value={spreadsheetMapping[header] ?? "skip"}
-                                    onValueChange={(value) => setSpreadsheetMapping((current) => ({ ...current, [header]: value as SpreadsheetImportTarget }))}
-                                    options={[...SPREADSHEET_IMPORT_TARGETS]}
-                                    size="sm"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                            <div className="rounded-md border border-line bg-bg/35 p-3">
-                              <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Import Target</p>
-                              <p className="mt-2 text-sm font-semibold text-fg/80">{selectedWorksheet?.name ?? "First worksheet"}</p>
-                              <p className="mt-1 text-xs text-fg/40">{mappedTargetCount} mapped column{mappedTargetCount === 1 ? "" : "s"}</p>
-                              <Button variant="accent" size="sm" className="mt-4 w-full justify-center" onClick={() => void handleImportSpreadsheetPreview()} disabled={spreadsheetImporting}>
-                                {spreadsheetImporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="h-3.5 w-3.5" />}
-                                Import Rows
-                              </Button>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     ) : (
-                      <div className="flex min-h-80 items-center justify-center p-6">
+                      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
                         <div className="max-w-sm text-center">
                           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-line bg-bg/45 text-fg/45">
                             <FileSpreadsheet className="h-6 w-6" />
                           </div>
                           <p className="mt-4 text-sm font-semibold text-fg/75">No spreadsheet selected</p>
-                          <p className="mt-1 text-xs text-fg/40">Upload a CSV/XLSX or choose a persisted source to preview, pivot, map, and import.</p>
-                          <Button variant="accent" size="sm" className="mt-4" onClick={() => spreadsheetUploadInputRef.current?.click()}>
-                            <UploadCloud className="h-3.5 w-3.5" />
-                            Upload CSV/XLSX
-                          </Button>
+                          <p className="mt-1 text-xs text-fg/40">Choose a source from the list to preview and pivot.</p>
                         </div>
                       </div>
                     )}
@@ -3439,134 +3278,49 @@ export function TakeoffTab({
                 </div>
               )}
 
-              {activeIntakeOption === "source" && (
-                <div className="p-4">
+              {activeSourcePanel && (
+                <div className="flex h-full min-h-0 flex-1 flex-col p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <p className="text-xs font-semibold text-fg/75">Drawing and model sources</p>
-                      <p className="mt-1 text-xs text-fg/40">{sourceCountLabel || "Upload or add a source."}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="secondary" size="sm" onClick={() => sourceUploadInputRef.current?.click()} disabled={uploadingTakeoffSource}>
-                        {uploadingTakeoffSource ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UploadCloud className="h-3.5 w-3.5" />}
-                        Upload Source
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={onOpenDocuments}>
-                        <FolderOpen className="h-3.5 w-3.5" />
-                        Documents
-                      </Button>
+                      <p className="text-xs font-semibold text-fg/75">{activeSourcePanel.title}</p>
+                      <p className="mt-1 text-xs text-fg/40">{activeSourcePanel.detail}</p>
                     </div>
                   </div>
-                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                    {[
-                      { label: "PDF", docs: pdfDocuments },
-                      { label: "DWG/DXF", docs: dwgDocuments },
-                      { label: "Model", docs: modelDocuments },
-                    ].map((group) => (
-                      <div key={group.label} className="rounded-md border border-line bg-panel/60 p-2">
-                        <div className="flex items-center justify-between px-1 pb-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">{group.label}</p>
-                          <span className="text-[10px] text-fg/30">{group.docs.length}</span>
-                        </div>
-                        <div className={cn("space-y-1.5", group.docs.length > 0 && "max-h-72 overflow-y-auto pr-1")}>
-                          {group.docs.length > 0 ? group.docs.map((doc) => (
+
+                  <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-md border border-line bg-panel/60 p-2">
+                    {activeSourcePanel.docs.length > 0 ? (
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {activeSourcePanel.docs.map((doc) => {
+                          const Icon = activeSourcePanel.icon;
+                          return (
                             <button
                               key={doc.id}
                               type="button"
                               onClick={() => openTakeoffSurface(doc.id)}
-                              className="flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent bg-bg/40 px-2 py-2 text-left text-xs text-fg/65 transition-colors hover:border-accent/30 hover:bg-accent/5 hover:text-accent"
+                              className="flex min-w-0 items-center gap-2 rounded-md border border-transparent bg-bg/40 px-3 py-2.5 text-left text-xs text-fg/65 transition-colors hover:border-accent/30 hover:bg-accent/5 hover:text-accent"
                             >
-                              <Badge tone="default" className="text-[9px]">{takeoffKindLabel(doc.kind)}</Badge>
-                              <span className="min-w-0 flex-1 truncate">{doc.label}</span>
+                              <Icon className="h-3.5 w-3.5 shrink-0 text-fg/45" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium">{doc.label}</span>
+                                <span className="mt-0.5 block truncate text-[10px] text-fg/35">{takeoffKindLabel(doc.kind)}</span>
+                              </span>
                               <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fg/30" />
                             </button>
-                          )) : (
-                            <button
-                              type="button"
-                              onClick={() => sourceUploadInputRef.current?.click()}
-                              className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-line bg-bg/30 px-3 py-6 text-xs text-fg/35 transition-colors hover:border-accent/30 hover:text-accent"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                              Add {group.label}
-                            </button>
-                          )}
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="flex h-full min-h-56 items-center justify-center rounded-md border border-dashed border-line bg-bg/30 p-6 text-center">
+                        <div>
+                          {(() => {
+                            const Icon = activeSourcePanel.icon;
+                            return <Icon className="mx-auto h-8 w-8 text-fg/30" />;
+                          })()}
+                          <p className="mt-3 text-sm font-semibold text-fg/65">{activeSourcePanel.emptyLabel}</p>
+                          <p className="mt-1 text-xs text-fg/35">No matching project files yet.</p>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {activeIntakeOption === "extract" && (
-                <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                  <div>
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-semibold text-fg/75">Document extraction</p>
-                        <p className="mt-1 text-xs text-fg/40">Use tables, schedules, quotes, and written scope.</p>
-                      </div>
-                      <Button variant="accent" size="sm" onClick={() => openDocumentExtractor()}>
-                        <BrainCircuit className="h-3.5 w-3.5" />
-                        Extract
-                      </Button>
-                    </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      {extractableDocuments.length > 0 ? extractableDocuments.map((doc) => (
-                        <button
-                          key={doc.id}
-                          type="button"
-                          onClick={() => openDocumentExtractor(doc.fileName)}
-                          className="flex min-w-0 items-center gap-2 rounded-md border border-line bg-panel/70 px-3 py-2 text-left text-xs transition-colors hover:border-accent/35 hover:text-accent"
-                        >
-                          <Files className="h-3.5 w-3.5 shrink-0 text-fg/45" />
-                          <span className="min-w-0 flex-1 truncate">{doc.fileName}</span>
-                          <Badge tone="info" className="text-[9px]">{doc.documentType || "file"}</Badge>
-                        </button>
-                      )) : (
-                        <div className="rounded-md border border-dashed border-line bg-panel/50 px-3 py-5 text-center text-xs text-fg/40 md:col-span-2">
-                          No extractable project documents yet.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-md border border-line bg-panel/70 p-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Add sources</p>
-                    <Button variant="secondary" size="sm" className="mt-3 w-full justify-center" onClick={onOpenDocuments}>
-                      <FolderOpen className="h-3.5 w-3.5" />
-                      Open Documents
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {activeIntakeOption === "tools" && (
-                <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                  <div>
-                    <p className="text-xs font-semibold text-fg/75">Trade tools</p>
-                    <p className="mt-1 text-xs text-fg/40">Open the configured tool catalog for this workspace.</p>
-                    <div className="mt-4 grid gap-2 md:grid-cols-2">
-                      <Button variant="accent" size="sm" className="justify-center" onClick={onOpenPluginTools}>
-                        <Puzzle className="h-3.5 w-3.5" />
-                        Open Tool Library
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        className="justify-center"
-                        onClick={() => onOpenAgentChat?.("Choose an appropriate configured estimating tool for this scope, explain why, and stage any line items for review before applying them.")}
-                      >
-                        <Sparkles className="h-3.5 w-3.5" />
-                        Ask AI
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="rounded-md border border-line bg-panel/70 p-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/35">Applies to</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {["Labor", "Material", "Equipment", "Subcontract", "Travel"].map((label) => (
-                        <Badge key={label} tone="default" className="text-[10px]">{label}</Badge>
-                      ))}
-                    </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -3592,20 +3346,6 @@ export function TakeoffTab({
             <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake">
               <FolderOpen className="h-3.5 w-3.5" />
               <span className="hidden xl:inline">Intake</span>
-            </Button>
-            <Separator className="!h-6 !w-px" />
-          </>
-        )}
-        {onOpenRevisionDiff && !detached && (
-          <>
-            <Button
-              variant="secondary"
-              size="xs"
-              onClick={onOpenRevisionDiff}
-              title="Compare drawing revisions and re-takeoff"
-            >
-              <GitCompare className="h-3.5 w-3.5" />
-              <span className="hidden 2xl:inline">Compare</span>
             </Button>
             <Separator className="!h-6 !w-px" />
           </>
@@ -3660,12 +3400,12 @@ export function TakeoffTab({
                       ))}
                     </RadixSelect.Group>
                   )}
-                  {fileManagerModelDocuments.length > 0 && (
+                  {projectFileTakeoffDocuments.length > 0 && (
                     <RadixSelect.Group>
                       <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
                         Project Files
                       </RadixSelect.Label>
-                      {fileManagerModelDocuments.map((d) => (
+                      {projectFileTakeoffDocuments.map((d) => (
                         <RadixSelect.Item
                           key={d.id}
                           value={d.id}
@@ -3707,6 +3447,20 @@ export function TakeoffTab({
         {!isCadDocument && !isDwgDocument && (
           <>
             <Separator className="!h-6 !w-px" />
+            {onOpenRevisionDiff && !detached && (
+              <>
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  onClick={onOpenRevisionDiff}
+                  title="Compare drawing revisions and re-takeoff"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  <span className="hidden 2xl:inline">Compare</span>
+                </Button>
+                <Separator className="!h-6 !w-px" />
+              </>
+            )}
 
             {/* Page navigation */}
             <div className="flex items-center gap-1">
@@ -4256,7 +4010,7 @@ export function TakeoffTab({
                   Select a drawing to begin takeoff
                 </p>
                 <p className="mt-1 text-xs text-fg/30">
-                  Upload drawings via the Documents tab, then select one here to start measuring.
+                  Add drawings in Documents, then select one here to start measuring.
                 </p>
               </EmptyState>
             </div>

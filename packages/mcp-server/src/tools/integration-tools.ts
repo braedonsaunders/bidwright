@@ -62,7 +62,7 @@ function paramShape(input: ManifestActionDescriptor["input"]): ZodRawShape {
   for (const p of input) {
     let field: z.ZodTypeAny;
     switch (p.type) {
-      case "number":  field = z.number().describe(p.description); break;
+      case "number":  field = z.coerce.number().describe(p.description); break;
       case "boolean": field = z.boolean().describe(p.description); break;
       case "object":  field = z.record(z.unknown()).describe(p.description); break;
       case "array":   field = z.array(z.unknown()).describe(p.description); break;

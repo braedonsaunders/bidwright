@@ -44,10 +44,10 @@ interface WriteAgentLibrarySnapshotOptions {
 
 const SNAPSHOT_ROOT = "library-snapshots";
 const DATASET_ROW_PAGE_SIZE = 1000;
-const MAX_DATASET_ROWS_PER_FILE = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_DATASET_ROWS", 10000);
-const MAX_LABOR_UNITS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_LABOR_UNITS", 25000);
-const MAX_CATALOG_ITEMS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_CATALOG_ITEMS", 25000);
-const MAX_COST_ROWS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_COST_ROWS", 50000);
+const MAX_DATASET_ROWS_PER_FILE = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_DATASET_ROWS", 100000);
+const MAX_LABOR_UNITS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_LABOR_UNITS", 200000);
+const MAX_CATALOG_ITEMS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_CATALOG_ITEMS", 200000);
+const MAX_COST_ROWS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_COST_ROWS", 200000);
 const MAX_INDEX_FILE_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_FILE_ROWS", 40);
 const MAX_INDEX_WARNING_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_WARNINGS", 12);
 
@@ -81,6 +81,28 @@ function toJsonLine(value: unknown) {
 
 function toJsonLines(values: unknown[]) {
   return values.map(toJsonLine).join("\n") + (values.length > 0 ? "\n" : "");
+}
+
+function searchValue(value: unknown, max = 900): string {
+  if (value == null) return "";
+  const raw = typeof value === "string"
+    ? value
+    : typeof value === "number" || typeof value === "boolean"
+      ? String(value)
+      : JSON.stringify(value, jsonReplacer);
+  return raw.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function searchLine(kind: string, fields: Record<string, unknown>) {
+  const entries = Object.entries(fields)
+    .map(([key, value]) => [key, searchValue(value)] as const)
+    .filter(([, value]) => value.length > 0)
+    .map(([key, value]) => `${key}=${value}`);
+  return `[${kind}] ${entries.join(" | ")}`;
+}
+
+function toSearchLines(kind: string, rows: Record<string, unknown>[]) {
+  return rows.map((row) => searchLine(kind, row)).join("\n") + (rows.length > 0 ? "\n" : "");
 }
 
 function compact(value: unknown, max = 320) {
@@ -151,6 +173,10 @@ function datasetRowFileName(dataset: JsonRecord) {
   return `datasets/${safeFileName(dataset.name, "dataset")}-${safeFileName(dataset.id, "rows")}.jsonl`;
 }
 
+function datasetRowSearchFileName(dataset: JsonRecord) {
+  return `search/datasets/${safeFileName(dataset.name, "dataset")}-${safeFileName(dataset.id, "rows")}.search.txt`;
+}
+
 async function writeDatasetRows(
   rootPath: string,
   store: AgentLibraryStore,
@@ -158,7 +184,7 @@ async function writeDatasetRows(
   warnings: string[],
 ) {
   if (!store.listDatasetRows || typeof dataset.id !== "string") {
-    return { relativePath: datasetRowFileName(dataset), written: 0, total: 0, truncated: false };
+    return { relativePath: datasetRowFileName(dataset), searchRelativePath: datasetRowSearchFileName(dataset), searchContent: "", written: 0, total: 0, truncated: false };
   }
 
   let offset = 0;
@@ -187,8 +213,24 @@ async function writeDatasetRows(
   const relativePath = datasetRowFileName(dataset);
   await mkdir(join(rootPath, "datasets"), { recursive: true });
   await writeFile(join(rootPath, relativePath), toJsonLines(rows), "utf-8");
+  const searchRelativePath = datasetRowSearchFileName(dataset);
+  const searchContent = toSearchLines("dataset-row", rows.map((row) => ({
+    datasetId: row.datasetId,
+    id: row.id,
+    order: row.order,
+    data: row.data,
+    metadata: row.metadata,
+  })));
+  await mkdir(dirname(join(rootPath, searchRelativePath)), { recursive: true });
+  await writeFile(
+    join(rootPath, searchRelativePath),
+    searchContent,
+    "utf-8",
+  );
   return {
     relativePath,
+    searchRelativePath,
+    searchContent,
     written: rows.length,
     total,
     truncated: rows.length < total,
@@ -211,6 +253,7 @@ function datasetIndexRecord(dataset: JsonRecord, rowSnapshot: Awaited<ReturnType
     sourcePages: dataset.sourcePages,
     tags: dataset.tags,
     rowsFile: `${SNAPSHOT_ROOT}/${rowSnapshot.relativePath}`,
+    searchFile: `${SNAPSHOT_ROOT}/${rowSnapshot.searchRelativePath}`,
     rowsWritten: rowSnapshot.written,
     rowsTotal: rowSnapshot.total || dataset.rowCount || 0,
     truncated: rowSnapshot.truncated,
@@ -297,6 +340,8 @@ ${countRows}
 
 - \`${SNAPSHOT_ROOT}/README.md\` - usage guide
 - \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` - full snapshot file manifest, one file per line; search it, do not read it all
+- \`${SNAPSHOT_ROOT}/search/all-library.search.txt\` - plain-text first-party library corpus for fast rg/searchLibraryCorpus
+- \`${SNAPSHOT_ROOT}/search/\` - category-specific plain-text corpora for books, datasets, cost intelligence, catalogs, rates, labour units, and assemblies
 - \`${SNAPSHOT_ROOT}/books.jsonl\` - knowledge book IDs
 - \`${SNAPSHOT_ROOT}/knowledge-pages.jsonl\` - authored knowledge page IDs
 - \`${SNAPSHOT_ROOT}/datasets/index.jsonl\` - dataset IDs and row-file paths
@@ -320,20 +365,26 @@ ${warningRows}
 function buildReadme(snapshot: LibrarySnapshotInfo) {
   return `# Bidwright Library Snapshots
 
-These files are generated for the CLI estimating/review agent. They are optimized for fast text search from the project workdir.
+These files are generated into the agent runtime folder at intake/review start. They are optimized for fast first-party text search from the project workdir.
 
 Use them like this:
 
-1. Search this folder for scope terms from the bid package, for example material names, equipment names, sizes, cost codes, vendors, locations, spec sections, and production activities.
-2. Treat matches as discovery hints, not final pricing authority.
+1. Search \`${SNAPSHOT_ROOT}/search/\` first for scope terms from the bid package, for example material names, equipment names, sizes, cost codes, vendors, locations, spec sections, and production activities.
+2. Treat matches as retrieval results, not decisions. The estimator agent must judge relevance, exact/similar/context/manual basis, and source authority.
 3. Use MCP tools to read the authoritative source and preserve source IDs:
    - \`listKnowledgeBooks\`, \`queryKnowledge\`, \`queryGlobalLibrary\`, \`readDocumentText\`
    - \`listDatasets\`, \`queryDatasets\`
-   - \`searchLineItemCandidates\`, \`recommendCostSource\`, \`createWorksheetItemFromCandidate\`
+   - \`searchLibraryCorpus\`, \`searchLineItemCandidates\`, \`recommendCostSource\`, \`createWorksheetItemFromCandidate\`
    - \`listLaborUnits\`, \`previewAssembly\`
 4. Put the actual source IDs and page/table/row references in \`sourceNotes\`.
 
-JSONL files contain one searchable record per line. Large datasets may be truncated in these snapshots; when that happens, use \`queryDatasets\` or the relevant MCP list/search tool for the full source.
+Plain-text \`.search.txt\` files contain one grep-friendly record per line. JSONL files contain the structured record payloads. Large datasets may be truncated in these snapshots; when that happens, use \`queryDatasets\` or the relevant MCP list/search tool for the full source.
+
+Useful commands:
+
+- \`rg -n "scope phrase" ${SNAPSHOT_ROOT}/search\`
+- \`rg -n "vendor|code|operation|unit" ${SNAPSHOT_ROOT}/search/all-library.search.txt\`
+- \`rg -n "production rate" ${SNAPSHOT_ROOT}/search/datasets ${SNAPSHOT_ROOT}/search/knowledge-books.search.txt\`
 
 Start with \`${SNAPSHOT_ROOT}/library-index.md\`. Search \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` when you need the full file list.
 
@@ -354,6 +405,28 @@ export async function writeAgentLibrarySnapshot({
   const files: LibrarySnapshotFile[] = [];
   const warnings: string[] = [];
   const counts: Record<string, number> = {};
+  const searchCorpusSections: string[] = [];
+
+  async function writeSearchFile(
+    relativePath: string,
+    label: string,
+    kind: string,
+    rows: Record<string, unknown>[],
+    description?: string,
+  ) {
+    const content = toSearchLines(kind, rows);
+    await writeSnapshotFile(
+      rootPath,
+      files,
+      relativePath,
+      label,
+      content,
+      { count: rows.length, description: description ?? "Plain-text grep corpus for agent runtime search." },
+    );
+    if (rows.length > 0) {
+      searchCorpusSections.push(`# ${label} (${SNAPSHOT_ROOT}/${relativePath})\n${content}`);
+    }
+  }
 
   await safeCall(
     "line item search index rebuild",
@@ -409,50 +482,70 @@ export async function writeAgentLibrarySnapshot({
   counts.laborUnits = laborUnitsResult.total;
   counts.assemblies = assemblySummaries.length;
 
+  const bookRows = books.map((book) => ({
+    id: book.id,
+    name: book.name,
+    description: compact(book.description),
+    category: book.category,
+    scope: book.scope,
+    projectId: book.projectId,
+    sourceFileName: book.sourceFileName,
+    pageCount: book.pageCount,
+    chunkCount: book.chunkCount,
+    status: book.status,
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "books.jsonl",
     "Knowledge books/manuals",
-    toJsonLines(books.map((book) => ({
-      id: book.id,
-      name: book.name,
-      description: compact(book.description),
-      category: book.category,
-      scope: book.scope,
-      projectId: book.projectId,
-      sourceFileName: book.sourceFileName,
-      pageCount: book.pageCount,
-      chunkCount: book.chunkCount,
-      status: book.status,
-    }))),
+    toJsonLines(bookRows),
     { count: books.length, description: "Use IDs with listKnowledgeBooks/readDocumentText." },
   );
+  await writeSearchFile(
+    "search/knowledge-books.search.txt",
+    "Knowledge books/manuals search corpus",
+    "knowledge-book",
+    bookRows,
+    "Plain-text book/manual index; use rg first, then readDocumentText for authoritative pages.",
+  );
 
+  const knowledgeDocumentRows = knowledgeDocuments.map((document) => ({
+    id: document.id,
+    title: document.title,
+    description: compact(document.description),
+    category: document.category,
+    tags: document.tags,
+    scope: document.scope,
+    projectId: document.projectId,
+    pageCount: document.pageCount,
+    chunkCount: document.chunkCount,
+    status: document.status,
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "knowledge-pages.jsonl",
     "Manual knowledge page libraries",
-    toJsonLines(knowledgeDocuments.map((document) => ({
-      id: document.id,
-      title: document.title,
-      description: compact(document.description),
-      category: document.category,
-      tags: document.tags,
-      scope: document.scope,
-      projectId: document.projectId,
-      pageCount: document.pageCount,
-      chunkCount: document.chunkCount,
-      status: document.status,
-    }))),
+    toJsonLines(knowledgeDocumentRows),
     { count: knowledgeDocuments.length, description: "Full markdown snapshots are in knowledge-pages/ when available." },
+  );
+  await writeSearchFile(
+    "search/knowledge-pages.search.txt",
+    "Manual knowledge pages search corpus",
+    "knowledge-page",
+    knowledgeDocumentRows,
+    "Plain-text manually-authored knowledge index; use readDocumentText for full content.",
   );
 
   const datasetIndexes: JsonRecord[] = [];
+  const datasetRowSearchSections: string[] = [];
   for (const dataset of datasets) {
     const rowSnapshot = await writeDatasetRows(rootPath, store, dataset, warnings);
     datasetIndexes.push(datasetIndexRecord(dataset, rowSnapshot));
+    if (rowSnapshot.searchContent.trim()) {
+      datasetRowSearchSections.push(`# Dataset rows: ${String(dataset.name ?? dataset.id)} (${SNAPSHOT_ROOT}/${rowSnapshot.searchRelativePath})\n${rowSnapshot.searchContent}`);
+    }
   }
   await writeSnapshotFile(
     rootPath,
@@ -466,6 +559,13 @@ export async function writeAgentLibrarySnapshot({
       truncated: datasetIndexes.some((dataset) => dataset.truncated === true),
     },
   );
+  await writeSearchFile(
+    "search/datasets.search.txt",
+    "Dataset index search corpus",
+    "dataset",
+    datasetIndexes,
+    "Plain-text dataset index and row-file pointers; search row corpora under search/datasets/ for values.",
+  );
   for (const dataset of datasetIndexes) {
     files.push({
       path: String(dataset.rowsFile),
@@ -474,7 +574,15 @@ export async function writeAgentLibrarySnapshot({
       count: numberValue(dataset.rowsWritten),
       truncated: dataset.truncated === true,
     });
+    files.push({
+      path: String(dataset.searchFile),
+      label: `Dataset row search corpus: ${String(dataset.name ?? dataset.id)}`,
+      description: "Plain-text row corpus for rg/searchLibraryCorpus; use queryDatasets for authoritative row reads.",
+      count: numberValue(dataset.rowsWritten),
+      truncated: dataset.truncated === true,
+    });
   }
+  searchCorpusSections.push(...datasetRowSearchSections);
 
   const catalogItems: JsonRecord[] = [];
   for (const catalog of catalogs) {
@@ -502,23 +610,31 @@ export async function writeAgentLibrarySnapshot({
     }
   }
   counts.catalogItems = catalogItems.length;
+  const catalogRows = catalogs.map((catalog) => ({
+    id: catalog.id,
+    name: catalog.name,
+    kind: catalog.kind,
+    scope: catalog.scope,
+    projectId: catalog.projectId,
+    description: compact(catalog.description),
+    source: catalog.source,
+    sourceDescription: compact(catalog.sourceDescription),
+    itemCount: catalog.itemCount,
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "catalogs/index.jsonl",
     "Catalog index",
-    toJsonLines(catalogs.map((catalog) => ({
-      id: catalog.id,
-      name: catalog.name,
-      kind: catalog.kind,
-      scope: catalog.scope,
-      projectId: catalog.projectId,
-      description: compact(catalog.description),
-      source: catalog.source,
-      sourceDescription: compact(catalog.sourceDescription),
-      itemCount: catalog.itemCount,
-    }))),
+    toJsonLines(catalogRows),
     { count: catalogs.length },
+  );
+  await writeSearchFile(
+    "search/catalogs.search.txt",
+    "Catalog index search corpus",
+    "catalog",
+    catalogRows,
+    "Plain-text catalog index; search catalog item corpus for item rows.",
   );
   await writeSnapshotFile(
     rootPath,
@@ -532,32 +648,47 @@ export async function writeAgentLibrarySnapshot({
       truncated: catalogItems.length >= MAX_CATALOG_ITEMS,
     },
   );
+  await writeSearchFile(
+    "search/catalog-items.search.txt",
+    "Catalog items search corpus",
+    "catalog-item",
+    catalogItems,
+    "Plain-text material/equipment catalog item corpus; use searchLineItemCandidates or searchCatalogs for authoritative IDs.",
+  );
 
   const rateScheduleItems = [
     ...flattenRateScheduleItems(globalRateSchedules, "global"),
     ...flattenRateScheduleItems(revisionRateSchedules, "revision"),
   ];
   counts.rateScheduleItems = rateScheduleItems.length;
+  const rateScheduleRows = [...globalRateSchedules, ...revisionRateSchedules].map((schedule) => ({
+    id: schedule.id,
+    name: schedule.name,
+    description: compact(schedule.description),
+    category: schedule.category,
+    scope: schedule.scope,
+    projectId: schedule.projectId,
+    revisionId: schedule.revisionId,
+    sourceScheduleId: schedule.sourceScheduleId,
+    effectiveDate: schedule.effectiveDate,
+    expiryDate: schedule.expiryDate,
+    tierCount: arrayCount(schedule.tiers),
+    itemCount: arrayCount(schedule.items),
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "rate-schedules/schedules.jsonl",
     "Rate schedule index",
-    toJsonLines([...globalRateSchedules, ...revisionRateSchedules].map((schedule) => ({
-      id: schedule.id,
-      name: schedule.name,
-      description: compact(schedule.description),
-      category: schedule.category,
-      scope: schedule.scope,
-      projectId: schedule.projectId,
-      revisionId: schedule.revisionId,
-      sourceScheduleId: schedule.sourceScheduleId,
-      effectiveDate: schedule.effectiveDate,
-      expiryDate: schedule.expiryDate,
-      tierCount: arrayCount(schedule.tiers),
-      itemCount: arrayCount(schedule.items),
-    }))),
+    toJsonLines(rateScheduleRows),
     { count: globalRateSchedules.length + revisionRateSchedules.length },
+  );
+  await writeSearchFile(
+    "search/rate-schedules.search.txt",
+    "Rate schedule index search corpus",
+    "rate-schedule",
+    rateScheduleRows,
+    "Plain-text rate schedule index; import schedules before using revision rate item IDs.",
   );
   await writeSnapshotFile(
     rootPath,
@@ -567,56 +698,76 @@ export async function writeAgentLibrarySnapshot({
     toJsonLines(rateScheduleItems),
     { count: rateScheduleItems.length, description: "Use importRateSchedule/getItemConfig for revision-safe item IDs." },
   );
+  await writeSearchFile(
+    "search/rate-schedule-items.search.txt",
+    "Rate schedule items search corpus",
+    "rate-schedule-item",
+    rateScheduleItems,
+    "Plain-text labour/equipment/general-conditions/rental rate item corpus; use listRateScheduleItems for exact imported IDs.",
+  );
 
+  const laborLibraryRows = laborLibraries.map((library) => ({
+    id: library.id,
+    name: library.name,
+    description: compact(library.description),
+    provider: library.provider,
+    discipline: library.discipline,
+    source: library.source,
+    sourceDescription: compact(library.sourceDescription),
+    sourceDatasetId: library.sourceDatasetId,
+    tags: library.tags,
+    unitCount: library.unitCount,
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "labor-units/libraries.jsonl",
     "Labor unit library index",
-    toJsonLines(laborLibraries.map((library) => ({
-      id: library.id,
-      name: library.name,
-      description: compact(library.description),
-      provider: library.provider,
-      discipline: library.discipline,
-      source: library.source,
-      sourceDescription: compact(library.sourceDescription),
-      sourceDatasetId: library.sourceDatasetId,
-      tags: library.tags,
-      unitCount: library.unitCount,
-    }))),
+    toJsonLines(laborLibraryRows),
     { count: laborLibraries.length },
   );
+  await writeSearchFile(
+    "search/labor-unit-libraries.search.txt",
+    "Labor unit libraries search corpus",
+    "labor-unit-library",
+    laborLibraryRows,
+    "Plain-text labor productivity library index.",
+  );
+  const laborUnitRows = laborUnitsResult.units.map((unit) => ({
+    id: unit.id,
+    libraryId: unit.libraryId,
+    catalogItemId: unit.catalogItemId,
+    code: unit.code,
+    name: unit.name,
+    description: compact(unit.description),
+    discipline: unit.discipline,
+    category: unit.category,
+    className: unit.className,
+    subClassName: unit.subClassName,
+    outputUom: unit.outputUom,
+    hoursNormal: unit.hoursNormal,
+    entityCategoryType: unit.entityCategoryType,
+    tags: unit.tags,
+    sourceRef: unit.sourceRef,
+  }));
   await writeSnapshotFile(
     rootPath,
     files,
     "labor-units/units.jsonl",
     "Labor productivity units",
-    toJsonLines(laborUnitsResult.units.map((unit) => ({
-      id: unit.id,
-      libraryId: unit.libraryId,
-      catalogItemId: unit.catalogItemId,
-      code: unit.code,
-      name: unit.name,
-      description: compact(unit.description),
-      discipline: unit.discipline,
-      category: unit.category,
-      className: unit.className,
-      subClassName: unit.subClassName,
-      outputUom: unit.outputUom,
-      hoursNormal: unit.hoursNormal,
-      hoursDifficult: unit.hoursDifficult,
-      hoursVeryDifficult: unit.hoursVeryDifficult,
-      defaultDifficulty: unit.defaultDifficulty,
-      entityCategoryType: unit.entityCategoryType,
-      tags: unit.tags,
-      sourceRef: unit.sourceRef,
-    }))),
+    toJsonLines(laborUnitRows),
     {
       count: laborUnitsResult.units.length,
       description: "Use IDs with listLaborUnits and preserve laborUnitId/sourceNotes.",
       truncated: laborUnitsResult.units.length < laborUnitsResult.total,
     },
+  );
+  await writeSearchFile(
+    "search/labor-units.search.txt",
+    "Labor productivity units search corpus",
+    "labor-unit",
+    laborUnitRows,
+    "Plain-text labor productivity unit corpus; agent decides exact/similar/context/manual basis.",
   );
 
   const assemblies = await Promise.all(
@@ -635,13 +786,28 @@ export async function writeAgentLibrarySnapshot({
     toJsonLines(assemblySummaries),
     { count: assemblySummaries.length, description: "Use previewAssembly before inserting assembly-backed scope." },
   );
+  await writeSearchFile(
+    "search/assemblies.search.txt",
+    "Assemblies search corpus",
+    "assembly",
+    assemblySummaries,
+    "Plain-text assembly index; use previewAssembly before inserting assembly-backed scope.",
+  );
+  const fullAssemblyRows = assemblies.filter((assembly): assembly is JsonRecord => !!assembly);
   await writeSnapshotFile(
     rootPath,
     files,
     "assemblies/full.jsonl",
     "Assembly definitions",
-    toJsonLines(assemblies.filter((assembly): assembly is JsonRecord => !!assembly)),
-    { count: assemblies.filter(Boolean).length, description: "Includes parameters and component source IDs." },
+    toJsonLines(fullAssemblyRows),
+    { count: fullAssemblyRows.length, description: "Includes parameters and component source IDs." },
+  );
+  await writeSearchFile(
+    "search/assembly-definitions.search.txt",
+    "Assembly definitions search corpus",
+    "assembly-definition",
+    fullAssemblyRows,
+    "Plain-text assembly definition corpus with parameters and component refs.",
   );
 
   if (organizationId) {
@@ -662,68 +828,105 @@ export async function writeAgentLibrarySnapshot({
       JSON.stringify(costSummary, null, 2),
       { description: "Counts for resources, observations, vendors, and effective costs." },
     );
+    await writeSearchFile(
+      "search/cost-intelligence-summary.search.txt",
+      "Cost intelligence summary search corpus",
+      "cost-intelligence-summary",
+      [asRecord(costSummary)],
+      "Plain-text cost intelligence summary counts.",
+    );
+    const costResourceRows = (resources as JsonRecord[]).map((resource) => ({
+      id: resource.id,
+      catalogItemId: resource.catalogItemId,
+      resourceType: resource.resourceType,
+      category: resource.category,
+      code: resource.code,
+      name: resource.name,
+      description: compact(resource.description),
+      manufacturer: resource.manufacturer,
+      manufacturerPartNumber: resource.manufacturerPartNumber,
+      defaultUom: resource.defaultUom,
+      aliases: resource.aliases,
+      tags: resource.tags,
+      metadata: resource.metadata,
+      active: resource.active,
+    }));
     await writeSnapshotFile(
       rootPath,
       files,
       "cost-intelligence/resources.jsonl",
       "Cost intelligence resources",
-      toJsonLines((resources as JsonRecord[]).map((resource) => ({
-        id: resource.id,
-        catalogItemId: resource.catalogItemId,
-        resourceType: resource.resourceType,
-        category: resource.category,
-        code: resource.code,
-        name: resource.name,
-        description: compact(resource.description),
-        manufacturer: resource.manufacturer,
-        manufacturerPartNumber: resource.manufacturerPartNumber,
-        defaultUom: resource.defaultUom,
-        aliases: resource.aliases,
-        tags: resource.tags,
-        metadata: resource.metadata,
-        active: resource.active,
-      }))),
+      toJsonLines(costResourceRows),
       {
         count: (resources as JsonRecord[]).length,
         description: "Use searchLineItemCandidates/recommendCostSource for linked worksheet rows.",
         truncated: (resources as JsonRecord[]).length < counts.costResources,
       },
     );
+    await writeSearchFile(
+      "search/cost-resources.search.txt",
+      "Cost intelligence resources search corpus",
+      "cost-resource",
+      costResourceRows,
+      "Plain-text cost intelligence resource corpus; use unified search for linked worksheet rows.",
+    );
+    const effectiveCostRows = (effectiveCosts as JsonRecord[]).map((cost) => ({
+      id: cost.id,
+      resourceId: cost.resourceId,
+      resourceName: (cost.resource as JsonRecord | null | undefined)?.name,
+      resourceType: (cost.resource as JsonRecord | null | undefined)?.resourceType,
+      category: (cost.resource as JsonRecord | null | undefined)?.category,
+      projectId: cost.projectId,
+      vendorName: cost.vendorName,
+      region: cost.region,
+      uom: cost.uom,
+      unitCost: cost.unitCost,
+      unitPrice: cost.unitPrice,
+      currency: cost.currency,
+      effectiveDate: cost.effectiveDate,
+      expiresAt: cost.expiresAt,
+      sourceObservationId: cost.sourceObservationId,
+      method: cost.method,
+      sampleSize: cost.sampleSize,
+      confidence: cost.confidence,
+      metadata: cost.metadata,
+    }));
     await writeSnapshotFile(
       rootPath,
       files,
       "cost-intelligence/effective-costs.jsonl",
       "Effective cost bases",
-      toJsonLines((effectiveCosts as JsonRecord[]).map((cost) => ({
-        id: cost.id,
-        resourceId: cost.resourceId,
-        resourceName: (cost.resource as JsonRecord | null | undefined)?.name,
-        resourceType: (cost.resource as JsonRecord | null | undefined)?.resourceType,
-        category: (cost.resource as JsonRecord | null | undefined)?.category,
-        projectId: cost.projectId,
-        vendorName: cost.vendorName,
-        region: cost.region,
-        uom: cost.uom,
-        unitCost: cost.unitCost,
-        unitPrice: cost.unitPrice,
-        currency: cost.currency,
-        effectiveDate: cost.effectiveDate,
-        expiresAt: cost.expiresAt,
-        sourceObservationId: cost.sourceObservationId,
-        method: cost.method,
-        sampleSize: cost.sampleSize,
-        confidence: cost.confidence,
-        metadata: cost.metadata,
-      }))),
+      toJsonLines(effectiveCostRows),
       {
         count: (effectiveCosts as JsonRecord[]).length,
         description: "Preserve effectiveCostId/costResourceId when used.",
         truncated: (effectiveCosts as JsonRecord[]).length < counts.effectiveCosts,
       },
     );
+    await writeSearchFile(
+      "search/effective-costs.search.txt",
+      "Effective costs search corpus",
+      "effective-cost",
+      effectiveCostRows,
+      "Plain-text effective cost basis corpus; preserve effectiveCostId/costResourceId when used.",
+    );
   } else {
     warnings.push("No organizationId on request; cost intelligence snapshots were skipped.");
   }
+
+  const allSearchContent = searchCorpusSections.join("\n");
+  await writeSnapshotFile(
+    rootPath,
+    files,
+    "search/all-library.search.txt",
+    "All library search corpus",
+    allSearchContent,
+    {
+      description: "Concatenated plain-text first-party library corpus for rg/searchLibraryCorpus. Search it; do not read it wholesale.",
+      count: allSearchContent ? allSearchContent.split("\n").filter((line) => line.startsWith("[")).length : 0,
+      truncated: Object.values(counts).some((count) => count >= MAX_DATASET_ROWS_PER_FILE || count >= MAX_LABOR_UNITS || count >= MAX_CATALOG_ITEMS || count >= MAX_COST_ROWS),
+    },
+  );
 
   const snapshot: LibrarySnapshotInfo = {
     rootDir: SNAPSHOT_ROOT,

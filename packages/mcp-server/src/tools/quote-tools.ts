@@ -83,6 +83,21 @@ function compactText(value: unknown, maxLength = 180) {
   return text.length > maxLength ? `${text.slice(0, Math.max(0, maxLength - 1))}...` : text;
 }
 
+function compactTags(value: unknown, limit = 8) {
+  return asArray(value)
+    .map((tag) => String(tag ?? "").trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function stripLeakedToolParameterMarkup(value: unknown) {
+  if (typeof value !== "string") return value;
+  return value
+    .replace(/\s*<\/[a-zA-Z][^>]*>\s*<parameter\b[\s\S]*$/i, "")
+    .replace(/\s*<parameter\b[\s\S]*$/i, "")
+    .trim();
+}
+
 function normalizedText(value: unknown) {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -91,6 +106,912 @@ function matchesText(value: unknown, query?: string | null) {
   const q = normalizedText(query);
   if (!q) return true;
   return normalizedText(value).includes(q);
+}
+
+function matchesAllTerms(value: unknown, query?: string | null) {
+  const q = normalizedText(query);
+  if (!q) return true;
+  const haystack = normalizedText(value);
+  return q.split(/\s+/).filter(Boolean).every((term) => haystack.includes(term));
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function findCreatedWorksheetItem(data: unknown, worksheetId: string, input: Record<string, any>) {
+  const direct = asRecord(data);
+  const directItem = asRecord(direct.item);
+  if (directItem.id) return directItem;
+  if (direct.id && (direct.worksheetId === worksheetId || !direct.worksheetId)) return direct;
+
+  const workspace = asRecord(direct.workspace ?? direct.data?.workspace ?? direct.data ?? direct);
+  const worksheet = asArray(workspace.worksheets).map(asRecord).find((entry) => String(entry.id ?? "") === worksheetId);
+  const items = asArray(worksheet?.items).map(asRecord);
+  if (items.length === 0) return {};
+
+  const entityName = String(input.entityName ?? "");
+  const description = String(input.description ?? "");
+  const candidates = items.filter((item) =>
+    (!entityName || String(item.entityName ?? item.name ?? "") === entityName) &&
+    (!description || String(item.description ?? "") === description)
+  );
+  return candidates[candidates.length - 1] ?? items[items.length - 1] ?? {};
+}
+
+function isIgnoredSourceDocument(fileName: unknown) {
+  const name = String(fileName ?? "").toLowerCase();
+  return /(^|\/)__macosx(\/|$)|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(name);
+}
+
+function isDrawingLikeSourceDocument(doc: any) {
+  if (!doc || isIgnoredSourceDocument(doc.fileName) || isIgnoredSourceDocument(doc.storagePath)) return false;
+  const documentType = normalizedText(doc.documentType);
+  const fileType = normalizedText(doc.fileType);
+  const fileName = normalizedText(doc.fileName);
+
+  if (fileType !== "application/pdf" && fileType !== "pdf" && !fileName.endsWith(".pdf")) return false;
+  return documentType === "drawing";
+}
+
+function normalizedToolId(toolId: unknown) {
+  return String(toolId ?? "")
+    .replace(/^mcp__bidwright__/, "")
+    .trim();
+}
+
+function collectVisualToolEvidence(ws: any) {
+  const evidence = {
+    renderedPages: 0,
+    zoomedRegions: 0,
+    symbolScans: 0,
+    imageSymbolScans: 0,
+    renderedPageCalls: [] as Array<{ documentId: string; pageNumber: number }>,
+    zoomRegionCalls: [] as Array<{
+      documentId: string;
+      pageNumber: number;
+      region: Record<string, any>;
+    }>,
+  };
+
+  for (const run of asArray(ws.aiRuns)) {
+    const events = asArray(asRecord(run.output).events);
+    for (const event of events) {
+      if (!event || (event.type !== "tool_call" && event.type !== "tool")) continue;
+      const data = asRecord(event.data);
+      const toolId = normalizedToolId(data.toolId ?? event.toolId);
+      const input = asRecord(data.input ?? event.input);
+      if (toolId === "renderDrawingPage") {
+        evidence.renderedPages += 1;
+        const documentId = String(input.documentId ?? "").trim();
+        const pageNumber = Number(input.pageNumber);
+        if (documentId && Number.isFinite(pageNumber)) {
+          evidence.renderedPageCalls.push({ documentId, pageNumber });
+        }
+      }
+      if (toolId === "zoomDrawingRegion") {
+        evidence.zoomedRegions += 1;
+        const documentId = String(input.documentId ?? "").trim();
+        const pageNumber = Number(input.pageNumber);
+        const region = asRecord(input.region);
+        if (documentId && Number.isFinite(pageNumber) && Object.keys(region).length > 0) {
+          evidence.zoomRegionCalls.push({ documentId, pageNumber, region });
+        }
+      }
+      if (toolId === "scanDrawingSymbols") {
+        evidence.symbolScans += 1;
+        if (input.includeImage === true || String(input.includeImage ?? "").toLowerCase() === "true") {
+          evidence.imageSymbolScans += 1;
+        }
+      }
+    }
+  }
+
+  return evidence;
+}
+
+function evidenceDocumentIdsMatch(a: unknown, b: unknown) {
+  const left = String(a ?? "").trim();
+  const right = String(b ?? "").trim();
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const normalize = (value: string) => value.replace(/\.\.\.|…/g, "");
+  const compactLeft = normalize(left);
+  const compactRight = normalize(right);
+  if (compactLeft.length >= 12 && right.startsWith(compactLeft)) return true;
+  if (compactRight.length >= 12 && left.startsWith(compactRight)) return true;
+  return false;
+}
+
+function visualPageEvidenceMatchesActual(
+  evidence: unknown,
+  actualCalls: Array<{ documentId: string; pageNumber: number }>,
+) {
+  const entry = asRecord(evidence);
+  const pageNumber = Number(entry.pageNumber);
+  if (!Number.isFinite(pageNumber)) return false;
+  return actualCalls.some((call) =>
+    call.pageNumber === pageNumber &&
+    evidenceDocumentIdsMatch(entry.documentId, call.documentId)
+  );
+}
+
+function numericRegionValue(region: Record<string, any>, key: string) {
+  const value = Number(region[key]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function isTargetedZoomRegion(regionValue: unknown) {
+  const region = asRecord(regionValue);
+  const width = numericRegionValue(region, "width");
+  const height = numericRegionValue(region, "height");
+  const imageWidth = numericRegionValue(region, "imageWidth");
+  const imageHeight = numericRegionValue(region, "imageHeight");
+  if (!width || !height || width <= 0 || height <= 0) return false;
+  if (!imageWidth || !imageHeight || imageWidth <= 0 || imageHeight <= 0) return true;
+  const areaRatio = (width * height) / (imageWidth * imageHeight);
+  return areaRatio < 0.75 && width < imageWidth * 0.95 && height < imageHeight * 0.95;
+}
+
+function regionsApproximatelyMatch(aValue: unknown, bValue: unknown) {
+  const a = asRecord(aValue);
+  const b = asRecord(bValue);
+  const keys = ["x", "y", "width", "height"];
+  return keys.every((key) => {
+    const left = numericRegionValue(a, key);
+    const right = numericRegionValue(b, key);
+    if (left === null || right === null) return false;
+    const tolerance = Math.max(8, Math.abs(right) * 0.03);
+    return Math.abs(left - right) <= tolerance;
+  });
+}
+
+function visualZoomEvidenceMatchesActual(
+  evidence: unknown,
+  actualCalls: Array<{ documentId: string; pageNumber: number; region: Record<string, any> }>,
+) {
+  const entry = asRecord(evidence);
+  const pageNumber = Number(entry.pageNumber);
+  if (!Number.isFinite(pageNumber) || !isTargetedZoomRegion(entry.region)) return false;
+  return actualCalls.some((call) =>
+    call.pageNumber === pageNumber &&
+    evidenceDocumentIdsMatch(entry.documentId, call.documentId) &&
+    isTargetedZoomRegion(call.region) &&
+    regionsApproximatelyMatch(entry.region, call.region)
+  );
+}
+
+function hasAuditArrayEvidence(entry: Record<string, any>, keys: string[]) {
+  return keys.some((key) => asArray(entry[key]).length > 0);
+}
+
+function drawingEvidenceEngine(strategy: any) {
+  return asRecord(asRecord(strategy?.summary).drawingEvidenceEngine);
+}
+
+function normalizeEvidenceClaimKey(value: unknown) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(number|qty|quantity|count|total|each|ea|of|the|drawing|source|visual|bom|spec|table|ocr|text|governing|alternate|older|newer|orientation|plan|sheet|shop|schedule|quote|vendor|manufacturer|revision|rev|issued|production|baseline|primary|per|as|built|actual|fabrication|detail|order|line|dated|date|model|document|doc|reference|superseded|supersedes)\b/g, " ")
+    .replace(/\b(?:[a-z]+\d+[a-z0-9]*|\d+[a-z]+[a-z0-9]*)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function comparableEvidenceClaimValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const match = value.match(/-?\d[\d,]*(?:\.\d+)?/);
+    if (match) {
+      const parsed = Number(String(match[0]).replace(/,/g, ""));
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function evidenceClaimGroupKey(claim: Record<string, any>) {
+  return [
+    String(claim.packageId ?? claim.packageName ?? "unknown").toLowerCase(),
+    normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim),
+    String(claim.unit ?? "").toLowerCase(),
+  ].join("|");
+}
+
+const HIGH_AUTHORITY_EVIDENCE_TERMS = [
+  "bill of material",
+  "bill of materials",
+  "bom",
+  "parts list",
+  "part list",
+  "schedule",
+  "spec sheet",
+  "specification sheet",
+  "accessories quantity description",
+  "vendor quote",
+  "vendor quotation",
+  "model bom",
+  "model quantity",
+  "quantity table",
+  "material table",
+];
+
+function hasHighAuthorityEvidenceLanguage(text: string) {
+  const normalized = ` ${normalizedText(text)} `;
+  return HIGH_AUTHORITY_EVIDENCE_TERMS.some((term) => normalized.includes(` ${term} `));
+}
+
+function isHighAuthorityEvidenceClaim(claim: Record<string, any>) {
+  const method = normalizedText(claim.method);
+  const evidenceText = evidenceClaimEvidenceText(claim);
+  if (method === "vendor_quote") return true;
+  return hasHighAuthorityEvidenceLanguage(evidenceText);
+}
+
+function evidenceClaimEvidenceText(claim: Record<string, any>) {
+  const evidenceText = asArray(claim.evidence).flatMap((entryValue) => {
+    const entry = asRecord(entryValue);
+    return [
+      entry.result,
+      entry.sourceText,
+      entry.quotedText,
+      entry.quote,
+      entry.ocrText,
+      entry.rawText,
+      entry.tool,
+      entry.regionType,
+      entry.fileName,
+      entry.documentTitle,
+    ];
+  });
+  return normalizedText([
+    claim.quantityName,
+    claim.claim,
+    claim.rationale,
+    claim.assumption,
+    claim.method,
+    claim.packageName,
+    ...evidenceText,
+  ].join(" "));
+}
+
+function hasExplicitEvidenceOverride(entries: Array<Record<string, any>>) {
+  const sourceText = normalizedText(entries.flatMap((claim) =>
+    asArray(claim.evidence).flatMap((entryValue) => {
+      const entry = asRecord(entryValue);
+      return [entry.sourceText, entry.quotedText, entry.quote, entry.ocrText, entry.rawText];
+    })
+  ).join(" "));
+  return [
+    "supersedes",
+    "superseded by",
+    "replaces",
+    "replaced by",
+    "obsolete",
+    "void",
+    "addendum",
+    "revision history",
+    "order of precedence",
+    "client confirmed",
+    "vendor confirmed",
+    "approved submittal",
+    "change order",
+    "rfi response",
+    "field directive",
+  ].some((term) => sourceText.includes(term));
+}
+
+function textReferencesEvidenceClaimValue(text: string, claim: Record<string, any>) {
+  const value = comparableEvidenceClaimValue(claim.value);
+  if (value === null) return false;
+  return new RegExp(`(^|[^0-9.])${String(value).replace(".", "\\.")}([^0-9.]|$)`).test(text);
+}
+
+function resolutionSelectsHighAuthorityEvidence(entries: Array<Record<string, any>>) {
+  const resolutionText = normalizedText(entries.map((claim) =>
+    asRecord(claim.reconciliation).resolution ?? ""
+  ).join(" "));
+  if (!resolutionText) return false;
+
+  const highAuthorityEntries = entries.filter(isHighAuthorityEvidenceClaim);
+  const lowerAuthorityEntries = entries.filter((claim) => !isHighAuthorityEvidenceClaim(claim));
+  const mentionsHighValue = highAuthorityEntries.some((claim) => textReferencesEvidenceClaimValue(resolutionText, claim));
+  const mentionsLowerValue = lowerAuthorityEntries.some((claim) => textReferencesEvidenceClaimValue(resolutionText, claim));
+  const mentionsHighAuthoritySource = [
+    "bom",
+    "bill of material",
+    "parts list",
+    "schedule",
+    "spec sheet",
+    "vendor quote",
+    "table",
+  ].some((term) => resolutionText.includes(term));
+  const lowerSourceGoverns = [
+    "drawing governs",
+    "shop drawing governs",
+    "new drawing governs",
+    "newer drawing",
+    "visual governs",
+    "visual count governs",
+    "shop drawing supersedes",
+    "drawing supersedes",
+    "superseded by shop drawing",
+    "superseded by drawing",
+  ].some((term) => resolutionText.includes(term)) ||
+    [/drawing.{0,90}supersed/, /supersed.{0,90}drawing/, /as\s*built\s+drawing/].some((pattern) => pattern.test(resolutionText));
+
+  if (lowerSourceGoverns || (mentionsLowerValue && !mentionsHighValue)) return false;
+  if (mentionsHighValue && mentionsHighAuthoritySource) return true;
+  return mentionsHighAuthoritySource && [
+    "governing",
+    "governs",
+    "baseline",
+    "use",
+    "carry",
+    "prevail",
+    "selected",
+  ].some((term) => resolutionText.includes(term));
+}
+
+function resolutionKeepsHighAuthorityEvidence(entries: Array<Record<string, any>>) {
+  return resolutionSelectsHighAuthorityEvidence(entries);
+}
+
+function evidenceContradictionIsResolved(entries: Array<Record<string, any>>) {
+  const hasCarriedAssumption = entries.some((claim) => normalizedText(asRecord(claim.reconciliation).status) === "carried_assumption");
+  if (hasCarriedAssumption) {
+    const hasHighAuthority = entries.some(isHighAuthorityEvidenceClaim);
+    const hasLowerAuthority = entries.some((claim) => !isHighAuthorityEvidenceClaim(claim));
+    if (!hasHighAuthority || !hasLowerAuthority) return true;
+    return resolutionKeepsHighAuthorityEvidence(entries) || hasExplicitEvidenceOverride(entries);
+  }
+
+  const hasResolved = entries.some((claim) => normalizedText(asRecord(claim.reconciliation).status) === "resolved");
+  if (!hasResolved) return false;
+
+  const hasHighAuthority = entries.some(isHighAuthorityEvidenceClaim);
+  const hasLowerAuthority = entries.some((claim) => !isHighAuthorityEvidenceClaim(claim));
+  if (!hasHighAuthority || !hasLowerAuthority) return true;
+
+  return resolutionKeepsHighAuthorityEvidence(entries) || hasExplicitEvidenceOverride(entries);
+}
+
+function detectDrawingEvidenceClaimContradictions(claimsValue: unknown) {
+  const claims = asArray(claimsValue).map(asRecord);
+  const groups = new Map<string, Array<Record<string, any>>>();
+  for (const claim of claims) {
+    const key = evidenceClaimGroupKey(claim);
+    if (!normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim)) continue;
+    groups.set(key, [...(groups.get(key) ?? []), claim]);
+  }
+
+  const contradictions: string[] = [];
+  for (const [key, claimsInGroup] of groups.entries()) {
+    const values = claimsInGroup
+      .map((claim) => comparableEvidenceClaimValue(claim.value))
+      .filter((value): value is number => value !== null);
+    const distinct = [...new Set(values)];
+    if (distinct.length <= 1) continue;
+    if (!evidenceContradictionIsResolved(claimsInGroup)) {
+      const authorityConflict = claimsInGroup.some(isHighAuthorityEvidenceClaim) && claimsInGroup.some((claim) => !isHighAuthorityEvidenceClaim(claim));
+      contradictions.push(
+        authorityConflict
+          ? `${claimsInGroup[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. BOM/spec/schedule/vendor-table conflict needs explicit supersession/order-of-precedence evidence or high-authority table selection. A carried assumption cannot price the lower-context drawing value unless an explicit override is cited.`
+          : `${claimsInGroup[0]?.quantityName ?? key}: ${distinct.join(" vs ")}`
+      );
+    }
+  }
+  return contradictions;
+}
+
+function packageMatchesClaim(entry: Record<string, any>, claim: Record<string, any>) {
+  const packageKeys = [entry.packageId, entry.packageName].map(packageEvidenceKey).filter(Boolean);
+  const claimKeys = [claim.packageId, claim.packageName].map(packageEvidenceKey).filter(Boolean);
+  if (packageKeys.some((left) => claimKeys.some((right) => packageEvidenceKeysMatch(left, right)))) return true;
+  return false;
+}
+
+function packageEvidenceKey(value: unknown) {
+  return normalizedText(value)
+    .split("-")
+    .filter((token) => token && !["pkg", "package", "scope", "drawing", "visual", "takeoff"].includes(token))
+    .join("-");
+}
+
+function packageEvidenceKeysMatch(left: string, right: string) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.includes(right) || right.includes(left)) return true;
+  const leftTokens = left.split("-").filter((token) => token.length >= 3);
+  const rightTokens = right.split("-").filter((token) => token.length >= 3);
+  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
+  const shared = leftTokens.filter((token) => rightTokens.includes(token)).length;
+  const required = Math.min(2, Math.min(leftTokens.length, rightTokens.length));
+  return shared >= required && shared / Math.min(leftTokens.length, rightTokens.length) >= 0.67;
+}
+
+function claimHasUsableDrawingEvidence(claimValue: unknown) {
+  const claim = asRecord(claimValue);
+  const method = normalizedText(claim.method);
+  const evidence = asArray(claim.evidence).map(asRecord);
+  if (!normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim)) return false;
+  if (claim.value === undefined || claim.value === null || claim.value === "") return false;
+  if (method === "assumption") return String(claim.assumption ?? claim.rationale ?? "").trim().length >= 20;
+  if (evidence.length === 0) return false;
+  if (method === "visual_count" || method === "takeoff") {
+    return evidence.some((entry) =>
+      (entry.regionId || Object.keys(asRecord(entry.bbox)).length > 0) &&
+      String(entry.imageHash ?? "").trim().length >= 16 &&
+      ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols"].some((name) =>
+        normalizedText(entry.tool).includes(name)
+      )
+    );
+  }
+  if (method === "bom_table" || method === "drawing_table" || method === "ocr_text") {
+    return evidence.some((entry) => entry.regionId || String(entry.sourceText ?? "").trim().length >= 20);
+  }
+  return evidence.length > 0 || String(claim.rationale ?? "").trim().length >= 20;
+}
+
+function targetMatchesDrawingDrivenPackage(entry: Record<string, any>, targetText: string, strategy: any) {
+  const target = normalizedText(targetText);
+  if (!target) return true;
+
+  const packageId = normalizedText(entry.packageId);
+  const packageName = normalizedText(entry.packageName);
+  const packagePlan = asArray(strategy?.packagePlan).map(asRecord).find((plan) => {
+    const planId = normalizedText(plan.id ?? plan.packageId);
+    const planName = normalizedText(plan.name ?? plan.packageName);
+    return (packageId && planId === packageId) || (packageName && planName === packageName);
+  });
+  const bindings = asRecord(packagePlan?.bindings);
+  const candidates = [
+    packageId,
+    packageName,
+    normalizedText(packagePlan?.name),
+    ...asArray(bindings.worksheetNames).map(normalizedText),
+    ...asArray(bindings.textMatchers).map(normalizedText),
+  ].filter((value) => value.length >= 3);
+
+  return candidates.some((candidate) => target.includes(candidate) || candidate.includes(target));
+}
+
+function validateDrawingEvidenceEngineForPricing(
+  strategy: any,
+  drawingDrivenPackages: Array<Record<string, any>>,
+  targetText = "",
+  evidenceBasis?: Record<string, any> | null,
+) {
+  if (drawingDrivenPackages.length === 0) return null;
+  const claimIds = evidenceBasisClaimIds(evidenceBasis);
+  const targetPackages = targetText
+    ? drawingDrivenPackages.filter((entry) => targetMatchesDrawingDrivenPackage(entry, targetText, strategy))
+    : drawingDrivenPackages;
+  const packagesToCheck = targetPackages.length > 0 ? targetPackages : drawingDrivenPackages;
+
+  const engine = drawingEvidenceEngine(strategy);
+  const atlas = asRecord(engine.atlas);
+  const claims = asArray(engine.claims).map(asRecord);
+  const latestVerification = asRecord(asArray(engine.verifications)[0]);
+  const unresolvedStoredContradictions = asArray(engine.contradictions)
+    .map(asRecord)
+    .filter((entry) => !["resolved", "carried_assumption"].includes(normalizedText(entry.status)));
+  const detectedContradictions = detectDrawingEvidenceClaimContradictions(claims);
+
+  if (Object.keys(atlas).length === 0 || Number(atlas.regionCount ?? 0) <= 0) {
+    return "Drawing Evidence Engine atlas is missing. Call buildDrawingAtlas before creating worksheets/items from drawing-driven scope.";
+  }
+
+  if (claims.length === 0) {
+    return "Drawing evidence ledger is empty. For each drawing-driven quantity, call searchDrawingRegions, inspectDrawingRegion, then saveDrawingEvidenceClaim before creating worksheets/items.";
+  }
+
+  if (lineEvidenceBasisRequiresDrawing(evidenceBasis)) {
+    if (claimIds.length === 0) {
+      return "This line is marked as drawing/takeoff quantity driven, so evidenceBasis.quantity.drawingClaimIds must name the Drawing Evidence Engine claim(s) that prove the quantity. Put labour manual, rate schedule, vendor quote, allowance model, indirect-cost model, document reference, or assumption support under evidenceBasis.pricing when those sources justify price/rate/productivity instead of quantity.";
+    }
+    const selectedClaims = claimIds
+      .map((id) => claims.find((claim) => String(claim.claimId ?? claim.id ?? "") === id))
+      .filter((claim): claim is Record<string, any> => !!claim);
+    const missingClaimIds = claimIds.filter((id) => !selectedClaims.some((claim) => String(claim.claimId ?? claim.id ?? "") === id));
+    if (missingClaimIds.length > 0) {
+      return `Drawing evidence claim id(s) not found for this line: ${missingClaimIds.join(", ")}. Call getDrawingEvidenceLedger or saveDrawingEvidenceClaim, then retry with valid claim ids.`;
+    }
+    const unusable = selectedClaims.filter((claim) => !claimHasUsableDrawingEvidence(claim));
+    if (unusable.length > 0) {
+      return `Selected drawing evidence claim(s) are not usable for pricing: ${unusable.map((claim) => String(claim.claimId ?? claim.quantityName ?? "unknown")).join(", ")}. Repair the claim evidence first.`;
+    }
+
+    const selectedKeys = new Set(selectedClaims.map(evidenceClaimGroupKey));
+    const relevantStoredContradictions = unresolvedStoredContradictions.filter((entry) => {
+      const contradictionClaimIds = asArray(entry.claimIds).map((id) => String(id ?? ""));
+      const contradictionKey = String(entry.key ?? "");
+      return contradictionClaimIds.some((id) => claimIds.includes(id)) || selectedKeys.has(contradictionKey);
+    });
+    const relevantDetectedContradictions = detectDrawingEvidenceClaimContradictions(
+      claims.filter((claim) => selectedKeys.has(evidenceClaimGroupKey(claim))),
+    );
+    if (relevantStoredContradictions.length > 0 || relevantDetectedContradictions.length > 0) {
+      const stored = relevantStoredContradictions.map((entry) => String(entry.message ?? entry.quantityName ?? entry.id)).slice(0, 5);
+      const detected = relevantDetectedContradictions.slice(0, 5);
+      return `Selected drawing evidence has unresolved contradictions: ${[...stored, ...detected].join("; ")}. Reconcile the specific selected claim(s), choose the governing claim, or carry an explicit assumption before pricing this drawing-driven line.`;
+    }
+
+    if (!latestVerification || !latestVerification.status) {
+      return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger before pricing drawing-driven quantity lines.";
+    }
+    if (normalizedText(latestVerification.status) === "failed") {
+      const verificationText = normalizedText(JSON.stringify(latestVerification));
+      const selectedFailure = claimIds.some((id) => verificationText.includes(normalizedText(id)));
+      if (selectedFailure) {
+        return `Independent drawing evidence verification failed for a selected claim. Repair: ${asArray(latestVerification.failures).slice(0, 5).join("; ")}`;
+      }
+    }
+
+    return null;
+  }
+
+  const packagesWithoutClaims = packagesToCheck.filter((entry) =>
+    !claims.some((claim) => packageMatchesClaim(entry, claim) && claimHasUsableDrawingEvidence(claim)),
+  );
+  if (packagesWithoutClaims.length > 0) {
+    const names = packagesWithoutClaims
+      .slice(0, 6)
+      .map((entry) => String(entry.packageId ?? entry.packageName ?? "unnamed package"))
+      .join(", ");
+    return `Drawing evidence ledger is missing usable claims for drawing-driven package(s): ${names}. SaveDrawingEvidenceClaim must include document/page/region/bbox/tool/result/imageHash for visual quantities, or BOM/OCR/assumption evidence for non-visual quantities.`;
+  }
+
+  if (unresolvedStoredContradictions.length > 0 || detectedContradictions.length > 0) {
+    const stored = unresolvedStoredContradictions.map((entry) => String(entry.message ?? entry.quantityName ?? entry.id)).slice(0, 5);
+    const detected = detectedContradictions.slice(0, 5);
+    return `Drawing evidence ledger has unresolved contradictions: ${[...stored, ...detected].join("; ")}. Reconcile sources or carry an explicit assumption before creating worksheets/items.`;
+  }
+
+  if (!latestVerification || !latestVerification.status) {
+    return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger before creating worksheets/items from drawing-driven quantities.";
+  }
+  if (normalizedText(latestVerification.status) === "failed") {
+    return `Independent drawing evidence verification failed. Repair: ${asArray(latestVerification.failures).slice(0, 5).join("; ")}`;
+  }
+
+  return null;
+}
+
+const LINE_EVIDENCE_BASIS_TYPES = [
+  "drawing_quantity",
+  "visual_takeoff",
+  "drawing_table",
+  "drawing_note",
+  "document_quantity",
+  "vendor_quote",
+  "knowledge_labor",
+  "rate_schedule",
+  "allowance",
+  "indirect",
+  "subcontract",
+  "equipment_rental",
+  "material_quote",
+  "assumption",
+  "mixed",
+] as const;
+
+const DRAWING_QUANTITY_BASIS_TYPES = [
+  "drawing_quantity",
+  "visual_takeoff",
+  "drawing_table",
+  "drawing_note",
+] as const;
+
+function lineEvidenceBasisRequiresDrawing(evidenceBasis?: Record<string, any> | null) {
+  const quantityBasis = asRecord(evidenceBasis?.quantity);
+  const type = normalizedText(quantityBasis.type ?? evidenceBasis?.quantityType ?? evidenceBasis?.type);
+  return (DRAWING_QUANTITY_BASIS_TYPES as readonly string[]).includes(type);
+}
+
+function evidenceBasisClaimIds(evidenceBasis?: Record<string, any> | null) {
+  const basis = asRecord(evidenceBasis);
+  const quantityBasis = asRecord(basis.quantity);
+  return [
+    ...asArray(basis.drawingClaimIds),
+    ...asArray(quantityBasis.drawingClaimIds),
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+}
+
+function evidenceAxisType(evidenceBasis: Record<string, any>, axis: "quantity" | "pricing") {
+  const nested = asRecord(evidenceBasis[axis]);
+  return normalizedText(nested.type ?? evidenceBasis[`${axis}Type`] ?? evidenceBasis.type);
+}
+
+function collectEvidenceAxisArray(evidenceBasis: Record<string, any>, key: string) {
+  return [
+    ...asArray(evidenceBasis[key]),
+    ...asArray(asRecord(evidenceBasis.quantity)[key]),
+    ...asArray(asRecord(evidenceBasis.pricing)[key]),
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+}
+
+function claimIdsMentionedInLine(input: {
+  evidenceBasis?: Record<string, any> | null;
+  sourceNotes?: string;
+  sourceEvidence?: Record<string, any>;
+  targetText?: string;
+}) {
+  const text = [
+    input.targetText,
+    input.sourceNotes,
+    JSON.stringify(input.evidenceBasis ?? {}),
+    JSON.stringify(input.sourceEvidence ?? {}),
+  ].join("\n");
+  return [...new Set([...text.matchAll(/\bclaim-[0-9a-f]{12}\b/gi)].map((match) => match[0]))];
+}
+
+function looksLikeStructuredSourceRef(ref: unknown): boolean {
+  if (typeof ref !== "string") return false;
+  const value = ref.trim();
+  if (value.length < 4) return false;
+  // Accept "doc:<id>:<page>", "dataset:<id>:<row>", "book:<id>:<page>", "lu:<id>", "vendor:<id>", "uri:..."
+  if (/^(doc|document|dataset|ds|book|kb|knowledge|lu|labor|vendor|invoice|quote|catalog|cat|costres|effcost|sku|standard|spec|page|sheet|cell|row|atlas|claim)[-:]/i.test(value)) return true;
+  // Accept hyphenated DB ids like ds-<uuid>, lu-<uuid>, doc-<uuid>, etc.
+  if (/^[a-z]{2,8}-[a-z0-9]{6,}/i.test(value)) return true;
+  // Accept URIs
+  if (/^https?:\/\//i.test(value)) return true;
+  // Accept document filename + page/section "Foo.pdf p.12" or "Foo.xlsx Sheet 'x' row 4"
+  if (/\.(pdf|xlsx|xls|csv|tsv|md|txt|docx|doc)\b/i.test(value)) return true;
+  return false;
+}
+
+function structuredSourceRefCount(basis: Record<string, any>): number {
+  const all = collectEvidenceAxisArray(basis, "sourceRefs");
+  return all.filter(looksLikeStructuredSourceRef).length;
+}
+
+function resourceCompositionEntryCount(composition: unknown): number {
+  if (!composition || typeof composition !== "object") return 0;
+  const obj = composition as Record<string, unknown>;
+  const resources = Array.isArray(obj.resources) ? obj.resources : [];
+  return resources.length;
+}
+
+function categoryEntityType(ws: any, categoryId?: string | null, categoryName?: string | null) {
+  if (!categoryId && !categoryName) return "";
+  const cats = asArray(ws.entityCategories).map(asRecord);
+  const byId = categoryId ? cats.find((c: any) => String(c.id ?? "") === String(categoryId)) : null;
+  if (byId) return String(byId.entityType ?? byId.name ?? "").toLowerCase();
+  if (categoryName) {
+    const byName = cats.find((c: any) => String(c.name ?? "").toLowerCase() === String(categoryName).toLowerCase());
+    if (byName) return String(byName.entityType ?? byName.name ?? "").toLowerCase();
+    return String(categoryName).toLowerCase();
+  }
+  return "";
+}
+
+function compositeMaterialThreshold(): number {
+  return 5000; // applies to Material/Subcontractor rows priced at >= $5K with no structured pricing link
+}
+
+function validateLineEvidenceBasisForPricing(ws: any, input: {
+  evidenceBasis?: Record<string, any> | null;
+  sourceNotes?: string;
+  laborUnitId?: string | null;
+  rateScheduleItemId?: string | null;
+  sourceEvidence?: Record<string, any>;
+  targetText?: string;
+  categoryId?: string | null;
+  category?: string | null;
+  costResourceId?: string | null;
+  effectiveCostId?: string | null;
+  itemId?: string | null;
+  resourceComposition?: Record<string, unknown> | null;
+  cost?: number | null;
+  price?: number | null;
+  uom?: string | null;
+  quantity?: number | null;
+}) {
+  const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
+  if (drawingDocs.length === 0) return null;
+
+  const basis = asRecord(input.evidenceBasis);
+  const type = normalizedText(basis.type);
+  const quantityType = evidenceAxisType(basis, "quantity");
+  const pricingType = evidenceAxisType(basis, "pricing");
+  const declaredClaimIds = evidenceBasisClaimIds(basis);
+  const mentionedClaimIds = claimIdsMentionedInLine(input);
+  const missingDeclaredClaimIds = mentionedClaimIds.filter((id) => !declaredClaimIds.includes(id));
+  if (!type && !quantityType && !pricingType) {
+    return [
+      "Line evidence basis is required because this project contains drawings.",
+      "Prefer evidenceBasis.quantity.type and evidenceBasis.pricing.type so quantity provenance and pricing/rate provenance are separate.",
+      "Legacy evidenceBasis.type is still accepted as a single-source shorthand. Use one of:",
+      LINE_EVIDENCE_BASIS_TYPES.join(", "),
+      "Use drawing_quantity/visual_takeoff/drawing_table/drawing_note in evidenceBasis.quantity only when this row's quantity is directly driven by drawing evidence and include drawingClaimIds.",
+      "Use indirect, rate_schedule, knowledge_labor, vendor_quote, allowance, subcontract, equipment_rental, material_quote, document_quantity, assumption, or mixed when the row is justified by a non-drawing estimating basis.",
+    ].join(" ");
+  }
+  for (const [label, value] of [["type", type], ["quantity.type", quantityType], ["pricing.type", pricingType]] as const) {
+    if (value && !(LINE_EVIDENCE_BASIS_TYPES as readonly string[]).includes(value)) {
+      return `Unsupported evidenceBasis.${label} '${String(value)}'. Use one of: ${LINE_EVIDENCE_BASIS_TYPES.join(", ")}.`;
+    }
+  }
+  if (type && !(LINE_EVIDENCE_BASIS_TYPES as readonly string[]).includes(type)) {
+    return `Unsupported evidenceBasis.type '${String(basis.type ?? "")}'. Use one of: ${LINE_EVIDENCE_BASIS_TYPES.join(", ")}.`;
+  }
+
+  if (missingDeclaredClaimIds.length > 0) {
+    return `Drawing evidence claim id(s) are mentioned in line text/sourceEvidence but not attached to the quantity evidence basis: ${missingDeclaredClaimIds.join(", ")}. Put them in evidenceBasis.quantity.drawingClaimIds and set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note; use evidenceBasis.pricing for the material/rate/vendor basis.`;
+  }
+
+  if (declaredClaimIds.length > 0 && !lineEvidenceBasisRequiresDrawing(basis)) {
+    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate.";
+  }
+
+  if (lineEvidenceBasisRequiresDrawing(basis)) {
+    if (!pricingType || (DRAWING_QUANTITY_BASIS_TYPES as readonly string[]).includes(pricingType)) {
+      return "Drawing quantity evidence proves count/measurement, not price/rate/productivity. Add evidenceBasis.pricing.type with the rate schedule, labour manual, vendor/material quote, equipment/subcontract source, allowance model, or assumption that supports the unit cost/hours.";
+    }
+    return null;
+  }
+
+  const notes = String(input.sourceNotes ?? "").trim();
+  const quantityBasis = asRecord(basis.quantity);
+  const pricingBasis = asRecord(basis.pricing);
+  const rationale = [
+    basis.rationale,
+    quantityBasis.rationale,
+    pricingBasis.rationale,
+  ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" ");
+  const sourceRefs = collectEvidenceAxisArray(basis, "sourceRefs");
+  const assumptionIds = collectEvidenceAxisArray(basis, "assumptionIds");
+  const hasStructuredEvidence = Object.keys(asRecord(input.sourceEvidence)).length > 0 || sourceRefs.length > 0 || assumptionIds.length > 0;
+  if (notes.length < 40 && rationale.length < 40 && !hasStructuredEvidence) {
+    return "Non-drawing line items still need evidence. Provide sourceNotes, evidenceBasis.rationale, sourceRefs, assumptionIds, or sourceEvidence explaining the labour/manual/rate/vendor/allowance/indirect basis.";
+  }
+  if ((type === "rate_schedule" || pricingType === "rate_schedule") && !input.rateScheduleItemId) {
+    return "evidenceBasis.pricing.type='rate_schedule' requires a concrete rateScheduleItemId from listRateScheduleItems/getItemConfig.";
+  }
+  if ((type === "knowledge_labor" || pricingType === "knowledge_labor") && !input.laborUnitId && !hasStructuredEvidence && !/knowledge|manual|page|labor|labour/i.test(notes)) {
+    return "evidenceBasis.pricing.type='knowledge_labor' requires laborUnitId or source evidence/notes naming the labour manual, page, or analog used.";
+  }
+  if ((type === "assumption" || quantityType === "assumption" || pricingType === "assumption") && assumptionIds.length === 0 && rationale.length < 40) {
+    return "evidenceBasis assumption basis requires assumptionIds from saveEstimateAssumptions or a substantive rationale.";
+  }
+
+  // Category-aware citation discipline (domain-agnostic)
+  const entityType = categoryEntityType(ws, input.categoryId, input.category);
+  const structuredRefs = structuredSourceRefCount(basis);
+  const hasAssumptionIds = assumptionIds.length > 0;
+  const compositionCount = resourceCompositionEntryCount(input.resourceComposition);
+  const cost = Number.isFinite(input.cost) ? Number(input.cost) : 0;
+  const price = Number.isFinite(input.price) ? Number(input.price) : 0;
+  const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
+  const rowDollar = Math.max(cost * Math.max(quantity, 1), price * Math.max(quantity, 1), cost, price);
+
+  // #1: Labour rows must have laborUnitId OR structured sourceRefs
+  if (entityType === "labour" || entityType === "labor") {
+    const hasLaborUnit = !!input.laborUnitId;
+    const hasStructuredRef = structuredRefs > 0;
+    if (!hasLaborUnit && !hasStructuredRef && !hasAssumptionIds) {
+      return "Labour rows require either laborUnitId (from listLaborUnits/listLaborUnitTree/getLaborUnit) OR evidenceBasis.pricing.sourceRefs containing at least one structured citation (e.g., 'ds-<id>', 'lu-<id>', 'doc-<id>:p<page>', 'kb-<id>:p<page>'), OR evidenceBasis.pricing.assumptionIds linked to a saved assumption documenting that the library was searched and no usable analog exists. Free-text sourceNotes alone is not enough.";
+    }
+  }
+
+  // #1: Material / Subcontractor rows must have a structured pricing link OR equivalent
+  const isMaterialish = entityType === "material" || entityType === "subcontractor" || entityType === "consumables" || entityType === "consumable" || entityType === "rental equipment" || entityType === "rental_equipment" || entityType === "equipment" || entityType === "other charges" || entityType === "allowance";
+  if (isMaterialish) {
+    const hasStructuredLink = !!(input.costResourceId || input.effectiveCostId || input.itemId);
+    const hasStructuredRef = structuredRefs > 0;
+    const hasComposition = compositionCount > 0;
+    if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition) {
+      return "Material/Subcontractor/Equipment/Allowance rows require either a structured pricing link (costResourceId, effectiveCostId, or itemId from searchLineItemCandidates/recommendCostSource), OR evidenceBasis.pricing.sourceRefs with at least one structured citation (vendor invoice/quote, dataset row, knowledge-book page, catalog SKU, document+page reference), OR evidenceBasis.pricing.assumptionIds linked to a saved assumption documenting the search-attempt and that vendor finalization is required, OR resourceComposition.resources populated with cited components. Free-text sourceNotes alone is not enough.";
+    }
+
+    // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence
+    const isLumpSum = String(input.uom ?? "").toUpperCase() === "LS";
+    if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink) {
+      const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
+      if (!hasComponentEvidence) {
+        return `Composite Material/Subcontractor rows priced at $${compositeMaterialThreshold().toLocaleString()}+ or with uom=LS need component-level evidence: either a single structured pricing link (costResourceId/effectiveCostId/itemId) OR resourceComposition.resources with 2+ cited components OR 2+ structured entries in evidenceBasis.pricing.sourceRefs (one per cost component such as pipe, fittings, flanges, fasteners, supports, etc., each citing a vendor/dataset/catalog reference). Adders/multipliers (e.g. "+30%") in description must be backed by a citation in sourceRefs, not invented.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null): string | null {
+  const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
+  if (drawingDocs.length === 0) return null;
+  if (!lineEvidenceBasisRequiresDrawing(evidenceBasis)) return null;
+
+  const scopeGraph = asRecord(strategy?.scopeGraph);
+  const audit = asRecord(scopeGraph.visualTakeoffAudit);
+  const evidence = collectVisualToolEvidence(ws);
+  const engine = drawingEvidenceEngine(strategy);
+  const hasLedgerEvidence = Object.keys(asRecord(engine.atlas)).length > 0 && asArray(engine.claims).some(claimHasUsableDrawingEvidence);
+  const drawingNames = drawingDocs.slice(0, 5).map((doc: any) => doc.fileName).join("; ");
+  const sampleLine = drawingNames ? ` Detected drawing PDFs include: ${drawingNames}.` : "";
+
+  if (Object.keys(audit).length === 0) {
+    return `Visual drawing takeoff audit is missing from saveEstimateScopeGraph.${sampleLine} Before creating worksheets/items, call buildDrawingAtlas, searchDrawingRegions, inspectDrawingRegion on the specific detail/symbol/table region that drives scope, saveDrawingEvidenceClaim, verifyDrawingEvidenceLedger, and re-save saveEstimateScopeGraph with visualTakeoffAudit.`;
+  }
+
+  if (!hasLedgerEvidence && evidence.renderedPages === 0) {
+    return `No actual atlas/render evidence is recorded for this drawing package.${sampleLine} Build the Drawing Evidence Engine atlas or render at least one relevant drawing page, then re-save saveEstimateScopeGraph.visualTakeoffAudit before creating worksheets/items.`;
+  }
+
+  if (!hasLedgerEvidence && evidence.zoomedRegions === 0) {
+    return `Full-page drawing evidence is only overview evidence. No targeted crop/region evidence is recorded yet. Inspect the specific detail, symbol, schedule, dimension, or table region that drives scope, save a drawing evidence claim, then re-save saveEstimateScopeGraph.visualTakeoffAudit before creating worksheets/items.`;
+  }
+
+  if (audit.completedBeforePricing !== true) {
+    return `saveEstimateScopeGraph.visualTakeoffAudit.completedBeforePricing must be true before creating worksheets/items. Re-save the scope graph after the atlas search, targeted inspection, evidence claims, and ledger verification are complete.`;
+  }
+
+  const drawingDrivenPackages = asArray(audit.drawingDrivenPackages).filter(
+    (entry: any) => entry && typeof entry === "object" && !Array.isArray(entry),
+  ) as Array<Record<string, any>>;
+  const notDrawingDrivenReason = String(audit.notDrawingDrivenReason ?? "").trim();
+
+  if (drawingDrivenPackages.length === 0) {
+    if (notDrawingDrivenReason.length >= 40) return null;
+    return `Drawing PDFs exist, but visualTakeoffAudit has no drawingDrivenPackages and no substantive notDrawingDrivenReason. Identify the drawing-driven packages, or explain why the drawings do not drive quantity/scope, before creating worksheets/items.`;
+  }
+
+  const packagesMissingOverview = drawingDrivenPackages.filter((entry) =>
+    !hasLedgerEvidence && !hasAuditArrayEvidence(entry, ["renderedPages"]),
+  );
+  const packagesMissingDeepEvidence = drawingDrivenPackages.filter((entry) =>
+    !hasLedgerEvidence && !hasAuditArrayEvidence(entry, ["zoomEvidence"]),
+  );
+  const packagesMissingActualOverview = drawingDrivenPackages.filter((entry) =>
+    !hasLedgerEvidence &&
+    asArray(entry.renderedPages).length > 0 &&
+    !asArray(entry.renderedPages).some((page) => visualPageEvidenceMatchesActual(page, evidence.renderedPageCalls)),
+  );
+  const packagesMissingActualZoom = drawingDrivenPackages.filter((entry) =>
+    !hasLedgerEvidence &&
+    asArray(entry.zoomEvidence).length > 0 &&
+    !asArray(entry.zoomEvidence).some((zoom) => visualZoomEvidenceMatchesActual(zoom, evidence.zoomRegionCalls)),
+  );
+
+  if (
+    packagesMissingOverview.length > 0 ||
+    packagesMissingDeepEvidence.length > 0 ||
+    packagesMissingActualOverview.length > 0 ||
+    packagesMissingActualZoom.length > 0
+  ) {
+    const summarize = (entries: Array<Record<string, any>>) => entries
+      .slice(0, 5)
+      .map((entry) => String(entry.packageId ?? entry.packageName ?? "unnamed package"))
+      .join(", ");
+    const overview = packagesMissingOverview.length > 0
+      ? ` Missing atlas/page evidence: ${summarize(packagesMissingOverview)}.`
+      : "";
+    const deep = packagesMissingDeepEvidence.length > 0
+      ? ` Missing targeted crop evidence: ${summarize(packagesMissingDeepEvidence)}.`
+      : "";
+    const actualOverview = packagesMissingActualOverview.length > 0
+      ? ` Page evidence does not match an actual atlas/render record: ${summarize(packagesMissingActualOverview)}.`
+      : "";
+    const actualDeep = packagesMissingActualZoom.length > 0
+      ? ` Targeted crop evidence does not match an actual inspected/zoomed region, or is effectively full-page: ${summarize(packagesMissingActualZoom)}.`
+      : "";
+    return `visualTakeoffAudit is incomplete for drawing-driven packages.${overview}${deep}${actualOverview}${actualDeep} Re-save saveEstimateScopeGraph after recording atlas/page evidence plus targeted crop/ledger evidence for each drawing-driven package. Symbol scan/count evidence is optional and only belongs after a specific small symbol or cropped region has been identified.`;
+  }
+
+  const drawingEvidenceGate = validateDrawingEvidenceEngineForPricing(strategy, drawingDrivenPackages, targetText, evidenceBasis);
+  if (drawingEvidenceGate) return drawingEvidenceGate;
+
+  return null;
 }
 
 function pageSlice<T>(items: T[], input: { limit?: number; offset?: number }, maxLimit = 100) {
@@ -282,7 +1203,27 @@ export function registerQuoteTools(server: McpServer) {
 
   type GateTarget = "importRateSchedule" | "createWorksheet" | "createWorksheetItem";
 
-  async function checkGate(gate: GateTarget): Promise<string | null> {
+  async function checkGate(
+    gate: GateTarget,
+    targetText = "",
+    lineEvidence?: {
+      evidenceBasis?: Record<string, any> | null;
+      sourceNotes?: string;
+      laborUnitId?: string | null;
+      rateScheduleItemId?: string | null;
+      sourceEvidence?: Record<string, any>;
+      categoryId?: string | null;
+      category?: string | null;
+      costResourceId?: string | null;
+      effectiveCostId?: string | null;
+      itemId?: string | null;
+      resourceComposition?: Record<string, unknown> | null;
+      cost?: number | null;
+      price?: number | null;
+      uom?: string | null;
+      quantity?: number | null;
+    },
+  ): Promise<string | null> {
     const ws = await getWs();
     const project = ws.project || {};
     const revision = ws.currentRevision || {};
@@ -314,6 +1255,7 @@ export function registerQuoteTools(server: McpServer) {
     const hasExecutionPlan = !!strategy && Object.keys(strategy.executionPlan || {}).length > 0;
     const hasAssumptions = !!strategy && Array.isArray(strategy.assumptions) && strategy.assumptions.length > 0;
     const hasPackagePlan = !!strategy && Array.isArray(strategy.packagePlan) && strategy.packagePlan.length > 0;
+    const benchmarkingEnabled = (ws as any)?.meta?.benchmarkingEnabled === true;
     const hasBenchmarks = !!strategy && Object.keys(strategy.benchmarkProfile || {}).length > 0;
 
     if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasScopeGraph) {
@@ -328,8 +1270,38 @@ export function registerQuoteTools(server: McpServer) {
     if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasPackagePlan) {
       return `Commercial/package structure is missing. Call saveEstimatePackagePlan before creating worksheets or items.`;
     }
-    if (gate === "createWorksheetItem" && !hasBenchmarks) {
+    if (benchmarkingEnabled && gate === "createWorksheetItem" && !hasBenchmarks) {
       return `Historical benchmark pass has not been run. Call recomputeEstimateBenchmarks and saveEstimateAdjustments before creating detailed line items.`;
+    }
+
+    if (gate === "createWorksheetItem") {
+      const lineBasisGate = validateLineEvidenceBasisForPricing(ws, {
+        evidenceBasis: lineEvidence?.evidenceBasis ?? null,
+        sourceNotes: lineEvidence?.sourceNotes,
+        laborUnitId: lineEvidence?.laborUnitId,
+        rateScheduleItemId: lineEvidence?.rateScheduleItemId,
+        sourceEvidence: lineEvidence?.sourceEvidence,
+        targetText,
+        categoryId: lineEvidence?.categoryId ?? null,
+        category: lineEvidence?.category ?? null,
+        costResourceId: lineEvidence?.costResourceId ?? null,
+        effectiveCostId: lineEvidence?.effectiveCostId ?? null,
+        itemId: lineEvidence?.itemId ?? null,
+        resourceComposition: lineEvidence?.resourceComposition ?? null,
+        cost: lineEvidence?.cost ?? null,
+        price: lineEvidence?.price ?? null,
+        uom: lineEvidence?.uom ?? null,
+        quantity: lineEvidence?.quantity ?? null,
+      });
+      if (lineBasisGate) return lineBasisGate;
+
+      const visualTakeoffGate = validateVisualTakeoffAuditForPricing(
+        ws,
+        strategy,
+        targetText,
+        lineEvidence?.evidenceBasis ?? null,
+      );
+      if (visualTakeoffGate) return visualTakeoffGate;
     }
 
     // Gate 2: rate schedules required for createWorksheet and createWorksheetItem
@@ -457,8 +1429,8 @@ export function registerQuoteTools(server: McpServer) {
       q: z.string().optional().describe("Optional search terms for rate schedule items when includeRateScheduleItems=true."),
       category: z.string().optional().describe("Optional schedule/category filter for rate schedule items and org schedules."),
       scheduleId: z.string().optional().describe("Optional imported revision schedule id filter for rate schedule items."),
-      limit: z.number().int().positive().max(100).default(25),
-      offset: z.number().int().min(0).default(0),
+      limit: z.coerce.number().int().positive().max(100).default(25),
+      offset: z.coerce.number().int().min(0).default(0),
       includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps in the item page."),
     },
     async (input) => {
@@ -539,7 +1511,8 @@ export function registerQuoteTools(server: McpServer) {
         instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
-      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, call recommendEstimateBasis with the scope phrase and preferred category. If a result exists, preserve its rateScheduleItemId/itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use recommendLaborBasis/listLaborUnits for labour productivity and previewAssembly for assembly-backed scope. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no structured candidate exists, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
+      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, search the runtime first-party library corpora with rg/searchLibraryCorpus, then call searchLineItemCandidates/recommendEstimateBasis with the scope phrase and preferred category for structured IDs. The search tools use the same indexed search surface as the worksheet line-level library picker and return candidates only; the estimating agent decides relevance, authority, exact/similar/context/manual basis, and final rationale. For rate-schedule rows, prefer createRateScheduleWorksheetItem with the selected rateScheduleItemId, tierUnits, and evidenceBasis; it derives category/name and keeps the payload smaller. For non-rate rows, preserve itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use listLaborUnitTree/listLaborUnits for compact labour productivity candidates, getLaborUnit for focused details on one shortlisted unit, and previewAssembly for assembly-backed scope. If you choose a labor-unit analog, explain why the operation/unit/context is defensible and record the limitation in sourceNotes. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no first-party structured candidate is usable, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
+      instructions += `\n\nLINE EVIDENCE BASIS: When drawings exist, createWorksheetItem requires evidenceBasis. Prefer the two-axis form: evidenceBasis.quantity.type explains where the quantity/hours/duration/count came from, while evidenceBasis.pricing.type explains where unit cost/rate/productivity/allowance came from. If quantity comes from a drawing/table/takeoff, set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and put claim IDs in evidenceBasis.quantity.drawingClaimIds. If the price comes from a material quote, labour manual, rate item, vendor quote, equipment/subcontract source, allowance model, indirect model, document quantity, assumption, or mixed basis, put that under evidenceBasis.pricing with refs/rationale. Do not hide a drawing-derived quantity behind material_quote/vendor_quote/knowledge_labor; split the quantity and pricing bases.`;
 
       // If no categories configured, provide default guidance
       if (entityCategories.length === 0) {
@@ -580,7 +1553,7 @@ export function registerQuoteTools(server: McpServer) {
       if (rateSchedCatNames.length > 0) {
         instructions += `\n\nQUANTITY × UNITS (CRITICAL for rate_schedule categories: ${rateSchedCatNames.join(", ")}): `;
         instructions += `For these categories, quantity is a MULTIPLIER on the tierUnits values. tierUnits is a JSON map keyed by RateScheduleTier id with hours per quantity. `;
-        instructions += `The calc engine computes: total = Σ(tierUnits[tierId] × tier rate) × quantity. `;
+        instructions += `The calc engine computes cost/price from rateScheduleItemId, quantity, and tierUnits; do not pass cost, price, or markup. `;
         instructions += `Get tier ids from the rate schedule. Do NOT confuse quantity with total tier hours — quantity × tier hours must make logical sense for the item. `;
         instructions += `Example: 1 person for 80 regular hours → quantity=1, tierUnits={"<reg-tier-id>": 80}. 4 people for 200 regular hours each → quantity=4, tierUnits={"<reg-tier-id>": 200}.`;
       }
@@ -632,7 +1605,7 @@ export function registerQuoteTools(server: McpServer) {
       folderPath: z.string().optional().describe("Folder path to create/use, e.g. 'Mechanical / Field Install'"),
     },
     async ({ name, description, folderId, folderPath }) => {
-      const gateError = await checkGate("createWorksheet");
+      const gateError = await checkGate("createWorksheet", [folderPath, name, description].filter(Boolean).join(" "));
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
       const resolvedFolderId = folderId ?? await ensureWorksheetFolderPath(folderPath);
@@ -743,7 +1716,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For rate_schedule categories (itemSource=rate_schedule), set rateScheduleItemId and use the rate item name as entityName. Put task details in the description field, NOT in entityName. For freeform categories, set cost and quantity directly. UOM must be from the category's validUoms list.`,
+    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM must be from the category's validUoms list. When drawings exist, every row must include evidenceBasis. Prefer the two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and must cite Drawing Evidence Engine claim IDs; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
     {
       worksheetId: z.string().describe("ID of the worksheet"),
       entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
@@ -751,12 +1724,12 @@ export function registerQuoteTools(server: McpServer) {
       category: z.string().optional().describe("Category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use categoryId when available."),
       entityType: z.string().optional().describe("Legacy entity type/category type. The server canonicalizes this from categoryId when provided."),
       description: z.string().default("").describe("Description with document reference and assumptions"),
-      quantity: z.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
+      quantity: z.coerce.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
       uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
-      cost: z.number().default(0).describe("Unit cost ($0 if unknown — note NEEDS PRICING in description)"),
-      markup: z.number().default(0).describe("Markup percentage. For markup-eligible categories, apply the revision defaultMarkup from getItemConfig."),
-      price: z.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
-      tierUnits: z.record(z.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
+      cost: z.coerce.number().optional().describe("Editable unit cost for freeform/unit-cost categories only. Do not pass for tiered/rate categories; Bidwright calculates those from rateScheduleItemId and tierUnits."),
+      markup: z.coerce.number().optional().describe("Markup percentage for markup-eligible categories only. Do not pass for tiered/rate categories."),
+      price: z.coerce.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
+      tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
       costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from searchLineItemCandidates/recommendCostSource."),
@@ -764,6 +1737,28 @@ export function registerQuoteTools(server: McpServer) {
       laborUnitId: z.string().nullable().optional().describe("Labor unit ID for labour productivity sources."),
       resourceComposition: z.record(z.unknown()).optional().describe("Structured resource rollup from a search candidate, recommendation, or assembly expansion."),
       sourceEvidence: z.record(z.unknown()).optional().describe("Structured provenance from a search candidate, recommendation, or source document."),
+      evidenceBasis: z.object({
+        type: z.enum(LINE_EVIDENCE_BASIS_TYPES).optional().describe("Legacy single-source shorthand. Prefer quantity.type plus pricing.type when quantity and price/rate come from different sources."),
+        quantity: z.object({
+          type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
+          drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
+          quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        pricing: z.object({
+          type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies unit cost, rate, productivity, markup basis, or allowance value."),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        quantityDriver: z.string().optional().describe("Short explanation of what drives quantity, hours, duration, or allowance."),
+        drawingClaimIds: z.array(z.string()).default([]).describe("Legacy location for drawing quantity claim IDs. Prefer evidenceBasis.quantity.drawingClaimIds."),
+        sourceRefs: z.array(z.string()).default([]).describe("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
+        assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
+        rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
+      }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
       classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
       costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
       phaseId: z.string().optional().describe("Phase ID"),
@@ -772,10 +1767,61 @@ export function registerQuoteTools(server: McpServer) {
       ),
     },
     async (input) => {
-      const gateError = await checkGate("createWorksheetItem");
+      const wsForGate = await getWs();
+      const targetWorksheet = asArray(wsForGate.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
+      const gateError = await checkGate("createWorksheetItem", [
+        targetWorksheet?.name,
+        input.entityName,
+        input.description,
+        input.sourceNotes,
+      ].filter(Boolean).join(" "), {
+        evidenceBasis: input.evidenceBasis ?? null,
+        sourceNotes: input.sourceNotes,
+        laborUnitId: input.laborUnitId,
+        rateScheduleItemId: input.rateScheduleItemId,
+        sourceEvidence: input.sourceEvidence,
+        categoryId: input.categoryId ?? null,
+        category: input.category ?? null,
+        costResourceId: input.costResourceId ?? null,
+        effectiveCostId: input.effectiveCostId ?? null,
+        itemId: input.itemId ?? null,
+        resourceComposition: input.resourceComposition ?? null,
+        cost: input.cost ?? null,
+        price: input.price ?? null,
+        uom: input.uom ?? null,
+        quantity: input.quantity ?? null,
+      });
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
 
-      const { worksheetId, ...rest } = input;
+      const { worksheetId, evidenceBasis, ...rest } = input;
+      if (evidenceBasis) {
+        rest.sourceEvidence = {
+          ...asRecord(rest.sourceEvidence),
+          evidenceBasis,
+        };
+      }
+      const autoWarnings: string[] = [];
+      for (const key of ["entityName", "description", "sourceNotes"] as const) {
+        (rest as any)[key] = stripLeakedToolParameterMarkup((rest as any)[key]);
+      }
+      if (!rest.category && !rest.categoryId && rest.rateScheduleItemId) {
+        const matchingSchedule = asArray(wsForGate.rateSchedules).map(asRecord).find((schedule) =>
+          asArray(schedule.items).some((item) => String(asRecord(item).id ?? "") === String(rest.rateScheduleItemId))
+        );
+        if (matchingSchedule) {
+          const scheduleCategory = String(matchingSchedule.category ?? "");
+          const categoryMatch = asArray(wsForGate.entityCategories).map(asRecord).find((category) =>
+            normalizeCategoryToolKey(category.name) === normalizeCategoryToolKey(scheduleCategory) ||
+            normalizeCategoryToolKey(category.entityType) === normalizeCategoryToolKey(scheduleCategory)
+          );
+          if (categoryMatch) {
+            rest.categoryId = String(categoryMatch.id ?? "");
+            rest.category = String(categoryMatch.name ?? scheduleCategory);
+            rest.entityType = String(categoryMatch.entityType ?? scheduleCategory);
+            autoWarnings.push(`Inferred category "${rest.category}" from rateScheduleItemId ${rest.rateScheduleItemId}.`);
+          }
+        }
+      }
       const requestedCategory = rest.category;
       const requestedCategoryId = rest.categoryId;
       if (!requestedCategory && !requestedCategoryId) {
@@ -800,6 +1846,7 @@ export function registerQuoteTools(server: McpServer) {
           rest.entityType = catConfig.entityType;
           const src = catConfig.itemSource || "freeform";
           const calcType = catConfig.calculationType || "manual";
+          const requiresRateSchedule = src === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
 
           // Validate UOM against category's validUoms
           const validUoms: string[] = catConfig.validUoms || [];
@@ -810,13 +1857,15 @@ export function registerQuoteTools(server: McpServer) {
                 rest.uom = catConfig.defaultUom || validUoms[0];
               }
             } else if (!validUoms.includes(rest.uom)) {
-              return { content: [{ type: "text" as const, text: `ERROR: UOM "${rest.uom}" is not valid for category "${catConfig.name}". Valid UOMs: ${validUoms.join(", ")}. Use one of these or omit uom to use the default (${catConfig.defaultUom}).` }], isError: true };
+              const requestedUom = rest.uom;
+              rest.uom = catConfig.defaultUom || validUoms[0];
+              autoWarnings.push(`UOM "${requestedUom}" is not valid for category "${catConfig.name}"; used "${rest.uom}" instead. Valid UOMs: ${validUoms.join(", ")}.`);
             }
           }
 
           // Validate itemSource requirements
-          if (src === "rate_schedule" && !rest.rateScheduleItemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=rate_schedule — a rateScheduleItemId is required.\n1. Call getItemConfig to see available rate schedule items\n2. Set rateScheduleItemId to a valid item ID\nWithout this, the item will have no linked rate.` }], isError: true };
+          if (requiresRateSchedule && !rest.rateScheduleItemId) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.` }], isError: true };
           }
           if (src === "catalog" && !rest.itemId) {
             return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call searchLineItemCandidates or getItemConfig, then retry with a valid itemId.` }], isError: true };
@@ -851,12 +1900,21 @@ export function registerQuoteTools(server: McpServer) {
 
           // Validate calculationType requirements
           const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
-          if ((calcType === "tiered_rate" || calcType === "duration_rate") && src === "rate_schedule" && !hasTierUnits) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so tierUnits are required. Without tierUnits, this item will calculate to $0.` }], isError: true };
+          if (requiresRateSchedule && !hasTierUnits) {
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so positive tierUnits are required. Provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price.` }], isError: true };
+          }
+          if (requiresRateSchedule) {
+            const suppliedCalculatedValue = [rest.cost, rest.markup, rest.price].some((value) => value !== undefined && Number(value) !== 0);
+            if (suppliedCalculatedValue) {
+              return { content: [{ type: "text" as const, text: `ERROR: Do not pass cost, markup, or price for "${catConfig.name}" rows. They are calculated by Bidwright from rateScheduleItemId, quantity, and tierUnits.` }], isError: true };
+            }
+            delete rest.cost;
+            delete rest.markup;
+            delete rest.price;
           }
 
           // Auto-apply default markup for markup-eligible categories when not explicitly set
-          if (catConfig.editableFields?.markup && (rest.markup === 0 || rest.markup === undefined)) {
+          if (!requiresRateSchedule && catConfig.editableFields?.markup && rest.markup === undefined) {
             const rev = ws.currentRevision || {};
             const revMarkup: number = rev.defaultMarkup ?? 0;
             if (revMarkup > 0) {
@@ -870,18 +1928,19 @@ export function registerQuoteTools(server: McpServer) {
       }
 
       // Normalize markup to decimal: agent may send 15 for 15%, DB stores 0.15
-      const normalizedMarkup = (rest.markup || 0) > 1 ? (rest.markup || 0) / 100 : (rest.markup || 0);
-      rest.markup = normalizedMarkup;
-      const price = rest.price ?? (rest.cost || 0) * (1 + normalizedMarkup);
+      if (rest.markup !== undefined) {
+        rest.markup = rest.markup > 1 ? rest.markup / 100 : rest.markup;
+      }
       const cat = resolvedCategory?.name ?? requestedCategory ?? rest.category;
       if (!cat) {
         return { content: [{ type: "text" as const, text: "ERROR: categoryId could not be resolved from the current workspace. Call getItemConfig and retry with a valid categoryId or category name." }], isError: true };
       }
-      const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat, price };
+      const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat };
       try {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
         invalidateWs();
-        const itemId = (data as any)?.id || (data as any)?.item?.id || "";
+        const createdItem = findCreatedWorksheetItem(data, worksheetId, rest);
+        const itemId = String(createdItem.id ?? (data as any)?.id ?? (data as any)?.item?.id ?? "");
         return { content: [{ type: "text" as const, text: toolUiText(`Created item: ${rest.entityName} (${cat})`, {
           kind: "worksheet_item.created",
           worksheetId,
@@ -891,13 +1950,168 @@ export function registerQuoteTools(server: McpServer) {
           categoryId: body.categoryId ?? null,
           quantity: rest.quantity,
           uom: rest.uom,
-          unitCost: rest.cost ?? 0,
-          unitPrice: price,
+          calculation: "system_calculated",
           sourceNotes: rest.sourceNotes ?? "",
+          warnings: autoWarnings,
         }) }] };
       } catch (err: any) {
         const msg = err?.message || String(err);
         return { content: [{ type: "text" as const, text: `ERROR creating item "${rest.entityName}": ${msg}. Check field values and try again.` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "createRateScheduleWorksheetItem",
+    "Create a system-calculated rate-schedule worksheet row with a smaller safer payload. Use this for Labour, Equipment, Rental Equipment, and General Conditions rate-card rows instead of the broad createWorksheetItem tool. Provide a concrete rateScheduleItemId and positive tierUnits; Bidwright derives the category/name from the imported rate schedule and calculates cost/sell. Do not pass cost, price, or markup.",
+    {
+      worksheetId: z.string().describe("ID of the worksheet"),
+      rateScheduleItemId: z.string().describe("Concrete imported revision rate schedule item ID from listRateScheduleItems/getItemConfig"),
+      tierUnits: z.record(z.coerce.number()).describe("Units per rate tier. Keys are tier IDs from getItemConfig/listRateScheduleItems, values are positive units per quantity."),
+      quantity: z.coerce.number().default(1).describe("Quantity multiplier. Usually 1 for total hours on a row."),
+      uom: z.string().optional().describe("Optional UOM. Defaults to the category default or HR."),
+      phaseId: z.string().optional(),
+      description: z.string().default("").describe("Task/scope description; do not put task details in entityName."),
+      sourceNotes: z.string().default("").describe("Source basis, productivity logic, assumptions, and document/library refs."),
+      laborUnitId: z.string().nullable().optional().describe("Labor unit ID when a labour manual/unit informed the tierUnits."),
+      resourceComposition: z.record(z.unknown()).optional(),
+      sourceEvidence: z.record(z.unknown()).optional(),
+      evidenceBasis: z.object({
+        type: z.enum(LINE_EVIDENCE_BASIS_TYPES).optional(),
+        quantity: z.object({
+          type: z.enum(LINE_EVIDENCE_BASIS_TYPES),
+          drawingClaimIds: z.array(z.string()).default([]),
+          quantityDriver: z.string().optional(),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        pricing: z.object({
+          type: z.enum(LINE_EVIDENCE_BASIS_TYPES),
+          sourceRefs: z.array(z.string()).default([]),
+          assumptionIds: z.array(z.string()).default([]),
+          rationale: z.string().optional(),
+        }).passthrough().optional(),
+        quantityDriver: z.string().optional(),
+        drawingClaimIds: z.array(z.string()).default([]),
+        sourceRefs: z.array(z.string()).default([]),
+        assumptionIds: z.array(z.string()).default([]),
+        rationale: z.string().optional(),
+      }).passthrough().describe("Line-level evidence contract. Use quantity/pricing axes."),
+      classification: z.record(z.unknown()).optional(),
+      costCode: z.string().nullable().optional(),
+    },
+    async (input) => {
+      const ws = await getWs();
+      const rateSchedules = asArray(ws.rateSchedules).map(asRecord);
+      let matchedSchedule: Record<string, any> | null = null;
+      let matchedItem: Record<string, any> | null = null;
+      for (const schedule of rateSchedules) {
+        const item = asArray(schedule.items).map(asRecord).find((entry) => String(entry.id ?? "") === input.rateScheduleItemId);
+        if (item) {
+          matchedSchedule = schedule;
+          matchedItem = item;
+          break;
+        }
+      }
+      if (!matchedSchedule || !matchedItem) {
+        const available = rateSchedules
+          .flatMap((schedule) => asArray(schedule.items).map(asRecord).map((item) => `${String(item.name ?? "rate item")} (${String(item.id ?? "")})`))
+          .slice(0, 15)
+          .join(", ");
+        return {
+          content: [{ type: "text" as const, text: `ERROR: rateScheduleItemId "${input.rateScheduleItemId}" does not match any imported rate schedule item in this revision.${available ? ` Available: ${available}` : " Import a rate schedule and call listRateScheduleItems first."}` }],
+          isError: true,
+        };
+      }
+
+      const scheduleCategory = String(matchedSchedule.category ?? matchedItem.category ?? "");
+      const categoryMatch = asArray(ws.entityCategories).map(asRecord).find((category) =>
+        normalizeCategoryToolKey(category.name) === normalizeCategoryToolKey(scheduleCategory) ||
+        normalizeCategoryToolKey(category.entityType) === normalizeCategoryToolKey(scheduleCategory)
+      );
+      if (!categoryMatch) {
+        return {
+          content: [{ type: "text" as const, text: `ERROR: Could not resolve entity category for rate schedule category "${scheduleCategory}". Call getItemConfig and use createWorksheetItem with a valid categoryId if this schedule is custom.` }],
+          isError: true,
+        };
+      }
+
+      const positiveTierUnits = Object.fromEntries(
+        Object.entries(input.tierUnits || {})
+          .map(([key, value]) => [key, Number(value)] as const)
+          .filter(([, value]) => Number.isFinite(value) && value > 0)
+      );
+      if (Object.keys(positiveTierUnits).length === 0) {
+        return {
+          content: [{ type: "text" as const, text: "ERROR: positive tierUnits are required. Provide tier IDs from the imported rate schedule, for example {\"rst-...\": 120}." }],
+          isError: true,
+        };
+      }
+
+      const targetWorksheet = asArray(ws.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
+      const gateError = await checkGate("createWorksheetItem", [
+        targetWorksheet?.name,
+        matchedItem.name,
+        input.description,
+        input.sourceNotes,
+      ].filter(Boolean).join(" "), {
+        evidenceBasis: input.evidenceBasis,
+        sourceNotes: input.sourceNotes,
+        laborUnitId: input.laborUnitId,
+        rateScheduleItemId: input.rateScheduleItemId,
+        sourceEvidence: input.sourceEvidence,
+        categoryId: String(categoryMatch.id ?? "") || null,
+        category: String(categoryMatch.name ?? scheduleCategory) || null,
+        resourceComposition: input.resourceComposition ?? null,
+        uom: input.uom ?? null,
+        quantity: input.quantity ?? null,
+      });
+      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+
+      const body: Record<string, unknown> = {
+        entityName: String(matchedItem.name ?? "Rate Schedule Item"),
+        categoryId: String(categoryMatch.id ?? ""),
+        category: String(categoryMatch.name ?? scheduleCategory),
+        entityType: String(categoryMatch.entityType ?? scheduleCategory),
+        description: stripLeakedToolParameterMarkup(input.description),
+        quantity: input.quantity,
+        uom: input.uom || String(categoryMatch.defaultUom ?? "HR"),
+        tierUnits: positiveTierUnits,
+        rateScheduleItemId: input.rateScheduleItemId,
+        laborUnitId: input.laborUnitId,
+        resourceComposition: input.resourceComposition,
+        sourceEvidence: {
+          ...asRecord(input.sourceEvidence),
+          evidenceBasis: input.evidenceBasis,
+        },
+        classification: input.classification,
+        costCode: input.costCode,
+        phaseId: input.phaseId,
+        sourceNotes: stripLeakedToolParameterMarkup(input.sourceNotes),
+      };
+
+      try {
+        const data = await apiPost(projectPath(`/worksheets/${input.worksheetId}/items`), body);
+        invalidateWs();
+        const createdItem = findCreatedWorksheetItem(data, input.worksheetId, body);
+        const itemId = String(createdItem.id ?? (data as any)?.id ?? (data as any)?.item?.id ?? "");
+        return { content: [{ type: "text" as const, text: toolUiText(`Created rate-schedule item: ${body.entityName} (${body.category})`, {
+          kind: "worksheet_item.created",
+          worksheetId: input.worksheetId,
+          itemId,
+          entityName: body.entityName,
+          category: body.category,
+          categoryId: body.categoryId,
+          quantity: body.quantity,
+          uom: body.uom,
+          calculation: "system_calculated",
+          sourceNotes: body.sourceNotes ?? "",
+          warnings: [],
+        }) }] };
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        return { content: [{ type: "text" as const, text: `ERROR creating rate-schedule item "${String(matchedItem.name ?? "")}": ${msg}. Check worksheetId, tierUnits, and evidenceBasis, then retry.` }], isError: true };
       }
     }
   );
@@ -912,18 +2126,18 @@ export function registerQuoteTools(server: McpServer) {
       categoryId: z.string().nullable().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this when changing category."),
       category: z.string().optional(),
       description: z.string().optional(),
-      quantity: z.number().optional(),
+      quantity: z.coerce.number().optional(),
       uom: z.string().optional(),
-      cost: z.number().optional(),
-      markup: z.number().optional(),
-      price: z.number().optional(),
+      cost: z.coerce.number().optional(),
+      markup: z.coerce.number().optional(),
+      price: z.coerce.number().optional(),
       rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
       costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID. Pass null to clear."),
       effectiveCostId: z.string().nullable().optional().describe("Effective cost ID. Pass null to clear."),
       laborUnitId: z.string().nullable().optional().describe("Labor unit ID. Pass null to clear."),
       resourceComposition: z.record(z.unknown()).optional(),
       sourceEvidence: z.record(z.unknown()).optional(),
-      tierUnits: z.record(z.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
+      tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
       classification: z.record(z.unknown()).optional().describe("Construction classification JSON, e.g. { masterformat: '03 30 00' }."),
       costCode: z.string().nullable().optional().describe("Internal cost code. Pass null to clear."),
       phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
@@ -1066,8 +2280,8 @@ export function registerQuoteTools(server: McpServer) {
       taskType: z.enum(["task", "milestone"]).default("task"),
       startDate: z.string().optional().describe("Start date (ISO string, e.g. '2026-04-01')"),
       endDate: z.string().optional().describe("End date (ISO string)"),
-      duration: z.number().optional().describe("Duration in days"),
-      order: z.number().optional().describe("Sort order"),
+      duration: z.coerce.number().optional().describe("Duration in days"),
+      order: z.coerce.number().optional().describe("Sort order"),
     },
     async (input) => {
       await apiPost(projectPath("/schedule-tasks"), input);
@@ -1109,8 +2323,8 @@ export function registerQuoteTools(server: McpServer) {
       q: z.string().optional().describe("Search schedule name, description, category, or a small sample of item names."),
       category: z.string().optional().describe("Filter by schedule category/entity type, e.g. Labour or Equipment."),
       scope: z.string().default("global").describe("Rate schedule scope. Usually global for importable org schedules."),
-      limit: z.number().int().positive().max(100).default(25),
-      offset: z.number().int().min(0).default(0),
+      limit: z.coerce.number().int().positive().max(25).default(12),
+      offset: z.coerce.number().int().min(0).default(0),
       includeSampleItems: z.boolean().default(true).describe("Include up to 5 item names per schedule for orientation."),
     },
     async (input) => {
@@ -1126,8 +2340,8 @@ export function registerQuoteTools(server: McpServer) {
             ...asArray(schedule.items).slice(0, 20).map((item: any) => `${item.name} ${item.code ?? ""}`),
           ].some((value) => matchesText(value, input.q));
         })
-        .map((schedule: any) => summarizeRateSchedule(schedule, { includeSampleItems: input.includeSampleItems }));
-      const page = pageSlice(filtered, input, 100);
+        .map((schedule: any) => summarizeRateSchedule(schedule, { includeSampleItems: input.includeSampleItems && (!!input.q || !!input.category) }));
+      const page = pageSlice(filtered, input, 25);
       return { content: [{ type: "text" as const, text: JSON.stringify({
         total: page.total,
         offset: page.offset,
@@ -1145,8 +2359,8 @@ export function registerQuoteTools(server: McpServer) {
     {
       scheduleId: z.string().describe("Org-level rate schedule id from listRateSchedules."),
       q: z.string().optional().describe("Optional item search within this schedule."),
-      limit: z.number().int().positive().max(200).default(50),
-      offset: z.number().int().min(0).default(0),
+      limit: z.coerce.number().int().positive().max(200).default(50),
+      offset: z.coerce.number().int().min(0).default(0),
       includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
     },
     async (input) => {
@@ -1173,13 +2387,18 @@ export function registerQuoteTools(server: McpServer) {
     "importRateSchedule",
     "Import a global (org-level) rate schedule into the current quote revision. This creates a revision-scoped copy with all tiers and items. Required before Labour/rate_schedule items can be created.",
     {
-      globalScheduleId: z.string().describe("ID of the global rate schedule to import"),
+      globalScheduleId: z.string().optional().describe("ID of the global rate schedule to import"),
+      scheduleId: z.string().optional().describe("Alias for globalScheduleId."),
     },
-    async ({ globalScheduleId }) => {
+    async ({ globalScheduleId, scheduleId }) => {
       const gateError = await checkGate("importRateSchedule");
       if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+      const id = globalScheduleId ?? scheduleId;
+      if (!id) {
+        return { content: [{ type: "text" as const, text: "ERROR: importRateSchedule requires globalScheduleId. Use the id returned by listRateSchedules." }], isError: true };
+      }
 
-      const data = await apiPost(projectPath("/rate-schedules/import"), { scheduleId: globalScheduleId });
+      const data = await apiPost(projectPath("/rate-schedules/import"), { scheduleId: id });
       invalidateWs();
       return { content: [{ type: "text" as const, text: `Imported rate schedule into current revision` }] };
     }
@@ -1193,8 +2412,8 @@ export function registerQuoteTools(server: McpServer) {
       category: z.string().optional().describe("Filter by schedule category (e.g. 'labour', 'equipment')"),
       q: z.string().optional().describe("Search item name, code, unit, schedule name, or category."),
       scheduleId: z.string().optional().describe("Filter by imported revision schedule id."),
-      limit: z.number().int().positive().max(200).default(50),
-      offset: z.number().int().min(0).default(0),
+      limit: z.coerce.number().int().positive().max(200).default(50),
+      offset: z.coerce.number().int().min(0).default(0),
       includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
     },
     async (input) => {
@@ -1237,29 +2456,65 @@ export function registerQuoteTools(server: McpServer) {
   // ── searchItems ───────────────────────────────────────────
   server.tool(
     "searchItems",
-    "Search existing line items across all worksheets.",
+    "Search existing line items across all worksheets. Returns compact paginated summaries; use a focused query/category/worksheetId for detail.",
     {
       query: z.string().optional(),
       category: z.string().optional(),
       worksheetId: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(100).optional().describe("Maximum compact results to return. Defaults to 20."),
     },
-    async ({ query, category, worksheetId }) => {
+    async ({ query, category, worksheetId, limit }) => {
       const params = new URLSearchParams();
       if (query) params.set("q", query);
       if (category) params.set("category", category);
       if (worksheetId) params.set("worksheetId", worksheetId);
+      params.set("limit", String(limit ?? 20));
       const data = await apiGet(projectPath(`/worksheet-items/search?${params}`));
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      const payload = asRecord(data);
+      const items = asArray(payload.items).map((itemValue) => {
+        const item = asRecord(itemValue);
+        return {
+          id: item.id,
+          worksheetId: item.worksheetId,
+          worksheetName: item.worksheetName,
+          category: item.category,
+          entityName: compactText(item.entityName, 90),
+          description: compactText(item.description, 140),
+          quantity: item.quantity,
+          uom: item.uom,
+          cost: item.cost,
+          markup: item.markup,
+          price: item.price,
+          totalPrice: item.totalPrice ?? item.extendedPrice,
+          rateScheduleItemId: item.rateScheduleItemId ?? null,
+          itemId: item.itemId ?? null,
+          laborUnitId: item.laborUnitId ?? null,
+          sourceNotes: compactText(item.sourceNotes, 220),
+        };
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          totalMatches: payload.totalMatches ?? items.length,
+          returned: items.length,
+          query: query || null,
+          category: category || null,
+          worksheetId: worksheetId || null,
+          items,
+          note: (payload.totalMatches ?? items.length) > items.length
+            ? "More matches exist. Re-run with a focused query, category, or worksheetId."
+            : undefined,
+        }, null, 2) }],
+      };
     }
   );
 
   // ═══════════════════════════════════════════════════════════
-  // ESTIMATE FACTORS — productivity, difficulty, weather, access
+  // ESTIMATE FACTORS — productivity, weather, access, conditions
   // ═══════════════════════════════════════════════════════════
 
   const factorImpactSchema = z.enum(["labor_hours", "resource_units", "direct_cost", "sell_price"]);
   const factorConfidenceSchema = z.enum(["high", "medium", "low"]);
-  const factorSourceTypeSchema = z.enum(["library", "knowledge", "labor_unit", "condition_difficulty", "neca_difficulty", "custom", "agent"]);
+  const factorSourceTypeSchema = z.enum(["library", "knowledge", "labor_unit", "project_condition", "condition_difficulty", "neca_difficulty", "custom", "agent"]);
   const factorApplicationScopeSchema = z.enum(["global", "line", "both"]);
   const factorFormulaTypeSchema = z.enum(["fixed_multiplier", "per_unit_scale", "condition_score", "temperature_productivity", "neca_condition_score", "extended_duration"]);
   const factorScopeSchema = z.object({
@@ -1278,11 +2533,84 @@ export function registerQuoteTools(server: McpServer) {
 
   server.tool(
     "listEstimateFactorLibrary",
-    "List built-in and organization estimate productivity factors. Use this after reading knowledge books and labor units to seed weather, access, safety, schedule, methods, or condition difficulty factors.",
-    {},
-    async () => {
+    "Search a compact index of built-in and organization estimate factors. Use this after reading knowledge books, labor units, datasets, and project documents to seed weather, access, safety, schedule, method, condition, escalation, or productivity multipliers. The agent decides whether a factor is relevant and whether it belongs globally/scoped or on specific line items. This returns compact rows only; do not expect the full library payload.",
+    {
+      q: z.string().optional().describe("Search terms such as winter, access, overtime, piping, productivity, weather, escalation, safety."),
+      category: z.string().optional().describe("Optional category filter, e.g. Productivity, Weather, Access, Schedule."),
+      impact: factorImpactSchema.optional(),
+      applicationScope: factorApplicationScopeSchema.optional(),
+      limit: z.coerce.number().int().min(1).max(50).default(20),
+    },
+    async ({ q, category, impact, applicationScope, limit }) => {
       const data = await apiGet(projectPath("/factors/library"));
-      return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+      const entries = asArray(data).map(asRecord);
+      const filtered = entries.filter((entry) => {
+        if (category && normalizedText(entry.category) !== normalizedText(category)) return false;
+        if (impact && String(entry.impact ?? "") !== impact) return false;
+        if (applicationScope && String(entry.applicationScope ?? "") !== applicationScope) return false;
+        const searchable = [
+          entry.id,
+          entry.name,
+          entry.code,
+          entry.description,
+          entry.category,
+          entry.impact,
+          entry.appliesTo,
+          entry.applicationScope,
+          entry.formulaType,
+          entry.confidence,
+          entry.sourceType,
+          entry.sourceId,
+          JSON.stringify(entry.sourceRef ?? {}),
+          JSON.stringify(entry.scope ?? {}),
+          ...compactTags(entry.tags, 24),
+        ].join(" ");
+        return matchesAllTerms(searchable, q);
+      });
+      const factors = filtered.slice(0, limit).map((entry) => ({
+        id: String(entry.id ?? ""),
+        name: String(entry.name ?? ""),
+        code: entry.code ? String(entry.code) : undefined,
+        description: compactText(entry.description, 220),
+        category: String(entry.category ?? ""),
+        impact: String(entry.impact ?? ""),
+        value: Number(entry.value ?? 1),
+        appliesTo: String(entry.appliesTo ?? ""),
+        applicationScope: String(entry.applicationScope ?? ""),
+        formulaType: String(entry.formulaType ?? ""),
+        confidence: String(entry.confidence ?? ""),
+        sourceType: String(entry.sourceType ?? ""),
+        sourceId: entry.sourceId ? String(entry.sourceId) : undefined,
+        sourceRef: {
+          title: compactText(asRecord(entry.sourceRef).title, 90),
+          locator: compactText(asRecord(entry.sourceRef).locator, 100),
+          basis: compactText(asRecord(entry.sourceRef).basis, 180),
+          formula: compactText(asRecord(entry.sourceRef).formula, 140),
+          fileName: compactText(asRecord(entry.sourceRef).fileName, 100),
+        },
+        scope: entry.scope,
+        tags: compactTags(entry.tags),
+      }));
+      const categories = [...new Set(entries.map((entry) => String(entry.category ?? "").trim()).filter(Boolean))].sort();
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            total: entries.length,
+            matched: filtered.length,
+            returned: factors.length,
+            hasMore: filtered.length > factors.length,
+            filters: { q: q ?? null, category: category ?? null, impact: impact ?? null, applicationScope: applicationScope ?? null, limit },
+            categories,
+            factors,
+            guidance: [
+              "This is a compact retrieval index. The agent decides whether a factor applies from project evidence; the library does not recommend automatically.",
+              "Use createEstimateFactor with sourceRef evidence after worksheet rows exist for line-level factors, or with scope filters for global/scoped factors.",
+              "If the result set is broad, search again with q/category/impact/applicationScope instead of reading the full library payload.",
+            ],
+          }, null, 2),
+        }],
+      };
     }
   );
 
@@ -1295,7 +2623,7 @@ export function registerQuoteTools(server: McpServer) {
       description: z.string().optional(),
       category: z.string().default("Productivity"),
       impact: factorImpactSchema.default("labor_hours"),
-      value: z.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
+      value: z.coerce.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
       appliesTo: z.string().default("Labour"),
       applicationScope: factorApplicationScopeSchema.default("both"),
       scope: factorScopeSchema.default({ mode: "all" }),
@@ -1323,7 +2651,7 @@ export function registerQuoteTools(server: McpServer) {
       description: z.string().optional(),
       category: z.string().optional(),
       impact: factorImpactSchema.optional(),
-      value: z.number().min(0.05).max(10).optional(),
+      value: z.coerce.number().min(0.05).max(10).optional(),
       appliesTo: z.string().optional(),
       applicationScope: factorApplicationScopeSchema.optional(),
       scope: factorScopeSchema.optional(),
@@ -1353,7 +2681,7 @@ export function registerQuoteTools(server: McpServer) {
 
   server.tool(
     "listEstimateFactors",
-    "List estimate factors already applied to the current revision, including calculated target counts and value/cost/hour deltas.",
+    "List estimate factors already applied to the current revision, including calculated target counts, target line item IDs, and value/cost/hour deltas. Use this after creating global or line-level factors to verify they affected the intended worksheet rows.",
     {},
     async () => {
       const ws = await getWs();
@@ -1377,18 +2705,18 @@ export function registerQuoteTools(server: McpServer) {
 
   server.tool(
     "createEstimateFactor",
-    `Create an estimate productivity factor. Factors affect worksheet-derived production before rollups and quote modifiers. Use sourceType/sourceRef to cite the basis: knowledge book page, labor-unit difficulty column, condition difficulty bridge, or custom assumption. value is a multiplier: 1.10 = +10%, 0.92 = -8%.`,
+    `Create an estimate factor. Factors affect worksheet-derived production/cost before rollups and quote modifiers. Use sourceType/sourceRef to cite the basis: knowledge book page, labor unit, dataset, project condition evidence, library preset, or custom assumption; prefer sourceType "project_condition" for project-specific access/weather/site/method constraints. For a global/scoped factor set applicationScope="global" and scope filters such as {mode:"all"}, {mode:"category", analyticsBuckets:["labour"]}, {mode:"phase", phaseIds:[...]}, or {mode:"worksheet", worksheetIds:[...]}. For a line-level factor, first create/read worksheet items, then set applicationScope="line" and scope:{mode:"line", worksheetItemIds:[...]}. Do not bake factor effects into worksheet quantities, tierUnits, unit costs, or hand-calculated labour values when an explicit factor should carry the adjustment. value is a multiplier: 1.10 = +10%, 0.92 = -8%. After creating a factor, call recalculateTotals/listEstimateFactors/getWorkspace to verify target counts and deltas.`,
     {
       name: z.string().describe("Factor name, e.g. Winter Weather, Confined Space, Shop Prefabrication"),
       code: z.string().optional(),
       description: z.string().optional(),
       category: z.string().default("Productivity"),
       impact: factorImpactSchema.default("labor_hours"),
-      value: z.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
+      value: z.coerce.number().min(0.05).max(10).describe("Multiplier, e.g. 1.10 for +10% or 0.92 for -8%"),
       active: z.boolean().default(true),
       appliesTo: z.string().default("Labour"),
       applicationScope: factorApplicationScopeSchema.default("global"),
-      scope: factorScopeSchema.default({ mode: "all" }).describe("Scope filters. For labor items use {mode:'category', analyticsBuckets:['labour']}; for a phase use phaseIds."),
+      scope: factorScopeSchema.default({ mode: "all" }).describe("Scope filters. Global examples: {mode:'all'} or {mode:'category', analyticsBuckets:['labour']}. Line-level example: {mode:'line', worksheetItemIds:['...']}. Phase example: {mode:'phase', phaseIds:['...']}."),
       formulaType: factorFormulaTypeSchema.default("fixed_multiplier"),
       parameters: z.record(z.unknown()).default({}).describe("Formula inputs. For line factors use scope.worksheetItemIds; for condition scores use score/maxScore; for temperature use temperature, temperatureUnit, humidity."),
       confidence: factorConfidenceSchema.default("medium"),
@@ -1398,9 +2726,23 @@ export function registerQuoteTools(server: McpServer) {
       tags: z.array(z.string()).default([]),
     },
     async (input) => {
-      await apiPost(projectPath("/factors"), input);
+      const data = await apiPost(projectPath("/factors"), input);
       invalidateWs();
-      return { content: [{ type: "text" as const, text: `Created estimate factor: ${input.name}` }] };
+      const factors = Array.isArray((data as any)?.estimateFactors) ? (data as any).estimateFactors : [];
+      const createdFactor = [...factors]
+        .reverse()
+        .find((factor: any) => factor?.name === input.name && Number(factor?.value) === Number(input.value))
+        ?? null;
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            message: `Created estimate factor: ${input.name}`,
+            createdFactor,
+            factorCount: factors.length,
+          }, null, 2),
+        }],
+      };
     }
   );
 
@@ -1414,7 +2756,7 @@ export function registerQuoteTools(server: McpServer) {
       description: z.string().optional(),
       category: z.string().optional(),
       impact: factorImpactSchema.optional(),
-      value: z.number().min(0.05).max(10).optional(),
+      value: z.coerce.number().min(0.05).max(10).optional(),
       active: z.boolean().optional(),
       appliesTo: z.string().optional(),
       applicationScope: factorApplicationScopeSchema.optional(),
@@ -1457,8 +2799,8 @@ export function registerQuoteTools(server: McpServer) {
       name: z.string().describe("Modifier name, e.g. 'Overhead', '10% Contingency', 'Volume Discount'"),
       type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).default("Other").describe("Modifier type"),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).default("All").describe("What the modifier applies to"),
-      percentage: z.number().optional().describe("Percentage adjustment (e.g. 10 for 10%). Use this OR amount, not both."),
-      amount: z.number().optional().describe("Fixed dollar amount. Use this OR percentage, not both."),
+      percentage: z.coerce.number().optional().describe("Percentage adjustment (e.g. 10 for 10%). Use this OR amount, not both."),
+      amount: z.coerce.number().optional().describe("Fixed dollar amount. Use this OR percentage, not both."),
       show: z.enum(["Yes", "No"]).default("Yes").describe("Show on client quote ('Yes') or hide/distribute ('No')"),
     },
     async (input) => {
@@ -1476,8 +2818,8 @@ export function registerQuoteTools(server: McpServer) {
       name: z.string().optional(),
       type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).optional(),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).optional(),
-      percentage: z.number().nullable().optional().describe("Set to null to clear percentage"),
-      amount: z.number().nullable().optional().describe("Set to null to clear amount"),
+      percentage: z.coerce.number().nullable().optional().describe("Set to null to clear percentage"),
+      amount: z.coerce.number().nullable().optional().describe("Set to null to clear amount"),
       show: z.enum(["Yes", "No"]).optional(),
     },
     async ({ modifierId, ...patch }) => {
@@ -1514,7 +2856,7 @@ export function registerQuoteTools(server: McpServer) {
       name: z.string().describe("ALI name, e.g. 'Performance Bond', 'Option: Expedited Schedule'"),
       type: z.enum(["OptionStandalone", "OptionAdditional", "LineItemAdditional", "LineItemStandalone", "CustomTotal"]).describe("ALI type"),
       description: z.string().optional().describe("Description or notes"),
-      amount: z.number().default(0).describe("Dollar amount"),
+      amount: z.coerce.number().default(0).describe("Dollar amount"),
     },
     async (input) => {
       await apiPost(projectPath("/ali"), input);
@@ -1531,7 +2873,7 @@ export function registerQuoteTools(server: McpServer) {
       name: z.string().optional(),
       type: z.enum(["OptionStandalone", "OptionAdditional", "LineItemAdditional", "LineItemStandalone", "CustomTotal"]).optional(),
       description: z.string().optional(),
-      amount: z.number().optional(),
+      amount: z.coerce.number().optional(),
     },
     async ({ aliId, ...patch }) => {
       await apiPatch(projectPath(`/ali/${aliId}`), patch);
@@ -1562,7 +2904,7 @@ export function registerQuoteTools(server: McpServer) {
       sectionType: z.string().default("custom").describe("Section type: cover_letter, scope, methodology, schedule, safety, assumptions, team, custom"),
       title: z.string().describe("Section heading, e.g. 'Scope of Work', 'Project Schedule'"),
       content: z.string().describe("Section body text (markdown supported)"),
-      order: z.number().optional().describe("Sort order (lower = earlier in PDF)"),
+      order: z.coerce.number().optional().describe("Sort order (lower = earlier in PDF)"),
     },
     async (input) => {
       await apiPost(projectPath("/report-sections"), input);
@@ -1579,7 +2921,7 @@ export function registerQuoteTools(server: McpServer) {
       sectionType: z.string().optional(),
       title: z.string().optional(),
       content: z.string().optional(),
-      order: z.number().optional(),
+      order: z.coerce.number().optional(),
     },
     async ({ sectionId, ...patch }) => {
       await apiPatch(projectPath(`/report-sections/${sectionId}`), patch);
@@ -1615,7 +2957,7 @@ export function registerQuoteTools(server: McpServer) {
       description: z.string().optional(),
       notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output."),
       scratchpad: z.string().optional().describe("Internal estimator/agent notes and scratch work. Not customer-facing."),
-      defaultMarkup: z.number().optional().describe("Default markup percentage for new items"),
+      defaultMarkup: z.coerce.number().optional().describe("Default markup percentage for new items"),
       dateQuote: z.string().nullable().optional().describe("Quote date (ISO string)"),
       dateDue: z.string().nullable().optional().describe("Due date (ISO string)"),
       dateWalkdown: z.string().nullable().optional().describe("Walkdown date (ISO string)"),
@@ -1625,7 +2967,7 @@ export function registerQuoteTools(server: McpServer) {
       shippingMethod: z.string().optional(),
       shippingTerms: z.string().optional(),
       leadLetter: z.string().optional().describe("Cover letter / lead-in text for the quote"),
-      grandTotal: z.number().optional().describe("Manual grand total"),
+      grandTotal: z.coerce.number().optional().describe("Manual grand total"),
       printEmptyNotesColumn: z.boolean().optional(),
       printPhaseTotalOnly: z.boolean().optional().describe("Show only phase totals, hide individual items"),
     },
@@ -1777,10 +3119,10 @@ export function registerQuoteTools(server: McpServer) {
       label: z.string().describe("Display label"),
       sourceCategory: z.string().optional().describe("For auto_category: EntityCategory name to aggregate"),
       sourcePhase: z.string().optional().describe("For auto_phase: phase name to aggregate"),
-      manualValue: z.number().optional().describe("For manual: sell/price value"),
-      manualCost: z.number().optional().describe("For manual: cost value"),
-      modifierPercent: z.number().optional().describe("For modifier: percentage"),
-      modifierAmount: z.number().optional().describe("For modifier: fixed dollar amount"),
+      manualValue: z.coerce.number().optional().describe("For manual: sell/price value"),
+      manualCost: z.coerce.number().optional().describe("For manual: cost value"),
+      modifierPercent: z.coerce.number().optional().describe("For modifier: percentage"),
+      modifierAmount: z.coerce.number().optional().describe("For modifier: fixed dollar amount"),
       visible: z.boolean().optional().describe("Visible on PDF (default true)"),
     },
     async (input) => {
@@ -1800,10 +3142,10 @@ export function registerQuoteTools(server: McpServer) {
     {
       rowId: z.string().describe("Summary row ID"),
       label: z.string().optional().describe("New label"),
-      manualValue: z.number().optional().describe("New value (manual rows)"),
-      manualCost: z.number().optional().describe("New cost (manual rows)"),
-      modifierPercent: z.number().optional().describe("New percentage (modifier rows)"),
-      modifierAmount: z.number().optional().describe("New amount (modifier rows)"),
+      manualValue: z.coerce.number().optional().describe("New value (manual rows)"),
+      manualCost: z.coerce.number().optional().describe("New cost (manual rows)"),
+      modifierPercent: z.coerce.number().optional().describe("New percentage (modifier rows)"),
+      modifierAmount: z.coerce.number().optional().describe("New amount (modifier rows)"),
       visible: z.boolean().optional().describe("Visible on PDF"),
       style: z.enum(["normal", "bold", "indent", "highlight"]).optional().describe("Display style"),
     },

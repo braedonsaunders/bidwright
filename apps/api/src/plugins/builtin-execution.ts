@@ -27,7 +27,6 @@ export interface BuiltinPluginExecutionContext {
   toolId: string;
   input: Record<string, unknown>;
   formState?: Record<string, unknown>;
-  revisionDifficulty?: string;
   lookupDatasetRows: (datasetRef: string) => Promise<Array<Record<string, unknown>>>;
   lookupDatasetColumns: (datasetRef: string) => Promise<DatasetColumn[]>;
   resolveRateScheduleItem: (rateScheduleItemId: string) => Promise<RateScheduleSelection | null>;
@@ -206,14 +205,6 @@ function renderDeclarativeOutput(template: PluginToolOutputTemplate | undefined,
   return output;
 }
 
-function normalizeDifficulty(value: string) {
-  const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
-  if (normalized === "difficult") return "Difficult";
-  if (normalized === "very difficult" || normalized === "verydifficult") return "Very Difficult";
-  if (normalized === "extreme") return "Extreme";
-  return "Normal";
-}
-
 function buildLabourLineItem(args: {
   rateScheduleItemId: string;
   regularTierId?: string;
@@ -246,16 +237,6 @@ function buildLabourLineItem(args: {
   return lineItem;
 }
 
-function laborUnitHours(unit: LaborUnit, difficultyLabel: string) {
-  if (difficultyLabel === "Difficult") {
-    return unit.hoursDifficult ?? unit.hoursNormal;
-  }
-  if (difficultyLabel === "Very Difficult" || difficultyLabel === "Extreme") {
-    return unit.hoursVeryDifficult ?? unit.hoursDifficult ?? unit.hoursNormal;
-  }
-  return unit.hoursNormal;
-}
-
 async function executeLaborUnitsTool(
   ctx: BuiltinPluginExecutionContext,
   providerLabel: string,
@@ -271,11 +252,8 @@ async function executeLaborUnitsTool(
     throw new Error(`No ${providerLabel} labor unit matched the selected category/class/sub-class.`);
   }
 
-  const difficulty = normalizeDifficulty(
-    toStringValue(ctx.input.difficulty) || ctx.revisionDifficulty || laborUnit.defaultDifficulty || "Normal",
-  );
   const quantity = toNumber(ctx.input.quantity);
-  const hoursPerUnit = laborUnitHours(laborUnit, difficulty);
+  const hoursPerUnit = laborUnit.hoursNormal;
   const totalHours = roundHours(quantity * hoursPerUnit);
   const description = [
     providerLabel,
@@ -296,7 +274,7 @@ async function executeLaborUnitsTool(
         entityType: serviceItem.entityCategoryType || laborUnit.entityCategoryType || serviceItem.category || "Labour",
         description,
         hours: totalHours,
-        sourceNotes: `${providerLabel} labor unit ${laborUnit.code || laborUnit.id}: ${hoursPerUnit.toFixed(2)} hrs/${outputUom} x ${quantity} @ ${difficulty}.`,
+        sourceNotes: `${providerLabel} labor unit ${laborUnit.code || laborUnit.id}: ${hoursPerUnit.toFixed(2)} hrs/${outputUom} x ${quantity}. Apply condition/difficulty adjustments with Factors.`,
       }),
     ],
     summary: {
@@ -305,7 +283,6 @@ async function executeLaborUnitsTool(
         { label: "Labor Unit", value: laborUnit.name, format: "text" },
         { label: "Hours / Unit", value: hoursPerUnit, format: "hours" },
         { label: "Quantity", value: quantity, format: "number" },
-        { label: "Difficulty", value: difficulty, format: "text" },
         { label: "Total Hours", value: totalHours, format: "hours" },
       ],
     },

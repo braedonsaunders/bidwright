@@ -3,11 +3,14 @@
 import { useEffect, useState } from "react";
 import { Loader2, AlertTriangle, Mail, Paperclip, User, Calendar, Users } from "lucide-react";
 import { Button } from "@/components/ui";
-import { cn } from "@/lib/utils";
+import { inspectFileIngest, type FileIngestManifestResponse } from "@/lib/api";
 
 interface EmailViewerProps {
   url: string;
   fileName: string;
+  projectId?: string;
+  sourceKind?: "source_document" | "file_node";
+  sourceId?: string;
 }
 
 interface EmailAddress {
@@ -48,19 +51,15 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function EmailViewer({ url, fileName }: EmailViewerProps) {
+export function EmailViewer({ url, fileName, projectId, sourceKind, sourceId }: EmailViewerProps) {
   const [email, setEmail] = useState<ParsedEmail | null>(null);
+  const [manifest, setManifest] = useState<FileIngestManifestResponse["manifest"]["email"] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const isMsgFile = fileName.toLowerCase().endsWith(".msg");
 
   useEffect(() => {
-    if (isMsgFile) {
-      setLoading(false);
-      return;
-    }
-
     let cancelled = false;
 
     async function loadEmail() {
@@ -68,6 +67,22 @@ export function EmailViewer({ url, fileName }: EmailViewerProps) {
       setError(null);
 
       try {
+        if (projectId && sourceKind && sourceId) {
+          const result = await inspectFileIngest(projectId, { sourceKind, sourceId });
+          if (cancelled) return;
+          const emailManifest = result.manifest.email;
+          if (!emailManifest) {
+            throw new Error("No email manifest was produced for this file.");
+          }
+          setManifest(emailManifest);
+          setEmail(null);
+          return;
+        }
+
+        if (isMsgFile) {
+          throw new Error("Outlook .msg preview requires a stored project file.");
+        }
+
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to fetch email: ${response.statusText}`);
 
@@ -91,17 +106,70 @@ export function EmailViewer({ url, fileName }: EmailViewerProps) {
 
     loadEmail();
     return () => { cancelled = true; };
-  }, [url, isMsgFile]);
+  }, [url, isMsgFile, projectId, sourceKind, sourceId]);
 
-  if (isMsgFile) {
+  if (manifest) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
-        <Mail className="h-10 w-10 text-text-secondary" />
-        <p className="text-sm text-text-primary font-medium">Outlook .msg format not supported</p>
-        <p className="text-sm text-text-secondary text-center max-w-md">
-          The .msg format is proprietary to Microsoft Outlook. To view this email, open it in Outlook
-          and save it as .eml format, which is universally supported.
-        </p>
+      <div className="flex flex-1 flex-col overflow-auto">
+        <div className="border-b border-line bg-panel p-4 space-y-2">
+          <h2 className="text-lg font-semibold text-text-primary">{manifest.subject}</h2>
+          <div className="space-y-1 text-sm">
+            {manifest.from && (
+              <div className="flex items-center gap-2 text-text-secondary">
+                <User className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="font-medium text-text-primary">From:</span>
+                <span>{manifest.from}</span>
+              </div>
+            )}
+            {manifest.to.length > 0 && (
+              <div className="flex items-start gap-2 text-text-secondary">
+                <Users className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                <span className="font-medium text-text-primary">To:</span>
+                <span>{manifest.to.join(", ")}</span>
+              </div>
+            )}
+            {manifest.cc.length > 0 && (
+              <div className="flex items-start gap-2 text-text-secondary">
+                <Users className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                <span className="font-medium text-text-primary">CC:</span>
+                <span>{manifest.cc.join(", ")}</span>
+              </div>
+            )}
+            {(manifest.sentAt || manifest.receivedAt) && (
+              <div className="flex items-center gap-2 text-text-secondary">
+                <Calendar className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="font-medium text-text-primary">{manifest.sentAt ? "Sent:" : "Received:"}</span>
+                <span>{new Date(manifest.sentAt ?? manifest.receivedAt ?? "").toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 bg-bg p-4">
+          {manifest.bodyPreview ? (
+            <pre className="whitespace-pre-wrap text-sm text-text-primary font-sans leading-relaxed">{manifest.bodyPreview}</pre>
+          ) : (
+            <p className="text-sm text-text-secondary italic">No readable body text</p>
+          )}
+        </div>
+
+        {manifest.attachments.length > 0 && (
+          <div className="border-t border-line bg-panel p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Paperclip className="h-4 w-4 text-text-secondary" />
+              <span className="text-sm font-medium text-text-primary">Attachments ({manifest.attachmentCount})</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {manifest.attachments.map((att, i) => (
+                <div key={`${att.fileName}-${i}`} className="flex items-center gap-2 rounded border border-line bg-bg px-3 py-1.5 text-sm">
+                  <Paperclip className="h-3.5 w-3.5 text-text-secondary" />
+                  <span className="text-text-primary">{att.fileName}</span>
+                  {att.size != null && <span className="text-text-secondary text-xs">({formatFileSize(att.size)})</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

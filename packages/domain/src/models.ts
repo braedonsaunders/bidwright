@@ -30,6 +30,12 @@ export interface SourceDocumentStructuredData {
   }>;
   keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
   selectionMarks?: Array<{ state: string; pageNumber: number; confidence: number }>;
+  nativePdf?: {
+    pageCount?: number | null;
+    pageCountSource?: "pdf-native" | "extraction-fallback";
+    extractionPageCount?: number;
+    error?: string;
+  };
 }
 
 export interface SourceDocument {
@@ -140,7 +146,6 @@ export interface QuoteRevision {
   freightOnBoard: string;
   status: "Open" | "Pending" | "Awarded" | "DidNotGet" | "Declined" | "Cancelled" | "Closed" | "Other";
   defaultMarkup: number;
-  laborDifficulty: string;
   followUpNote: string;
   printEmptyNotesColumn: boolean;
   printCategory: string[];
@@ -538,7 +543,7 @@ export interface Adjustment {
 
 export type EstimateFactorImpact = "labor_hours" | "resource_units" | "direct_cost" | "sell_price";
 export type EstimateFactorConfidence = "high" | "medium" | "low";
-export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
+export type EstimateFactorSourceType = "library" | "knowledge" | "labor_unit" | "project_condition" | "condition_difficulty" | "neca_difficulty" | "custom" | "agent";
 export type EstimateFactorApplicationScope = "global" | "line" | "both";
 export type EstimateFactorFormulaType =
   | "fixed_multiplier"
@@ -800,9 +805,6 @@ export interface LaborUnit {
   subClassName: string;
   outputUom: string;
   hoursNormal: number;
-  hoursDifficult: number | null;
-  hoursVeryDifficult: number | null;
-  defaultDifficulty: "normal" | "difficult" | "very_difficult";
   entityCategoryType: string;
   tags: string[];
   sourceRef: Record<string, unknown>;
@@ -937,7 +939,6 @@ export interface AssemblyComponent {
   catalogItemId: string | null;
   rateScheduleItemId: string | null;
   laborUnitId: string | null;
-  laborDifficulty: "normal" | "difficult" | "very_difficult";
   costResourceId: string | null;
   effectiveCostId: string | null;
   subAssemblyId: string | null;
@@ -1333,7 +1334,7 @@ export interface PluginField {
   validation?: PluginFieldValidation;
   conditionals?: PluginFieldConditional[];  // show/hide/modify based on other fields
   computation?: {                           // computed fields
-    formula: string;                        // e.g., "quantity * hoursPerUnit * difficultyFactor"
+    formula: string;                        // e.g., "quantity * hoursPerUnit * productivityFactor"
     dependencies: string[];                 // field ids used in formula
     format?: string;                        // display format: "number", "currency", "hours"
     datasetId?: string;                     // dataset for lookup/interpolate/nearest formulas
@@ -1401,11 +1402,11 @@ export interface PluginScoringCriterion {
 
 export interface PluginScoringEffect {
   type: "revision_patch" | "modifier" | "both";
-  // For revision_patch: which field to write (e.g., "laborDifficulty", "defaultMarkup")
+  // For revision_patch: which field to write (e.g., "defaultMarkup")
   revisionField?: string;
   // For modifier: create/update a quote modifier from the scoring result
   modifier?: {
-    name: string;                                          // modifier name (e.g., "Difficulty Factor")
+    name: string;                                          // modifier name (e.g., "Productivity Factor")
     appliesTo: "All" | "Labour" | "Material" | "Equipment"; // what it affects
     show: "Yes" | "No";                                    // visible on breakout?
     // The result band's `value` is parsed as a number and used as the percentage.
@@ -1502,7 +1503,7 @@ export interface PluginOutputTextContent {
 }
 
 export interface PluginOutputRevisionPatch {
-  field: string;           // e.g., "laborDifficulty", "defaultMarkup"
+  field: string;           // e.g., "defaultMarkup"
   value: unknown;
 }
 
@@ -1747,6 +1748,28 @@ export interface AppSettings {
     azureDiFeatures?: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
     azureDiQueryFields?: string;
     azureDiOutputFormat?: "text" | "markdown";
+    /** Active drawing-extraction provider for drawing PDFs. `none` disables enrichment. */
+    drawingExtractionProvider?: "landingAi" | "geminiPro" | "geminiFlash" | "none";
+    /** Master enable for the configured provider. Defaults true when a provider is chosen. */
+    drawingExtractionEnabled?: boolean;
+    /** @deprecated Use drawingExtractionProvider/drawingExtractionEnabled. */
+    landingAiDrawingExtractionEnabled?: boolean;
+    landingAiApiKey?: string;
+    landingAiEndpoint?: string;
+    landingAiParseModel?: string;
+    landingAiExtractModel?: string;
+    /** Google API key for Gemini drawing extraction. */
+    geminiApiKey?: string;
+    /** Model id used when drawingExtractionProvider === "geminiPro". */
+    geminiProModel?: string;
+    /** Model id used when drawingExtractionProvider === "geminiFlash". */
+    geminiFlashModel?: string;
+    /** When false, disables Gemini's "thinking" mode (faster + cheaper, lower quality on dense drawings). */
+    geminiThinkingEnabled?: boolean;
+    autodeskClientId?: string;
+    autodeskClientSecret?: string;
+    autodeskApsRevitActivityId?: string;
+    autodeskApsAutocadActivityId?: string;
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

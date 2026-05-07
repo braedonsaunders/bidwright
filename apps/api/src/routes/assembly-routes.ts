@@ -32,7 +32,6 @@ const componentCreateSchema = z.object({
   catalogItemId: z.string().nullable().optional(),
   rateScheduleItemId: z.string().nullable().optional(),
   laborUnitId: z.string().nullable().optional(),
-  laborDifficulty: z.enum(["normal", "difficult", "very_difficult"]).optional(),
   costResourceId: z.string().nullable().optional(),
   effectiveCostId: z.string().nullable().optional(),
   subAssemblyId: z.string().nullable().optional(),

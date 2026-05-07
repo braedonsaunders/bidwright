@@ -59,6 +59,9 @@ importers:
       bullmq:
         specifier: ^5.34.8
         version: 5.71.0
+      fast-xml-parser:
+        specifier: ^5.7.2
+        version: 5.7.2
       fastify:
         specifier: ^5.1.0
         version: 5.8.2
@@ -71,18 +74,27 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
+      libarchive.js:
+        specifier: ^2.0.2
+        version: 2.0.2
       nodemailer:
         specifier: ^6.9.16
         version: 6.10.1
       occt-import-js:
         specifier: ^0.0.23
         version: 0.0.23
+      pdfjs-dist:
+        specifier: ^5.5.207
+        version: 5.5.207
       playwright:
         specifier: ^1.58.2
         version: 1.58.2
       postal-mime:
         specifier: ^2.7.4
         version: 2.7.4
+      web-ifc:
+        specifier: ^0.0.77
+        version: 0.0.77
       xlsx:
         specifier: ^0.18.5
         version: 0.18.5
@@ -2656,6 +2668,9 @@ packages:
     resolution: {integrity: sha512-3g6NUTPd/YtuuGrhMnOMRjFc+LJw/bnMp3+0r/Wcz3IXUuCosKRJvMphm5+Q+bvTVGcJJuRvVLuYba+WojaFaA==}
     engines: {node: '>=0.8'}
 
+  comlink@4.4.2:
+    resolution: {integrity: sha512-OxGdvBmJuNKSCMO4NTl1L47VRp6xn2wG4F/2hYzB6tiCb709otOxtEYCSvK80PtjODfXXZu8ds+Nw5kVCjqd2g==}
+
   comma-separated-tokens@1.0.8:
     resolution: {integrity: sha512-GHuDRO12Sypu2cV70d1dkA2EUmXHgntrzbpvOB+Qy+49ypNfGgFQIC2fhhXbnyrJRynDCAARsT7Ou0M6hirpfw==}
 
@@ -3529,6 +3544,9 @@ packages:
 
   layout-base@1.0.2:
     resolution: {integrity: sha512-8h2oVEZNktL4BH2JCOI90iD1yXwL6iNW7KcCKT2QZgQJR2vbqDsldCTPRU9NifTCqHZci57XvQQ15YTu+sTYPg==}
+
+  libarchive.js@2.0.2:
+    resolution: {integrity: sha512-JHb+P4suNSjvz/dMdRgOe7JAxluXJeialzSFkKHU5y0ZK+m175drPOaIYW6I9WXSDcPcQ13eCUgMnpgY0ggmoQ==}
 
   lie@3.3.0:
     resolution: {integrity: sha512-UaiMJzeWRlEujzAuw5LokY1L5ecNQYZKfmyZ9L7wDHb/p5etKaxXhohBcrw0EYby+G/NA52vRSN4N39dxHAIwQ==}
@@ -7214,6 +7232,8 @@ snapshots:
 
   codepage@1.15.0: {}
 
+  comlink@4.4.2: {}
+
   comma-separated-tokens@1.0.8: {}
 
   comma-separated-tokens@2.0.3: {}
@@ -8150,6 +8170,10 @@ snapshots:
   kleur@4.1.5: {}
 
   layout-base@1.0.2: {}
+
+  libarchive.js@2.0.2:
+    dependencies:
+      comlink: 4.4.2
 
   lie@3.3.0:
     dependencies:

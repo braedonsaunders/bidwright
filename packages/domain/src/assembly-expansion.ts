@@ -25,7 +25,6 @@ export interface AssemblyComponentDefinition {
   catalogItemId?: string | null;
   rateScheduleItemId?: string | null;
   laborUnitId?: string | null;
-  laborDifficulty?: "normal" | "difficult" | "very_difficult" | string | null;
   costResourceId?: string | null;
   effectiveCostId?: string | null;
   subAssemblyId?: string | null;
@@ -76,9 +75,6 @@ export interface LaborUnitRef {
   subClassName?: string;
   outputUom?: string;
   hoursNormal: number;
-  hoursDifficult?: number | null;
-  hoursVeryDifficult?: number | null;
-  defaultDifficulty?: "normal" | "difficult" | "very_difficult" | string | null;
   entityCategoryType?: string | null;
 }
 
@@ -325,22 +321,7 @@ export function expandAssembly(
     }
   }
 
-  function normalizeLaborDifficulty(value: string | null | undefined): "normal" | "difficult" | "very_difficult" {
-    const normalized = (value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
-    if (normalized === "difficult") return "difficult";
-    if (normalized === "very_difficult" || normalized === "verydifficult" || normalized === "extreme") {
-      return "very_difficult";
-    }
-    return "normal";
-  }
-
-  function laborUnitHoursPerOutput(unit: LaborUnitRef, difficulty: "normal" | "difficult" | "very_difficult") {
-    if (difficulty === "very_difficult") {
-      return unit.hoursVeryDifficult ?? unit.hoursDifficult ?? unit.hoursNormal;
-    }
-    if (difficulty === "difficult") {
-      return unit.hoursDifficult ?? unit.hoursNormal;
-    }
+  function laborUnitHoursPerOutput(unit: LaborUnitRef) {
     return unit.hoursNormal;
   }
 
@@ -504,8 +485,7 @@ export function expandAssembly(
             continue;
           }
 
-          const difficulty = normalizeLaborDifficulty(component.laborDifficulty ?? laborUnit.defaultDifficulty);
-          const hoursPerOutput = laborUnitHoursPerOutput(laborUnit, difficulty);
+          const hoursPerOutput = laborUnitHoursPerOutput(laborUnit);
           const totalHours = roundQuantity(qty * hoursPerOutput);
           const rateEntries = Object.entries(rsi.rates ?? {});
           const costEntries = Object.entries(rsi.costRates ?? {});
@@ -533,7 +513,7 @@ export function expandAssembly(
             unitCost: component.costOverride ?? ((costRates[0] ?? 0) * totalHours),
             unitPrice: (rates[0] ?? 0) * totalHours,
             markup: component.markupOverride ?? 0,
-            notes: component.notes || `Labor unit ${difficulty.replace("_", " ")}: ${hoursPerOutput} hr/${outputUom} x ${roundQuantity(qty)} ${outputUom}.`,
+            notes: component.notes || `Labor unit: ${hoursPerOutput} hr/${outputUom} x ${roundQuantity(qty)} ${outputUom}.`,
             sortOrder: lineCounter++,
           });
           continue;

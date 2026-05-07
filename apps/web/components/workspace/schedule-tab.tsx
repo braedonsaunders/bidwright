@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { AlertCircle, Calendar, Plus, X } from "lucide-react";
+import { AlertCircle, Calendar, FileText, Loader2, Plus, Upload, X } from "lucide-react";
 import type {
   CreateScheduleBaselineInput,
   CreateDependencyInput,
@@ -15,6 +15,7 @@ import type {
   ScheduleTaskAssignment,
   ScheduleTask,
   ScheduleTaskPatchInput,
+  ScheduleImportCandidate,
   WorkspaceResponse,
 } from "@/lib/api";
 import {
@@ -30,13 +31,16 @@ import {
   deleteScheduleDependency,
   deleteScheduleResource,
   deleteScheduleTask,
+  getProjectWorkspace,
+  getScheduleImportCandidates,
   getSchedulePdfUrl,
+  importProjectSchedule,
   saveScheduleBaseline,
   updateScheduleCalendar,
   updateScheduleResource,
   updateScheduleTask,
 } from "@/lib/api";
-import { Button, EmptyState } from "@/components/ui";
+import { Badge, Button, EmptyState, ModalBackdrop } from "@/components/ui";
 import {
   addDays,
   buildIndentTaskUpdates,
@@ -79,6 +83,9 @@ interface ScheduleTabApi {
   deleteScheduleDependency: typeof deleteScheduleDependency;
   deleteScheduleResource: typeof deleteScheduleResource;
   deleteScheduleTask: typeof deleteScheduleTask;
+  getProjectWorkspace: typeof getProjectWorkspace;
+  getScheduleImportCandidates: typeof getScheduleImportCandidates;
+  importProjectSchedule: typeof importProjectSchedule;
   saveScheduleBaseline: typeof saveScheduleBaseline;
   updateScheduleCalendar: typeof updateScheduleCalendar;
   updateScheduleResource: typeof updateScheduleResource;
@@ -98,6 +105,9 @@ const DEFAULT_SCHEDULE_API: ScheduleTabApi = {
   deleteScheduleDependency,
   deleteScheduleResource,
   deleteScheduleTask,
+  getProjectWorkspace,
+  getScheduleImportCandidates,
+  importProjectSchedule,
   saveScheduleBaseline,
   updateScheduleCalendar,
   updateScheduleResource,
@@ -109,6 +119,94 @@ function getScheduleErrorMessage(error: unknown) {
     return error.message;
   }
   return "Schedule update failed. Please try again.";
+}
+
+function ScheduleImportModal({
+  open,
+  candidates,
+  loading,
+  importingId,
+  error,
+  onClose,
+  onImport,
+}: {
+  open: boolean;
+  candidates: ScheduleImportCandidate[];
+  loading: boolean;
+  importingId: string | null;
+  error: string | null;
+  onClose: () => void;
+  onImport: (candidate: ScheduleImportCandidate) => void;
+}) {
+  if (!open) return null;
+
+  return (
+    <ModalBackdrop open={open} onClose={onClose} size="xl">
+      <div
+        className="flex max-h-[72vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-fg">Import Schedule</h3>
+            <p className="mt-0.5 text-xs text-fg/45">Already-uploaded Microsoft Project and Primavera P6 files.</p>
+          </div>
+          <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-fg/50">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking uploaded files...
+            </div>
+          ) : candidates.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
+              <Upload className="h-9 w-9 text-fg/15" />
+              <p className="text-sm font-medium text-fg/55">No schedule files found</p>
+              <p className="max-w-sm text-xs text-fg/40">Upload an MPP, MPX, Microsoft Project XML, XER, or P6 XML file in Documents / Files first.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {candidates.map((candidate) => {
+                const key = `${candidate.sourceKind}:${candidate.sourceId}`;
+                const disabled = candidate.status !== "available";
+                return (
+                  <div key={key} className="flex items-center gap-3 rounded-md border border-line bg-bg/35 px-3 py-2">
+                    <FileText className="h-4 w-4 shrink-0 text-fg/40" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-fg">{candidate.fileName}</span>
+                        <Badge tone={candidate.status === "available" ? "success" : "warning"}>{candidate.format.toUpperCase()}</Badge>
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-fg/40">{candidate.message}</p>
+                    </div>
+                    <Button
+                      variant={disabled ? "secondary" : "accent"}
+                      size="xs"
+                      disabled={disabled || importingId !== null}
+                      onClick={() => onImport(candidate)}
+                    >
+                      {importingId === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                      Import
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {error && (
+          <div className="border-t border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">
+            {error}
+          </div>
+        )}
+      </div>
+    </ModalBackdrop>
+  );
 }
 
 export function ScheduleTab({
@@ -134,6 +232,11 @@ export function ScheduleTab({
   const [editingTask, setEditingTask] = useState<ScheduleTask | null>(null);
   const [pendingMutations, setPendingMutations] = useState(0);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importCandidates, setImportCandidates] = useState<ScheduleImportCandidate[]>([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const projectId = workspace.project.id;
   const phases = workspace.phases ?? [];
@@ -351,6 +454,34 @@ export function ScheduleTab({
   const handleExportPdf = useCallback(() => {
     window.open(getSchedulePdfUrl(projectId), "_blank", "noopener,noreferrer");
   }, [projectId]);
+
+  const handleOpenImport = useCallback(() => {
+    setShowImportModal(true);
+    setImportLoading(true);
+    setImportError(null);
+    void api.getScheduleImportCandidates(projectId)
+      .then((result) => setImportCandidates(result.candidates))
+      .catch((error) => setImportError(getScheduleErrorMessage(error)))
+      .finally(() => setImportLoading(false));
+  }, [api, projectId]);
+
+  const handleImportSchedule = useCallback((candidate: ScheduleImportCandidate) => {
+    const key = `${candidate.sourceKind}:${candidate.sourceId}`;
+    setImportingId(key);
+    setImportError(null);
+    void api.importProjectSchedule(projectId, {
+      sourceKind: candidate.sourceKind,
+      sourceId: candidate.sourceId,
+      mode: "replace",
+    })
+      .then(() => api.getProjectWorkspace(projectId))
+      .then((response) => {
+        startTransition(() => apply(response));
+        setShowImportModal(false);
+      })
+      .catch((error) => setImportError(getScheduleErrorMessage(error)))
+      .finally(() => setImportingId(null));
+  }, [api, apply, projectId, startTransition]);
 
   const handleClickTask = useCallback(
     (task: ScheduleTask) => {
@@ -619,6 +750,7 @@ export function ScheduleTab({
         onScrollToday={handleScrollToday}
         onScrollNext={() => setScrollOffset((offset) => offset + scrollStep)}
         onAddTask={handleAddTask}
+        onOpenImport={handleOpenImport}
         onToggleFilters={() => setShowFilters((current) => !current)}
         filtersActive={filtersActive}
         insights={scheduleInsights}
@@ -792,6 +924,16 @@ export function ScheduleTab({
         onCreateResource={handleCreateResource}
         onUpdateResource={handleUpdateResource}
         onDeleteResource={handleDeleteResource}
+      />
+
+      <ScheduleImportModal
+        open={showImportModal}
+        candidates={importCandidates}
+        loading={importLoading}
+        importingId={importingId}
+        error={importError}
+        onClose={() => setShowImportModal(false)}
+        onImport={handleImportSchedule}
       />
 
       {isPending && (

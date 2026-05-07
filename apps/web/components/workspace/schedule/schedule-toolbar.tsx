@@ -17,6 +17,7 @@ import {
   Save,
   Settings2,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { Badge, Button, CompactSelect, Select } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ interface ScheduleToolbarProps {
   onScrollToday: () => void;
   onScrollNext: () => void;
   onAddTask: () => void;
+  onOpenImport: () => void;
   onToggleFilters: () => void;
   filtersActive: boolean;
   insights: ScheduleInsights;
@@ -105,6 +107,7 @@ export function ScheduleToolbar({
   onScrollToday,
   onScrollNext,
   onAddTask,
+  onOpenImport,
   onToggleFilters,
   filtersActive,
   insights,
@@ -145,7 +148,7 @@ export function ScheduleToolbar({
   return (
     <div className="rounded-t-lg rounded-b-none border border-line bg-panel shadow-sm" data-testid="schedule-toolbar">
       <div className="grid w-full min-w-0 grid-cols-5 items-center gap-1 px-1 py-1">
-        <div className="grid min-w-0 grid-cols-3 gap-1 rounded-md bg-bg/45 p-0.5">
+        <div className="grid min-w-0 grid-cols-4 gap-1 rounded-md bg-bg/45 p-0.5">
           {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
             <button
               key={value}
@@ -261,6 +264,17 @@ export function ScheduleToolbar({
           >
             <Calendar className="h-3.5 w-3.5" />
             Task
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            title="Import schedule"
+            aria-label="Import schedule"
+            onClick={onOpenImport}
+            className="h-6 w-full rounded-md px-1.5 text-[10px]"
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Import
           </Button>
           <Button
             variant="ghost"

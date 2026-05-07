@@ -51,6 +51,22 @@ export interface AppSettingsRecord {
     azureDiFeatures?: Array<"keyValuePairs" | "queryFields" | "ocrHighResolution" | "formulas" | "styleFont" | "barcodes" | "languages">;
     azureDiQueryFields?: string;
     azureDiOutputFormat?: "text" | "markdown";
+    drawingExtractionProvider?: "landingAi" | "geminiPro" | "geminiFlash" | "none";
+    drawingExtractionEnabled?: boolean;
+    /** @deprecated kept for backward compatibility. */
+    landingAiDrawingExtractionEnabled?: boolean;
+    landingAiApiKey?: string;
+    landingAiEndpoint?: string;
+    landingAiParseModel?: string;
+    landingAiExtractModel?: string;
+    geminiApiKey?: string;
+    geminiProModel?: string;
+    geminiFlashModel?: string;
+    geminiThinkingEnabled?: boolean;
+    autodeskClientId?: string;
+    autodeskClientSecret?: string;
+    autodeskApsRevitActivityId?: string;
+    autodeskApsAutocadActivityId?: string;
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;

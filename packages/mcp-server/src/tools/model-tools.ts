@@ -79,6 +79,8 @@ function issuePreview(issues: any[], limit = 6) {
 
 function summarizeModelAsset(asset: any) {
   const manifest = asRecord(asset.manifest);
+  const modelIngest = asRecord(manifest.modelIngest);
+  const adapter = asRecord(modelIngest.adapter);
   const counts = asRecord(asset._count);
   const bom = asArray(asset.bom);
   const quantities = asArray(asset.quantities);
@@ -95,6 +97,9 @@ function summarizeModelAsset(asset: any) {
     format: asset.format,
     units: asset.units ?? manifest.units ?? null,
     parser: manifest.parser ?? manifest.parserName ?? manifest.generator ?? null,
+    ingestAdapter: adapter.adapterId ?? manifest.adapterId ?? null,
+    ingestProvider: adapter.provider ?? manifest.provider ?? null,
+    ingestCapabilityStatus: adapter.status ?? manifest.adapterStatus ?? null,
     source: manifest.source ?? (asset.sourceDocumentId ? "source_document" : "file_node"),
     counts: {
       elements: elementCount,
@@ -111,6 +116,7 @@ function summarizeModelAsset(asset: any) {
       elementCount ? "Use queryModelElements for filtered object/type/material/level searches." : null,
       quantityCount || bomCount ? "Use extractModelBom for persisted estimating quantities before creating worksheet items." : null,
       Boolean(manifest.editableInBidWrightModelEditor) ? "Open bidwrightEditorPath for visual QA or manual model review." : null,
+      adapter.status && adapter.status !== "available" ? `Ingest adapter status is ${adapter.status}; inspect issues before relying on quantities.` : null,
     ].filter(Boolean),
   };
 }
@@ -125,6 +131,8 @@ function normalizedAsset(asset: any) {
     status: asset.status,
     units: asset.units,
     checksum: asset.checksum,
+    ingestCapabilityStatus: asRecord(asRecord(manifest.modelIngest).adapter).status ?? manifest.adapterStatus ?? null,
+    ingestAdapter: asRecord(asRecord(manifest.modelIngest).adapter).adapterId ?? manifest.adapterId ?? null,
     source: manifest.source ?? (asset.sourceDocumentId ? "source_document" : "file_node"),
     sourceDocumentId: asset.sourceDocumentId ?? null,
     fileNodeId: asset.fileNodeId ?? null,
@@ -137,6 +145,30 @@ function normalizedAsset(asset: any) {
 }
 
 export function registerModelTools(server: McpServer) {
+  server.tool(
+    "getModelIngestCapabilities",
+    `Report BidWright's CAD/BIM/model ingest capability matrix.
+
+Use this before relying on RVT, DWG, IFC, DXF, STEP, mesh, or Autodesk APS extraction. It returns explicit adapter states: available, missing, unsupported, degraded, or failed.`,
+    {
+      format: z.string().optional().describe("Optional file extension filter, such as ifc, rvt, dwg, dxf, step, stl, obj, or glb."),
+    },
+    async ({ format }) => {
+      const projectId = getProjectId();
+      const params = new URLSearchParams();
+      if (format) params.set("format", format);
+      const result = await apiGet<any>(`/api/models/${projectId}/ingest-capabilities?${params.toString()}`);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
   server.tool(
     "listModels",
     `Scan and list model/CAD/BIM assets in the current project.
@@ -175,8 +207,8 @@ The manifest includes parser status, source lineage, native file metadata, eleme
     {
       modelId: z.string().describe("Model asset id returned by listModels"),
       includeRaw: z.boolean().default(false).describe("Include raw manifest arrays. Default false returns compact previews only."),
-      limit: z.number().int().positive().max(200).default(50).describe("Rows per raw array when includeRaw=true."),
-      offset: z.number().int().min(0).default(0).describe("Offset for raw arrays when includeRaw=true."),
+      limit: z.coerce.number().int().positive().max(200).default(50).describe("Rows per raw array when includeRaw=true."),
+      offset: z.coerce.number().int().min(0).default(0).describe("Offset for raw arrays when includeRaw=true."),
     },
     async ({ modelId, includeRaw, limit, offset }) => {
       const projectId = getProjectId();
@@ -231,8 +263,8 @@ This tool returns only extracted data. It does not infer or fabricate model elem
           level: z.string().optional(),
           system: z.string().optional(),
           name: z.string().optional(),
-          limit: z.number().min(1).max(500).default(100),
-          offset: z.number().min(0).default(0),
+          limit: z.coerce.number().min(1).max(500).default(100),
+          offset: z.coerce.number().min(0).default(0),
         })
         .default({ limit: 100 }),
     },
@@ -274,8 +306,8 @@ The BOM is conservative: unsupported formats return a clear status and empty row
     {
       modelId: z.string().describe("Model asset id returned by listModels"),
       grouping: z.string().optional().describe("Requested grouping note, such as material, class, system, level, or assembly"),
-      limit: z.number().int().positive().max(500).default(100),
-      offset: z.number().int().min(0).default(0),
+      limit: z.coerce.number().int().positive().max(500).default(100),
+      offset: z.coerce.number().int().min(0).default(0),
     },
     async ({ modelId, grouping, limit, offset }) => {
       const projectId = getProjectId();
@@ -348,8 +380,8 @@ Call createWorksheetItem first when a new estimate row is needed, then call this
       modelElementId: z.string().optional().describe("Model element id, when the line item comes from a specific object/assembly"),
       modelQuantityId: z.string().optional().describe("Persisted model quantity id, when the line item should track a specific extracted quantity"),
       quantityField: z.string().default("quantity").describe("Worksheet item field driven by the model quantity"),
-      multiplier: z.number().default(1).describe("Multiplier applied to the model quantity before writing/recording derivedQuantity"),
-      derivedQuantity: z.number().optional().describe("Resolved quantity used for the worksheet item if already known"),
+      multiplier: z.coerce.number().default(1).describe("Multiplier applied to the model quantity before writing/recording derivedQuantity"),
+      derivedQuantity: z.coerce.number().optional().describe("Resolved quantity used for the worksheet item if already known"),
       selection: z.record(z.unknown()).optional().describe("Optional UI/model selection payload for traceability"),
     },
     async ({ modelId, ...input }) => {

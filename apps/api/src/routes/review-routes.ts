@@ -452,11 +452,11 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
     // Spawn CLI
     const instructionFile = adapter.primaryInstructionFile;
-    const initialPrompt = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md so the review can discover available books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. Do not read large JSONL snapshots or files-manifest.jsonl wholesale; search them with rg/grep and use MCP tools for focused reads. Execute the FULL review workflow:
+    const initialPrompt = `Read ${instructionFile} now. Then read the compact files library-snapshots/README.md and library-snapshots/library-index.md so the review can discover available books, datasets, cost intelligence, labour units, assemblies, catalogs, and rate books. Bidwright has dropped first-party library text corpora into library-snapshots/search in this runtime folder; search them with rg/grep or searchLibraryCorpus. Do not read large JSONL snapshots, all-library.search.txt, or files-manifest.jsonl wholesale; search them and use MCP tools for focused reads. Execute the FULL review workflow:
 
 1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
 2. Read EVERY project document (specs, RFQs, BOMs, drawings) using Read tool on documents/ folder
-3. Search library-snapshots and MCP tools for relevant rate/productivity/cost sources, then read knowledge book table of contents and relevant chapters
+3. Search library-snapshots/search with rg/searchLibraryCorpus and MCP tools for relevant rate/productivity/cost sources, then read knowledge book table of contents and relevant chapters. Treat search results as candidate retrieval only; the review agent decides relevance and source authority.
 4. Cross-reference: for each spec section/requirement, check if a corresponding line item exists in the estimate
 5. Call saveReviewCoverage with the scope coverage checklist
 6. Identify gaps (unpriced scope), risks (unclear items, wrong assumptions), severity-rate each finding

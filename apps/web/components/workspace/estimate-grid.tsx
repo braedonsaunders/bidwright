@@ -21,6 +21,7 @@ import {
   Copy,
   Download,
   Edit3,
+  CheckSquare,
   ExternalLink,
   Folder,
   FolderOpen,
@@ -66,6 +67,7 @@ import type {
 import {
   createWorksheet,
   createWorksheetFolder,
+  createAdjustment,
   createWorksheetItem,
   createWorksheetItemFast,
   createEstimateFactor,
@@ -121,6 +123,12 @@ import { AssemblyInsertModal } from "./assembly-insert-modal";
 import { SaveSelectionAsAssemblyModal } from "./save-selection-as-assembly-modal";
 import { makeUomOptions, useUomLibrary } from "@/components/shared/uom-select";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
+import {
+  CLASSIFICATION_STANDARD_OPTIONS,
+  type ClassificationKey,
+  getClassificationCode,
+  setClassificationCode,
+} from "./classification-utils";
 
 /* ─── Types ─── */
 
@@ -133,6 +141,7 @@ export interface EstimateGridProps {
   activeWorksheetId?: WorksheetTabId;
   onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
   onOpenPluginTools?: (target?: { pluginId?: string; pluginSlug?: string; toolId?: string }) => void;
+  onOpenTakeoffLink?: (worksheetItemId: string) => void;
   variant?: "default" | "snap";
   maxLineItems?: number;
   lockedWorksheetId?: string;
@@ -388,6 +397,30 @@ const ESTIMATE_TABLE_COLUMN_WIDTHS: Record<ColumnId, number> = {
   margin: 64,
   phaseId: 88,
   actions: 40,
+};
+
+const RESIZABLE_ESTIMATE_COLUMNS = new Set<ColumnId>(TOGGLEABLE_COLUMNS);
+const ESTIMATE_TABLE_COLUMN_MIN_WIDTHS: Partial<Record<ColumnId, number>> = {
+  lineOrder: 32,
+  entityName: 120,
+  vendor: 80,
+  description: 140,
+  quantity: 56,
+  uom: 52,
+  factors: 64,
+  units: 112,
+  cost: 72,
+  extCost: 80,
+  markup: 56,
+  price: 80,
+  margin: 56,
+  phaseId: 72,
+};
+const ESTIMATE_TABLE_COLUMN_MAX_WIDTHS: Partial<Record<ColumnId, number>> = {
+  entityName: 460,
+  vendor: 320,
+  description: 560,
+  units: 360,
 };
 
 const WORKSHEET_ORGANIZER_PANEL_WIDTH = 256;
@@ -1039,13 +1072,7 @@ function payloadNumber(payload: Record<string, unknown> | undefined, key: string
 }
 
 function laborUnitDefaultHours(payload: Record<string, unknown> | undefined) {
-  const normal = payloadNumber(payload, "hoursNormal");
-  const difficult = payloadNumber(payload, "hoursDifficult");
-  const veryDifficult = payloadNumber(payload, "hoursVeryDifficult");
-  const difficulty = payloadString(payload, "defaultDifficulty");
-  if (difficulty === "very_difficult") return veryDifficult ?? difficult ?? normal;
-  if (difficulty === "difficult") return difficult ?? normal;
-  return normal;
+  return payloadNumber(payload, "hoursNormal");
 }
 
 function itemNeedsLaborRateSelection(item: EntityOptionItem) {
@@ -1758,14 +1785,8 @@ function optionMetaParts(item: EntityOptionItem) {
   const payload = item.payload;
   switch (item.source) {
     case "labor_unit": {
-      const difficulty = payloadString(payload, "defaultDifficulty");
-      const difficult = payloadNumber(payload, "hoursDifficult");
-      const veryDifficult = payloadNumber(payload, "hoursVeryDifficult");
       return [
         item.unit ? `UOM ${item.unit}` : "",
-        difficulty ? `default ${difficulty}` : "",
-        difficult !== undefined ? `${difficult.toFixed(2)} diff` : "",
-        veryDifficult !== undefined ? `${veryDifficult.toFixed(2)} very` : "",
       ].filter(Boolean);
     }
     case "rate_schedule":
@@ -2082,6 +2103,7 @@ export function EstimateGrid({
   activeWorksheetId,
   onActiveWorksheetChange,
   onOpenPluginTools,
+  onOpenTakeoffLink,
   variant = "default",
   maxLineItems,
   lockedWorksheetId,
@@ -2157,6 +2179,7 @@ export function EstimateGrid({
   const entityDropdownRef = useRef<HTMLDivElement | null>(null);
   const entityDropdownCloseTimerRef = useRef<number | null>(null);
   const entityDropdownOpenFrameRef = useRef<number | null>(null);
+  const rowContextMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Filter state
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -2164,6 +2187,8 @@ export function EstimateGrid({
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+  const [contextClassificationKey, setContextClassificationKey] = useState<ClassificationKey>("masterformat");
+  const [contextClassificationValue, setContextClassificationValue] = useState("");
 
   // Tab menu
   const [tabMenu, setTabMenu] = useState<{ wsId: string; x: number; y: number } | null>(null);
@@ -2220,13 +2245,16 @@ export function EstimateGrid({
   const [factorLineItem, setFactorLineItem] = useState<WorkspaceWorksheetItem | null>(null);
 
   // ─── NEW STATE: Row Selection / Bulk Operations ───
+  const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkMarkupValue, setBulkMarkupValue] = useState("");
+  const [bulkClassificationKey, setBulkClassificationKey] = useState<ClassificationKey>("masterformat");
+  const [bulkClassificationValue, setBulkClassificationValue] = useState("");
 
   // ─── NEW STATE: Column Visibility ───
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnId>>(
     new Set(isSnapMode ? SNAP_VISIBLE_COLUMNS : DEFAULT_VISIBLE_COLUMNS)
   );
+  const [columnWidths, setColumnWidths] = useState<Partial<Record<ColumnId, number>>>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const userToggledColumnsRef = useRef(false);
 
@@ -3145,6 +3173,13 @@ export function EstimateGrid({
     return rows;
   }, [categoryFilter, phaseFilter, activeTab, workspace, sortState, getRowHourBreakdown, displayLineItem]);
 
+  const visibleSelectableRowIds = useMemo(
+    () => visibleRows.filter((row) => !isTemporaryWorksheetItemId(row.id)).map((row) => row.id),
+    [visibleRows]
+  );
+  const allVisibleRowsSelected = visibleSelectableRowIds.length > 0
+    && visibleSelectableRowIds.every((id) => selectedIds.has(id));
+
   const activeFolderId = folderIdFromView(activeTab);
   const activeFolder = activeFolderId ? findWorksheetFolder(workspace, activeFolderId) : null;
   const activeWorksheetForActions = useMemo(() => {
@@ -3379,10 +3414,10 @@ export function EstimateGrid({
   ]);
 
   // Helper to check if a column is visible
-  // Checkbox column only appears when items are selected (bulk mode)
+  // Checkbox column only appears while selection mode is active.
   const isColVisible = useCallback(
     (col: ColumnId) => {
-      if (col === "checkbox") return selectedIds.size > 0;
+      if (col === "checkbox") return selectionMode || selectedIds.size > 0;
       if (!visibleColumns.has(col)) return false;
       if (isSnapMode) return true;
       if (fitLevel === "compact") {
@@ -3393,7 +3428,7 @@ export function EstimateGrid({
       }
       return true;
     },
-    [fitLevel, isSnapMode, visibleColumns, selectedIds.size]
+    [fitLevel, isSnapMode, selectionMode, selectedIds.size, visibleColumns]
   );
 
   // Count visible data columns for colSpan on group header
@@ -3413,9 +3448,55 @@ export function EstimateGrid({
 
   const tableMinWidth = useMemo(() => {
     return ESTIMATE_TABLE_COLUMN_ORDER.reduce((width, column) => (
-      isColVisible(column) ? width + ESTIMATE_TABLE_COLUMN_WIDTHS[column] : width
+      isColVisible(column) ? width + (columnWidths[column] ?? ESTIMATE_TABLE_COLUMN_WIDTHS[column]) : width
     ), 0);
-  }, [isColVisible]);
+  }, [columnWidths, isColVisible]);
+
+  function estimateColumnWidth(column: ColumnId) {
+    return columnWidths[column] ?? ESTIMATE_TABLE_COLUMN_WIDTHS[column];
+  }
+
+  function startColumnResize(column: ColumnId, event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!RESIZABLE_ESTIMATE_COLUMNS.has(column)) return;
+    const startX = event.clientX;
+    const startWidth = estimateColumnWidth(column);
+    const minWidth = ESTIMATE_TABLE_COLUMN_MIN_WIDTHS[column] ?? 40;
+    const maxWidth = ESTIMATE_TABLE_COLUMN_MAX_WIDTHS[column] ?? 420;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.round(Math.min(maxWidth, Math.max(minWidth, startWidth + moveEvent.clientX - startX)));
+      setColumnWidths((current) => ({ ...current, [column]: nextWidth }));
+    };
+
+    const handlePointerUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+  }
+
+  function renderColumnResizeHandle(column: ColumnId) {
+    if (!RESIZABLE_ESTIMATE_COLUMNS.has(column)) return null;
+    return (
+      <button
+        type="button"
+        aria-label={`Resize ${COLUMN_LABELS[column]} column`}
+        className="absolute inset-y-0 -right-1 z-20 w-2 cursor-col-resize rounded-full opacity-0 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none"
+        onPointerDown={(event) => startColumnResize(column, event)}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <span className="absolute inset-y-1 left-1/2 w-px -translate-x-1/2 rounded-full bg-accent/55 shadow-[0_0_0_1px_hsl(var(--panel))]" />
+      </button>
+    );
+  }
 
   // ─── Cell editing ───
 
@@ -4278,15 +4359,22 @@ export function EstimateGrid({
     });
   }
 
-  function duplicateRow(itemId: string) {
-    if (!ensureSnapLineCapacity(1)) return;
-    const row = visibleRows.find((r) => r.id === itemId);
-    if (!row) return;
+  function getWorksheetOrderedRows(worksheetId: string) {
+    return [...(findWs(workspace, worksheetId)?.items ?? [])].sort((left, right) => left.lineOrder - right.lineOrder);
+  }
 
-	    const payload: CreateWorksheetItemInput = {
-	      phaseId: row.phaseId ?? null,
-	      categoryId: row.categoryId ?? null,
-	      category: row.category,
+  function lineOrderBelow(row: WorkspaceWorksheetItem) {
+    const rows = getWorksheetOrderedRows(row.worksheetId);
+    const index = rows.findIndex((entry) => entry.id === row.id);
+    const next = index >= 0 ? rows[index + 1] : undefined;
+    return next ? (row.lineOrder + next.lineOrder) / 2 : row.lineOrder + 1;
+  }
+
+  function payloadFromRow(row: WorkspaceWorksheetItem, overrides: Partial<CreateWorksheetItemInput> = {}): CreateWorksheetItemInput {
+    return {
+      phaseId: row.phaseId ?? null,
+      categoryId: row.categoryId ?? null,
+      category: row.category,
       entityType: row.entityType,
       entityName: row.entityName,
       classification: row.classification ?? {},
@@ -4308,9 +4396,114 @@ export function EstimateGrid({
       sourceNotes: row.sourceNotes ?? "",
       resourceComposition: row.resourceComposition ?? {},
       sourceEvidence: row.sourceEvidence ?? {},
+      ...overrides,
+    };
+  }
+
+  function insertLineBelow(itemId: string) {
+    if (!ensureSnapLineCapacity(1)) return;
+    const row = visibleRows.find((r) => r.id === itemId);
+    if (!row) return;
+    const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
+    const draftItem: WorkspaceWorksheetItem = {
+      id: temporaryId,
+      worksheetId: row.worksheetId,
+      phaseId: row.phaseId ?? null,
+      categoryId: row.categoryId ?? null,
+      category: row.category,
+      entityType: row.entityType,
+      entityName: "",
+      classification: {},
+      costCode: null,
+      vendor: undefined,
+      description: "",
+      quantity: 1,
+      uom: row.uom,
+      cost: 0,
+      markup: row.markup ?? workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      lineOrder: lineOrderBelow(row),
+      rateScheduleItemId: null,
+      itemId: null,
+      costResourceId: null,
+      effectiveCostId: null,
+      laborUnitId: null,
+      tierUnits: {},
+      sourceNotes: "",
+      resourceComposition: {},
+      sourceEvidence: {},
     };
 
-    createItem(row.worksheetId, payload, "Duplicate failed.");
+    onApply((current) => applyWorksheetItemUpsert(current, draftItem));
+    setSelectedRowId(temporaryId);
+    setSelectedCell({ rowId: temporaryId, column: "entityName" });
+    setEntityDropdownVisible(false);
+    setEntityDropdownClosingRowId(null);
+    setEntityDropdownRowId(temporaryId);
+    setEntitySearchTerm("");
+    setEntitySearchError(null);
+    setEntityPluginResults([]);
+  }
+
+  function duplicateRow(itemId: string) {
+    if (!ensureSnapLineCapacity(1)) return;
+    const row = visibleRows.find((r) => r.id === itemId);
+    if (!row) return;
+    createItem(row.worksheetId, payloadFromRow(row, { lineOrder: lineOrderBelow(row) }), "Duplicate failed.");
+  }
+
+  function splitRow(itemId: string) {
+    if (!ensureSnapLineCapacity(1)) return;
+    const row = visibleRows.find((r) => r.id === itemId);
+    if (!row) return;
+    if (row.quantity <= 0) {
+      onError("Only rows with a positive quantity can be split.");
+      return;
+    }
+    const firstQuantity = Math.round((row.quantity / 2) * 10_000) / 10_000;
+    const secondQuantity = Math.round((row.quantity - firstQuantity) * 10_000) / 10_000;
+    if (firstQuantity <= 0 || secondQuantity <= 0) {
+      onError("This row is too small to split cleanly.");
+      return;
+    }
+    commitItemPatch(row.id, {
+      quantity: firstQuantity,
+      price: roundMoney(row.cost * firstQuantity * (1 + row.markup)),
+    }, "Split failed.");
+    createItem(row.worksheetId, payloadFromRow(row, {
+      quantity: secondQuantity,
+      price: roundMoney(row.cost * secondQuantity * (1 + row.markup)),
+      lineOrder: lineOrderBelow(row),
+      sourceNotes: mergeSourceNotes(row.sourceNotes, `Split from ${row.entityName}`),
+    }), "Split failed.");
+  }
+
+  function mergeWithRowBelow(itemId: string) {
+    const row = visibleRows.find((r) => r.id === itemId);
+    if (!row) return;
+    const rows = getWorksheetOrderedRows(row.worksheetId);
+    const index = rows.findIndex((entry) => entry.id === row.id);
+    const next = index >= 0 ? rows[index + 1] : undefined;
+    if (!next) {
+      onError("There is no row below to merge.");
+      return;
+    }
+    if (row.uom !== next.uom) {
+      onError("Rows must use the same UOM before they can be merged.");
+      return;
+    }
+    const quantity = row.quantity + next.quantity;
+    const cost = quantity > 0
+      ? roundMoney(((row.cost * row.quantity) + (next.cost * next.quantity)) / quantity)
+      : row.cost;
+    commitItemPatch(row.id, {
+      description: [row.description, next.description].filter(Boolean).join("\n"),
+      quantity,
+      cost,
+      price: roundMoney(row.price + next.price),
+      sourceNotes: mergeSourceNotes(row.sourceNotes, next.sourceNotes, `Merged ${next.entityName} into ${row.entityName}`),
+    }, "Merge failed.");
+    deleteRow(next.id);
   }
 
   // ─── Reorder ───
@@ -4366,20 +4559,29 @@ export function EstimateGrid({
     });
   }
 
-  function toggleSelectAll() {
-    const selectableRowIds = visibleRows
-      .filter((row) => !isTemporaryWorksheetItemId(row.id))
-      .map((row) => row.id);
+  function toggleSelectionMode() {
+    setSelectionMode((current) => {
+      const next = !current;
+      if (!next) setSelectedIds(new Set());
+      return next;
+    });
+  }
 
-    if (selectedIds.size === selectableRowIds.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(selectableRowIds));
-    }
+  function toggleSelectAll() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allVisibleRowsSelected) {
+        for (const id of visibleSelectableRowIds) next.delete(id);
+      } else {
+        for (const id of visibleSelectableRowIds) next.add(id);
+      }
+      return next;
+    });
   }
 
   function handleBulkDelete() {
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
     startTransition(async () => {
       try {
         let last: WorkspaceResponse | null = null;
@@ -4397,6 +4599,7 @@ export function EstimateGrid({
 
   function handleBulkMoveToWorksheet(targetWsId: string) {
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
     startTransition(async () => {
       try {
         let last: WorkspaceResponse | null = null;
@@ -4416,6 +4619,7 @@ export function EstimateGrid({
 
   function handleBulkAssignPhase(phaseId: string) {
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
     startTransition(async () => {
       try {
         let last: WorkspaceResponse | null = null;
@@ -4430,21 +4634,28 @@ export function EstimateGrid({
     });
   }
 
-  function handleBulkSetMarkup() {
-    const val = parseNum(bulkMarkupValue) / 100;
-    if (!Number.isFinite(val)) return;
+  function handleBulkAssignClassification() {
+    const trimmed = bulkClassificationValue.trim();
+    if (!trimmed) return;
     const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const rowById = new Map((workspace.worksheets ?? []).flatMap((worksheet) => worksheet.items).map((row) => [row.id, row]));
     startTransition(async () => {
       try {
         let last: WorkspaceResponse | null = null;
         for (const id of ids) {
-          last = await updateWorksheetItem(workspace.project.id, id, { markup: val });
+          const row = rowById.get(id);
+          const classification = setClassificationCode(row?.classification, bulkClassificationKey, trimmed);
+          last = await updateWorksheetItem(workspace.project.id, id, {
+            classification,
+            ...(bulkClassificationKey === "costCode" ? { costCode: trimmed } : {}),
+          });
         }
         if (last) onApply(last);
         setSelectedIds(new Set());
-        setBulkMarkupValue("");
+        setBulkClassificationValue("");
       } catch (e) {
-        onError(e instanceof Error ? e.message : "Set markup failed.");
+        onError(e instanceof Error ? e.message : "Assign classification failed.");
       }
     });
   }
@@ -4491,6 +4702,115 @@ export function EstimateGrid({
         onError(e instanceof Error ? e.message : "Bulk duplicate failed.");
       }
     });
+  }
+
+  function handleContextAssignPhase(row: WorkspaceWorksheetItem, phaseId: string) {
+    commitItemPatch(row.id, { phaseId: phaseId || null }, "Assign phase failed.");
+    setContextMenu(null);
+  }
+
+  function handleContextMoveToWorksheet(row: WorkspaceWorksheetItem, worksheetId: string) {
+    if (!worksheetId || worksheetId === row.worksheetId) {
+      setContextMenu(null);
+      return;
+    }
+    commitItemPatch(row.id, { worksheetId } as WorksheetItemPatchInput, "Move failed.");
+    setContextMenu(null);
+  }
+
+  function handleContextApplyClassification(row: WorkspaceWorksheetItem) {
+    const trimmed = contextClassificationValue.trim();
+    if (!trimmed) return;
+    commitItemPatch(row.id, {
+      classification: setClassificationCode(row.classification, contextClassificationKey, trimmed),
+      ...(contextClassificationKey === "costCode" ? { costCode: trimmed } : {}),
+    }, "Assign classification failed.");
+    setContextClassificationValue("");
+    setContextMenu(null);
+  }
+
+  function clearRowClassification(row: WorkspaceWorksheetItem) {
+    commitItemPatch(row.id, { classification: {}, costCode: null }, "Clear classification failed.");
+    setContextMenu(null);
+  }
+
+  function selectRowsByPredicate(predicate: (row: WorkspaceWorksheetItem) => boolean) {
+    setSelectedIds(new Set(visibleRows.filter((row) => !isTemporaryWorksheetItemId(row.id) && predicate(row)).map((row) => row.id)));
+    setSelectionMode(true);
+    setContextMenu(null);
+  }
+
+  function selectSingleRow(rowId: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      next.add(rowId);
+      return next;
+    });
+    setContextMenu(null);
+  }
+
+  function startTransformWithRow(rowId: string) {
+    setSelectedIds(new Set([rowId]));
+    setSelectionMode(true);
+    setContextMenu(null);
+  }
+
+  function applyRowPhaseAndCodeToSelection(row: WorkspaceWorksheetItem) {
+    const ids = Array.from(selectedIds).filter((id) => id !== row.id);
+    if (ids.length === 0) return;
+    startTransition(async () => {
+      try {
+        let last: WorkspaceResponse | null = null;
+        for (const id of ids) {
+          last = await updateWorksheetItem(workspace.project.id, id, {
+            phaseId: row.phaseId ?? null,
+            classification: row.classification ?? {},
+            costCode: getClassificationCode(row.classification, "costCode", row.costCode) || null,
+          });
+        }
+        if (last) onApply(last);
+        setSelectedIds(new Set());
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Apply row coding failed.");
+      }
+    });
+    setContextMenu(null);
+  }
+
+  function createAllowanceFromRow(row: WorkspaceWorksheetItem) {
+    startTransition(async () => {
+      try {
+        const next = await createAdjustment(workspace.project.id, {
+          name: `Allowance - ${row.entityName || "Line item"}`,
+          description: mergeSourceNotes(row.description, row.sourceNotes),
+          type: "Allowance",
+          kind: "line_item",
+          pricingMode: "line_item_standalone",
+          financialCategory: "allowance",
+          calculationBase: "selected_scope",
+          appliesTo: row.entityName || row.category || "Line item",
+          amount: roundMoney(row.price || row.cost * row.quantity),
+          percentage: null,
+          show: "Yes",
+        });
+        onApply(next);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Create allowance failed.");
+      }
+    });
+    setContextMenu(null);
+  }
+
+  function linkRowToTakeoff(rowId: string) {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("bidwright:pending-takeoff-worksheet-item-id", rowId);
+    }
+    if (onOpenTakeoffLink) {
+      onOpenTakeoffLink(rowId);
+    } else {
+      onError("Open Takeoff and use a mark's link action to connect this line item.");
+    }
+    setContextMenu(null);
   }
 
   // ─── Universal Add Items ───
@@ -4705,20 +5025,39 @@ export function EstimateGrid({
   function handleContextMenu(e: React.MouseEvent, rowId: string) {
     e.preventDefault();
     if (isTemporaryWorksheetItemId(rowId)) return;
+    const row = visibleRows.find((entry) => entry.id === rowId);
+    if (row) {
+      const preferredKey: ClassificationKey = getClassificationCode(row.classification, "costCode", row.costCode)
+        ? "costCode"
+        : getClassificationCode(row.classification, "masterformat")
+          ? "masterformat"
+          : "masterformat";
+      setContextClassificationKey(preferredKey);
+      setContextClassificationValue(getClassificationCode(row.classification, preferredKey, row.costCode));
+    }
     setContextMenu({ rowId, x: e.clientX, y: e.clientY });
     setSelectedRowId(rowId);
   }
 
   useEffect(() => {
-    function close() {
-      setContextMenu(null);
+    function close(event: MouseEvent) {
+      const target = event.target;
+      if (target instanceof Element) {
+        if (
+          target.closest("[data-row-context-menu]") ||
+          target.closest(".row-context-menu-select-content") ||
+          target.closest("[data-radix-popper-content-wrapper]")
+        ) {
+          return;
+        }
+      }
       setTabMenu(null);
       setOrganizerMenu(null);
       if (entityDropdownRowId) {
         closeEntityDropdown(entityDropdownRowId);
       }
     }
-    if (contextMenu || tabMenu || organizerMenu || entityDropdownRowId) {
+    if (tabMenu || organizerMenu || entityDropdownRowId) {
       const timer = setTimeout(() => {
         document.addEventListener("click", close);
       }, 0);
@@ -4727,7 +5066,31 @@ export function EstimateGrid({
         document.removeEventListener("click", close);
       };
     }
-  }, [closeEntityDropdown, contextMenu, tabMenu, organizerMenu, entityDropdownRowId]);
+  }, [closeEntityDropdown, tabMenu, organizerMenu, entityDropdownRowId]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function close(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Node && rowContextMenuRef.current?.contains(target)) return;
+      if (target instanceof Element) {
+        if (
+          target.closest(".row-context-menu-select-content") ||
+          target.closest("[data-radix-popper-content-wrapper]")
+        ) {
+          return;
+        }
+      }
+      setContextMenu(null);
+    }
+    const timer = setTimeout(() => {
+      document.addEventListener("pointerdown", close, true);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("pointerdown", close, true);
+    };
+  }, [contextMenu]);
 
   // Close column picker on outside click
   useEffect(() => {
@@ -5220,8 +5583,6 @@ export function EstimateGrid({
 		                const detailParts = optionMetaParts(item);
 		                const laborTreeDepth = isLaborChoice ? options.laborTreeDepth ?? group.treePath?.length ?? 0 : 0;
 		                const laborReference = isLaborChoice ? laborUnitReferenceParts(item) : null;
-		                const laborDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursDifficult") : undefined;
-		                const laborVeryDifficult = isLaborChoice ? payloadNumber(item.payload, "hoursVeryDifficult") : undefined;
 		                const buttonStyle: React.CSSProperties = {
 		                  borderColor: colorWithAlpha(
 		                    itemCategoryColor,
@@ -5303,16 +5664,6 @@ export function EstimateGrid({
 		                          {item.unit && (
 		                            <span className="shrink-0 rounded border border-line/70 bg-bg/60 px-1 py-px">
 		                              {item.unit}
-		                            </span>
-		                          )}
-		                          {laborDifficult !== undefined && (
-		                            <span className="shrink-0 tabular-nums">
-		                              Diff {laborDifficult.toFixed(2)}
-		                            </span>
-		                          )}
-		                          {laborVeryDifficult !== undefined && (
-		                            <span className="shrink-0 tabular-nums">
-		                              Very {laborVeryDifficult.toFixed(2)}
 		                            </span>
 		                          )}
 		                          {needsRate && (
@@ -6149,6 +6500,32 @@ export function EstimateGrid({
     el.scrollBy({ left: dir === "left" ? -200 : 200, behavior: "smooth" });
   }, []);
 
+  const bulkClassificationOption =
+    CLASSIFICATION_STANDARD_OPTIONS.find((option) => option.key === bulkClassificationKey) ??
+    CLASSIFICATION_STANDARD_OPTIONS[0];
+  const hasBulkSelection = selectedIds.size > 0;
+  const contextRow = contextMenu
+    ? (workspace.worksheets ?? []).flatMap((worksheet) => worksheet.items).find((row) => row.id === contextMenu.rowId) ?? null
+    : null;
+  const contextWorksheetRows = contextRow
+    ? [...(findWs(workspace, contextRow.worksheetId)?.items ?? [])].sort((left, right) => left.lineOrder - right.lineOrder)
+    : [];
+  const contextRowIndex = contextRow ? contextWorksheetRows.findIndex((row) => row.id === contextRow.id) : -1;
+  const contextNextRow = contextRowIndex >= 0 ? contextWorksheetRows[contextRowIndex + 1] ?? null : null;
+  const contextPhase = contextRow?.phaseId
+    ? (workspace.phases ?? []).find((phase) => phase.id === contextRow.phaseId)
+    : null;
+  const contextCostCode = contextRow
+    ? getClassificationCode(contextRow.classification, "costCode", contextRow.costCode)
+    : "";
+  const contextAssemblySelectionCount = selectedIds.size;
+  const contextClassificationOption =
+    CLASSIFICATION_STANDARD_OPTIONS.find((option) => option.key === contextClassificationKey) ??
+    CLASSIFICATION_STANDARD_OPTIONS[0];
+  const contextCanApplyCoding = contextRow
+    ? selectedIds.size > (selectedIds.has(contextRow.id) ? 1 : 0)
+    : false;
+
   // ─── Render ───
 
   return (
@@ -6364,12 +6741,62 @@ export function EstimateGrid({
             </Badge>
           )}
 
-          <div className="ml-auto flex items-center gap-1.5">
-            {/* Column visibility toggle */}
+          <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-bg/55 p-0.5 shadow-sm">
+            <Button
+              size="xs"
+              className="rounded-md"
+              onClick={() => addNewItem()}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+              title={
+                (workspace.worksheets ?? []).length === 0
+                  ? "Create a worksheet first"
+                  : snapLimitReached
+                    ? `Snap limit reached (${snapLineLimit} lines)`
+                    : "Add one line item"
+              }
+            >
+              <Plus className="h-3 w-3" /> Add
+            </Button>
+            <Button
+              size="xs"
+              variant="ghost"
+              className="rounded-md"
+              onClick={() => setShowAddItemsPicker(true)}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+              title={
+                (workspace.worksheets ?? []).length === 0
+                  ? "Create a worksheet first"
+                  : snapLimitReached
+                    ? `Snap limit reached (${snapLineLimit} lines)`
+                    : "Add multiple line items"
+              }
+            >
+              <Boxes className="h-3 w-3" /> Multi
+            </Button>
+
+            <div className="mx-0.5 h-4 w-px bg-line" />
+
+            <Button
+              size="xs"
+              variant={selectionMode ? "secondary" : "ghost"}
+              className="rounded-md"
+              onClick={toggleSelectionMode}
+              title="Select rows for batch transforms"
+            >
+              <CheckSquare className="h-3 w-3" />
+              Select
+              {selectedIds.size > 0 ? (
+                <span className="rounded bg-accent/10 px-1 tabular-nums text-accent">{selectedIds.size}</span>
+              ) : null}
+            </Button>
+
+            <div className="mx-0.5 h-4 w-px bg-line" />
+
             <div className="relative" data-column-picker>
               <Button
                 size="xs"
                 variant="ghost"
+                className="rounded-md"
                 onClick={() => setShowColumnPicker(!showColumnPicker)}
                 title="Toggle columns"
               >
@@ -6399,111 +6826,136 @@ export function EstimateGrid({
               )}
             </div>
 
-            <Button size="xs" variant="ghost" onClick={exportTableAsCsv} title="Export as CSV">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="rounded-md"
+              onClick={exportTableAsCsv}
+              title="Export as CSV"
+            >
               <Download className="h-3 w-3" />
             </Button>
-	            <Button
-	              size="xs"
-	              onClick={() => addNewItem()}
-	              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
-	              title={
-                  (workspace.worksheets ?? []).length === 0
-                    ? "Create a worksheet first"
-                    : snapLimitReached
-                      ? `Snap limit reached (${snapLineLimit} lines)`
-                      : "Add one line item"
-                }
-	            >
-	              <Plus className="h-3 w-3" /> Add
-	            </Button>
-	            <Button
-	              size="xs"
-	              variant="ghost"
-	              onClick={() => setShowAddItemsPicker(true)}
-	              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
-	              title={
-                  (workspace.worksheets ?? []).length === 0
-                    ? "Create a worksheet first"
-                    : snapLimitReached
-                      ? `Snap limit reached (${snapLineLimit} lines)`
-                      : "Add multiple line items"
-                }
-	            >
-	              <Boxes className="h-3 w-3" /> Multi
-	            </Button>
-	          </div>
+          </div>
 	        </div>
 
       {/* ─── Bulk Operations Toolbar ─── */}
-      {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 px-3 py-2 bg-accent/5 border border-accent/20 rounded-lg text-xs">
-          <span className="font-medium text-accent">{selectedIds.size} selected</span>
+      {(selectionMode || selectedIds.size > 0) && (
+        <div className="overflow-visible rounded-lg border border-line bg-panel shadow-sm">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line bg-panel2/35 px-3 py-2 text-xs">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent">
+              <CheckSquare className="h-3.5 w-3.5" />
+            </span>
+            <span className="font-semibold text-fg">Rows</span>
+            <span className="rounded-md border border-line bg-bg/55 px-2 py-1 font-medium tabular-nums text-fg/65">
+              {selectedIds.size} selected
+            </span>
 
-          <Button size="xs" variant="danger" onClick={handleBulkDelete} disabled={isPending}>
-            <Trash2 className="h-3 w-3" /> Delete Selected
-          </Button>
-
-          <Button size="xs" variant="ghost" onClick={handleBulkDuplicate} disabled={isPending}>
-            <Copy className="h-3 w-3" /> Duplicate Selected
-          </Button>
-
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => setShowSaveAsAssembly(true)}
-            disabled={isPending}
-            title="Create a reusable assembly from these line items"
-          >
-            <Layers className="h-3 w-3" /> Save as Assembly
-          </Button>
-
-          {/* Move to Worksheet dropdown */}
-          <Select
-            size="xs"
-            className="w-36"
-            value=""
-            placeholder="Move to..."
-            onValueChange={(v) => {
-              if (v) handleBulkMoveToWorksheet(v);
-            }}
-            options={(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
-          />
-
-          {/* Assign Phase dropdown */}
-          <Select
-            size="xs"
-            className="w-36"
-            value=""
-            placeholder="Assign Phase..."
-            onValueChange={(v) => {
-              handleBulkAssignPhase(v === "__none__" ? "" : v);
-            }}
-            options={[
-              { value: "__none__", label: "None" },
-              ...buildEstimatePhaseOptions(workspace.phases ?? []),
-            ]}
-          />
-
-          {/* Set Markup */}
-          <div className="flex items-center gap-1">
-            <Input
-              className="h-7 w-16 text-[11px]"
-              type="number"
-              placeholder="Markup %"
-              value={bulkMarkupValue}
-              onChange={(e) => setBulkMarkupValue(e.target.value)}
-            />
-            <Button size="xs" variant="ghost" onClick={handleBulkSetMarkup} disabled={!bulkMarkupValue || isPending}>
-              Apply
-            </Button>
+            <div className="ml-auto flex items-center gap-1.5">
+              <Button
+                size="xs"
+                variant="secondary"
+                onClick={toggleSelectAll}
+                disabled={visibleSelectableRowIds.length === 0}
+              >
+                {allVisibleRowsSelected ? "Clear visible" : "Select visible"}
+              </Button>
+              <button
+                type="button"
+                className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/60 hover:text-fg/60"
+                onClick={() => {
+                  setSelectedIds(new Set());
+                  setSelectionMode(false);
+                }}
+                title="Close selection mode"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
 
-          <button
-            className="ml-auto text-fg/40 hover:text-fg/60 transition-colors"
-            onClick={() => setSelectedIds(new Set())}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
+            <div className="flex items-center gap-1 rounded-md border border-line bg-bg/45 p-1">
+              <Button size="xs" variant="ghost" onClick={handleBulkDuplicate} disabled={!hasBulkSelection || isPending}>
+                <Copy className="h-3 w-3" /> Duplicate
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setShowSaveAsAssembly(true)}
+                disabled={!hasBulkSelection || isPending}
+                title="Create a reusable assembly from these line items"
+              >
+                <Layers className="h-3 w-3" /> Assembly
+              </Button>
+              <Button size="xs" variant="danger" onClick={handleBulkDelete} disabled={!hasBulkSelection || isPending}>
+                <Trash2 className="h-3 w-3" /> Delete
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-1 rounded-md border border-line bg-bg/45 p-1">
+              <MoveRight className="mx-1 h-3.5 w-3.5 text-fg/35" />
+              <Select
+                size="xs"
+                className="w-40"
+                value=""
+                placeholder="Worksheet..."
+                disabled={!hasBulkSelection || isPending}
+                onValueChange={(v) => {
+                  if (v) handleBulkMoveToWorksheet(v);
+                }}
+                options={(workspace.worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
+              />
+              <Select
+                size="xs"
+                className="w-36"
+                value=""
+                placeholder="Phase..."
+                disabled={!hasBulkSelection || isPending}
+                onValueChange={(v) => {
+                  handleBulkAssignPhase(v === "__none__" ? "" : v);
+                }}
+                options={[
+                  { value: "__none__", label: "No phase" },
+                  ...buildEstimatePhaseOptions(workspace.phases ?? []),
+                ]}
+              />
+            </div>
+
+            <div className="ml-auto flex items-center gap-1 rounded-md border border-line bg-bg/45 p-1">
+              <Tag className="mx-1 h-3.5 w-3.5 text-fg/35" />
+              <Select
+                size="xs"
+                className="w-32"
+                value={bulkClassificationKey}
+                disabled={isPending}
+                onValueChange={(value) => setBulkClassificationKey(value as ClassificationKey)}
+                options={CLASSIFICATION_STANDARD_OPTIONS.map((option) => ({
+                  value: option.key,
+                  label: option.label,
+                }))}
+              />
+              <Input
+                className="h-7 w-32 text-[11px]"
+                placeholder={bulkClassificationOption?.placeholder ?? "Code"}
+                value={bulkClassificationValue}
+                onChange={(event) => setBulkClassificationValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handleBulkAssignClassification();
+                  }
+                }}
+              />
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={handleBulkAssignClassification}
+                disabled={!hasBulkSelection || !bulkClassificationValue.trim() || isPending}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -6570,99 +7022,118 @@ export function EstimateGrid({
             <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line">
               <div className="min-h-0 flex-1 overflow-auto">
                 <table className="w-full table-fixed text-sm" style={{ minWidth: tableMinWidth }}>
+                <colgroup>
+                  {ESTIMATE_TABLE_COLUMN_ORDER.filter((column) => isColVisible(column)).map((column) => (
+                    <col key={column} style={{ width: estimateColumnWidth(column) }} />
+                  ))}
+                </colgroup>
                 <thead className="bg-panel2 text-[11px] font-medium uppercase text-fg/35 sticky top-0 z-10">
                   <tr>
                     {/* Expand button column */}
                     {isColVisible("expand") && (
-                      <th className="border-b border-line px-1 py-2 w-8" />
+                      <th className="border-b border-line px-1 py-2 w-8" style={{ width: estimateColumnWidth("expand") }} />
                     )}
                     {/* Checkbox column */}
                     {isColVisible("checkbox") && (
-                      <th className="border-b border-line px-1 py-2 w-8">
+                      <th className="border-b border-line px-1 py-2 w-8" style={{ width: estimateColumnWidth("checkbox") }}>
                         <input
                           type="checkbox"
                           className="h-3.5 w-3.5 rounded border-line accent-accent cursor-pointer"
-                          checked={visibleRows.length > 0 && selectedIds.size === visibleRows.length}
+                          checked={allVisibleRowsSelected}
                           onChange={toggleSelectAll}
                         />
                       </th>
                     )}
                     {/* Reorder column */}
                     {isColVisible("reorder") && (
-                      <th className="border-b border-line px-1 py-2 w-14" />
+                      <th className="border-b border-line px-1 py-2 w-14" style={{ width: estimateColumnWidth("reorder") }} />
                     )}
                     {isColVisible("lineOrder") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-8 cursor-pointer select-none group/th" onClick={() => handleSortToggle("lineOrder")}>
+                      <th className="relative border-b border-line px-2 py-2 text-left w-8 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("lineOrder") }} onClick={() => handleSortToggle("lineOrder")}>
                         <span className="flex items-center gap-1"># {renderSortIcon("lineOrder")}</span>
+                        {renderColumnResizeHandle("lineOrder")}
                       </th>
                     )}
                     {isColVisible("entityName") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-[200px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("entityName")}>
+                      <th className="relative border-b border-line px-2 py-2 text-left w-[200px] cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("entityName") }} onClick={() => handleSortToggle("entityName")}>
                         <span className="flex items-center gap-1">Line Item Name {renderSortIcon("entityName")}</span>
+                        {renderColumnResizeHandle("entityName")}
                       </th>
                     )}
                     {isColVisible("vendor") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-[120px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("vendor")}>
+                      <th className="relative border-b border-line px-2 py-2 text-left w-[120px] cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("vendor") }} onClick={() => handleSortToggle("vendor")}>
                         <span className="flex items-center gap-1">Vendor {renderSortIcon("vendor")}</span>
+                        {renderColumnResizeHandle("vendor")}
                       </th>
                     )}
                     {isColVisible("description") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-[220px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("description")}>
+                      <th className="relative border-b border-line px-2 py-2 text-left w-[220px] cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("description") }} onClick={() => handleSortToggle("description")}>
                         <span className="flex items-center gap-1">Description {renderSortIcon("description")}</span>
+                        {renderColumnResizeHandle("description")}
                       </th>
                     )}
                     {isColVisible("quantity") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("quantity")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("quantity") }} onClick={() => handleSortToggle("quantity")}>
                         <span className="flex items-center justify-end gap-1">Qty {renderSortIcon("quantity")}</span>
+                        {renderColumnResizeHandle("quantity")}
                       </th>
                     )}
                     {isColVisible("uom") && (
-                      <th className="border-b border-line px-2 py-2 text-center w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("uom")}>
+                      <th className="relative border-b border-line px-2 py-2 text-center w-16 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("uom") }} onClick={() => handleSortToggle("uom")}>
                         <span className="flex items-center justify-center gap-1">UOM {renderSortIcon("uom")}</span>
+                        {renderColumnResizeHandle("uom")}
                       </th>
                     )}
                     {isColVisible("factors") && (
-                      <th className="border-b border-line px-1 py-1.5 text-center w-[80px]">
+                      <th className="relative border-b border-line px-1 py-1.5 text-center w-[80px]" style={{ width: estimateColumnWidth("factors") }}>
                         <span className="flex items-center justify-center gap-1">Factors</span>
+                        {renderColumnResizeHandle("factors")}
                       </th>
                     )}
                     {isColVisible("units") && (
-                      <th className="border-b border-line px-1.5 py-2 text-center w-[160px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("unit1")}>
+                      <th className="relative border-b border-line px-1.5 py-2 text-center w-[160px] cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("units") }} onClick={() => handleSortToggle("unit1")}>
                         <span className="flex items-center justify-center gap-1 text-[10px]">Units {renderSortIcon("unit1")}</span>
+                        {renderColumnResizeHandle("units")}
                       </th>
                     )}
                     {isColVisible("cost") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" onClick={() => handleSortToggle("cost")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-20 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("cost") }} onClick={() => handleSortToggle("cost")}>
                         <span className="flex items-center justify-end gap-1">Cost {renderSortIcon("cost")}</span>
+                        {renderColumnResizeHandle("cost")}
                       </th>
                     )}
                     {isColVisible("extCost") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("extCost")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("extCost") }} onClick={() => handleSortToggle("extCost")}>
                         <span className="flex items-center justify-end gap-1">Ext. Cost {renderSortIcon("extCost")}</span>
+                        {renderColumnResizeHandle("extCost")}
                       </th>
                     )}
                     {isColVisible("markup") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("markup")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("markup") }} onClick={() => handleSortToggle("markup")}>
                         <span className="flex items-center justify-end gap-1">Markup {renderSortIcon("markup")}</span>
+                        {renderColumnResizeHandle("markup")}
                       </th>
                     )}
                     {isColVisible("price") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" onClick={() => handleSortToggle("price")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-24 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("price") }} onClick={() => handleSortToggle("price")}>
                         <span className="flex items-center justify-end gap-1">Price {renderSortIcon("price")}</span>
+                        {renderColumnResizeHandle("price")}
                       </th>
                     )}
                     {isColVisible("margin") && (
-                      <th className="border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" onClick={() => handleSortToggle("margin")}>
+                      <th className="relative border-b border-line px-2 py-2 text-right w-16 cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("margin") }} onClick={() => handleSortToggle("margin")}>
                         <span className="flex items-center justify-end gap-1">Margin {renderSortIcon("margin")}</span>
+                        {renderColumnResizeHandle("margin")}
                       </th>
                     )}
                     {isColVisible("phaseId") && (
-                      <th className="border-b border-line px-2 py-2 text-left w-[88px] cursor-pointer select-none group/th" onClick={() => handleSortToggle("phaseId")}>
+                      <th className="relative border-b border-line px-2 py-2 text-left w-[88px] cursor-pointer select-none group/th" style={{ width: estimateColumnWidth("phaseId") }} onClick={() => handleSortToggle("phaseId")}>
                         <span className="flex items-center gap-1">Phase {renderSortIcon("phaseId")}</span>
+                        {renderColumnResizeHandle("phaseId")}
                       </th>
                     )}
                     {isColVisible("actions") && (
-                      <th className="border-b border-line px-2 py-2 text-center w-10"></th>
+                      <th className="border-b border-line px-2 py-2 text-center w-10" style={{ width: estimateColumnWidth("actions") }}></th>
                     )}
                   </tr>
                 </thead>
@@ -6685,6 +7156,7 @@ export function EstimateGrid({
                         visibleColumns={visibleColumns}
                         isColVisible={isColVisible}
                         visibleColumnCount={visibleColumnCount}
+                        selectionMode={selectionMode}
                         selectedIds={selectedIds}
                         lineFactorsByItemId={lineFactorsByItemId}
                         factorTotalsById={factorTotalsById}
@@ -6778,9 +7250,10 @@ export function EstimateGrid({
       </div>
 
       {/* ─── Context menu ─── */}
-      {contextMenu && (
+      {contextMenu && contextRow && (
         <div
           ref={(el) => {
+            rowContextMenuRef.current = el;
             if (!el) return;
             const rect = el.getBoundingClientRect();
             const vw = window.innerWidth;
@@ -6794,61 +7267,244 @@ export function EstimateGrid({
             el.style.left = `${x}px`;
             el.style.top = `${y}px`;
           }}
-          className="fixed z-50 rounded-lg border border-line bg-panel shadow-xl py-1 text-xs min-w-[160px]"
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          data-row-context-menu
+          className="fixed z-50 w-[280px] overflow-visible rounded-xl border border-line bg-panel p-1 text-xs shadow-2xl"
           style={{ left: -9999, top: -9999 }}
         >
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
-            onClick={() => {
-              const row = visibleRows.find((r) => r.id === contextMenu.rowId);
-              if (row) setDetailItem(row);
-              setContextMenu(null);
-            }}
-          >
-            <Maximize2 className="h-3 w-3" /> Open Detail
-          </button>
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
-            onClick={() => {
-              copyRowToClipboard(contextMenu.rowId);
-              setContextMenu(null);
-            }}
-          >
-            <Clipboard className="h-3 w-3" /> Copy Row
-          </button>
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
-            onClick={() => {
-              duplicateRow(contextMenu.rowId);
-              setContextMenu(null);
-            }}
-          >
-            <Copy className="h-3 w-3" /> Duplicate
-          </button>
+          <div className="rounded-lg border border-line bg-bg/45 px-2 py-1.5">
+            <div className="flex items-start gap-1.5">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/20 bg-accent/10 text-accent">
+                <MoreHorizontal className="h-3 w-3" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] font-semibold text-fg">{contextRow.entityName || "Line item"}</div>
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-fg/40">
+                  <span className="truncate">{contextRow.category || "Uncategorized"}</span>
+                  <span className="text-fg/20">/</span>
+                  <span className="tabular-nums">{contextRow.quantity} {contextRow.uom}</span>
+                  <span className="ml-auto font-medium tabular-nums text-fg/55">{formatMoney(contextRow.price)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
 
-          <div className="my-1 border-t border-line" />
+          <div className="mt-1 grid grid-cols-5 gap-1">
+            <button
+              className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              onClick={() => {
+                setDetailItem(contextRow);
+                setContextMenu(null);
+              }}
+            >
+              <Maximize2 className="h-3 w-3" /> Open
+            </button>
+            <button
+              className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              onClick={() => {
+                insertLineBelow(contextRow.id);
+                setContextMenu(null);
+              }}
+            >
+              <Plus className="h-3 w-3" /> Insert
+            </button>
+            <button
+              className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              onClick={() => {
+                duplicateRow(contextRow.id);
+                setContextMenu(null);
+              }}
+            >
+              <Copy className="h-3 w-3" /> Clone
+            </button>
+            <button
+              className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              onClick={() => {
+                copyRowToClipboard(contextRow.id);
+                setContextMenu(null);
+              }}
+            >
+              <Clipboard className="h-3 w-3" /> Copy
+            </button>
+            <button
+              className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-danger/25 bg-danger/8 text-[9px] text-danger transition-colors hover:bg-danger/15"
+              onClick={() => {
+                deleteRow(contextRow.id);
+                setContextMenu(null);
+              }}
+            >
+              <Trash2 className="h-3 w-3" /> Delete
+            </button>
+          </div>
 
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-panel2/60 flex items-center gap-2"
-            onClick={() => {
-              exportTableAsCsv();
-              setContextMenu(null);
-            }}
-          >
-            <Download className="h-3 w-3" /> Export Table as CSV
-          </button>
+          <div className="mt-1 rounded-lg border border-line bg-bg/35 p-1">
+            <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-normal text-fg/35">
+              <Sparkles className="h-3 w-3" /> Transform
+            </div>
+            <div className="grid grid-cols-2 gap-1">
+              <Select
+                size="xs"
+                value=""
+                contentClassName="row-context-menu-select-content"
+                placeholder={contextPhase ? estimatePhaseLabel(contextPhase) : "Assign phase"}
+                onValueChange={(value) => handleContextAssignPhase(contextRow, value === "__none__" ? "" : value)}
+                options={[
+                  { value: "__none__", label: "No phase" },
+                  ...buildEstimatePhaseOptions(workspace.phases ?? []),
+                ]}
+              />
+              <Select
+                size="xs"
+                value=""
+                contentClassName="row-context-menu-select-content"
+                placeholder="Move worksheet"
+                onValueChange={(value) => handleContextMoveToWorksheet(contextRow, value)}
+                options={(workspace.worksheets ?? [])
+                  .filter((worksheet) => worksheet.id !== contextRow.worksheetId)
+                  .map((worksheet) => ({ value: worksheet.id, label: worksheet.name }))}
+              />
+            </div>
+            <div className="mt-1 grid grid-cols-[92px_minmax(0,1fr)_auto] gap-1">
+              <Select
+                size="xs"
+                value={contextClassificationKey}
+                contentClassName="row-context-menu-select-content"
+                onValueChange={(value) => setContextClassificationKey(value as ClassificationKey)}
+                options={CLASSIFICATION_STANDARD_OPTIONS.map((option) => ({
+                  value: option.key,
+                  label: option.label,
+                }))}
+              />
+              <Input
+                className="h-7 text-[11px]"
+                placeholder={contextClassificationOption?.placeholder ?? "Code"}
+                value={contextClassificationValue}
+                onChange={(event) => setContextClassificationValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handleContextApplyClassification(contextRow);
+                  }
+                }}
+              />
+              <button
+                className="inline-flex h-7 items-center justify-center rounded-md border border-line px-2 text-[11px] font-medium text-fg/60 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+                disabled={!contextClassificationValue.trim()}
+                onClick={() => handleContextApplyClassification(contextRow)}
+              >
+                Apply
+              </button>
+            </div>
+            <div className="mt-1 grid grid-cols-4 gap-1">
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent"
+                onClick={() => {
+                  splitRow(contextRow.id);
+                  setContextMenu(null);
+                }}
+              >
+                Split
+              </button>
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+                disabled={!contextNextRow || contextNextRow.uom !== contextRow.uom}
+                title={!contextNextRow ? "No row below" : contextNextRow.uom !== contextRow.uom ? "UOM must match" : "Merge with row below"}
+                onClick={() => {
+                  mergeWithRowBelow(contextRow.id);
+                  setContextMenu(null);
+                }}
+              >
+                Merge
+              </button>
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent"
+                onClick={() => clearRowClassification(contextRow)}
+              >
+                Clear code
+              </button>
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+                disabled={contextAssemblySelectionCount < 2}
+                title={contextAssemblySelectionCount < 2 ? "Select multiple rows first" : "Convert selected rows to an assembly"}
+                onClick={() => {
+                  setShowSaveAsAssembly(true);
+                  setContextMenu(null);
+                }}
+              >
+                Assembly
+              </button>
+            </div>
+          </div>
 
-          <div className="my-1 border-t border-line" />
+          <div className="mt-1 rounded-lg border border-line bg-bg/35 p-1">
+            <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-normal text-fg/35">
+              <CheckSquare className="h-3 w-3" /> Select
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              <button className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent" onClick={() => selectSingleRow(contextRow.id)}>
+                This row
+              </button>
+              <button className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent" onClick={() => selectRowsByPredicate((row) => row.category === contextRow.category)}>
+                Category
+              </button>
+              <button className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent" onClick={() => selectRowsByPredicate((row) => (row.phaseId ?? "") === (contextRow.phaseId ?? ""))}>
+                Phase
+              </button>
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+                disabled={!contextCostCode}
+                onClick={() => selectRowsByPredicate((row) => getClassificationCode(row.classification, "costCode", row.costCode) === contextCostCode)}
+              >
+                Cost code
+              </button>
+              <button
+                className="rounded-md border border-line bg-panel px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+                disabled={!contextCanApplyCoding}
+                onClick={() => applyRowPhaseAndCodeToSelection(contextRow)}
+              >
+                Apply code
+              </button>
+              <button className="rounded-md border border-accent/25 bg-accent/8 px-1.5 py-1 text-[10px] font-medium text-accent transition-colors hover:bg-accent/12" onClick={() => startTransformWithRow(contextRow.id)}>
+                Transform
+              </button>
+            </div>
+          </div>
 
-          <button
-            className="w-full text-left px-3 py-1.5 hover:bg-danger/10 text-danger flex items-center gap-2"
-            onClick={() => {
-              deleteRow(contextMenu.rowId);
-              setContextMenu(null);
-            }}
-          >
-            <Trash2 className="h-3 w-3" /> Delete
-          </button>
+          <div className="mt-1 grid grid-cols-4 gap-1">
+            <button
+              className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-panel2/35 px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+              disabled={contextRowIndex <= 0}
+              onClick={() => {
+                handleMoveUp(contextRow, contextWorksheetRows);
+                setContextMenu(null);
+              }}
+            >
+              <ArrowUp className="h-3 w-3" /> Up
+            </button>
+            <button
+              className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-panel2/35 px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent disabled:pointer-events-none disabled:opacity-35"
+              disabled={!contextNextRow}
+              onClick={() => {
+                handleMoveDown(contextRow, contextWorksheetRows);
+                setContextMenu(null);
+              }}
+            >
+              <ArrowDown className="h-3 w-3" /> Down
+            </button>
+            <button
+              className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-panel2/35 px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent"
+              onClick={() => createAllowanceFromRow(contextRow)}
+            >
+              <CircleDollarSign className="h-3 w-3" /> Allow
+            </button>
+            <button
+              className="inline-flex items-center justify-center gap-1 rounded-lg border border-line bg-panel2/35 px-1.5 py-1 text-[10px] text-fg/65 transition-colors hover:border-accent/35 hover:text-accent"
+              onClick={() => linkRowToTakeoff(contextRow.id)}
+            >
+              <Link2 className="h-3 w-3" /> Takeoff
+            </button>
+          </div>
         </div>
       )}
 
@@ -8232,6 +8888,7 @@ function GroupRows({
   visibleColumns,
   isColVisible,
   visibleColumnCount,
+  selectionMode,
   selectedIds,
   lineFactorsByItemId,
   factorTotalsById,
@@ -8268,6 +8925,7 @@ function GroupRows({
   visibleColumns: Set<ColumnId>;
   isColVisible: (col: ColumnId) => boolean;
   visibleColumnCount: number;
+  selectionMode: boolean;
   selectedIds: Set<string>;
   lineFactorsByItemId: Map<string, EstimateFactor[]>;
   factorTotalsById: Map<string, ProjectWorkspaceData["estimate"]["totals"]["factorTotals"][number]>;
@@ -8350,10 +9008,18 @@ function GroupRows({
                   ? "bg-accent/10"
                   : isSelected
                   ? "bg-accent/5"
+                  : isChecked
+                  ? "bg-accent/8"
                   : "hover:bg-panel2/15"
               )}
               style={{ borderLeftColor: (catDef?.color ?? "#6b7280") + "40" }}
-              onClick={() => onSelectRow(row.id)}
+              onClick={() => {
+                if (selectionMode && !isTemporary) {
+                  onToggleSelectRow(row.id);
+                } else {
+                  onSelectRow(row.id);
+                }
+              }}
               onContextMenu={(e) => onContextMenu(e, row.id)}
             >
               {/* Expand button */}

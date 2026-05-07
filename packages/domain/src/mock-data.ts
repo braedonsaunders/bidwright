@@ -110,7 +110,6 @@ export const mockStore: BidwrightStore = {
       freightOnBoard: "",
       status: "Open",
       defaultMarkup: 0.2,
-      laborDifficulty: "Normal",
       followUpNote: "",
       printEmptyNotesColumn: false,
       printCategory: [],
