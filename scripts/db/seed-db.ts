@@ -299,6 +299,11 @@ async function main() {
           shortform: ec.shortform, defaultUom: ec.defaultUom,
           validUoms: ec.validUoms, editableFields: ec.editableFields as any,
           unitLabels: ec.unitLabels as any, calculationType: ec.calculationType,
+          itemSource: (ec as any).itemSource ?? "freeform",
+          color: (ec as any).color ?? "#6b7280",
+          order: (ec as any).order ?? 0,
+          isBuiltIn: (ec as any).isBuiltIn ?? false,
+          calcFormula: (ec as any).calcFormula ?? "",
         },
       });
     }
