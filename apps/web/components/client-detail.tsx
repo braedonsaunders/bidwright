@@ -52,7 +52,7 @@ import {
 } from "@/lib/api";
 import { formatCompactMoney, formatDate, formatMoney, formatPercent } from "@/lib/format";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
-import { Badge, Button, Card, EmptyState, Input, Label, ModalBackdrop } from "@/components/ui";
+import { Badge, Button, Card, EmptyState, Input, Label } from "@/components/ui";
 
 type EditableCustomerFields = Pick<
   Customer,
@@ -69,12 +69,10 @@ type EditableCustomerFields = Pick<
   | "notes"
 >;
 
-type ClientTab = "overview" | "quotes" | "profile" | "ratebooks";
+type ClientTab = "quotes" | "ratebooks";
 
 const CLIENT_TABS: Array<{ id: ClientTab; label: string }> = [
-  { id: "overview", label: "Overview" },
   { id: "quotes", label: "Quotes" },
-  { id: "profile", label: "Profile" },
   { id: "ratebooks", label: "Ratebooks" },
 ];
 
@@ -693,7 +691,7 @@ export function ClientDetail({
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
-  const [activeTab, setActiveTab] = useState<ClientTab>("overview");
+  const [activeTab, setActiveTab] = useState<ClientTab>("quotes");
   const [editForm, setEditForm] = useState<EditableCustomerFields>(() => ({
     name: initialCustomer?.name ?? "",
     shortName: initialCustomer?.shortName ?? "",
@@ -852,29 +850,18 @@ export function ClientDetail({
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {activeTab === "overview" && (
+        {activeTab === "quotes" && (
           <div className="h-full min-h-0 overflow-auto xl:overflow-hidden">
             <div className="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="min-h-[320px] min-w-0 xl:min-h-0">
                 <QuoteList className="h-full" projects={scopedProjects} users={users} departments={departments} />
               </div>
               <div className="min-h-0 space-y-4 xl:overflow-auto xl:pr-1">
+                <ProfilePanel customer={customer} onEdit={() => setEditOpen(true)} />
+                <ContactsPanel customer={customer} />
                 <StageDistribution projects={scopedProjects} />
                 <SignalPanel projects={scopedProjects} />
               </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "quotes" && (
-          <QuoteList className="h-full" projects={scopedProjects} users={users} departments={departments} />
-        )}
-
-        {activeTab === "profile" && (
-          <div className="h-full min-h-0 overflow-auto xl:overflow-hidden">
-            <div className="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_420px]">
-              <ProfilePanel className="min-h-[320px] xl:min-h-0" customer={customer} onEdit={() => setEditOpen(true)} />
-              <ContactsPanel className="min-h-[320px] xl:min-h-0" customer={customer} />
             </div>
           </div>
         )}
@@ -884,85 +871,94 @@ export function ClientDetail({
         )}
       </div>
 
-      <ModalBackdrop open={editOpen} onClose={() => !editSaving && setEditOpen(false)} size="xl">
-        <form onSubmit={handleProfileSubmit} className="rounded-lg border border-line bg-panel shadow-2xl">
-          <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
-            <div>
-              <h2 className="text-sm font-semibold text-fg">Edit client profile</h2>
-              <p className="mt-0.5 text-xs text-fg/50">Updates the customer record used across quotes.</p>
+      {editOpen && (
+        <div className="fixed inset-0 z-[200]">
+          <div className="absolute inset-0 bg-black/60" onClick={() => !editSaving && setEditOpen(false)} />
+          <div className="absolute inset-y-0 right-0 flex max-w-full">
+            <div className="w-screen max-w-lg">
+              <form onSubmit={handleProfileSubmit} className="flex h-full flex-col border-l border-line bg-panel shadow-2xl">
+                <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+                  <div>
+                    <h2 className="text-sm font-semibold text-fg">Edit client profile</h2>
+                    <p className="mt-0.5 text-xs text-fg/50">Updates the customer record used across quotes.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditOpen(false)}
+                    disabled={editSaving}
+                    className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                    aria-label="Close edit client dialog"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <Label>Name</Label>
+                      <Input autoFocus value={editForm.name} onChange={(event) => setEditForm((form) => ({ ...form, name: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Short Name</Label>
+                      <Input value={editForm.shortName} onChange={(event) => setEditForm((form) => ({ ...form, shortName: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Website</Label>
+                      <Input value={editForm.website} onChange={(event) => setEditForm((form) => ({ ...form, website: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Email</Label>
+                      <Input value={editForm.email} onChange={(event) => setEditForm((form) => ({ ...form, email: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Phone</Label>
+                      <Input value={editForm.phone} onChange={(event) => setEditForm((form) => ({ ...form, phone: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Label>Street</Label>
+                      <Input value={editForm.addressStreet} onChange={(event) => setEditForm((form) => ({ ...form, addressStreet: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>City</Label>
+                      <Input value={editForm.addressCity} onChange={(event) => setEditForm((form) => ({ ...form, addressCity: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Province / State</Label>
+                      <Input value={editForm.addressProvince} onChange={(event) => setEditForm((form) => ({ ...form, addressProvince: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Postal / Zip</Label>
+                      <Input value={editForm.addressPostalCode} onChange={(event) => setEditForm((form) => ({ ...form, addressPostalCode: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div>
+                      <Label>Country</Label>
+                      <Input value={editForm.addressCountry} onChange={(event) => setEditForm((form) => ({ ...form, addressCountry: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Label>Notes</Label>
+                      <Input value={editForm.notes} onChange={(event) => setEditForm((form) => ({ ...form, notes: event.target.value }))} disabled={editSaving} />
+                    </div>
+                    {editError && (
+                      <div className="sm:col-span-2 rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
+                        {editError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setEditOpen(false)} disabled={editSaving}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" variant="accent" size="sm" disabled={editSaving}>
+                    {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                    Save Profile
+                  </Button>
+                </div>
+              </form>
             </div>
-            <button
-              type="button"
-              onClick={() => setEditOpen(false)}
-              disabled={editSaving}
-              className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
-              aria-label="Close edit client dialog"
-            >
-              <X className="h-4 w-4" />
-            </button>
           </div>
-          <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <Label>Name</Label>
-              <Input autoFocus value={editForm.name} onChange={(event) => setEditForm((form) => ({ ...form, name: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Short Name</Label>
-              <Input value={editForm.shortName} onChange={(event) => setEditForm((form) => ({ ...form, shortName: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Website</Label>
-              <Input value={editForm.website} onChange={(event) => setEditForm((form) => ({ ...form, website: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Email</Label>
-              <Input value={editForm.email} onChange={(event) => setEditForm((form) => ({ ...form, email: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Phone</Label>
-              <Input value={editForm.phone} onChange={(event) => setEditForm((form) => ({ ...form, phone: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div className="sm:col-span-2">
-              <Label>Street</Label>
-              <Input value={editForm.addressStreet} onChange={(event) => setEditForm((form) => ({ ...form, addressStreet: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>City</Label>
-              <Input value={editForm.addressCity} onChange={(event) => setEditForm((form) => ({ ...form, addressCity: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Province / State</Label>
-              <Input value={editForm.addressProvince} onChange={(event) => setEditForm((form) => ({ ...form, addressProvince: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Postal / Zip</Label>
-              <Input value={editForm.addressPostalCode} onChange={(event) => setEditForm((form) => ({ ...form, addressPostalCode: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div>
-              <Label>Country</Label>
-              <Input value={editForm.addressCountry} onChange={(event) => setEditForm((form) => ({ ...form, addressCountry: event.target.value }))} disabled={editSaving} />
-            </div>
-            <div className="sm:col-span-2">
-              <Label>Notes</Label>
-              <Input value={editForm.notes} onChange={(event) => setEditForm((form) => ({ ...form, notes: event.target.value }))} disabled={editSaving} />
-            </div>
-            {editError && (
-              <div className="sm:col-span-2 rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
-                {editError}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setEditOpen(false)} disabled={editSaving}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="accent" size="sm" disabled={editSaving}>
-              {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-              Save Profile
-            </Button>
-          </div>
-        </form>
-      </ModalBackdrop>
+        </div>
+      )}
     </div>
   );
 }
