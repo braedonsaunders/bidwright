@@ -130,6 +130,7 @@ export function AppShell({
   const [searchOpen, setSearchOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarPreferenceLoaded, setSidebarPreferenceLoaded] = useState(false);
+  const [quoteSearch, setQuoteSearch] = useState("");
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Self-fetch projects so sidebar always has data regardless of page
@@ -439,74 +440,99 @@ export function AppShell({
           </div>
         )}
 
-        <nav className={cn("flex-1 space-y-0.5 py-3", sidebarCollapsed ? "px-2" : "px-3")}>
-          {navItems.map((item) => {
-            const active = item.href === "/"
-              ? pathname === "/"
-              : (item.activePaths ?? [item.href]).some((href) => pathname.startsWith(href));
-            const Icon = item.icon;
-            const label = t(`nav.${item.labelKey}`);
-            return (
-              <SidebarTooltip key={item.href} label={label} disabled={!sidebarCollapsed}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "flex items-center rounded-lg text-[13px] transition-colors",
-                    sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2.5 px-3 py-2",
-                    active
-                      ? "bg-accent/10 font-medium text-accent"
-                      : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
-                  )}
-                  aria-label={label}
-                  title={sidebarCollapsed ? undefined : label}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  {!sidebarCollapsed && <span className="truncate">{label}</span>}
-                </Link>
-              </SidebarTooltip>
-            );
-          })}
+        <nav className={cn("flex flex-1 flex-col overflow-hidden py-3", sidebarCollapsed ? "px-2" : "px-3")}>
+          <div className="space-y-0.5 shrink-0">
+            {navItems.map((item) => {
+              const active = item.href === "/"
+                ? pathname === "/"
+                : (item.activePaths ?? [item.href]).some((href) => pathname.startsWith(href));
+              const Icon = item.icon;
+              const label = t(`nav.${item.labelKey}`);
+              return (
+                <SidebarTooltip key={item.href} label={label} disabled={!sidebarCollapsed}>
+                  <Link
+                    href={item.href}
+                    className={cn(
+                      "flex items-center rounded-lg text-[13px] transition-colors",
+                      sidebarCollapsed ? "h-10 justify-center px-0" : "gap-2.5 px-3 py-2",
+                      active
+                        ? "bg-accent/10 font-medium text-accent"
+                        : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
+                    )}
+                    aria-label={label}
+                    title={sidebarCollapsed ? undefined : label}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {!sidebarCollapsed && <span className="truncate">{label}</span>}
+                  </Link>
+                </SidebarTooltip>
+              );
+            })}
+          </div>
 
           {!sidebarCollapsed && (() => {
-            const quotesToShow = searchQuery.trim()
-              ? filteredProjects
-                  .flatMap((p) => p.quote ? [{ ...p.quote, projectName: p.name }] : [])
-              : activeProject?.quote
-                ? [{ ...activeProject.quote, projectName: activeProject.name }]
-                : [];
-            return quotesToShow.length > 0 && (
-              <>
-                <div className="px-3 pb-1 pt-5">
+            const allQuotes = projects.flatMap((p) =>
+              p.quote ? [{ ...p.quote, projectName: p.name }] : []
+            );
+            const filteredQuotes = quoteSearch.trim()
+              ? allQuotes.filter((q) =>
+                  (q.title || "").toLowerCase().includes(quoteSearch.toLowerCase()) ||
+                  q.quoteNumber.toLowerCase().includes(quoteSearch.toLowerCase()) ||
+                  q.projectName.toLowerCase().includes(quoteSearch.toLowerCase())
+                )
+              : allQuotes;
+            return allQuotes.length > 0 && (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                <div className="shrink-0 px-3 pb-1 pt-4">
                   <span className="text-[11px] font-medium uppercase tracking-wider text-fg/30">
-                    {searchQuery.trim() ? t("quotesCount", { count: quotesToShow.length }) : t("quotes")}
+                    {t("quotes")}
                   </span>
                 </div>
-                {quotesToShow.slice(0, 6).map((quote) => {
-                  const isActive = pathname.startsWith(`/quotes/${quote.id}`);
-                  return (
-                    <Link
-                      key={quote.id}
-                      href={`/quotes/${quote.id}`}
-                      className={cn(
-                        "flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] transition-colors",
-                        isActive
-                          ? "bg-accent/10 text-accent font-medium"
-                          : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
-                      )}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="block truncate">{quote.title || quote.quoteNumber}</span>
-                        {searchQuery.trim() && (
-                          <span className="block truncate text-[10px] text-fg/30">{quote.projectName}</span>
+                {allQuotes.length > 5 && (
+                  <div className="shrink-0 px-3 pb-1.5">
+                    <div className="relative">
+                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-fg/25" />
+                      <input
+                        type="text"
+                        className="h-6 w-full rounded-md border border-line bg-panel2 pl-6 pr-2 text-[11px] text-fg placeholder:text-fg/30 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                        placeholder="Filter quotes..."
+                        value={quoteSearch}
+                        onChange={(e) => setQuoteSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="flex-1 overflow-y-auto min-h-0">
+                  {filteredQuotes.length === 0 && quoteSearch.trim() && (
+                    <div className="px-3 py-2 text-[11px] text-fg/30">No matching quotes</div>
+                  )}
+                  {filteredQuotes.map((quote) => {
+                    const isActive = pathname.startsWith(`/quotes/${quote.id}`);
+                    return (
+                      <Link
+                        key={quote.id}
+                        href={`/quotes/${quote.id}`}
+                        className={cn(
+                          "flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] transition-colors",
+                          isActive
+                            ? "bg-accent/10 text-accent font-medium"
+                            : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
                         )}
-                      </div>
-                      <Badge tone={statusTone(quote.status)} className="shrink-0">
-                        {quote.status}
-                      </Badge>
-                    </Link>
-                  );
-                })}
-              </>
+                      >
+                        <div className="min-w-0 flex-1">
+                          <span className="block truncate">{quote.title || quote.quoteNumber}</span>
+                          {allQuotes.length > 1 && (
+                            <span className="block truncate text-[10px] text-fg/30">{quote.projectName}</span>
+                          )}
+                        </div>
+                        <Badge tone={statusTone(quote.status)} className="shrink-0">
+                          {quote.status}
+                        </Badge>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
             );
           })()}
         </nav>
@@ -515,54 +541,54 @@ export function AppShell({
           <div ref={projectSelectorRef} className="relative border-t border-line px-4 py-3">
             <div className="flex items-center justify-between text-xs text-fg/40">
               <span>{t("activeProject")}</span>
-              <div className="flex items-center gap-1">
-                <span>{formatCompactMoney(activeProject.latestRevision?.subtotal ?? 0)}</span>
-                <div className="relative">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setThemeMenuOpen((open) => !open);
-                    }}
-                    className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/50 hover:text-fg/70"
-                    title={themeDescription}
-                  >
-                    <ThemeIcon className="h-3.5 w-3.5" />
-                  </button>
-                  {themeMenuOpen ? (
-                    <div className="absolute bottom-full right-0 z-50 mb-1 w-32 rounded-lg border border-line bg-panel p-1 shadow-lg">
-                      {THEME_OPTIONS.map((option) => {
-                        const Icon = option.icon;
-                        const selected = theme === option.value;
-                        return (
-                          <button
-                            key={option.value}
-                            type="button"
-                            className={cn(
-                              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-panel2",
-                              selected ? "text-accent" : "text-fg/70",
-                            )}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setTheme(option.value);
-                              setThemeMenuOpen(false);
-                            }}
-                          >
-                            <Icon className="h-3.5 w-3.5" />
-                            <span className="min-w-0 flex-1">{t(`theme.${option.labelKey}`)}</span>
-                            {selected ? <Check className="h-3.5 w-3.5" /> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
+              <div className="relative">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setThemeMenuOpen((open) => !open);
+                  }}
+                  className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/50 hover:text-fg/70"
+                  title={themeDescription}
+                >
+                  <ThemeIcon className="h-3.5 w-3.5" />
+                </button>
+                {themeMenuOpen ? (
+                  <div className="absolute bottom-full right-0 z-50 mb-1 w-32 rounded-lg border border-line bg-panel p-1 shadow-lg">
+                    {THEME_OPTIONS.map((option) => {
+                      const Icon = option.icon;
+                      const selected = theme === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-panel2",
+                            selected ? "text-accent" : "text-fg/70",
+                          )}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setTheme(option.value);
+                            setThemeMenuOpen(false);
+                          }}
+                        >
+                          <Icon className="h-3.5 w-3.5" />
+                          <span className="min-w-0 flex-1">{t(`theme.${option.labelKey}`)}</span>
+                          {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             </div>
             <button
               onClick={() => setProjectSelectorOpen((v) => !v)}
-              className="mt-2 flex w-full items-center justify-between rounded-lg bg-panel2 px-3 py-2 text-xs font-medium text-fg/70 transition-colors hover:bg-panel2/80 hover:text-fg"
+              className="mt-2 flex w-full items-center gap-2 rounded-lg bg-panel2 px-3 py-2 text-xs font-medium text-fg/70 transition-colors hover:bg-panel2/80 hover:text-fg"
             >
-              <span className="truncate">{activeProject.name}</span>
+              <span className="min-w-0 flex-1 truncate">{activeProject.name}</span>
+              {activeProject.latestRevision && (
+                <span className="shrink-0 text-[10px] text-fg/35">{formatCompactMoney(activeProject.latestRevision.subtotal)}</span>
+              )}
               <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", projectSelectorOpen && "rotate-180")} />
             </button>
 

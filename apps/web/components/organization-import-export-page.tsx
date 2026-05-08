@@ -287,17 +287,6 @@ const TRANSFORM_OPTIONS: Array<{ value: TransformKind; label: string }> = [
   { value: "date", label: "Date" },
 ];
 
-const SAMPLE_SOURCE: ParsedSource = {
-  name: "Legacy estimate sample.csv",
-  rows: [
-    { "Cost Type": "labour", "Item Description": "Install chilled water valves", Qty: "18", UM: "ea", "Unit Cost": "$74.50", "Markup %": "18%", Supplier: "Field crew" },
-    { "Cost Type": "material", "Item Description": "6 in. grooved elbow", Qty: "42", UM: "each", "Unit Cost": "$31.20", "Markup %": "22%", Supplier: "Northline Supply" },
-    { "Cost Type": "equipment", "Item Description": "Scissor lift", Qty: "3", UM: "day", "Unit Cost": "$185", "Markup %": "15%", Supplier: "Rental Desk" },
-    { "Cost Type": "subcontractor", "Item Description": "Controls termination allowance", Qty: "1", UM: "lot", "Unit Cost": "$4,800", "Markup %": "12%", Supplier: "Summit Controls" },
-  ],
-  columns: ["Cost Type", "Item Description", "Qty", "UM", "Unit Cost", "Markup %", "Supplier"],
-};
-
 const EMPTY_COUNTS: OrgCounts = {
   projects: 0,
   customers: 0,
@@ -537,13 +526,13 @@ function downloadJson(fileName: string, data: unknown) {
 
 function toneClass(tone: ExportSection["tone"]) {
   return {
-    accent: "border-accent/25 bg-accent/8 text-accent",
-    blue: "border-blue-500/20 bg-blue-500/8 text-blue-500",
-    green: "border-success/20 bg-success/8 text-success",
-    violet: "border-violet-500/20 bg-violet-500/8 text-violet-500",
-    amber: "border-warning/20 bg-warning/8 text-warning",
-    rose: "border-rose-500/20 bg-rose-500/8 text-rose-500",
-    slate: "border-fg/15 bg-fg/6 text-fg/60",
+    accent: "border-accent/30 bg-accent/12 text-accent dark:border-accent/25 dark:bg-accent/8",
+    blue: "border-blue-500/30 bg-blue-500/12 text-blue-600 dark:border-blue-500/20 dark:bg-blue-500/8 dark:text-blue-500",
+    green: "border-success/30 bg-success/12 text-success dark:border-success/20 dark:bg-success/8",
+    violet: "border-violet-500/30 bg-violet-500/12 text-violet-600 dark:border-violet-500/20 dark:bg-violet-500/8 dark:text-violet-500",
+    amber: "border-warning/30 bg-warning/12 text-warning dark:border-warning/20 dark:bg-warning/8",
+    rose: "border-rose-500/30 bg-rose-500/12 text-rose-600 dark:border-rose-500/20 dark:bg-rose-500/8 dark:text-rose-500",
+    slate: "border-fg/20 bg-fg/8 text-fg/70 dark:border-fg/15 dark:bg-fg/6 dark:text-fg/60",
   }[tone];
 }
 
@@ -581,9 +570,9 @@ export function OrganizationImportExportPage({
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
-  const [source, setSource] = useState<ParsedSource | null>(SAMPLE_SOURCE);
+  const [source, setSource] = useState<ParsedSource | null>(null);
   const [targetId, setTargetId] = useState(IMPORT_TARGETS[1].id);
-  const [mappings, setMappings] = useState<Record<string, FieldMapping>>(() => guessMappings(SAMPLE_SOURCE, IMPORT_TARGETS[1]));
+  const [mappings, setMappings] = useState<Record<string, FieldMapping>>({});
   const [conflictMode, setConflictMode] = useState<ConflictMode>("dry-run");
   const [matchStrategy, setMatchStrategy] = useState("entityName");
   const [importProgress, setImportProgress] = useState(0);
@@ -763,8 +752,8 @@ export function OrganizationImportExportPage({
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex h-full flex-col gap-5 overflow-hidden">
+      <div className="shrink-0 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-base font-semibold text-fg">Organization Import / Export</h2>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-fg/45">
@@ -772,7 +761,7 @@ export function OrganizationImportExportPage({
             <span className="h-1 w-1 rounded-full bg-fg/25" />
             <span>{formatCount(counts.projects)} estimates</span>
             <span className="h-1 w-1 rounded-full bg-fg/25" />
-            <span>{formatCount(counts.catalogs + counts.rateSchedules + counts.factors)} library records</span>
+            <span>{formatCount(counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors)} library records</span>
             {countsLoading && <Loader2 className="h-3 w-3 animate-spin text-fg/30" />}
           </div>
         </div>
@@ -794,6 +783,7 @@ export function OrganizationImportExportPage({
         </div>
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto">
       {mode === "export" ? (
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
           <Card className="overflow-hidden">
@@ -815,9 +805,11 @@ export function OrganizationImportExportPage({
                   ? users.length
                   : section.id === "datasets"
                     ? datasets.length
-                    : section.countKey
-                      ? counts[section.countKey]
-                      : 0;
+                    : section.id === "library"
+                      ? counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors
+                      : section.countKey
+                        ? counts[section.countKey]
+                        : 0;
                 const toggleSection = () => setSelectedSections((current) => ({ ...current, [section.id]: !current[section.id] }));
                 return (
                   <div
@@ -1170,10 +1162,11 @@ export function OrganizationImportExportPage({
               </Card>
             </div>
           </div>
-        </div>
+          </div>
       )}
+      </div>
 
-      <Card>
+      <Card className="shrink-0">
         <CardBody className="grid gap-3 md:grid-cols-4">
           <StatusPill icon={Columns3} label="Column mapping" value={`${mappedFieldCount}/${target.fields.length}`} />
           <StatusPill icon={Search} label="Match key" value={matchStrategy} />
