@@ -7,6 +7,7 @@ import type { I18nKeys } from "../i18n";
 import { BoundingBox, Matrix4, type XYZ } from "../math";
 import { property } from "../property";
 import { serializable, serialize } from "../serialize";
+import { Logger } from "../foundation/logger";
 import { type EdgeMeshData, type FaceMeshData, Mesh } from "../shape";
 import { MeshUtils } from "../visual/meshUtils";
 import { MeshNode } from "./meshNode";
@@ -175,7 +176,7 @@ export class Component {
             } else if (node instanceof MeshNode) {
                 this.mergeMeshNode(visual, node, totleTransform, offset);
             } else {
-                console.log(`****** to do merge MeshNode ******: ${Object.prototype.toString.call(node)}`);
+                Logger.warn(`Unhandled node type in mergeNodesMesh: ${Object.prototype.toString.call(node)}`);
             }
         }
     };

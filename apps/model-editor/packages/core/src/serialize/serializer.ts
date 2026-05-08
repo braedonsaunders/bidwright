@@ -173,8 +173,6 @@ export class Serializer {
     static serializeObject(target: object): Serialized {
         const className = target.constructor.name;
         if (!reflectMap.has(className)) {
-            console.log(target);
-
             throw new Error(
                 `Type ${target.constructor.name} is not registered, please add the @Serializer.register decorator.`,
             );

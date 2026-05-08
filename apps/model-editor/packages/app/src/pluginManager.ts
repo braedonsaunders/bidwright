@@ -215,8 +215,7 @@ export class PluginManager implements IPluginManager {
 
             Logger.info(`Plugin ${name} loaded successfully`);
         }).catch((err) => {
-            console.log(err);
-
+            Logger.error(`Failed to load plugin ${name}: ${err}`);
             alert(`Failed to load plugin ${name}: ${err}`);
         });
     }

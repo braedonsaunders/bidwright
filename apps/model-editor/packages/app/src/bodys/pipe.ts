@@ -178,7 +178,6 @@ export class PipeNode extends ParameterShapeNode {
                 return sweepResult; // Fallback to solid
             }
 
-            console.log("PipeNode: Performing boolean cut (outer - inner)");
             const hollowResult = this.document.application.shapeFactory.booleanCut(
                 [sweepResult.value],
                 [innerSweepResult.value],

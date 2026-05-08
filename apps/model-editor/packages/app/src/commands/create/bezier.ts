@@ -53,7 +53,6 @@ export class BezierCommand extends CreateCommand {
     }
 
     private isClose(data: SnapResult) {
-        console.log(this.stepDatas[0].point!.distanceTo(data.point!));
         return (
             this.stepDatas.length > 1 &&
             this.stepDatas[0].point!.distanceTo(data.point!) <= Precision.Distance

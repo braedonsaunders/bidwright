@@ -91,9 +91,6 @@ public:
         return ShapeResult { edge.Edge(), true, "" };
     }
 
-    /**
-     * TODO
-     */
     static ShapeResult ellipsoid(const Vector3& normal, const Vector3& center, const Vector3& xvec, double xRadius,
         double yRadius, double zRadius)
     {
