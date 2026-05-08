@@ -1279,10 +1279,11 @@ export function SettingsPage({
                       value={settings.defaults.defaultBreakoutStyle}
                       onValueChange={(v) => updateDefaults({ defaultBreakoutStyle: v })}
                       options={[
+                        { value: "grand_total", label: "Grand Total" },
                         { value: "category", label: "By Category" },
                         { value: "phase", label: "By Phase" },
-                        { value: "worksheet", label: "By Worksheet" },
-                        { value: "flat", label: "Flat (No Breakout)" },
+                        { value: "phase_detail", label: "Phase Detail" },
+                        { value: "labour_material_equipment", label: "Labour / Material / Equipment" },
                       ]}
                     />
                   </div>
