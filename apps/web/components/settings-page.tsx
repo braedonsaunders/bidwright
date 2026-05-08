@@ -68,7 +68,6 @@ import {
   DEFAULT_SETTINGS,
   GROUPS,
   INTEGRATIONS_SUBTABS,
-  MONTHS,
   ORG_SUBTABS,
   PROVIDER_CONFIG,
   STORAGE_KEY,
@@ -348,7 +347,6 @@ export function SettingsPage({
             timezone: apiSettings.defaults.timezone || prev.general.timezone,
             currency: apiSettings.defaults.currency || prev.general.currency,
             dateFormat: apiSettings.defaults.dateFormat || prev.general.dateFormat,
-            fiscalYearStart: apiSettings.defaults.fiscalYearStart ?? prev.general.fiscalYearStart,
           },
           email: {
             ...prev.email,
@@ -666,7 +664,6 @@ export function SettingsPage({
         timezone: settings.general.timezone,
         currency: settings.general.currency,
         dateFormat: settings.general.dateFormat,
-        fiscalYearStart: settings.general.fiscalYearStart,
         uoms: normalizeUomLibrary(settings.defaults.uoms),
         benchmarkingEnabled: settings.defaults.benchmarkingEnabled,
         benchmarkMinimumSimilarity: settings.defaults.benchmarkMinimumSimilarity,
@@ -976,22 +973,6 @@ export function SettingsPage({
                           options={DATE_FORMATS.map((f) => ({ value: f, label: f }))}
                         />
                       </div>
-                    </div>
-                  </CardBody>
-                </Card>
-                <Card className="lg:col-span-2">
-                  <CardHeader>
-                    <CardTitle>{t("fiscalTitle")}</CardTitle>
-                    <CardDescription>{t("fiscalDescription")}</CardDescription>
-                  </CardHeader>
-                  <CardBody>
-                    <div className="max-w-xs">
-                      <Label>{t("fiscalYearStart")}</Label>
-                      <Select
-                        value={String(settings.general.fiscalYearStart)}
-                        onValueChange={(v) => updateGeneral({ fiscalYearStart: parseInt(v, 10) })}
-                        options={MONTHS.map((m, i) => ({ value: String(i + 1), label: m }))}
-                      />
                     </div>
                   </CardBody>
                 </Card>

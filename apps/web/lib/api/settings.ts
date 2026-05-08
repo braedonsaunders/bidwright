@@ -27,7 +27,6 @@ export interface AppSettingsRecord {
     timezone: string;
     currency: string;
     dateFormat: string;
-    fiscalYearStart: number;
     uoms?: UnitOfMeasure[];
     benchmarkingEnabled?: boolean;
     benchmarkMinimumSimilarity?: number;

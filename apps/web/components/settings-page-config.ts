@@ -39,7 +39,6 @@ export interface GeneralSettings {
   timezone: string;
   currency: string;
   dateFormat: string;
-  fiscalYearStart: number;
 }
 
 export interface EmailSettings {
@@ -148,7 +147,6 @@ export const DEFAULT_SETTINGS: AllSettings = {
     timezone: "America/New_York",
     currency: "USD",
     dateFormat: "MM/DD/YYYY",
-    fiscalYearStart: 1,
   },
   email: {
     smtpHost: "",
@@ -249,7 +247,6 @@ export const TIMEZONES = [
 
 export const CURRENCIES = ["USD", "CAD", "EUR", "GBP", "AUD", "NZD", "CHF", "JPY"];
 export const DATE_FORMATS = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"];
-export const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 export const PROVIDER_CONFIG: Record<string, { label: string; keyField: keyof IntegrationSettings; placeholder: string; keyLabel: string }> = {
   anthropic: { label: "Anthropic", keyField: "anthropicApiKey", placeholder: "sk-ant-***", keyLabel: "Anthropic API Key" },
