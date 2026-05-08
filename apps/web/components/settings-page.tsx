@@ -205,7 +205,7 @@ function resolveSettingsNavigation(tabParam: string | null, groupParam: string |
     group,
     orgSubTab: orgTab ?? "general",
     dataSubTab: dataTab ?? "categories",
-    integrationsSubTab: integrationTab ?? "email",
+    integrationsSubTab: integrationTab ?? "llm",
   };
 }
 
@@ -1468,7 +1468,7 @@ export function SettingsPage({
 
           )}
 
-          {activeGroup === "integrations" && integrationsSubTab === "apikeys" && (() => {
+          {activeGroup === "integrations" && integrationsSubTab === "llm" && (() => {
             const provider = settings.integrations.llmProvider;
             const cfg = PROVIDER_CONFIG[provider];
             const currentKey = cfg ? (settings.integrations[cfg.keyField] as string) : "";
@@ -1476,11 +1476,11 @@ export function SettingsPage({
             return (
               <Card>
                 <CardHeader>
-                  <CardTitle>Integrations &amp; API Keys</CardTitle>
+                  <CardTitle>LLM Provider</CardTitle>
                 </CardHeader>
                 <CardBody className="space-y-4">
                   <div>
-                    <Label>LLM Provider</Label>
+                    <Label>Provider</Label>
                     <Select
                       value={provider}
                       onValueChange={(v) => {
@@ -1491,10 +1491,6 @@ export function SettingsPage({
                       options={Object.entries(PROVIDER_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
                     />
                   </div>
-
-                  <Separator />
-
-                  {/* Provider-specific credentials */}
                   <div>
                     <Label>{cfg?.keyLabel || "API Key"}</Label>
                     <Input
@@ -1510,8 +1506,6 @@ export function SettingsPage({
                       <p className="mt-1 text-[11px] text-fg/40">URL for your local LM Studio server</p>
                     )}
                   </div>
-
-                  {/* Test Connection Button */}
                   <div className="flex items-center gap-3">
                     <Button
                       variant="default"
@@ -1532,10 +1526,7 @@ export function SettingsPage({
                       </span>
                     )}
                   </div>
-
                   <Separator />
-
-                  {/* Model Selection */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <Label className="mb-0">Model</Label>
@@ -1557,290 +1548,291 @@ export function SettingsPage({
                       placeholder={!currentKey && !isLmStudio ? "Enter API key first..." : "Select a model..."}
                     />
                   </div>
-
-                  <Separator />
-
-                  {/* Azure Document Intelligence */}
-                  <div>
-                    <p className="text-xs font-medium text-fg/60 mb-2">Azure Document Intelligence</p>
-                    <p className="text-[10px] text-fg/40 mb-3">Primary extraction for PDFs, Office files, images, HTML, structured tables, and form key-value pairs.</p>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                          <Label>Document extraction</Label>
-                          <Select
-                            value={settings.integrations.documentExtractionProvider}
-                            onValueChange={(value) => updateIntegrations({ documentExtractionProvider: value as IntegrationSettings["documentExtractionProvider"] })}
-                            options={[
-                              { value: "azure", label: "Azure first" },
-                              { value: "auto", label: "Auto fallback" },
-                              { value: "local", label: "Local only" },
-                            ]}
-                          />
-                        </div>
-                        <div>
-                          <Label>Azure model</Label>
-                          <Select
-                            value={settings.integrations.azureDiModel}
-                            onValueChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
-                            options={[...AZURE_DI_MODEL_OPTIONS]}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <Label>Analysis features</Label>
-                        <MultiSelect
-                          selected={settings.integrations.azureDiFeatures ?? ["keyValuePairs"]}
-                          onChange={(azureDiFeatures) => updateIntegrations({ azureDiFeatures: azureDiFeatures as IntegrationSettings["azureDiFeatures"] })}
-                          options={AZURE_DI_FEATURE_OPTIONS}
-                          placeholder="Select v4 features..."
-                        />
-                      </div>
-                      <div>
-                        <Label>Content format</Label>
-                        <Select
-                          value={settings.integrations.azureDiOutputFormat}
-                          onValueChange={(value) => updateIntegrations({ azureDiOutputFormat: value as IntegrationSettings["azureDiOutputFormat"] })}
-                          options={[
-                            { value: "text", label: "Text" },
-                            { value: "markdown", label: "Markdown" },
-                          ]}
-                        />
-                      </div>
-                      {(settings.integrations.azureDiFeatures ?? []).includes("queryFields") && (
-                        <div>
-                          <Label>Query fields</Label>
-                          <Textarea
-                            rows={2}
-                            value={settings.integrations.azureDiQueryFields}
-                            onChange={(e) => updateIntegrations({ azureDiQueryFields: e.target.value })}
-                            placeholder="ProjectNumber, BidDueDate, Owner, Architect"
-                          />
-                        </div>
-                      )}
-                      <div>
-                        <Label>Endpoint</Label>
-                        <Input
-                          type="text"
-                          value={settings.integrations.azureDiEndpoint}
-                          onChange={(e) => updateIntegrations({ azureDiEndpoint: e.target.value })}
-                          placeholder="https://your-resource.cognitiveservices.azure.com/"
-                        />
-                      </div>
-                      <div>
-                        <Label>API Key</Label>
-                        <Input
-                          type="password"
-                          value={settings.integrations.azureDiKey}
-                          onChange={(e) => updateIntegrations({ azureDiKey: e.target.value })}
-                          placeholder="Enter Azure DI key..."
-                        />
-                        {settings.integrations.azureDiKey && (
-                          <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Autodesk APS CAD/BIM Ingest */}
-                  <div>
-                    <div className="mb-3 flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-xs font-medium text-fg/60 mb-1">Autodesk APS CAD/BIM Ingest</p>
-                        <p className="text-[10px] text-fg/40">Native RVT/DWG extraction through Autodesk APS only.</p>
-                      </div>
-                      <Badge tone={autodeskReady ? "success" : autodeskCredentialsConfigured ? "warning" : "default"}>
-                        {autodeskReady ? "Ready" : autodeskCredentialsConfigured ? "Partial" : "Missing"}
-                      </Badge>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                          <Label>Client ID</Label>
-                          <Input
-                            type="text"
-                            value={settings.integrations.autodeskClientId}
-                            onChange={(e) => updateIntegrations({ autodeskClientId: e.target.value })}
-                            placeholder="APS client ID"
-                          />
-                        </div>
-                        <div>
-                          <Label>Client Secret</Label>
-                          <Input
-                            type="password"
-                            value={settings.integrations.autodeskClientSecret}
-                            onChange={(e) => updateIntegrations({ autodeskClientSecret: e.target.value })}
-                            placeholder="APS client secret"
-                          />
-                          {settings.integrations.autodeskClientSecret && (
-                            <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.autodeskClientSecret)}</p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <div>
-                          <Label>Revit activity ID</Label>
-                          <Input
-                            type="text"
-                            value={settings.integrations.autodeskApsRevitActivityId}
-                            onChange={(e) => updateIntegrations({ autodeskApsRevitActivityId: e.target.value })}
-                            placeholder="nickname.activity+alias"
-                          />
-                        </div>
-                        <div>
-                          <Label>AutoCAD activity ID</Label>
-                          <Input
-                            type="text"
-                            value={settings.integrations.autodeskApsAutocadActivityId}
-                            onChange={(e) => updateIntegrations({ autodeskApsAutocadActivityId: e.target.value })}
-                            placeholder="nickname.activity+alias"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Drawing extraction provider */}
-                  <div>
-                    <div className="flex items-center justify-between gap-4 mb-3">
-                      <div>
-                        <p className="text-xs font-medium text-fg/60 mb-1">Drawing Extraction</p>
-                        <p className="text-[10px] text-fg/40">
-                          Optional verbose drawing-evidence enrichment for drawing PDFs. Picks one provider; Azure structured extraction always runs in parallel.
-                        </p>
-                      </div>
-                      <Toggle
-                        checked={settings.integrations.drawingExtractionEnabled}
-                        onChange={(drawingExtractionEnabled) => updateIntegrations({
-                          drawingExtractionEnabled,
-                          landingAiDrawingExtractionEnabled: drawingExtractionEnabled && settings.integrations.drawingExtractionProvider === "landingAi",
-                        })}
-                      />
-                    </div>
-                    <div className="space-y-3">
-                      <div>
-                        <Label>Provider</Label>
-                        <select
-                          className="block w-full rounded-md border border-line bg-panel2 px-2 py-1.5 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
-                          value={settings.integrations.drawingExtractionProvider}
-                          onChange={(e) => {
-                            const drawingExtractionProvider = e.target.value as IntegrationSettings["drawingExtractionProvider"];
-                            updateIntegrations({
-                              drawingExtractionProvider,
-                              landingAiDrawingExtractionEnabled: settings.integrations.drawingExtractionEnabled && drawingExtractionProvider === "landingAi",
-                            });
-                          }}
-                        >
-                          <option value="none">None — disable drawing enrichment</option>
-                          <option value="landingAi">LandingAI ADE — proven on drawings, ~$0.027/page parse</option>
-                          <option value="geminiPro">Gemini 2.5 Pro — best quality, scales w/ doc complexity (~$0.04–0.13/pg)</option>
-                          <option value="geminiFlash">Gemini 2.5 Flash — production sweet spot (~$0.013–0.022/pg)</option>
-                        </select>
-                      </div>
-
-                      {settings.integrations.drawingExtractionProvider === "landingAi" && (
-                        <>
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <div>
-                              <Label>LandingAI endpoint</Label>
-                              <Input
-                                type="text"
-                                value={settings.integrations.landingAiEndpoint}
-                                onChange={(e) => updateIntegrations({ landingAiEndpoint: e.target.value })}
-                                placeholder="https://api.va.landing.ai"
-                              />
-                            </div>
-                            <div>
-                              <Label>LandingAI API key</Label>
-                              <Input
-                                type="password"
-                                value={settings.integrations.landingAiApiKey}
-                                onChange={(e) => updateIntegrations({ landingAiApiKey: e.target.value })}
-                                placeholder="Enter LandingAI key..."
-                              />
-                              {settings.integrations.landingAiApiKey && (
-                                <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.landingAiApiKey)}</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <div>
-                              <Label>Parse model</Label>
-                              <Input
-                                type="text"
-                                value={settings.integrations.landingAiParseModel}
-                                onChange={(e) => updateIntegrations({ landingAiParseModel: e.target.value })}
-                                placeholder="dpt-2-latest"
-                              />
-                            </div>
-                            <div>
-                              <Label>Extract model</Label>
-                              <Input
-                                type="text"
-                                value={settings.integrations.landingAiExtractModel}
-                                onChange={(e) => updateIntegrations({ landingAiExtractModel: e.target.value })}
-                                placeholder="extract-latest"
-                              />
-                            </div>
-                          </div>
-                        </>
-                      )}
-
-                      {(settings.integrations.drawingExtractionProvider === "geminiPro" || settings.integrations.drawingExtractionProvider === "geminiFlash") && (
-                        <>
-                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <div>
-                              <Label>Gemini API key</Label>
-                              <Input
-                                type="password"
-                                value={settings.integrations.geminiApiKey}
-                                onChange={(e) => updateIntegrations({ geminiApiKey: e.target.value })}
-                                placeholder="AIza..."
-                              />
-                              {settings.integrations.geminiApiKey && (
-                                <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.geminiApiKey)}</p>
-                              )}
-                            </div>
-                            <div>
-                              <Label>Model id</Label>
-                              <Input
-                                type="text"
-                                value={settings.integrations.drawingExtractionProvider === "geminiPro"
-                                  ? settings.integrations.geminiProModel
-                                  : settings.integrations.geminiFlashModel}
-                                onChange={(e) => updateIntegrations(
-                                  settings.integrations.drawingExtractionProvider === "geminiPro"
-                                    ? { geminiProModel: e.target.value }
-                                    : { geminiFlashModel: e.target.value }
-                                )}
-                                placeholder={settings.integrations.drawingExtractionProvider === "geminiPro" ? "gemini-2.5-pro" : "gemini-2.5-flash"}
-                              />
-                            </div>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <div>
-                              <Label>Thinking mode</Label>
-                              <p className="text-[10px] text-fg/40">
-                                When enabled, Gemini plans before responding (better quality on dense drawings, higher cost). Disable for cheaper, faster output on simple drawings.
-                              </p>
-                            </div>
-                            <Toggle
-                              checked={settings.integrations.geminiThinkingEnabled}
-                              onChange={(geminiThinkingEnabled) => updateIntegrations({ geminiThinkingEnabled })}
-                            />
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
                 </CardBody>
               </Card>
             );
           })()}
+
+          {activeGroup === "integrations" && integrationsSubTab === "azure" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Azure Document Intelligence</CardTitle>
+              </CardHeader>
+              <CardBody className="space-y-4">
+                <p className="text-xs text-fg/50">Primary extraction for PDFs, Office files, images, HTML, structured tables, and form key-value pairs.</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label>Document extraction</Label>
+                    <Select
+                      value={settings.integrations.documentExtractionProvider}
+                      onValueChange={(value) => updateIntegrations({ documentExtractionProvider: value as IntegrationSettings["documentExtractionProvider"] })}
+                      options={[
+                        { value: "azure", label: "Azure first" },
+                        { value: "auto", label: "Auto fallback" },
+                        { value: "local", label: "Local only" },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <Label>Azure model</Label>
+                    <Select
+                      value={settings.integrations.azureDiModel}
+                      onValueChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
+                      options={[...AZURE_DI_MODEL_OPTIONS]}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label>Analysis features</Label>
+                  <MultiSelect
+                    selected={settings.integrations.azureDiFeatures ?? ["keyValuePairs"]}
+                    onChange={(azureDiFeatures) => updateIntegrations({ azureDiFeatures: azureDiFeatures as IntegrationSettings["azureDiFeatures"] })}
+                    options={AZURE_DI_FEATURE_OPTIONS}
+                    placeholder="Select v4 features..."
+                  />
+                </div>
+                <div>
+                  <Label>Content format</Label>
+                  <Select
+                    value={settings.integrations.azureDiOutputFormat}
+                    onValueChange={(value) => updateIntegrations({ azureDiOutputFormat: value as IntegrationSettings["azureDiOutputFormat"] })}
+                    options={[
+                      { value: "text", label: "Text" },
+                      { value: "markdown", label: "Markdown" },
+                    ]}
+                  />
+                </div>
+                {(settings.integrations.azureDiFeatures ?? []).includes("queryFields") && (
+                  <div>
+                    <Label>Query fields</Label>
+                    <Textarea
+                      rows={2}
+                      value={settings.integrations.azureDiQueryFields}
+                      onChange={(e) => updateIntegrations({ azureDiQueryFields: e.target.value })}
+                      placeholder="ProjectNumber, BidDueDate, Owner, Architect"
+                    />
+                  </div>
+                )}
+                <Separator />
+                <div>
+                  <Label>Endpoint</Label>
+                  <Input
+                    type="text"
+                    value={settings.integrations.azureDiEndpoint}
+                    onChange={(e) => updateIntegrations({ azureDiEndpoint: e.target.value })}
+                    placeholder="https://your-resource.cognitiveservices.azure.com/"
+                  />
+                </div>
+                <div>
+                  <Label>API Key</Label>
+                  <Input
+                    type="password"
+                    value={settings.integrations.azureDiKey}
+                    onChange={(e) => updateIntegrations({ azureDiKey: e.target.value })}
+                    placeholder="Enter Azure DI key..."
+                  />
+                  {settings.integrations.azureDiKey && (
+                    <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
+                  )}
+                </div>
+              </CardBody>
+            </Card>
+          )}
+
+          {activeGroup === "integrations" && integrationsSubTab === "autodesk" && (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between gap-4">
+                  <CardTitle>Autodesk APS CAD/BIM</CardTitle>
+                  <Badge tone={autodeskReady ? "success" : autodeskCredentialsConfigured ? "warning" : "default"}>
+                    {autodeskReady ? "Ready" : autodeskCredentialsConfigured ? "Partial" : "Missing"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardBody className="space-y-4">
+                <p className="text-xs text-fg/50">Native RVT/DWG extraction through Autodesk APS.</p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label>Client ID</Label>
+                    <Input
+                      type="text"
+                      value={settings.integrations.autodeskClientId}
+                      onChange={(e) => updateIntegrations({ autodeskClientId: e.target.value })}
+                      placeholder="APS client ID"
+                    />
+                  </div>
+                  <div>
+                    <Label>Client Secret</Label>
+                    <Input
+                      type="password"
+                      value={settings.integrations.autodeskClientSecret}
+                      onChange={(e) => updateIntegrations({ autodeskClientSecret: e.target.value })}
+                      placeholder="APS client secret"
+                    />
+                    {settings.integrations.autodeskClientSecret && (
+                      <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.autodeskClientSecret)}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label>Revit activity ID</Label>
+                    <Input
+                      type="text"
+                      value={settings.integrations.autodeskApsRevitActivityId}
+                      onChange={(e) => updateIntegrations({ autodeskApsRevitActivityId: e.target.value })}
+                      placeholder="nickname.activity+alias"
+                    />
+                  </div>
+                  <div>
+                    <Label>AutoCAD activity ID</Label>
+                    <Input
+                      type="text"
+                      value={settings.integrations.autodeskApsAutocadActivityId}
+                      onChange={(e) => updateIntegrations({ autodeskApsAutocadActivityId: e.target.value })}
+                      placeholder="nickname.activity+alias"
+                    />
+                  </div>
+                </div>
+              </CardBody>
+            </Card>
+          )}
+
+          {activeGroup === "integrations" && integrationsSubTab === "drawing" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Drawing Extraction</CardTitle>
+              </CardHeader>
+              <CardBody className="space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-xs text-fg/50">Optional verbose drawing-evidence enrichment for drawing PDFs. Picks one provider; Azure structured extraction always runs in parallel.</p>
+                  </div>
+                  <Toggle
+                    checked={settings.integrations.drawingExtractionEnabled}
+                    onChange={(drawingExtractionEnabled) => updateIntegrations({
+                      drawingExtractionEnabled,
+                      landingAiDrawingExtractionEnabled: drawingExtractionEnabled && settings.integrations.drawingExtractionProvider === "landingAi",
+                    })}
+                  />
+                </div>
+                <Separator />
+                <div>
+                  <Label>Provider</Label>
+                  <select
+                    className="block w-full rounded-md border border-line bg-panel2 px-2 py-1.5 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+                    value={settings.integrations.drawingExtractionProvider}
+                    onChange={(e) => {
+                      const drawingExtractionProvider = e.target.value as IntegrationSettings["drawingExtractionProvider"];
+                      updateIntegrations({
+                        drawingExtractionProvider,
+                        landingAiDrawingExtractionEnabled: settings.integrations.drawingExtractionEnabled && drawingExtractionProvider === "landingAi",
+                      });
+                    }}
+                  >
+                    <option value="none">None — disable drawing enrichment</option>
+                    <option value="landingAi">LandingAI ADE — proven on drawings, ~$0.027/page parse</option>
+                    <option value="geminiPro">Gemini 2.5 Pro — best quality, scales w/ doc complexity (~$0.04–0.13/pg)</option>
+                    <option value="geminiFlash">Gemini 2.5 Flash — production sweet spot (~$0.013–0.022/pg)</option>
+                  </select>
+                </div>
+
+                {settings.integrations.drawingExtractionProvider === "landingAi" && (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label>LandingAI endpoint</Label>
+                        <Input
+                          type="text"
+                          value={settings.integrations.landingAiEndpoint}
+                          onChange={(e) => updateIntegrations({ landingAiEndpoint: e.target.value })}
+                          placeholder="https://api.va.landing.ai"
+                        />
+                      </div>
+                      <div>
+                        <Label>LandingAI API key</Label>
+                        <Input
+                          type="password"
+                          value={settings.integrations.landingAiApiKey}
+                          onChange={(e) => updateIntegrations({ landingAiApiKey: e.target.value })}
+                          placeholder="Enter LandingAI key..."
+                        />
+                        {settings.integrations.landingAiApiKey && (
+                          <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.landingAiApiKey)}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label>Parse model</Label>
+                        <Input
+                          type="text"
+                          value={settings.integrations.landingAiParseModel}
+                          onChange={(e) => updateIntegrations({ landingAiParseModel: e.target.value })}
+                          placeholder="dpt-2-latest"
+                        />
+                      </div>
+                      <div>
+                        <Label>Extract model</Label>
+                        <Input
+                          type="text"
+                          value={settings.integrations.landingAiExtractModel}
+                          onChange={(e) => updateIntegrations({ landingAiExtractModel: e.target.value })}
+                          placeholder="extract-latest"
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {(settings.integrations.drawingExtractionProvider === "geminiPro" || settings.integrations.drawingExtractionProvider === "geminiFlash") && (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <Label>Gemini API key</Label>
+                        <Input
+                          type="password"
+                          value={settings.integrations.geminiApiKey}
+                          onChange={(e) => updateIntegrations({ geminiApiKey: e.target.value })}
+                          placeholder="AIza..."
+                        />
+                        {settings.integrations.geminiApiKey && (
+                          <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.geminiApiKey)}</p>
+                        )}
+                      </div>
+                      <div>
+                        <Label>Model id</Label>
+                        <Input
+                          type="text"
+                          value={settings.integrations.drawingExtractionProvider === "geminiPro"
+                            ? settings.integrations.geminiProModel
+                            : settings.integrations.geminiFlashModel}
+                          onChange={(e) => updateIntegrations(
+                            settings.integrations.drawingExtractionProvider === "geminiPro"
+                              ? { geminiProModel: e.target.value }
+                              : { geminiFlashModel: e.target.value }
+                          )}
+                          placeholder={settings.integrations.drawingExtractionProvider === "geminiPro" ? "gemini-2.5-pro" : "gemini-2.5-flash"}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <Label>Thinking mode</Label>
+                        <p className="text-[10px] text-fg/40">
+                          When enabled, Gemini plans before responding (better quality on dense drawings, higher cost). Disable for cheaper, faster output on simple drawings.
+                        </p>
+                      </div>
+                      <Toggle
+                        checked={settings.integrations.geminiThinkingEnabled}
+                        onChange={(geminiThinkingEnabled) => updateIntegrations({ geminiThinkingEnabled })}
+                      />
+                    </div>
+                  </>
+                )}
+              </CardBody>
+            </Card>
+          )}
 
           {activeGroup === "data" && (
             <div className="flex items-center gap-1 shrink-0">

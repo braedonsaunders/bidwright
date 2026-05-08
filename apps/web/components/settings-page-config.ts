@@ -9,14 +9,17 @@ export const STORAGE_KEY = "bidwright-settings";
 export type SettingsGroup = "organization" | "data" | "importExport" | "integrations" | "users";
 export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
 export type DataSubTab = "categories" | "uoms" | "conditions" | "factors";
-export type IntegrationsSubTab = "agent" | "apikeys" | "email" | "plugins" | "integrations";
+export type IntegrationsSubTab = "agent" | "llm" | "azure" | "autodesk" | "drawing" | "email" | "plugins" | "integrations";
 
-export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "brand", label: "Brand" },
-  { id: "departments", label: "Departments" },
-  { id: "defaults", label: "Defaults" },
-  { id: "terms", label: "Terms & Conditions" },
+export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
+  { id: "agent", label: "Agent Runtime" },
+  { id: "llm", label: "LLM" },
+  { id: "azure", label: "Azure" },
+  { id: "autodesk", label: "Autodesk" },
+  { id: "drawing", label: "Drawing Extraction" },
+  { id: "email", label: "Email" },
+  { id: "plugins", label: "Plugins" },
+  { id: "integrations", label: "Integrations" },
 ];
 
 export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
