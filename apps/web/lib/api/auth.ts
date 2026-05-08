@@ -235,6 +235,18 @@ export async function adminGetMyMemberships(): Promise<{ organizationIds: string
   return apiRequest("/api/admin/my-memberships");
 }
 
+export async function adminCopyLibrary(data: {
+  sourceOrgId: string;
+  targetOrgId: string;
+  sections: string[];
+}): Promise<{ ok: boolean; results: Record<string, number> }> {
+  return apiRequest("/api/admin/copy-library", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
 export async function listUsers(): Promise<AuthUser[]> {
   return apiRequest<AuthUser[]>("/users");
 }

@@ -500,4 +500,131 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: "Failed to delete catalog template" });
     }
   });
+
+  // ── POST /api/admin/copy-library ────────────────────────────────────
+  // Copy library data (catalog items, rate schedules, conditions, assemblies)
+  // from one organization to another.
+  fastify.post("/api/admin/copy-library", async (request, reply) => {
+    if (!requireSuperAdmin(request, reply)) return;
+
+    const { sourceOrgId, targetOrgId, sections } = request.body as {
+      sourceOrgId: string;
+      targetOrgId: string;
+      sections: string[];
+    };
+
+    if (!sourceOrgId || !targetOrgId) return reply.code(400).send({ error: "sourceOrgId and targetOrgId are required" });
+    if (sourceOrgId === targetOrgId) return reply.code(400).send({ error: "Source and target must be different organizations" });
+    if (!Array.isArray(sections) || sections.length === 0) return reply.code(400).send({ error: "At least one section is required" });
+
+    const [sourceOrg, targetOrg] = await Promise.all([
+      prisma.organization.findUnique({ where: { id: sourceOrgId } }),
+      prisma.organization.findUnique({ where: { id: targetOrgId } }),
+    ]);
+    if (!sourceOrg) return reply.code(404).send({ error: "Source organization not found" });
+    if (!targetOrg) return reply.code(404).send({ error: "Target organization not found" });
+
+    try {
+      const results: Record<string, number> = {};
+
+      if (sections.includes("catalogs")) {
+        const items = await prisma.catalogItem.findMany({ where: { organizationId: sourceOrgId } });
+        if (items.length > 0) {
+          await prisma.catalogItem.createMany({
+            data: items.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
+              ...rest,
+              organizationId: targetOrgId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        results.catalogs = items.length;
+      }
+
+      if (sections.includes("rates")) {
+        const schedules = await prisma.rateSchedule.findMany({
+          where: { organizationId: sourceOrgId },
+          include: { items: true, tiers: true },
+        });
+        for (const schedule of schedules) {
+          const { id, organizationId, createdAt, updatedAt, items, tiers, ...scheduleData } = schedule;
+          const newSchedule = await prisma.rateSchedule.create({
+            data: { ...scheduleData, organizationId: targetOrgId },
+          });
+          if (items.length > 0) {
+            await prisma.rateScheduleItem.createMany({
+              data: items.map(({ id, rateScheduleId, createdAt, updatedAt, ...rest }) => ({
+                ...rest,
+                rateScheduleId: newSchedule.id,
+              })),
+            });
+          }
+          if (tiers.length > 0) {
+            await prisma.rateScheduleTier.createMany({
+              data: tiers.map(({ id, rateScheduleId, createdAt, updatedAt, ...rest }) => ({
+                ...rest,
+                rateScheduleId: newSchedule.id,
+              })),
+            });
+          }
+        }
+        results.rates = schedules.length;
+      }
+
+      if (sections.includes("conditions")) {
+        const conditions = await prisma.conditionLibraryEntry.findMany({ where: { organizationId: sourceOrgId } });
+        if (conditions.length > 0) {
+          await prisma.conditionLibraryEntry.createMany({
+            data: conditions.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
+              ...rest,
+              organizationId: targetOrgId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        results.conditions = conditions.length;
+      }
+
+      if (sections.includes("assemblies")) {
+        const assemblies = await prisma.assembly.findMany({
+          where: { organizationId: sourceOrgId },
+          include: { items: true },
+        });
+        for (const assembly of assemblies) {
+          const { id, organizationId, createdAt, updatedAt, items, ...assemblyData } = assembly;
+          const newAssembly = await prisma.assembly.create({
+            data: { ...assemblyData, organizationId: targetOrgId },
+          });
+          if (items.length > 0) {
+            await prisma.assemblyItem.createMany({
+              data: items.map(({ id, assemblyId, createdAt, updatedAt, ...rest }) => ({
+                ...rest,
+                assemblyId: newAssembly.id,
+              })),
+            });
+          }
+        }
+        results.assemblies = assemblies.length;
+      }
+
+      if (sections.includes("categories")) {
+        const cats = await prisma.entityCategory.findMany({ where: { organizationId: sourceOrgId } });
+        if (cats.length > 0) {
+          await prisma.entityCategory.createMany({
+            data: cats.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
+              ...rest,
+              organizationId: targetOrgId,
+            })),
+            skipDuplicates: true,
+          });
+        }
+        results.categories = cats.length;
+      }
+
+      return { ok: true, results };
+    } catch (error) {
+      request.log.error(error, "Library copy failed");
+      return reply.code(500).send({ error: "Library copy failed", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
 }
