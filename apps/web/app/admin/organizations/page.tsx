@@ -12,7 +12,6 @@ import {
   adminCreateOrgUser,
   adminUpdateUser,
   adminDeleteUser,
-  seedEssentials,
   seedSampleData,
   type AdminOrg,
   type AuthUser,
@@ -87,16 +86,6 @@ export default function OrganizationsPage() {
       await adminDeleteOrganization(orgId);
       setOrgs((prev) => prev.filter((o) => o.id !== orgId));
     } catch { /* ignore */ }
-  }, []);
-
-  const handleSeedEssentials = useCallback(async (orgId: string) => {
-    setBusyOrgAction(`${orgId}:essentials`);
-    try {
-      await seedEssentials(orgId);
-    } catch { /* ignore */ }
-    finally {
-      setBusyOrgAction(null);
-    }
   }, []);
 
   const handleSeedSampleData = useCallback(async (orgId: string, orgName: string) => {
@@ -185,14 +174,6 @@ export default function OrganizationsPage() {
                       </Button>
                       <Button variant="ghost" size="xs" onClick={() => setEditingOrg(org)}>
                         <Edit3 className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => handleSeedEssentials(org.id)}
-                        disabled={busyOrgAction === `${org.id}:essentials`}
-                      >
-                        Essentials
                       </Button>
                       <Button
                         variant="ghost"

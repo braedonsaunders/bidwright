@@ -116,14 +116,6 @@ export async function seedSampleData(organizationId: string): Promise<{ ok: bool
   });
 }
 
-export async function seedEssentials(organizationId: string): Promise<{ ok: boolean }> {
-  return apiRequest("/api/setup/seed-essentials", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ organizationId }),
-  });
-}
-
 export interface OrgLimits {
   maxUsers: number;
   maxProjects: number;

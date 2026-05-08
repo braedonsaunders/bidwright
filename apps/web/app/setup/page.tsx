@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
-import { initSetup, seedSampleData, seedEssentials } from "@/lib/api";
+import { initSetup, seedSampleData } from "@/lib/api";
 import { Button, Input, Label } from "@/components/ui";
 import {
   ArrowLeft,
@@ -186,14 +186,6 @@ export default function SetupPage() {
 
       setSetupResult({ organization: result.organization });
       await refreshUser();
-
-      if (result.organization) {
-        try {
-          await seedEssentials(result.organization.id);
-        } catch {
-          /* Essentials can be retried later from admin tools. */
-        }
-      }
 
       if (result.organization) {
         setStep("seed");
