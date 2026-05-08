@@ -528,17 +528,25 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       const results: Record<string, number> = {};
 
       if (sections.includes("catalogs")) {
-        const items = await prisma.catalogItem.findMany({ where: { organizationId: sourceOrgId } });
-        if (items.length > 0) {
-          await prisma.catalogItem.createMany({
-            data: items.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
-              ...rest,
-              organizationId: targetOrgId,
-            })),
-            skipDuplicates: true,
+        const catalogs = await prisma.catalog.findMany({
+          where: { organizationId: sourceOrgId, isTemplate: false },
+          include: { items: true },
+        });
+        for (const catalog of catalogs) {
+          const { id, organizationId, items, ...catalogData } = catalog as any;
+          const newCatalog = await prisma.catalog.create({
+            data: { ...catalogData, organizationId: targetOrgId },
           });
+          if (items?.length > 0) {
+            await prisma.catalogItem.createMany({
+              data: items.map((item: any) => {
+                const { id, catalogId, ...rest } = item;
+                return { ...rest, catalogId: newCatalog.id };
+              }),
+            });
+          }
         }
-        results.catalogs = items.length;
+        results.catalogs = catalogs.reduce((sum, c) => sum + c.items.length, 0);
       }
 
       if (sections.includes("rates")) {
@@ -547,24 +555,24 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
           include: { items: true, tiers: true },
         });
         for (const schedule of schedules) {
-          const { id, organizationId, createdAt, updatedAt, items, tiers, ...scheduleData } = schedule;
+          const { id, organizationId, items, tiers, ...scheduleData } = schedule as any;
           const newSchedule = await prisma.rateSchedule.create({
             data: { ...scheduleData, organizationId: targetOrgId },
           });
-          if (items.length > 0) {
+          if (items?.length > 0) {
             await prisma.rateScheduleItem.createMany({
-              data: items.map(({ id, rateScheduleId, createdAt, updatedAt, ...rest }) => ({
-                ...rest,
-                rateScheduleId: newSchedule.id,
-              })),
+              data: items.map((si: any) => {
+                const { id, rateScheduleId, ...rest } = si;
+                return { ...rest, rateScheduleId: newSchedule.id };
+              }),
             });
           }
-          if (tiers.length > 0) {
+          if (tiers?.length > 0) {
             await prisma.rateScheduleTier.createMany({
-              data: tiers.map(({ id, rateScheduleId, createdAt, updatedAt, ...rest }) => ({
-                ...rest,
-                rateScheduleId: newSchedule.id,
-              })),
+              data: tiers.map((t: any) => {
+                const { id, rateScheduleId, ...rest } = t;
+                return { ...rest, rateScheduleId: newSchedule.id };
+              }),
             });
           }
         }
@@ -575,10 +583,10 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
         const conditions = await prisma.conditionLibraryEntry.findMany({ where: { organizationId: sourceOrgId } });
         if (conditions.length > 0) {
           await prisma.conditionLibraryEntry.createMany({
-            data: conditions.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
-              ...rest,
-              organizationId: targetOrgId,
-            })),
+            data: conditions.map((c) => {
+              const { id, organizationId, ...rest } = c as any;
+              return { ...rest, organizationId: targetOrgId };
+            }),
             skipDuplicates: true,
           });
         }
@@ -588,19 +596,27 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
       if (sections.includes("assemblies")) {
         const assemblies = await prisma.assembly.findMany({
           where: { organizationId: sourceOrgId },
-          include: { items: true },
+          include: { components: true, parameters: true },
         });
         for (const assembly of assemblies) {
-          const { id, organizationId, createdAt, updatedAt, items, ...assemblyData } = assembly;
+          const { id, organizationId, components, parameters, ...assemblyData } = assembly as any;
           const newAssembly = await prisma.assembly.create({
             data: { ...assemblyData, organizationId: targetOrgId },
           });
-          if (items.length > 0) {
-            await prisma.assemblyItem.createMany({
-              data: items.map(({ id, assemblyId, createdAt, updatedAt, ...rest }) => ({
-                ...rest,
-                assemblyId: newAssembly.id,
-              })),
+          if (parameters?.length > 0) {
+            await prisma.assemblyParameter.createMany({
+              data: parameters.map((p: any) => {
+                const { id, assemblyId, ...rest } = p;
+                return { ...rest, assemblyId: newAssembly.id };
+              }),
+            });
+          }
+          if (components?.length > 0) {
+            await prisma.assemblyComponent.createMany({
+              data: components.map((c: any) => {
+                const { id, assemblyId, ...rest } = c;
+                return { ...rest, assemblyId: newAssembly.id };
+              }),
             });
           }
         }
@@ -611,10 +627,10 @@ export async function adminRoutes(fastify: FastifyInstance): Promise<void> {
         const cats = await prisma.entityCategory.findMany({ where: { organizationId: sourceOrgId } });
         if (cats.length > 0) {
           await prisma.entityCategory.createMany({
-            data: cats.map(({ id, organizationId, createdAt, updatedAt, ...rest }) => ({
-              ...rest,
-              organizationId: targetOrgId,
-            })),
+            data: cats.map((c) => {
+              const { id, organizationId, ...rest } = c as any;
+              return { ...rest, organizationId: targetOrgId };
+            }),
             skipDuplicates: true,
           });
         }
