@@ -59,6 +59,7 @@ import {
 } from "@/lib/api";
 import type { Customer, CustomerContact, Department } from "@/lib/api";
 import {
+  Badge,
   Button,
   Card,
   CardBody,
@@ -68,6 +69,7 @@ import {
   EmptyState,
   Input,
   Label,
+  ModalBackdrop,
   Textarea,
   Toggle,
 } from "@/components/ui";
@@ -189,6 +191,58 @@ const ESTIMATE_SEARCH_SOURCE_CONTROLS: Array<{
     accent: "border-accent/25 bg-accent/8 text-accent",
   },
 ];
+
+/* ─── Condition Type Metadata ─── */
+
+type ConditionBadgeTone = "success" | "danger" | "info" | "warning" | "default";
+
+interface ConditionTypeMeta {
+  label: string;
+  tone: ConditionBadgeTone;
+}
+
+const CONDITION_TYPE_META: Record<string, ConditionTypeMeta> = {
+  inclusion: { label: "Inclusions", tone: "success" },
+  exclusion: { label: "Exclusions", tone: "danger" },
+  clarification: { label: "Clarifications", tone: "info" },
+  assumption: { label: "Assumptions", tone: "warning" },
+  general: { label: "General", tone: "default" },
+};
+
+const CONDITION_TYPE_KEYS = ["inclusion", "exclusion", "clarification", "assumption", "general"] as const;
+
+function conditionTypeMeta(raw: string): ConditionTypeMeta {
+  const key = raw.trim().toLowerCase();
+  if (CONDITION_TYPE_META[key]) return CONDITION_TYPE_META[key];
+  const label = key
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+  return { label, tone: "default" };
+}
+
+function conditionTypeBadgeClasses(tone: ConditionBadgeTone): string {
+  const map: Record<ConditionBadgeTone, string> = {
+    success: "border-success/20 bg-success/8 text-success",
+    danger: "border-danger/20 bg-danger/8 text-danger",
+    info: "border-accent/20 bg-accent/8 text-accent",
+    warning: "border-warning/20 bg-warning/8 text-warning",
+    default: "border-line bg-panel2 text-fg/70",
+  };
+  return map[tone];
+}
+
+function conditionTypeSectionAccent(tone: ConditionBadgeTone): string {
+  const map: Record<ConditionBadgeTone, string> = {
+    success: "border-l-success/40",
+    danger: "border-l-danger/40",
+    info: "border-l-accent/40",
+    warning: "border-l-warning/40",
+    default: "border-l-fg/20",
+  };
+  return map[tone];
+}
 
 /* ─── Helpers ─── */
 
@@ -798,7 +852,7 @@ function GeneralSubTab({
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Inclusions & Exclusions Sub-Tab
+   Conditions Sub-Tab
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function ConditionsSubTab({
@@ -820,58 +874,418 @@ function ConditionsSubTab({
     getConditionLibrary().then(setLibrary).catch(() => {});
   }, []);
 
-  const inclusions = [...(workspace.conditions ?? []).filter((c) => c.type === "inclusion")].sort(
-    (a, b) => a.order - b.order
-  );
-  const exclusions = [...(workspace.conditions ?? []).filter((c) => c.type === "exclusion")].sort(
-    (a, b) => a.order - b.order
-  );
-  const clarifications = [...(workspace.conditions ?? []).filter((c) => c.type === "clarification")].sort(
-    (a, b) => a.order - b.order
+  const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryTypeFilter, setLibraryTypeFilter] = useState<string>("all");
+
+  const refreshLibrary = useCallback(
+    () => getConditionLibrary().then(setLibrary).catch(() => {}),
+    [],
   );
 
-  const inclusionLibrary = library.filter((l) => l.type === "inclusion" || l.type === "Inclusion");
-  const exclusionLibrary = library.filter((l) => l.type === "exclusion" || l.type === "Exclusion");
-  const clarificationLibrary = library.filter((l) => l.type === "clarification" || l.type === "Clarification");
+  const allConditions = workspace.conditions ?? [];
+
+  const conditionsByType = useMemo(() => {
+    const grouped = new Map<string, ProjectCondition[]>();
+    for (const key of CONDITION_TYPE_KEYS) grouped.set(key, []);
+    for (const c of allConditions) {
+      const key = c.type.trim().toLowerCase();
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(c);
+    }
+    for (const conditions of grouped.values()) {
+      conditions.sort((a, b) => a.order - b.order);
+    }
+    return grouped;
+  }, [allConditions]);
+
+  const activeTypeKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const key of CONDITION_TYPE_KEYS) {
+      if ((conditionsByType.get(key)?.length ?? 0) > 0) keys.push(key);
+    }
+    for (const key of conditionsByType.keys()) {
+      if (!keys.includes(key)) keys.push(key);
+    }
+    return keys;
+  }, [conditionsByType]);
+
+  const libraryTypeKeys = useMemo(() => {
+    const seen = new Set<string>(CONDITION_TYPE_KEYS);
+    for (const entry of library) {
+      seen.add(entry.type.trim().toLowerCase());
+    }
+    return [...CONDITION_TYPE_KEYS, ...Array.from(seen).filter((k) => !CONDITION_TYPE_KEYS.includes(k as typeof CONDITION_TYPE_KEYS[number])).sort()];
+  }, [library]);
+
+  const filteredLibrary = useMemo(() => {
+    const q = librarySearch.trim().toLowerCase();
+    return library.filter((entry) => {
+      if (libraryTypeFilter !== "all" && entry.type.trim().toLowerCase() !== libraryTypeFilter) return false;
+      if (q && !entry.value.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [library, librarySearch, libraryTypeFilter]);
+
+  function addConditionFromLibrary(entry: ConditionLibraryEntry) {
+    startTransition(async () => {
+      try {
+        const next = await createCondition(workspace.project.id, {
+          type: entry.type.trim().toLowerCase(),
+          value: entry.value,
+          order: (conditionsByType.get(entry.type.trim().toLowerCase())?.length ?? 0) + 1,
+        });
+        onApply(next);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Add failed.");
+      }
+    });
+  }
+
+  const [addInputValues, setAddInputValues] = useState<Record<string, string>>({});
+
+  function addCondition(typeKey: string) {
+    const value = (addInputValues[typeKey] ?? "").trim();
+    if (!value) return;
+    startTransition(async () => {
+      try {
+        const next = await createCondition(workspace.project.id, {
+          type: typeKey,
+          value,
+          order: (conditionsByType.get(typeKey)?.length ?? 0) + 1,
+        });
+        onApply(next);
+        setAddInputValues((prev) => ({ ...prev, [typeKey]: "" }));
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Add failed.");
+      }
+    });
+  }
+
+  function removeCondition(id: string) {
+    startTransition(async () => {
+      try {
+        onApply(await deleteCondition(workspace.project.id, id));
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Delete failed.");
+      }
+    });
+  }
+
+  function saveToLibrary(value: string, type: string) {
+    startTransition(async () => {
+      try {
+        await createConditionLibraryEntry({ type, value });
+        refreshLibrary();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Failed to save to library.");
+      }
+    });
+  }
+
+  function removeFromLibrary(entryId: string) {
+    startTransition(async () => {
+      try {
+        await deleteConditionLibraryEntry(entryId);
+        refreshLibrary();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Failed to remove from library.");
+      }
+    });
+  }
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+
+  function saveEdit(id: string, type: string) {
+    if (!editValue.trim()) return;
+    startTransition(async () => {
+      try {
+        onApply(await updateCondition(workspace.project.id, id, { value: editValue.trim() }));
+        setEditingId(null);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Update failed.");
+      }
+    });
+  }
+
+  function moveCondition(condition: ProjectCondition, typeKey: string, direction: "up" | "down") {
+    const conditions = conditionsByType.get(typeKey) ?? [];
+    const idx = conditions.findIndex((c) => c.id === condition.id);
+    if (idx < 0) return;
+    const swapIndex = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIndex < 0 || swapIndex >= conditions.length) return;
+    const reordered = [...conditions];
+    [reordered[idx], reordered[swapIndex]] = [reordered[swapIndex], reordered[idx]];
+    const otherConditions = allConditions.filter((c) => c.type.trim().toLowerCase() !== typeKey);
+    const orderedIds = [
+      ...otherConditions.map((c) => c.id),
+      ...reordered.map((c) => c.id),
+    ];
+    startTransition(async () => {
+      try {
+        onApply(await reorderConditions(workspace.project.id, orderedIds));
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Reorder failed.");
+      }
+    });
+  }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
-      <ConditionList
-        title="Inclusions"
-        type="inclusion"
-        conditions={inclusions}
-        allConditions={workspace.conditions ?? []}
-        projectId={workspace.project.id}
-        libraryEntries={inclusionLibrary}
-        onApply={onApply}
-        onError={onError}
-        loading={loading}
-        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
-      />
-      <ConditionList
-        title="Exclusions"
-        type="exclusion"
-        conditions={exclusions}
-        allConditions={workspace.conditions ?? []}
-        projectId={workspace.project.id}
-        libraryEntries={exclusionLibrary}
-        onApply={onApply}
-        onError={onError}
-        loading={loading}
-        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
-      />
-      <ConditionList
-        title="Clarifications"
-        type="clarification"
-        conditions={clarifications}
-        allConditions={workspace.conditions ?? []}
-        projectId={workspace.project.id}
-        libraryEntries={clarificationLibrary}
-        onApply={onApply}
-        onError={onError}
-        loading={loading}
-        onLibraryChange={() => getConditionLibrary().then(setLibrary).catch(() => {})}
-      />
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex items-center justify-between shrink-0 mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-fg/70">
+            {allConditions.length} condition{allConditions.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            setLibrarySearch("");
+            setLibraryTypeFilter("all");
+            refreshLibrary();
+            setLibraryDrawerOpen(true);
+          }}
+          disabled={loading}
+        >
+          <BookOpen className="h-3.5 w-3.5" />
+          Pull from Library
+        </Button>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
+        {activeTypeKeys.map((typeKey) => {
+          const meta = conditionTypeMeta(typeKey);
+          const conditions = conditionsByType.get(typeKey) ?? [];
+          return (
+            <div
+              key={typeKey}
+              className={cn(
+                "rounded-lg border border-line border-l-4",
+                conditionTypeSectionAccent(meta.tone),
+              )}
+            >
+              <div className="flex items-center gap-2 px-3 py-2 bg-panel2/40 rounded-t-lg border-b border-line">
+                <Badge tone={meta.tone}>{meta.label}</Badge>
+                <span className="text-[11px] text-fg/35">{conditions.length}</span>
+              </div>
+
+              <div className="p-3 space-y-1">
+                {conditions.length === 0 ? (
+                  <p className="text-xs text-fg/35 py-1">No {meta.label.toLowerCase()} added.</p>
+                ) : (
+                  conditions.map((c, idx) => (
+                    <div
+                      key={c.id}
+                      className="group flex items-center gap-2 rounded-md border border-line/60 bg-bg/30 px-3 py-2 text-sm"
+                    >
+                      {editingId === c.id ? (
+                        <div className="flex flex-1 items-center gap-2">
+                          <Input
+                            className="flex-1"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveEdit(c.id, typeKey);
+                              if (e.key === "Escape") setEditingId(null);
+                            }}
+                            autoFocus
+                          />
+                          <Button size="xs" onClick={() => saveEdit(c.id, typeKey)} disabled={loading}>
+                            <Save className="h-3 w-3" />
+                          </Button>
+                          <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span
+                            className="flex-1 cursor-pointer"
+                            onDoubleClick={() => {
+                              setEditingId(c.id);
+                              setEditValue(c.value);
+                            }}
+                          >
+                            {c.value}
+                          </span>
+                          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                            <button
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-accent disabled:opacity-30"
+                              onClick={() => saveToLibrary(c.value, typeKey)}
+                              disabled={loading}
+                              title="Save to library"
+                            >
+                              <SaveAll className="h-3 w-3" />
+                            </button>
+                            <button
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
+                              onClick={() => moveCondition(c, typeKey, "up")}
+                              disabled={idx === 0 || loading}
+                            >
+                              <ArrowUp className="h-3 w-3" />
+                            </button>
+                            <button
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
+                              onClick={() => moveCondition(c, typeKey, "down")}
+                              disabled={idx === conditions.length - 1 || loading}
+                            >
+                              <ArrowDown className="h-3 w-3" />
+                            </button>
+                            <button
+                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger disabled:opacity-30"
+                              onClick={() => removeCondition(c.id)}
+                              disabled={loading}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))
+                )}
+
+                <div className="flex items-center gap-2 pt-1">
+                  <Input
+                    className="flex-1"
+                    placeholder={`Add ${meta.label.toLowerCase().replace(/s$/, "")}...`}
+                    value={addInputValues[typeKey] ?? ""}
+                    onChange={(e) => setAddInputValues((prev) => ({ ...prev, [typeKey]: e.target.value }))}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addCondition(typeKey);
+                    }}
+                  />
+                  <Button
+                    size="xs"
+                    onClick={() => addCondition(typeKey)}
+                    disabled={loading || !(addInputValues[typeKey] ?? "").trim()}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <ModalBackdrop open={libraryDrawerOpen} onClose={() => setLibraryDrawerOpen(false)} size="lg">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Condition Library</CardTitle>
+              <button
+                onClick={() => setLibraryDrawerOpen(false)}
+                className="rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-xs text-fg/50 mt-1">
+              Search and filter the library, then click items to add them to this quote.
+            </p>
+          </CardHeader>
+          <CardBody className="space-y-3 max-h-[60vh] overflow-y-auto">
+            <div className="flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
+                <Input
+                  value={librarySearch}
+                  onChange={(e) => setLibrarySearch(e.target.value)}
+                  placeholder="Search conditions..."
+                  className="pl-9"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setLibraryTypeFilter("all")}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  libraryTypeFilter === "all"
+                    ? "border-accent/20 bg-accent/8 text-accent ring-2 ring-accent/40 ring-offset-1 ring-offset-panel"
+                    : "border-line bg-panel2 text-fg/70 hover:bg-panel2/80",
+                )}
+              >
+                All
+                <span className="rounded-full bg-bg/40 px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums">
+                  {library.length}
+                </span>
+              </button>
+              {libraryTypeKeys.map((key) => {
+                const meta = conditionTypeMeta(key);
+                const count = library.filter((e) => e.type.trim().toLowerCase() === key).length;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setLibraryTypeFilter(key)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      conditionTypeBadgeClasses(meta.tone),
+                      libraryTypeFilter === key && "ring-2 ring-accent/40 ring-offset-1 ring-offset-panel",
+                    )}
+                  >
+                    {meta.label}
+                    <span className="rounded-full bg-bg/40 px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums">
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {filteredLibrary.length === 0 ? (
+              <EmptyState>
+                {librarySearch || libraryTypeFilter !== "all"
+                  ? "No conditions match your filters."
+                  : "No conditions in the library yet."}
+              </EmptyState>
+            ) : (
+              <div className="space-y-1">
+                {filteredLibrary.map((entry) => {
+                  const meta = conditionTypeMeta(entry.type);
+                  return (
+                    <div
+                      key={entry.id}
+                      className="group flex items-center gap-3 rounded-lg border border-line/60 px-3 py-2 text-sm hover:bg-panel2/40 transition-colors"
+                    >
+                      <Badge tone={meta.tone} className="shrink-0">
+                        {meta.label.replace(/s$/, "")}
+                      </Badge>
+                      <span className="flex-1 text-fg/80 truncate">{entry.value}</span>
+                      <div className="flex items-center gap-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => addConditionFromLibrary(entry)}
+                          disabled={loading}
+                        >
+                          <Plus className="h-3 w-3" /> Add
+                        </Button>
+                        <button
+                          className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger disabled:opacity-30"
+                          onClick={() => removeFromLibrary(entry.id)}
+                          disabled={loading}
+                          title="Remove from library"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      </ModalBackdrop>
     </div>
   );
 }
@@ -917,258 +1331,8 @@ function NotesSubTab({
   );
 }
 
-/* ─── Condition List ─── */
-
-function ConditionList({
-  title,
-  type,
-  conditions,
-  allConditions,
-  projectId,
-  libraryEntries,
-  onApply,
-  onError,
-  loading,
-  onLibraryChange,
-}: {
-  title: string;
-  type: string;
-  conditions: ProjectCondition[];
-  allConditions: ProjectCondition[];
-  projectId: string;
-  libraryEntries: ConditionLibraryEntry[];
-  onApply: (next: WorkspaceResponse) => void;
-  onError: (msg: string) => void;
-  loading: boolean;
-  onLibraryChange?: () => void;
-}) {
-  const [newValue, setNewValue] = useState("");
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
-  const [showLibrary, setShowLibrary] = useState(false);
-  const [isPending, startTransition] = useTransition();
-  const busy = loading || isPending;
-
-  function addCondition(value?: string) {
-    const text = (value ?? newValue).trim();
-    if (!text) return;
-    startTransition(async () => {
-      try {
-        const next = await createCondition(projectId, {
-          type,
-          value: text,
-          order: conditions.length + 1,
-        });
-        onApply(next);
-        setNewValue("");
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Add failed.");
-      }
-    });
-  }
-
-  function removeCondition(id: string) {
-    startTransition(async () => {
-      try {
-        onApply(await deleteCondition(projectId, id));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Delete failed.");
-      }
-    });
-  }
-
-  function saveEdit(id: string) {
-    if (!editValue.trim()) return;
-    startTransition(async () => {
-      try {
-        onApply(await updateCondition(projectId, id, { value: editValue.trim() }));
-        setEditingId(null);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Update failed.");
-      }
-    });
-  }
-
-  function moveCondition(index: number, direction: "up" | "down") {
-    const swapIndex = direction === "up" ? index - 1 : index + 1;
-    if (swapIndex < 0 || swapIndex >= conditions.length) return;
-    const reordered = [...conditions];
-    [reordered[index], reordered[swapIndex]] = [reordered[swapIndex], reordered[index]];
-    const otherConditions = allConditions.filter((c) => c.type !== type);
-    const orderedIds = [
-      ...otherConditions.map((c) => c.id),
-      ...reordered.map((c) => c.id),
-    ];
-    startTransition(async () => {
-      try {
-        onApply(await reorderConditions(projectId, orderedIds));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Reorder failed.");
-      }
-    });
-  }
-
-  function saveToLibrary(value: string) {
-    startTransition(async () => {
-      try {
-        await createConditionLibraryEntry({ type, value });
-        onLibraryChange?.();
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Failed to save to library.");
-      }
-    });
-  }
-
-  function removeFromLibrary(entryId: string) {
-    startTransition(async () => {
-      try {
-        await deleteConditionLibraryEntry(entryId);
-        onLibraryChange?.();
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Failed to remove from library.");
-      }
-    });
-  }
-
-  return (
-    <Card className="flex flex-col h-full min-h-0">
-      <CardHeader className="flex items-center justify-between shrink-0">
-        <CardTitle>{title}</CardTitle>
-        <Button size="xs" variant="ghost" onClick={() => setShowLibrary(!showLibrary)} disabled={busy}>
-          <BookOpen className="h-3.5 w-3.5" /> Library
-        </Button>
-      </CardHeader>
-      <CardBody className="space-y-3 flex-1 min-h-0 overflow-y-auto">
-        {/* Library panel */}
-        {showLibrary && (
-          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 space-y-2 max-h-48 overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-fg/60">Condition Library — {title}</span>
-              <button onClick={() => setShowLibrary(false)} className="text-fg/40 hover:text-fg/60">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {libraryEntries.length === 0 ? (
-              <p className="text-xs text-fg/40">No library entries. Save conditions to build your reusable library.</p>
-            ) : (
-              libraryEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="text-fg/70 truncate flex-1">{entry.value}</span>
-                  <div className="flex gap-1 shrink-0">
-                    <Button size="xs" variant="ghost" onClick={() => addCondition(entry.value)} disabled={busy}>
-                      <Plus className="h-3 w-3" /> Use
-                    </Button>
-                    <Button size="xs" variant="danger" onClick={() => removeFromLibrary(entry.id)} disabled={busy}>
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
-
-        {/* Condition list */}
-        {conditions.length === 0 && !showLibrary ? (
-          <EmptyState>No {title.toLowerCase()} added</EmptyState>
-        ) : conditions.length > 0 ? (
-          <div className="space-y-1">
-            {conditions.map((c, idx) => (
-              <div
-                key={c.id}
-                className="group flex items-center gap-2 rounded-lg border border-line bg-bg/30 px-3 py-2 text-sm"
-              >
-                {editingId === c.id ? (
-                  <div className="flex flex-1 items-center gap-2">
-                    <Input
-                      className="flex-1"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveEdit(c.id);
-                        if (e.key === "Escape") setEditingId(null);
-                      }}
-                      autoFocus
-                    />
-                    <Button size="xs" onClick={() => saveEdit(c.id)} disabled={busy}>
-                      <Save className="h-3 w-3" />
-                    </Button>
-                    <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
-                      Cancel
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <span
-                      className="flex-1 cursor-pointer"
-                      onDoubleClick={() => {
-                        setEditingId(c.id);
-                        setEditValue(c.value);
-                      }}
-                    >
-                      {c.value}
-                    </span>
-                    <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                      <button
-                        className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-accent disabled:opacity-30"
-                        onClick={() => saveToLibrary(c.value)}
-                        disabled={busy}
-                        title="Save to library"
-                      >
-                        <SaveAll className="h-3 w-3" />
-                      </button>
-                      <button
-                        className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
-                        onClick={() => moveCondition(idx, "up")}
-                        disabled={idx === 0 || busy}
-                      >
-                        <ArrowUp className="h-3 w-3" />
-                      </button>
-                      <button
-                        className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
-                        onClick={() => moveCondition(idx, "down")}
-                        disabled={idx === conditions.length - 1 || busy}
-                      >
-                        <ArrowDown className="h-3 w-3" />
-                      </button>
-                      <button
-                        className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger disabled:opacity-30"
-                        onClick={() => removeCondition(c.id)}
-                        disabled={busy}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </CardBody>
-
-      {/* Add new — pinned to bottom, always visible */}
-      <div className="flex items-center gap-2 shrink-0 border-t border-line px-5 py-3">
-        <Input
-          className="flex-1"
-          placeholder={`Add ${type}...`}
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") addCondition();
-          }}
-        />
-        <Button size="sm" onClick={() => addCondition()} disabled={busy || !newValue.trim()}>
-          <Plus className="h-3.5 w-3.5" />
-          Add
-        </Button>
-      </div>
-    </Card>
-  );
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
-   Rates Sub-Tab
+   Notes Sub-Tab
    ═══════════════════════════════════════════════════════════════════════════ */
 
 function RatesSubTab({

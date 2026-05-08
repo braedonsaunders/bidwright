@@ -13,6 +13,8 @@ import {
   Wrench,
   ChevronRight,
   Layers,
+  Settings,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +26,8 @@ import {
   CardTitle,
   FadeIn,
   Input,
+  Label,
+  Combobox,
   ModalBackdrop,
   Toggle,
 } from "@/components/ui";
@@ -33,6 +37,7 @@ import type {
   PluginRecord,
   PluginToolDefinition,
   PluginOutput,
+  PluginConfigField,
   DatasetRecord,
   EntityCategory,
 } from "@/lib/api";
@@ -65,6 +70,206 @@ interface ToolExecutionModalState {
   tool: PluginToolDefinition;
 }
 
+function PluginConfigModal({
+  plugin,
+  onSave,
+  onCancel,
+}: {
+  plugin: PluginRecord;
+  onSave: (config: Record<string, unknown>) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const schema = plugin.configSchema ?? [];
+  const [values, setValues] = useState<Record<string, unknown>>(() => {
+    const initial: Record<string, unknown> = { ...(plugin.config ?? {}) };
+    for (const field of schema) {
+      if (initial[field.key] === undefined && field.defaultValue !== undefined) {
+        initial[field.key] = field.defaultValue;
+      }
+    }
+    return initial;
+  });
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const handleChange = useCallback((key: string, value: unknown) => {
+    setValues((prev) => ({ ...prev, [key]: value }));
+    setErrors((prev) => {
+      if (key in prev) {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      return prev;
+    });
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    const newErrors: Record<string, string> = {};
+    for (const field of schema) {
+      const val = values[field.key];
+      if (field.required && (val === undefined || val === null || val === "")) {
+        newErrors[field.key] = `${field.label} is required`;
+      }
+      if (field.validation?.min !== undefined && typeof val === "number" && val < field.validation.min) {
+        newErrors[field.key] = `${field.label} must be at least ${field.validation.min}`;
+      }
+      if (field.validation?.max !== undefined && typeof val === "number" && val > field.validation.max) {
+        newErrors[field.key] = `${field.label} must be at most ${field.validation.max}`;
+      }
+      if (field.validation?.minLength !== undefined && typeof val === "string" && val.length < field.validation.minLength) {
+        newErrors[field.key] = `${field.label} must be at least ${field.validation.minLength} characters`;
+      }
+    }
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(values);
+    } catch {
+      setSaving(false);
+    }
+  }, [schema, values, onSave]);
+
+  return (
+    <Card className="max-h-[80vh] overflow-y-auto">
+      <CardHeader className="flex flex-row items-center justify-between sticky top-0 bg-panel z-10 border-b border-line">
+        <div className="flex items-center gap-2 min-w-0">
+          <Settings className="h-4 w-4 text-fg/40 shrink-0" />
+          <CardTitle className="text-sm">Configure {plugin.name}</CardTitle>
+        </div>
+        <Button variant="ghost" size="xs" onClick={onCancel} disabled={saving}>
+          <X className="h-4 w-4" />
+        </Button>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        {schema.length === 0 ? (
+          <div className="py-8 text-center">
+            <Puzzle className="mx-auto h-6 w-6 text-fg/15 mb-2" />
+            <p className="text-xs text-fg/40">This plugin has no configuration fields.</p>
+          </div>
+        ) : (
+          <>
+            <p className="text-[11px] text-fg/50">
+              Configure settings for <span className="font-medium text-fg/70">{plugin.name}</span>. These values are stored securely and used at runtime.
+            </p>
+            <div className="grid grid-cols-12 gap-3">
+              {schema.map((field) => (
+                <PluginConfigFieldRenderer
+                  key={field.key}
+                  field={field}
+                  value={values[field.key]}
+                  onChange={(v) => handleChange(field.key, v)}
+                  error={errors[field.key]}
+                />
+              ))}
+            </div>
+          </>
+        )}
+        {schema.length > 0 && (
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-line">
+            <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="sm" onClick={handleSave} disabled={saving}>
+              {saving ? "Saving..." : "Save Configuration"}
+            </Button>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
+function PluginConfigFieldRenderer({
+  field,
+  value,
+  onChange,
+  error,
+}: {
+  field: PluginConfigField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  error?: string;
+}) {
+  const isFullWidth = field.type === "boolean";
+
+  return (
+    <div className={cn(isFullWidth ? "col-span-12" : "col-span-12 sm:col-span-6", "space-y-1")}>
+      <Label htmlFor={`config-${field.key}`}>
+        {field.label}
+        {field.required && <span className="text-danger ml-0.5">*</span>}
+      </Label>
+      {field.description && (
+        <p className="text-[10px] text-fg/40 -mt-0.5 mb-1">{field.description}</p>
+      )}
+
+      {(field.type === "text" || field.type === "url") && (
+        <Input
+          id={`config-${field.key}`}
+          type={field.type === "url" ? "url" : "text"}
+          value={String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder}
+        />
+      )}
+
+      {field.type === "password" && (
+        <Input
+          id={`config-${field.key}`}
+          type="password"
+          value={String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder ?? "••••••••"}
+        />
+      )}
+
+      {field.type === "number" && (
+        <Input
+          id={`config-${field.key}`}
+          type="number"
+          value={value !== undefined && value !== null ? String(value) : ""}
+          onChange={(e) => onChange(e.target.value ? parseFloat(e.target.value) : undefined)}
+          placeholder={field.placeholder}
+          min={field.validation?.min}
+          max={field.validation?.max}
+          step="any"
+        />
+      )}
+
+      {field.type === "boolean" && (
+        <div className="flex items-center gap-2 pt-1">
+          <Toggle
+            checked={Boolean(value ?? field.defaultValue ?? false)}
+            onChange={(v) => onChange(v)}
+          />
+          <span className="text-xs text-fg/60">{value ? "Enabled" : "Disabled"}</span>
+        </div>
+      )}
+
+      {field.type === "select" && (
+        <Combobox
+          id={`config-${field.key}`}
+          value={String(value ?? "")}
+          onChange={onChange}
+          options={field.options ?? []}
+          placeholder={field.placeholder ?? "Select..."}
+          searchPlaceholder={`Search ${field.label.toLowerCase()}...`}
+        />
+      )}
+
+      {error && (
+        <p className="text-[10px] text-danger flex items-center gap-1">
+          <AlertCircle className="h-3 w-3" />
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function PluginsPage({
   initialPlugins,
   initialDatasets,
@@ -88,6 +293,7 @@ export function PluginsPage({
   const [editingPlugin, setEditingPlugin] = useState<PluginRecord | null>(null);
   const [detailPlugin, setDetailPlugin] = useState<PluginRecord | null>(null);
   const [detailActiveTool, setDetailActiveTool] = useState<string>("");
+  const [configuringPlugin, setConfiguringPlugin] = useState<PluginRecord | null>(null);
 
   const datasetOptions = useMemo(
     () => (initialDatasets ?? []).map((ds) => ({ id: ds.id, name: ds.name, columns: ds.columns.map((c) => ({ key: c.key, name: c.name })) })),
@@ -380,7 +586,22 @@ export function PluginsPage({
                         <span>v{plugin.version}</span>
                       )}
                     </div>
-                    <ChevronRight className="h-3.5 w-3.5 text-fg/20" />
+                    <div className="flex items-center gap-1">
+                      {plugin.configSchema && plugin.configSchema.length > 0 && (
+                        <button
+                          type="button"
+                          className="rounded p-1 text-fg/30 hover:text-fg/60 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfiguringPlugin(plugin);
+                          }}
+                          title="Configure"
+                        >
+                          <Settings className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      <ChevronRight className="h-3.5 w-3.5 text-fg/20" />
+                    </div>
                   </div>
                   {/* Mini tool list — fixed 3-row slot so cards stay aligned
                       whether the plugin has 0, 1, or 10 tools. */}
@@ -444,6 +665,17 @@ export function PluginsPage({
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    {detailPlugin.configSchema && detailPlugin.configSchema.length > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => {
+                          setConfiguringPlugin(detailPlugin);
+                        }}
+                      >
+                        <Settings className="h-3 w-3" /> Configure
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="xs"
@@ -613,6 +845,30 @@ export function PluginsPage({
               )}
             </CardBody>
           </Card>
+        )}
+      </ModalBackdrop>
+
+      {/* Plugin Config Modal */}
+      <ModalBackdrop
+        open={!!configuringPlugin}
+        onClose={() => setConfiguringPlugin(null)}
+        size="md"
+      >
+        {configuringPlugin && (
+          <PluginConfigModal
+            plugin={configuringPlugin}
+            onSave={async (config) => {
+              const updated = await apiUpdatePlugin(configuringPlugin.id, { config });
+              setPlugins((prev) =>
+                prev.map((p) => (p.id === updated.id ? updated : p))
+              );
+              if (detailPlugin?.id === updated.id) {
+                setDetailPlugin(updated);
+              }
+              setConfiguringPlugin(null);
+            }}
+            onCancel={() => setConfiguringPlugin(null)}
+          />
         )}
       </ModalBackdrop>
 
