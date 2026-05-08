@@ -2,18 +2,9 @@
 
 import { useState } from "react";
 import { AlertCircle, Loader2, Sparkles, X } from "lucide-react";
-import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Textarea } from "@/components/ui";
+import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, ModalBackdrop, Textarea } from "@/components/ui";
 import { generateManifestFromOpenAPI, installIntegration } from "@/lib/api/integrations";
 
-/**
- * Modal for installing a custom-authored manifest. Two paths:
- *
- *  1. Paste / upload a manifest JSON document directly.
- *  2. (Slice 4 — coming) Generate from an OpenAPI spec.
- *
- * The API parses + Zod-validates the manifest before persisting; on
- * failure we surface the validation message verbatim.
- */
 export function CustomManifestModal(props: {
   onClose: () => void;
   onInstalled: (id: string) => void;
@@ -54,61 +45,59 @@ export function CustomManifestModal(props: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={props.onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="w-[720px] max-w-full max-h-[88vh] overflow-y-auto">
-        <Card>
-          <CardHeader className="flex items-center justify-between gap-3">
-            <CardTitle className="text-base">Install custom manifest</CardTitle>
-            <button onClick={props.onClose} className="rounded-md p-1 text-fg/60 hover:bg-panel2 hover:text-fg">
-              <X className="h-4 w-4" />
-            </button>
-          </CardHeader>
-          <CardBody className="space-y-3">
-            <p className="text-sm text-fg/65">
-              Paste a manifest JSON document below. It will be validated against the integration manifest schema
-              before installation. See the docs for the schema reference.
-            </p>
-            {error ? (
-              <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-600">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-none" />
-                <div className="flex-1 break-words">{error}</div>
-              </div>
-            ) : null}
-            <div className="rounded-md border border-line bg-panel2 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-medium text-fg/70">
-                <Sparkles className="h-3.5 w-3.5" /> Generate from OpenAPI spec
-              </div>
-              <div className="flex gap-1.5">
-                <Input
-                  placeholder="https://api.example.com/openapi.json"
-                  value={openapiUrl}
-                  onChange={(e) => setOpenapiUrl(e.target.value)}
-                />
-                <Button size="sm" variant="secondary" onClick={generateFromOpenAPI} disabled={generating || !openapiUrl}>
-                  {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Generate"}
-                </Button>
-              </div>
-              <p className="text-[11px] text-fg/55">Pulls the spec, infers auth + actions, and pre-fills the editor below. Edit before installing.</p>
+    <ModalBackdrop open={true} onClose={props.onClose} size="xl">
+      <Card className="overflow-hidden">
+        <CardHeader className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Install Custom Manifest</CardTitle>
+          <button onClick={props.onClose} className="rounded-md p-1 text-fg/60 hover:bg-panel2 hover:text-fg">
+            <X className="h-4 w-4" />
+          </button>
+        </CardHeader>
+        <CardBody className="max-h-[70vh] space-y-3 overflow-y-auto">
+          <p className="text-sm text-fg/65">
+            Paste a manifest JSON document below. It will be validated against the integration manifest schema
+            before installation. See the docs for the schema reference.
+          </p>
+          {error ? (
+            <div className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-sm text-red-600">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-none" />
+              <div className="flex-1 break-words">{error}</div>
             </div>
-            <Label>Manifest JSON</Label>
-            <Textarea
-              rows={20}
-              spellCheck={false}
-              className="font-mono text-xs"
-              value={json}
-              onChange={(e) => setJson(e.target.value)}
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
-              <Button onClick={submit} disabled={installing}>
-                {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Install
+          ) : null}
+          <div className="rounded-md border border-line bg-panel2 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-xs font-medium text-fg/70">
+              <Sparkles className="h-3.5 w-3.5" /> Generate from OpenAPI spec
+            </div>
+            <div className="flex gap-1.5">
+              <Input
+                placeholder="https://api.example.com/openapi.json"
+                value={openapiUrl}
+                onChange={(e) => setOpenapiUrl(e.target.value)}
+              />
+              <Button size="sm" variant="secondary" onClick={generateFromOpenAPI} disabled={generating || !openapiUrl}>
+                {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Generate"}
               </Button>
             </div>
-          </CardBody>
-        </Card>
-      </div>
-    </div>
+            <p className="text-[11px] text-fg/55">Pulls the spec, infers auth + actions, and pre-fills the editor below. Edit before installing.</p>
+          </div>
+          <Label>Manifest JSON</Label>
+          <Textarea
+            rows={20}
+            spellCheck={false}
+            className="font-mono text-xs"
+            value={json}
+            onChange={(e) => setJson(e.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={props.onClose}>Cancel</Button>
+            <Button onClick={submit} disabled={installing}>
+              {installing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Install
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
+    </ModalBackdrop>
   );
 }
 
