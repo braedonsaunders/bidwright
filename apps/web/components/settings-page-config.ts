@@ -11,6 +11,14 @@ export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "term
 export type DataSubTab = "categories" | "uoms" | "conditions" | "factors";
 export type IntegrationsSubTab = "agent" | "llm" | "azure" | "autodesk" | "drawing" | "email" | "plugins" | "integrations";
 
+export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "brand", label: "Brand" },
+  { id: "departments", label: "Departments" },
+  { id: "defaults", label: "Defaults" },
+  { id: "terms", label: "Terms & Conditions" },
+];
+
 export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
   { id: "agent", label: "Agent Runtime" },
   { id: "llm", label: "LLM" },
@@ -27,14 +35,6 @@ export const DATA_SUBTABS: { id: DataSubTab; label: string }[] = [
   { id: "uoms", label: "Units" },
   { id: "factors", label: "Factors" },
   { id: "conditions", label: "Conditions" },
-];
-
-export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
-  { id: "agent", label: "Agent Runtime" },
-  { id: "apikeys", label: "API Keys" },
-  { id: "email", label: "Email" },
-  { id: "plugins", label: "Plugins" },
-  { id: "integrations", label: "Integrations" },
 ];
 
 export interface GeneralSettings {
