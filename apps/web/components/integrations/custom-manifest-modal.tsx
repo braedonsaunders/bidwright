@@ -46,14 +46,14 @@ export function CustomManifestModal(props: {
 
   return (
     <ModalBackdrop open={true} onClose={props.onClose} size="xl">
-      <Card className="overflow-hidden">
-        <CardHeader className="flex items-center justify-between gap-3">
+      <Card className="flex max-h-[90vh] flex-col overflow-hidden">
+        <CardHeader className="flex shrink-0 items-center justify-between gap-3">
           <CardTitle className="text-base">Install Custom Manifest</CardTitle>
           <button onClick={props.onClose} className="rounded-md p-1 text-fg/60 hover:bg-panel2 hover:text-fg">
             <X className="h-4 w-4" />
           </button>
         </CardHeader>
-        <CardBody className="max-h-[70vh] space-y-3 overflow-y-auto">
+        <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
           <p className="text-sm text-fg/65">
             Paste a manifest JSON document below. It will be validated against the integration manifest schema
             before installation. See the docs for the schema reference.
