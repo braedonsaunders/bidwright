@@ -140,9 +140,9 @@ export function DxfViewer({ url, fileName, projectId, sourceKind, sourceId }: Dx
 
       try {
         if (isDwg && projectId && sourceKind && sourceId) {
-          let result = await getDwgTakeoffMetadata(projectId, sourceId);
+          let result = await getDwgTakeoffMetadata(projectId, sourceId, false, sourceKind);
           if (result.status !== "processed") {
-            result = await processDwgTakeoffMetadata(projectId, sourceId);
+            result = await processDwgTakeoffMetadata(projectId, sourceId, sourceKind);
           }
           if (cancelled) return;
           if (result.status !== "processed") {

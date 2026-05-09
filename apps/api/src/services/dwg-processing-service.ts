@@ -534,32 +534,31 @@ function parseConverterCommand(command: string, inputPath: string, outputPath: s
 }
 
 async function convertDwgToDxf(inputPath: string): Promise<{ dxfText?: string; converter: DwgProcessingResult["converter"] }> {
-  const command = process.env.BIDWRIGHT_DWG_CONVERTER_CMD?.trim();
-  if (!command) {
-    return {
-      converter: {
-        status: "missing",
-        message: "Set BIDWRIGHT_DWG_CONVERTER_CMD with {input} and {output} placeholders to enable binary DWG processing.",
-      },
-    };
-  }
+  const envCommand = process.env.BIDWRIGHT_DWG_CONVERTER_CMD?.trim();
+  const commands = envCommand
+    ? [envCommand]
+    : ["dwg2dxf {input} -o {output}", "ODAFileConverter {input} {output} ACAD2018 DXF"];
 
   const tempDir = await mkdtemp(join(tmpdir(), "bidwright-dwg-"));
   const outputPath = join(tempDir, "converted.dxf");
   try {
-    const parsed = parseConverterCommand(command, inputPath, outputPath);
-    if (!parsed) {
-      return { converter: { status: "failed", command, message: "Converter command could not be parsed." } };
+    for (const command of commands) {
+      const parsed = parseConverterCommand(command, inputPath, outputPath);
+      if (!parsed) continue;
+      try {
+        await execFileAsync(parsed.file, parsed.args, { timeout: 120_000, maxBuffer: 1024 * 1024 * 8 });
+        const dxfText = await readFile(outputPath, "utf-8");
+        if (dxfText && dxfText.length > 0) {
+          return { dxfText, converter: { status: "configured", command } };
+        }
+      } catch {
+        continue;
+      }
     }
-    await execFileAsync(parsed.file, parsed.args, { timeout: 120_000, maxBuffer: 1024 * 1024 * 8 });
-    const dxfText = await readFile(outputPath, "utf-8");
-    return { dxfText, converter: { status: "configured", command } };
-  } catch (error) {
     return {
       converter: {
-        status: "failed",
-        command,
-        message: error instanceof Error ? error.message : "DWG converter failed.",
+        status: "missing",
+        message: "No DWG converter found. Install LibreDWG (dwg2dxf) or set BIDWRIGHT_DWG_CONVERTER_CMD.",
       },
     };
   } finally {
@@ -599,33 +598,54 @@ async function persistResult(documentId: string, result: DwgProcessingResult, cu
 export async function getDwgProcessingResult(
   projectId: string,
   documentId: string,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; sourceKind?: "source_document" | "file_node" } = {},
 ): Promise<DwgProcessingResult> {
-  const document = await prisma.sourceDocument.findFirst({ where: { id: documentId, projectId } });
-  if (!document) throw Object.assign(new Error("Drawing document not found."), { statusCode: 404 });
+  const sourceKind = options.sourceKind ?? "source_document";
 
-  const cached = (document.structuredData as { dwgTakeoff?: DwgProcessingResult } | null)?.dwgTakeoff;
+  let storagePath: string | null;
+  let fileName: string;
+  let structuredData: unknown;
+  let fileId: string;
+
+  if (sourceKind === "file_node") {
+    const fileNode = await prisma.fileNode.findFirst({ where: { id: documentId, projectId } });
+    if (!fileNode) throw Object.assign(new Error("Drawing file not found."), { statusCode: 404 });
+    if (fileNode.type !== "file") throw Object.assign(new Error("Selected item is not a file."), { statusCode: 400 });
+    storagePath = fileNode.storagePath;
+    fileName = fileNode.name;
+    structuredData = fileNode.metadata;
+    fileId = fileNode.id;
+  } else {
+    const document = await prisma.sourceDocument.findFirst({ where: { id: documentId, projectId } });
+    if (!document) throw Object.assign(new Error("Drawing document not found."), { statusCode: 404 });
+    storagePath = document.storagePath;
+    fileName = document.fileName;
+    structuredData = document.structuredData;
+    fileId = document.id;
+  }
+
+  const cached = (structuredData as { dwgTakeoff?: DwgProcessingResult } | null)?.dwgTakeoff;
   if (!options.refresh && cached?.schemaVersion === 1 && cached.processorVersion === PROCESSOR_VERSION) {
     return cached;
   }
 
-  if (!document.storagePath) {
+  if (!storagePath) {
     throw Object.assign(new Error("Drawing file is not available on disk."), { statusCode: 404 });
   }
 
-  const sourcePath = resolveApiPath(document.storagePath);
+  const sourcePath = resolveApiPath(storagePath);
   const bytes = await readFile(sourcePath);
   const sourceHash = hashBytes(bytes);
-  const ext = extensionOf(document.fileName || document.fileType);
-  const sourceKind = ext === "dxf" ? "dxf" : ext === "dwg" ? "dwg" : "unknown";
+  const ext = extensionOf(fileName);
+  const fileSourceKind = ext === "dxf" ? "dxf" : ext === "dwg" ? "dwg" : "unknown";
   const processedAt = new Date().toISOString();
   const versionId = randomUUID();
   let dxfText: string | undefined;
   let converter: DwgProcessingResult["converter"] = { status: "not_required" };
 
-  if (sourceKind === "dxf" || bytes.toString("utf-8", 0, Math.min(bytes.byteLength, 5000)).includes("SECTION")) {
+  if (fileSourceKind === "dxf" || bytes.toString("utf-8", 0, Math.min(bytes.byteLength, 5000)).includes("SECTION")) {
     dxfText = bytes.toString("utf-8");
-  } else if (sourceKind === "dwg") {
+  } else if (fileSourceKind === "dwg") {
     const converted = await convertDwgToDxf(sourcePath);
     dxfText = converted.dxfText;
     converter = converted.converter;
@@ -635,13 +655,13 @@ export async function getDwgProcessingResult(
     const result: DwgProcessingResult = {
       schemaVersion: 1,
       processorVersion: PROCESSOR_VERSION,
-      documentId,
+      documentId: fileId,
       projectId,
-      fileName: document.fileName,
+      fileName,
       sourceHash,
       processedAt,
       status: "converter_required",
-      sourceKind,
+      sourceKind: fileSourceKind,
       converter,
       units: "unitless",
       extents: { minX: 0, minY: 0, maxX: 100, maxY: 100 },
@@ -657,16 +677,16 @@ export async function getDwgProcessingResult(
           processedAt,
           sourceHash,
           status: "converter_required",
-          sourceKind,
+          sourceKind: fileSourceKind,
           entityCount: 0,
           layerCount: 0,
           layoutCount: 0,
           converterStatus: converter.status,
         }),
-        ...priorVersions(document.structuredData),
+        ...priorVersions(structuredData),
       ].slice(0, MAX_STORED_VERSIONS),
     };
-    await persistResult(documentId, result, document.structuredData);
+    await persistResult(fileId, result, structuredData, sourceKind);
     return result;
   }
 
@@ -675,13 +695,13 @@ export async function getDwgProcessingResult(
     const result: DwgProcessingResult = {
       schemaVersion: 1,
       processorVersion: PROCESSOR_VERSION,
-      documentId,
+      documentId: fileId,
       projectId,
-      fileName: document.fileName,
+      fileName,
       sourceHash,
       processedAt,
       status: "processed",
-      sourceKind,
+      sourceKind: fileSourceKind,
       converter,
       ...parsed,
       activeVersionId: versionId,
@@ -691,29 +711,29 @@ export async function getDwgProcessingResult(
           processedAt,
           sourceHash,
           status: "processed",
-          sourceKind,
+          sourceKind: fileSourceKind,
           entityCount: parsed.entities.length,
           layerCount: parsed.layers.length,
           layoutCount: parsed.layouts.length,
           converterStatus: converter.status,
         }),
-        ...priorVersions(document.structuredData),
+        ...priorVersions(structuredData),
       ].slice(0, MAX_STORED_VERSIONS),
     };
-    await persistResult(documentId, result, document.structuredData);
+    await persistResult(fileId, result, structuredData, sourceKind);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not parse DXF entities.";
     const result: DwgProcessingResult = {
       schemaVersion: 1,
       processorVersion: PROCESSOR_VERSION,
-      documentId,
+      documentId: fileId,
       projectId,
-      fileName: document.fileName,
+      fileName,
       sourceHash,
       processedAt,
       status: "failed",
-      sourceKind,
+      sourceKind: fileSourceKind,
       converter,
       units: "unitless",
       extents: { minX: 0, minY: 0, maxX: 100, maxY: 100 },
@@ -729,16 +749,16 @@ export async function getDwgProcessingResult(
           processedAt,
           sourceHash,
           status: "failed",
-          sourceKind,
+          sourceKind: fileSourceKind,
           entityCount: 0,
           layerCount: 0,
           layoutCount: 0,
           converterStatus: converter.status,
         }),
-        ...priorVersions(document.structuredData),
+        ...priorVersions(structuredData),
       ].slice(0, MAX_STORED_VERSIONS),
     };
-    await persistResult(documentId, result, document.structuredData);
+    await persistResult(fileId, result, structuredData, sourceKind);
     throw Object.assign(new Error(message), { statusCode: 400, result });
   }
 }

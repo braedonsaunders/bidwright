@@ -32,10 +32,11 @@ export async function takeoffRoutes(app: FastifyInstance) {
   // adapter, then persists entity/layer/layout metadata in SourceDocument.
   app.get("/api/takeoff/:projectId/documents/:documentId/dwg-metadata", async (request, reply) => {
     const { projectId, documentId } = request.params as { projectId: string; documentId: string };
-    const query = request.query as { refresh?: string };
+    const query = request.query as { refresh?: string; sourceKind?: string };
     try {
       return await getDwgProcessingResult(projectId, documentId, {
         refresh: query.refresh === "1" || query.refresh === "true",
+        sourceKind: query.sourceKind === "file_node" ? "file_node" : "source_document",
       });
     } catch (error) {
       const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number"
@@ -51,8 +52,12 @@ export async function takeoffRoutes(app: FastifyInstance) {
   // ── POST /api/takeoff/:projectId/documents/:documentId/process-dwg ────
   app.post("/api/takeoff/:projectId/documents/:documentId/process-dwg", async (request, reply) => {
     const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    const query = request.query as { sourceKind?: string };
     try {
-      return await getDwgProcessingResult(projectId, documentId, { refresh: true });
+      return await getDwgProcessingResult(projectId, documentId, {
+        refresh: true,
+        sourceKind: query.sourceKind === "file_node" ? "file_node" : "source_document",
+      });
     } catch (error) {
       const statusCode = typeof (error as { statusCode?: unknown }).statusCode === "number"
         ? (error as { statusCode: number }).statusCode

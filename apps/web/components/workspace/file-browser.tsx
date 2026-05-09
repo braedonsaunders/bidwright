@@ -835,7 +835,7 @@ function EmptyPreviewState() {
     <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-panel/90 px-6">
       <motion.div
         aria-hidden
-        className="absolute inset-0 opacity-20 [background-image:linear-gradient(hsl(var(--fg)/0.07)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.05)_1px,transparent_1px)] [background-size:32px_32px]"
+        className="absolute inset-0 opacity-[0.35] dark:opacity-20 [background-image:linear-gradient(hsl(var(--fg)/0.12)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.08)_1px,transparent_1px)] [background-size:32px_32px]"
         animate={{ backgroundPosition: ["0px 0px", "60px 60px"] }}
         transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
       />
