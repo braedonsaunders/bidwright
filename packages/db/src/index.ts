@@ -1,2 +1,2 @@
 export * from "./client";
-export { seedAllForOrganization, seedEntityCategories } from "./seed-data";
+export { seedAllForOrganization, seedEntityCategories, seedEstimatorPersonas } from "./seed-data";
