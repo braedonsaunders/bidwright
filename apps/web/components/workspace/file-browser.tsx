@@ -202,7 +202,8 @@ const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl
 const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
 const XLSX_EXTENSIONS = new Set(["xlsx", "xls", "xlsm", "ods"]);
 const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
-const DXF_EXTENSIONS = new Set(["dxf", "dwg"]);
+const DXF_EXTENSIONS = new Set(["dxf"]);
+const DWG_EXTENSIONS = new Set(["dwg"]);
 const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz", "tgz"]);
 const MARKUP_CANDIDATE_EXTENSIONS = new Set(["csv", "tsv", "xml", "xlsx", "xls", "xlsm", "ods"]);
 const RTF_EXTENSIONS = new Set(["rtf"]);
@@ -265,7 +266,7 @@ function nextUntitledModelName(nodes: FileNode[]): string {
   }
 }
 
-type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
+type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "dwg" | "zip" | "rtf" | "none";
 type EditorMode = "none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist" | "model";
 
 function getFilePreviewType(item: TreeItem): FilePreviewType {
@@ -278,8 +279,9 @@ function getFilePreviewType(item: TreeItem): FilePreviewType {
   if (XLSX_EXTENSIONS.has(ext)) return "xlsx";
   if (SPREADSHEET_EXTENSIONS.has(ext)) return "xlsx";
   if (EMAIL_EXTENSIONS.has(ext)) return "email";
-  if (DXF_EXTENSIONS.has(ext)) return "dxf";
-  if (ZIP_EXTENSIONS.has(ext)) return "zip";
+    if (DXF_EXTENSIONS.has(ext)) return "dxf";
+    if (DWG_EXTENSIONS.has(ext)) return "dwg";
+    if (ZIP_EXTENSIONS.has(ext)) return "zip";
   if (RTF_EXTENSIONS.has(ext)) return "rtf";
   return "none";
 }
@@ -938,133 +940,6 @@ function TextPreview({ url, extractedText }: { url: string | null; extractedText
       </pre>
     </div>
   );
-}
-
-/* ─── Spreadsheet Preview (CSV/TSV) ─── */
-
-function SpreadsheetPreview({ url, extractedText, fileName }: { url: string | null; extractedText?: string; fileName: string }) {
-  const [content, setContent] = useState<string | null>(extractedText ?? null);
-  const [loading, setLoading] = useState(!extractedText);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (extractedText || !url) return;
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    fetch(url, { credentials: "include" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`${res.status}`);
-        const text = await res.text();
-        if (!cancelled) { setContent(text); setLoading(false); }
-      })
-      .catch((err) => {
-        if (!cancelled) { setError(err instanceof Error ? err.message : "Failed to load"); setLoading(false); }
-      });
-    return () => { cancelled = true; };
-  }, [url, extractedText]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Loader2 className="h-5 w-5 animate-spin text-accent" />
-        <span className="ml-2 text-sm text-fg/50">Loading spreadsheet...</span>
-      </div>
-    );
-  }
-
-  if (error || !content) {
-    return (
-      <div className="flex flex-col items-center gap-2 p-8 text-sm text-danger">
-        <AlertTriangle className="h-5 w-5" />
-        <p>{error ?? "No content available"}</p>
-      </div>
-    );
-  }
-
-  const ext = getFileExtension(fileName);
-  const separator = ext === "tsv" ? "\t" : ",";
-  const rows = parseCSV(content, separator);
-  const headerRow = rows[0] ?? [];
-  const dataRows = rows.slice(1);
-
-  return (
-    <div className="overflow-auto bg-bg/30 flex-1 p-2">
-      <table className="w-full text-xs border-collapse">
-        {headerRow.length > 0 && (
-          <thead>
-            <tr>
-              {headerRow.map((cell, i) => (
-                <th
-                  key={i}
-                  className="sticky top-0 bg-panel2 border border-line px-2 py-1.5 text-left font-medium text-fg/70 whitespace-nowrap"
-                >
-                  {cell}
-                </th>
-              ))}
-            </tr>
-          </thead>
-        )}
-        <tbody>
-          {dataRows.slice(0, 500).map((row, ri) => (
-            <tr key={ri} className={ri % 2 === 0 ? "bg-panel/30" : ""}>
-              {row.map((cell, ci) => (
-                <td
-                  key={ci}
-                  className="border border-line/50 px-2 py-1 text-fg/60 whitespace-nowrap max-w-[300px] truncate"
-                >
-                  {cell}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {dataRows.length > 500 && (
-        <p className="text-[11px] text-fg/30 text-center py-2">
-          Showing first 500 of {dataRows.length} rows
-        </p>
-      )}
-    </div>
-  );
-}
-
-/** Simple CSV parser that handles quoted fields */
-function parseCSV(text: string, separator: string): string[][] {
-  const rows: string[][] = [];
-  const lines = text.split("\n");
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const cells: string[] = [];
-    let current = "";
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (inQuotes) {
-        if (ch === '"' && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else if (ch === '"') {
-          inQuotes = false;
-        } else {
-          current += ch;
-        }
-      } else {
-        if (ch === '"') {
-          inQuotes = true;
-        } else if (ch === separator) {
-          cells.push(current.trim());
-          current = "";
-        } else {
-          current += ch;
-        }
-      }
-    }
-    cells.push(current.trim());
-    rows.push(cells);
-  }
-  return rows;
 }
 
 /* ─── Structured Content View ─── */
@@ -2458,14 +2333,6 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             {filePreviewType === "docx" && previewUrl && <DocxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "xlsx" && previewUrl && (
               <div className="flex min-h-0 flex-1 flex-col">
-                {ingestSourceRef && isMarkupCandidate(selectedItem) && (
-                  <BluebeamMarkupsViewer
-                    key={`markups-${ingestSourceRef.sourceKind}-${ingestSourceRef.sourceId}`}
-                    projectId={projectId}
-                    sourceKind={ingestSourceRef.sourceKind}
-                    sourceId={ingestSourceRef.sourceId}
-                  />
-                )}
                 <div className="min-h-0 flex-1">
                   <XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />
                 </div>

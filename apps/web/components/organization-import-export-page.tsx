@@ -49,12 +49,14 @@ import { exportAllDataManagement } from "@/lib/data-export-import";
 import {
   getCatalogs,
   getConditionLibrary,
+  getCostIntelligenceSummary,
   getCustomers,
   getEntityCategories,
   getProjects,
   listEstimateFactorLibraryEntries,
   listKnowledgeBooks,
   listKnowledgeDocuments,
+  listLaborUnitLibraries,
   listRateSchedules,
   type BrandProfile,
   type DatasetRecord,
@@ -79,13 +81,15 @@ interface ExportSection {
 interface OrgCounts {
   projects: number;
   customers: number;
-  catalogs: number;
-  rateSchedules: number;
+  catalogItems: number;
+  rateScheduleItems: number;
   entityCategories: number;
   conditionLibrary: number;
   factors: number;
   knowledgeBooks: number;
   knowledgeDocuments: number;
+  laborUnits: number;
+  costResources: number;
 }
 
 interface ImportTargetField {
@@ -149,7 +153,6 @@ const EXPORT_SECTIONS: ExportSection[] = [
     category: "Estimating",
     icon: Library,
     tone: "green",
-    countKey: "catalogs",
     includes: ["catalogs", "items", "rate schedules", "conditions", "factors", "UOMs"],
   },
   {
@@ -287,13 +290,15 @@ const TRANSFORM_OPTIONS: Array<{ value: TransformKind; label: string }> = [
 const EMPTY_COUNTS: OrgCounts = {
   projects: 0,
   customers: 0,
-  catalogs: 0,
-  rateSchedules: 0,
+  catalogItems: 0,
+  rateScheduleItems: 0,
   entityCategories: 0,
   conditionLibrary: 0,
   factors: 0,
   knowledgeBooks: 0,
   knowledgeDocuments: 0,
+  laborUnits: 0,
+  costResources: 0,
 };
 
 function normalizeHeader(value: string) {
@@ -588,6 +593,8 @@ export function OrganizationImportExportPage({
         factors,
         books,
         documents,
+        laborLibs,
+        costSummary,
       ] = await Promise.allSettled([
         getProjects(),
         getCustomers(),
@@ -598,17 +605,21 @@ export function OrganizationImportExportPage({
         listEstimateFactorLibraryEntries(),
         listKnowledgeBooks(),
         listKnowledgeDocuments(),
+        listLaborUnitLibraries("organization"),
+        getCostIntelligenceSummary(),
       ]);
       setCounts({
         projects: projects.status === "fulfilled" ? projects.value.length : 0,
         customers: customers.status === "fulfilled" ? customers.value.length : 0,
-        catalogs: catalogs.status === "fulfilled" ? catalogs.value.reduce((sum, c) => sum + (c.itemCount ?? c.items?.length ?? 0), 0) : 0,
-        rateSchedules: schedules.status === "fulfilled" ? schedules.value.reduce((sum, s) => sum + (s.items?.length ?? 0), 0) : 0,
+        catalogItems: catalogs.status === "fulfilled" ? catalogs.value.reduce((sum, c) => sum + (c.itemCount ?? 0), 0) : 0,
+        rateScheduleItems: schedules.status === "fulfilled" ? schedules.value.reduce((sum, s) => sum + (s.items?.length ?? 0), 0) : 0,
         entityCategories: categories.status === "fulfilled" ? categories.value.length : 0,
         conditionLibrary: conditions.status === "fulfilled" ? conditions.value.length : 0,
         factors: factors.status === "fulfilled" ? factors.value.length : 0,
         knowledgeBooks: books.status === "fulfilled" ? books.value.length : 0,
         knowledgeDocuments: documents.status === "fulfilled" ? documents.value.length : 0,
+        laborUnits: laborLibs.status === "fulfilled" ? laborLibs.value.reduce((sum, l) => sum + (l.unitCount ?? 0), 0) : 0,
+        costResources: costSummary.status === "fulfilled" ? costSummary.value.resources : 0,
       });
     } finally {
       setCountsLoading(false);
@@ -746,7 +757,7 @@ export function OrganizationImportExportPage({
             <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
             <span>{formatCount(counts.projects)} estimates</span>
             <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
-            <span>{formatCount(counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors)} library</span>
+            <span>{formatCount(counts.catalogItems + counts.rateScheduleItems + counts.conditionLibrary + counts.factors + counts.laborUnits + counts.costResources)} library</span>
             {countsLoading && <Loader2 className="h-3 w-3 animate-spin text-fg/30" />}
           </div>
         </div>
@@ -923,7 +934,7 @@ function ExportView({
               : section.id === "datasets"
                 ? datasets.length
                 : section.id === "library"
-                  ? counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors
+                  ? counts.catalogItems + counts.rateScheduleItems + counts.conditionLibrary + counts.factors + counts.laborUnits
                   : section.countKey
                     ? counts[section.countKey]
                     : 0;

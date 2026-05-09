@@ -105,6 +105,11 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
       setError(null);
 
       try {
+        const ext = fileName.split(".").pop()?.toLowerCase();
+        if (ext === "dwg") {
+          throw new Error("DWG files are not supported for preview. Please download the file to view it.");
+        }
+
         const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`Failed to fetch file: ${response.statusText}`);
 
