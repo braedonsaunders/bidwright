@@ -5,6 +5,7 @@ import {
   BookOpen,
   Check,
   ClipboardList,
+  Code2,
   Database,
   Plus,
   Save,
@@ -22,6 +23,10 @@ import {
   Label,
   MultiSelect,
   Select,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   Textarea,
   Toggle,
 } from "@/components/ui";
@@ -77,6 +82,16 @@ const executionModeOptions = [
   { value: "allowance", label: "Allowance" },
   { value: "historical_allowance", label: "Historical allowance" },
   { value: "mixed", label: "Mixed" },
+];
+
+type DetailTab = "general" | "methodology" | "commercial" | "instructions" | "advanced";
+
+const detailTabs: { value: DetailTab; label: string; icon: typeof ClipboardList }[] = [
+  { value: "general", label: "General", icon: ClipboardList },
+  { value: "methodology", label: "Methodology", icon: SlidersHorizontal },
+  { value: "commercial", label: "Commercial", icon: Database },
+  { value: "instructions", label: "Instructions", icon: BookOpen },
+  { value: "advanced", label: "Advanced", icon: Code2 },
 ];
 
 function emptyPlaybook(order: number): EstimatorPersona {
@@ -350,6 +365,7 @@ export function EstimatingPlaybooksManager({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>("general");
 
   useEffect(() => {
     setPlaybooks(initialPlaybooks);
@@ -579,7 +595,11 @@ export function EstimatingPlaybooksManager({
 
       <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
         {selected ? (
-          <>
+          <Tabs
+            value={detailTab}
+            onValueChange={(value) => setDetailTab(value as DetailTab)}
+            className="flex h-full min-h-0 flex-col"
+          >
             <div className="shrink-0 border-b border-line px-3 py-2">
               <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
@@ -613,363 +633,380 @@ export function EstimatingPlaybooksManager({
                 </div>
               </div>
               {error && <div className="mt-2 rounded-md border border-danger/25 bg-danger/8 px-2 py-1.5 text-xs text-danger">{error}</div>}
+              <div className="mt-2 -mx-1 overflow-x-auto px-1 scrollbar-none">
+                <TabsList className="h-9">
+                  {detailTabs.map((tab) => {
+                    const Icon = tab.icon;
+                    return (
+                      <TabsTrigger key={tab.value} value={tab.value} className="h-7 gap-1.5 px-3">
+                        <Icon className="h-3.5 w-3.5" />
+                        {tab.label}
+                      </TabsTrigger>
+                    );
+                  })}
+                </TabsList>
+              </div>
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto p-3">
-              <div className="grid gap-3 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
-                <div className="space-y-3">
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={ClipboardList}
-                      title="Identity"
-                      detail="Use domain-neutral labels. Discipline can be construction, manufacturing, software services, facilities, maintenance, or any other estimating context."
-                    />
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div>
-                        <Label>Name</Label>
-                        <Input value={selected.name} onChange={(event) => updateEdit(selected.id, { name: event.target.value })} placeholder="Industrial shutdown estimator" />
-                      </div>
-                      <div>
-                        <Label>Domain / Discipline</Label>
-                        <Input value={selected.trade} onChange={(event) => updateEdit(selected.id, { trade: event.target.value })} placeholder="mechanical, electrical, SaaS services, facilities" />
-                      </div>
+              <TabsContent value="general" className="m-0 space-y-3 outline-none data-[state=inactive]:hidden">
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={ClipboardList}
+                    title="Identity"
+                    detail="Use domain-neutral labels. Discipline can be construction, manufacturing, software services, facilities, maintenance, or any other estimating context."
+                  />
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <Label>Name</Label>
+                      <Input value={selected.name} onChange={(event) => updateEdit(selected.id, { name: event.target.value })} placeholder="Industrial shutdown estimator" />
                     </div>
-                    <div className="mt-3">
-                      <Label>Description</Label>
-                      <Input value={selected.description} onChange={(event) => updateEdit(selected.id, { description: event.target.value })} placeholder="What this estimator is best at" />
+                    <div>
+                      <Label>Domain / Discipline</Label>
+                      <Input value={selected.trade} onChange={(event) => updateEdit(selected.id, { trade: event.target.value })} placeholder="mechanical, electrical, SaaS services, facilities" />
                     </div>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <label className="flex items-center justify-between gap-3 rounded-md border border-line/65 bg-panel px-3 py-2 text-sm text-fg">
-                        <span>Default estimator</span>
-                        <input
-                          type="checkbox"
-                          checked={selected.isDefault}
-                          onChange={(event) => updateEdit(selected.id, { isDefault: event.target.checked })}
-                          className="rounded border-line"
-                        />
-                      </label>
-                      <div className="flex items-center justify-between gap-3 rounded-md border border-line/65 bg-panel px-3 py-2">
-                        <span className="text-sm text-fg">Enabled</span>
-                        <Toggle checked={selected.enabled !== false} onChange={(enabled) => setEnabled(selected, enabled)} />
-                      </div>
+                  </div>
+                  <div className="mt-3">
+                    <Label>Description</Label>
+                    <Input value={selected.description} onChange={(event) => updateEdit(selected.id, { description: event.target.value })} placeholder="What this estimator is best at" />
+                  </div>
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <label className="flex items-center justify-between gap-3 rounded-md border border-line/65 bg-panel px-3 py-2 text-sm text-fg">
+                      <span>Default estimator</span>
+                      <input
+                        type="checkbox"
+                        checked={selected.isDefault}
+                        onChange={(event) => updateEdit(selected.id, { isDefault: event.target.checked })}
+                        className="rounded border-line"
+                      />
+                    </label>
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-line/65 bg-panel px-3 py-2">
+                      <span className="text-sm text-fg">Enabled</span>
+                      <Toggle checked={selected.enabled !== false} onChange={(enabled) => setEnabled(selected, enabled)} />
                     </div>
-                  </section>
+                  </div>
+                </section>
 
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={BookOpen}
-                      title="Library Bindings"
-                      detail="Prioritize specific library sources while still allowing the agent to search the full library when evidence is missing."
-                    />
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div>
-                        <Label>Priority Knowledge Books</Label>
-                        <MultiSelect
-                          options={knowledgeBooks
-                            .filter((book) => book.status === "indexed")
-                            .map((book) => ({
-                              value: book.id,
-                              label: book.name,
-                              description: `${book.category} - ${book.pageCount} pages`,
-                            }))}
-                          selected={selected.knowledgeBookIds ?? []}
-                          onChange={(knowledgeBookIds) => updateEdit(selected.id, { knowledgeBookIds })}
-                          placeholder="Select books"
-                        />
-                      </div>
-                      <div>
-                        <Label>Priority Knowledge Pages</Label>
-                        <MultiSelect
-                          options={knowledgeDocuments
-                            .filter((document) => document.status === "indexed" || document.status === "draft")
-                            .map((document) => ({
-                              value: document.id,
-                              label: document.title,
-                              description: `${document.category} - ${(document.tags ?? []).join(", ")}`,
-                            }))}
-                          selected={selected.knowledgeDocumentIds ?? []}
-                          onChange={(knowledgeDocumentIds) => updateEdit(selected.id, { knowledgeDocumentIds })}
-                          placeholder="Select page libraries"
-                        />
-                      </div>
-                      <div>
-                        <Label>Dataset Tags</Label>
-                        <Input
-                          value={(selected.datasetTags ?? []).join(", ")}
-                          onChange={(event) => updateEdit(selected.id, { datasetTags: splitList(event.target.value) })}
-                          placeholder="labor-units, vendor-costs, benchmarks"
-                        />
-                      </div>
-                      <div>
-                        <Label>Package Buckets</Label>
-                        <Input
-                          value={(selected.packageBuckets ?? []).join(", ")}
-                          onChange={(event) => updateEdit(selected.id, { packageBuckets: splitList(event.target.value) })}
-                          placeholder="Discovery, Production, QA, Overhead"
-                        />
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={SlidersHorizontal}
-                      title="Methodology"
-                      detail="These fields guide how the agent breaks work down, which quantities drive effort, and which factors must be checked before pricing."
-                    />
-                    <div className="mt-3 grid gap-3">
-                      <div>
-                        <Label>Breakdown Axes</Label>
-                        <Input
-                          value={joinList(methodology.breakdownAxes ?? productivityGuidance.breakdownAxes)}
-                          onChange={(event) => updateEdit(selected.id, {
-                            productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { breakdownAxes: splitList(event.target.value) }),
-                          })}
-                          placeholder="system, location, phase, size class, complexity"
-                        />
-                      </div>
-                      <div>
-                        <Label>Quantity Drivers</Label>
-                        <Input
-                          value={joinList(methodology.quantityDrivers ?? productivityGuidance.quantityDrivers)}
-                          onChange={(event) => updateEdit(selected.id, {
-                            productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { quantityDrivers: splitList(event.target.value) }),
-                          })}
-                          placeholder="units, hours, transactions, devices, joints, assets"
-                        />
-                      </div>
-                      <div>
-                        <Label>Correction Factors</Label>
-                        <Input
-                          value={joinList(methodology.correctionFactors ?? productivityGuidance.correctionFactors)}
-                          onChange={(event) => updateEdit(selected.id, {
-                            productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { correctionFactors: splitList(event.target.value) }),
-                          })}
-                          placeholder="access, complexity, material, region, schedule pressure"
-                        />
-                      </div>
-                    </div>
-                  </section>
-                </div>
-
-                <div className="space-y-3">
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={Database}
-                      title="Commercial Policy"
-                      detail="Control when weak evidence becomes an allowance, when external providers should be used, and how offsite or preproduction work is priced."
-                    />
-                    <div className="mt-3 grid gap-3">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <Label>Evidence-Light Pricing</Label>
-                          <Select
-                            value={String(packaging.weakEvidencePricingMode ?? "allowance")}
-                            onValueChange={(value) => updateEdit(selected.id, {
-                              commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { weakEvidencePricingMode: value }),
-                            })}
-                            options={pricingModeOptions}
-                          />
-                        </div>
-                        <div>
-                          <Label>Offsite / Preproduction Pricing</Label>
-                          <Select
-                            value={String(packaging.offsiteProductionPricingMode ?? packaging.shopFabricationPricingMode ?? "detailed")}
-                            onValueChange={(value) => updateEdit(selected.id, {
-                              commercialGuidance: patchNestedJson(commercialGuidance, "packaging", {
-                                offsiteProductionPricingMode: value,
-                                shopFabricationPricingMode: value,
-                              }),
-                            })}
-                            options={pricingModeOptions}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <Label>Default Execution Model</Label>
-                        <Select
-                          value={String(packaging.defaultExecutionMode ?? "")}
-                          onValueChange={(value) => updateEdit(selected.id, {
-                            commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { defaultExecutionMode: value || undefined }),
-                          })}
-                          options={executionModeOptions}
-                        />
-                      </div>
-                      <div>
-                        <Label>Activities Usually Priced Commercially</Label>
-                        <Input
-                          value={externalPricingDefaults.join(", ")}
-                          onChange={(event) => updateEdit(selected.id, {
-                            defaultAssumptions: {
-                              ...defaultAssumptions,
-                              externalPricingDefaults: splitList(event.target.value),
-                            },
-                          })}
-                          placeholder="specialty vendors, permit fees, cloud services, third-party testing"
-                        />
-                      </div>
-                      <div>
-                        <Label>Evidence Policy</Label>
-                        <Input
-                          value={String(packaging.evidencePolicy ?? "")}
-                          onChange={(event) => updateEdit(selected.id, {
-                            commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { evidencePolicy: event.target.value }),
-                          })}
-                          placeholder="Use allowance when quantity, rate, or execution model cannot be evidenced"
-                        />
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={ClipboardList}
-                      title="Role Coverage"
-                      detail="Generalized coordination, management, QA, or oversight policy. Configure aliases so validation can detect your industry's role names."
-                    />
-                    <div className="mt-3 grid gap-3">
-                      <div>
-                        <Label>Coverage Mode</Label>
-                        <Select
-                          value={roleCoverage.coverageMode}
-                          onValueChange={(coverageMode) => updateEdit(selected.id, {
-                            productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, { coverageMode }),
-                          })}
-                          options={coverageModeOptions}
-                        />
-                      </div>
-                      <div>
-                        <Label>Shared Overhead Worksheet Matchers</Label>
-                        <Input
-                          value={roleCoverage.overheadWorksheetMatchers.join(", ")}
-                          onChange={(event) => updateEdit(selected.id, {
-                            productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
-                              overheadWorksheetMatchers: splitList(event.target.value),
-                            }),
-                          })}
-                          placeholder="general conditions, overhead, shared support"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <Label className="mb-0">Roles</Label>
-                          <Button
-                            size="xs"
-                            variant="secondary"
-                            onClick={() => updateEdit(selected.id, {
-                              productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
-                                roles: [
-                                  ...roleCoverage.roles,
-                                  {
-                                    id: `role-${Date.now()}`,
-                                    label: "",
-                                    aliases: [],
-                                    ratio: "",
-                                    threshold: "",
-                                    placement: "",
-                                    notes: "",
-                                  },
-                                ],
-                              }),
-                            })}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                            Role
-                          </Button>
-                        </div>
-                        {roleCoverage.roles.map((role, index) => {
-                          const patchRole = (patch: Partial<RoleCoverageRole>) => {
-                            const nextRoles = roleCoverage.roles.map((candidate, candidateIndex) =>
-                              candidateIndex === index ? { ...candidate, ...patch } : candidate,
-                            );
-                            updateEdit(selected.id, {
-                              productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, { roles: nextRoles }),
-                            });
-                          };
-                          return (
-                            <div key={role.id || index} className="rounded-md border border-line/65 bg-panel p-2">
-                              <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                                <Input value={role.label} onChange={(event) => patchRole({ label: event.target.value })} placeholder="Role label" />
-                                <Input value={role.aliases.join(", ")} onChange={(event) => patchRole({ aliases: splitList(event.target.value) })} placeholder="aliases" />
-                                <Button
-                                  size="xs"
-                                  variant="ghost"
-                                  onClick={() => updateEdit(selected.id, {
-                                    productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
-                                      roles: roleCoverage.roles.filter((_, candidateIndex) => candidateIndex !== index),
-                                    }),
-                                  })}
-                                >
-                                  <X className="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                              <div className="mt-2 grid gap-2 md:grid-cols-3">
-                                <Input value={role.ratio} onChange={(event) => patchRole({ ratio: event.target.value })} placeholder="ratio, e.g. 1:6" />
-                                <Input value={role.threshold} onChange={(event) => patchRole({ threshold: event.target.value })} placeholder="threshold, e.g. 4 weeks" />
-                                <Input value={role.placement} onChange={(event) => patchRole({ placement: event.target.value })} placeholder="placement preference" />
-                              </div>
-                              <Input className="mt-2" value={role.notes} onChange={(event) => patchRole({ notes: event.target.value })} placeholder="notes" />
-                            </div>
-                          );
-                        })}
-                        {roleCoverage.roles.length === 0 && (
-                          <div className="rounded-md border border-dashed border-line px-3 py-5 text-center text-xs text-fg/40">
-                            Add role policies only when this estimator needs explicit coordination, QA, or oversight logic.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
-                    <SectionHeader
-                      icon={Search}
-                      title="Review Behavior"
-                      detail="Tell the reconcile pass which scopes, risks, or estimate mechanics deserve extra scrutiny."
-                    />
-                    <div className="mt-3">
-                      <Label>Review Focus Areas</Label>
-                      <Input
-                        value={(selected.reviewFocusAreas ?? []).join(", ")}
-                        onChange={(event) => updateEdit(selected.id, { reviewFocusAreas: splitList(event.target.value) })}
-                        placeholder="coverage gaps, evidence-light pricing, role duplication, lead times"
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={BookOpen}
+                    title="Library Bindings"
+                    detail="Prioritize specific library sources while still allowing the agent to search the full library when evidence is missing."
+                  />
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <Label>Priority Knowledge Books</Label>
+                      <MultiSelect
+                        options={knowledgeBooks
+                          .filter((book) => book.status === "indexed")
+                          .map((book) => ({
+                            value: book.id,
+                            label: book.name,
+                            description: `${book.category} - ${book.pageCount} pages`,
+                          }))}
+                        selected={selected.knowledgeBookIds ?? []}
+                        onChange={(knowledgeBookIds) => updateEdit(selected.id, { knowledgeBookIds })}
+                        placeholder="Select books"
                       />
                     </div>
-                  </section>
-                </div>
-              </div>
+                    <div>
+                      <Label>Priority Knowledge Pages</Label>
+                      <MultiSelect
+                        options={knowledgeDocuments
+                          .filter((document) => document.status === "indexed" || document.status === "draft")
+                          .map((document) => ({
+                            value: document.id,
+                            label: document.title,
+                            description: `${document.category} - ${(document.tags ?? []).join(", ")}`,
+                          }))}
+                        selected={selected.knowledgeDocumentIds ?? []}
+                        onChange={(knowledgeDocumentIds) => updateEdit(selected.id, { knowledgeDocumentIds })}
+                        placeholder="Select page libraries"
+                      />
+                    </div>
+                    <div>
+                      <Label>Dataset Tags</Label>
+                      <Input
+                        value={(selected.datasetTags ?? []).join(", ")}
+                        onChange={(event) => updateEdit(selected.id, { datasetTags: splitList(event.target.value) })}
+                        placeholder="labor-units, vendor-costs, benchmarks"
+                      />
+                    </div>
+                    <div>
+                      <Label>Package Buckets</Label>
+                      <Input
+                        value={(selected.packageBuckets ?? []).join(", ")}
+                        onChange={(event) => updateEdit(selected.id, { packageBuckets: splitList(event.target.value) })}
+                        placeholder="Discovery, Production, QA, Overhead"
+                      />
+                    </div>
+                  </div>
+                </section>
+              </TabsContent>
 
-              <section className="mt-3 rounded-lg border border-line/70 bg-bg/25 p-3">
-                <SectionHeader
-                  icon={BookOpen}
-                  title="Agent Instructions"
-                  detail="Narrative guidance is still useful, but keep supervision, commercialization, and source policy in the structured sections above whenever possible."
-                />
-                <div className="mt-3">
-                  <Label>System Instructions</Label>
-                  <Textarea
-                    className="min-h-[180px] resize-y font-mono text-xs leading-relaxed"
-                    value={selected.systemPrompt}
-                    onChange={(event) => updateEdit(selected.id, { systemPrompt: event.target.value })}
-                    placeholder="Describe the estimator methodology, assumptions to challenge, common misses, and how to reason in this domain."
+              <TabsContent value="methodology" className="m-0 space-y-3 outline-none data-[state=inactive]:hidden">
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={SlidersHorizontal}
+                    title="Methodology"
+                    detail="These fields guide how the agent breaks work down, which quantities drive effort, and which factors must be checked before pricing."
                   />
-                </div>
-              </section>
+                  <div className="mt-3 grid gap-3">
+                    <div>
+                      <Label>Breakdown Axes</Label>
+                      <Input
+                        value={joinList(methodology.breakdownAxes ?? productivityGuidance.breakdownAxes)}
+                        onChange={(event) => updateEdit(selected.id, {
+                          productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { breakdownAxes: splitList(event.target.value) }),
+                        })}
+                        placeholder="system, location, phase, size class, complexity"
+                      />
+                    </div>
+                    <div>
+                      <Label>Quantity Drivers</Label>
+                      <Input
+                        value={joinList(methodology.quantityDrivers ?? productivityGuidance.quantityDrivers)}
+                        onChange={(event) => updateEdit(selected.id, {
+                          productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { quantityDrivers: splitList(event.target.value) }),
+                        })}
+                        placeholder="units, hours, transactions, devices, joints, assets"
+                      />
+                    </div>
+                    <div>
+                      <Label>Correction Factors</Label>
+                      <Input
+                        value={joinList(methodology.correctionFactors ?? productivityGuidance.correctionFactors)}
+                        onChange={(event) => updateEdit(selected.id, {
+                          productivityGuidance: patchNestedJson(productivityGuidance, "methodology", { correctionFactors: splitList(event.target.value) }),
+                        })}
+                        placeholder="access, complexity, material, region, schedule pressure"
+                      />
+                    </div>
+                  </div>
+                </section>
 
-              <section className="mt-3 rounded-lg border border-line/70 bg-bg/25 p-3">
-                <SectionHeader
-                  icon={Database}
-                  title="Raw Structured Policy"
-                  detail="Advanced JSON override surface. These objects are injected into the agent estimator and read by final validation."
-                />
-                <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                  <RawJsonField label="Default Assumptions JSON" value={selected.defaultAssumptions} onChange={(value) => updateEdit(selected.id, { defaultAssumptions: value as any })} />
-                  <RawJsonField label="Productivity Guidance JSON" value={selected.productivityGuidance} onChange={(value) => updateEdit(selected.id, { productivityGuidance: value as any })} />
-                  <RawJsonField label="Commercial Guidance JSON" value={selected.commercialGuidance} onChange={(value) => updateEdit(selected.id, { commercialGuidance: value as any })} />
-                </div>
-              </section>
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={ClipboardList}
+                    title="Role Coverage"
+                    detail="Generalized coordination, management, QA, or oversight policy. Configure aliases so validation can detect your industry's role names."
+                  />
+                  <div className="mt-3 grid gap-3">
+                    <div>
+                      <Label>Coverage Mode</Label>
+                      <Select
+                        value={roleCoverage.coverageMode}
+                        onValueChange={(coverageMode) => updateEdit(selected.id, {
+                          productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, { coverageMode }),
+                        })}
+                        options={coverageModeOptions}
+                      />
+                    </div>
+                    <div>
+                      <Label>Shared Overhead Worksheet Matchers</Label>
+                      <Input
+                        value={roleCoverage.overheadWorksheetMatchers.join(", ")}
+                        onChange={(event) => updateEdit(selected.id, {
+                          productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
+                            overheadWorksheetMatchers: splitList(event.target.value),
+                          }),
+                        })}
+                        placeholder="general conditions, overhead, shared support"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="mb-0">Roles</Label>
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          onClick={() => updateEdit(selected.id, {
+                            productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
+                              roles: [
+                                ...roleCoverage.roles,
+                                {
+                                  id: `role-${Date.now()}`,
+                                  label: "",
+                                  aliases: [],
+                                  ratio: "",
+                                  threshold: "",
+                                  placement: "",
+                                  notes: "",
+                                },
+                              ],
+                            }),
+                          })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          Role
+                        </Button>
+                      </div>
+                      {roleCoverage.roles.map((role, index) => {
+                        const patchRole = (patch: Partial<RoleCoverageRole>) => {
+                          const nextRoles = roleCoverage.roles.map((candidate, candidateIndex) =>
+                            candidateIndex === index ? { ...candidate, ...patch } : candidate,
+                          );
+                          updateEdit(selected.id, {
+                            productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, { roles: nextRoles }),
+                          });
+                        };
+                        return (
+                          <div key={role.id || index} className="rounded-md border border-line/65 bg-panel p-2">
+                            <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                              <Input value={role.label} onChange={(event) => patchRole({ label: event.target.value })} placeholder="Role label" />
+                              <Input value={role.aliases.join(", ")} onChange={(event) => patchRole({ aliases: splitList(event.target.value) })} placeholder="aliases" />
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => updateEdit(selected.id, {
+                                  productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
+                                    roles: roleCoverage.roles.filter((_, candidateIndex) => candidateIndex !== index),
+                                  }),
+                                })}
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            <div className="mt-2 grid gap-2 md:grid-cols-3">
+                              <Input value={role.ratio} onChange={(event) => patchRole({ ratio: event.target.value })} placeholder="ratio, e.g. 1:6" />
+                              <Input value={role.threshold} onChange={(event) => patchRole({ threshold: event.target.value })} placeholder="threshold, e.g. 4 weeks" />
+                              <Input value={role.placement} onChange={(event) => patchRole({ placement: event.target.value })} placeholder="placement preference" />
+                            </div>
+                            <Input className="mt-2" value={role.notes} onChange={(event) => patchRole({ notes: event.target.value })} placeholder="notes" />
+                          </div>
+                        );
+                      })}
+                      {roleCoverage.roles.length === 0 && (
+                        <div className="rounded-md border border-dashed border-line px-3 py-5 text-center text-xs text-fg/40">
+                          Add role policies only when this estimator needs explicit coordination, QA, or oversight logic.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              </TabsContent>
+
+              <TabsContent value="commercial" className="m-0 space-y-3 outline-none data-[state=inactive]:hidden">
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={Database}
+                    title="Commercial Policy"
+                    detail="Control when weak evidence becomes an allowance, when external providers should be used, and how offsite or preproduction work is priced."
+                  />
+                  <div className="mt-3 grid gap-3">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <Label>Evidence-Light Pricing</Label>
+                        <Select
+                          value={String(packaging.weakEvidencePricingMode ?? "allowance")}
+                          onValueChange={(value) => updateEdit(selected.id, {
+                            commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { weakEvidencePricingMode: value }),
+                          })}
+                          options={pricingModeOptions}
+                        />
+                      </div>
+                      <div>
+                        <Label>Offsite / Preproduction Pricing</Label>
+                        <Select
+                          value={String(packaging.offsiteProductionPricingMode ?? packaging.shopFabricationPricingMode ?? "detailed")}
+                          onValueChange={(value) => updateEdit(selected.id, {
+                            commercialGuidance: patchNestedJson(commercialGuidance, "packaging", {
+                              offsiteProductionPricingMode: value,
+                              shopFabricationPricingMode: value,
+                            }),
+                          })}
+                          options={pricingModeOptions}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Default Execution Model</Label>
+                      <Select
+                        value={String(packaging.defaultExecutionMode ?? "")}
+                        onValueChange={(value) => updateEdit(selected.id, {
+                          commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { defaultExecutionMode: value || undefined }),
+                        })}
+                        options={executionModeOptions}
+                      />
+                    </div>
+                    <div>
+                      <Label>Activities Usually Priced Commercially</Label>
+                      <Input
+                        value={externalPricingDefaults.join(", ")}
+                        onChange={(event) => updateEdit(selected.id, {
+                          defaultAssumptions: {
+                            ...defaultAssumptions,
+                            externalPricingDefaults: splitList(event.target.value),
+                          },
+                        })}
+                        placeholder="specialty vendors, permit fees, cloud services, third-party testing"
+                      />
+                    </div>
+                    <div>
+                      <Label>Evidence Policy</Label>
+                      <Input
+                        value={String(packaging.evidencePolicy ?? "")}
+                        onChange={(event) => updateEdit(selected.id, {
+                          commercialGuidance: patchNestedJson(commercialGuidance, "packaging", { evidencePolicy: event.target.value }),
+                        })}
+                        placeholder="Use allowance when quantity, rate, or execution model cannot be evidenced"
+                      />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={Search}
+                    title="Review Behavior"
+                    detail="Tell the reconcile pass which scopes, risks, or estimate mechanics deserve extra scrutiny."
+                  />
+                  <div className="mt-3">
+                    <Label>Review Focus Areas</Label>
+                    <Input
+                      value={(selected.reviewFocusAreas ?? []).join(", ")}
+                      onChange={(event) => updateEdit(selected.id, { reviewFocusAreas: splitList(event.target.value) })}
+                      placeholder="coverage gaps, evidence-light pricing, role duplication, lead times"
+                    />
+                  </div>
+                </section>
+              </TabsContent>
+
+              <TabsContent value="instructions" className="m-0 outline-none data-[state=inactive]:hidden">
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={BookOpen}
+                    title="Agent Instructions"
+                    detail="Narrative guidance is still useful, but keep supervision, commercialization, and source policy in the structured sections above whenever possible."
+                  />
+                  <div className="mt-3">
+                    <Label>System Instructions</Label>
+                    <Textarea
+                      className="min-h-[320px] resize-y font-mono text-xs leading-relaxed"
+                      value={selected.systemPrompt}
+                      onChange={(event) => updateEdit(selected.id, { systemPrompt: event.target.value })}
+                      placeholder="Describe the estimator methodology, assumptions to challenge, common misses, and how to reason in this domain."
+                    />
+                  </div>
+                </section>
+              </TabsContent>
+
+              <TabsContent value="advanced" className="m-0 outline-none data-[state=inactive]:hidden">
+                <section className="rounded-lg border border-line/70 bg-bg/25 p-3">
+                  <SectionHeader
+                    icon={Code2}
+                    title="Raw Structured Policy"
+                    detail="Advanced JSON override surface. These objects are injected into the agent estimator and read by final validation."
+                  />
+                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                    <RawJsonField label="Default Assumptions JSON" value={selected.defaultAssumptions} onChange={(value) => updateEdit(selected.id, { defaultAssumptions: value as any })} />
+                    <RawJsonField label="Productivity Guidance JSON" value={selected.productivityGuidance} onChange={(value) => updateEdit(selected.id, { productivityGuidance: value as any })} />
+                    <RawJsonField label="Commercial Guidance JSON" value={selected.commercialGuidance} onChange={(value) => updateEdit(selected.id, { commercialGuidance: value as any })} />
+                  </div>
+                </section>
+              </TabsContent>
             </div>
-          </>
+          </Tabs>
         ) : (
           <div className="flex h-full min-h-0 items-center justify-center p-8 text-center">
             <div>
