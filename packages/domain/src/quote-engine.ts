@@ -426,23 +426,6 @@ function groupItemsForBreakout(
   entityCategories: EntityCategory[] = [],
 ) {
   const categoryLookup = buildCategoryLookup(entityCategories);
-  if (breakoutStyle === "labour_material_equipment") {
-    // Map each item to a bucket via the org's EntityCategory.analyticsBucket.
-    // Items in categories with bucket "labour" → Labour; "equipment" → Equipment;
-    // anything else (including null and "material") rolls into Materials.
-    const bucketFor = (item: WorksheetItem): "labour" | "equipment" | "materials" => {
-      const b = categoryForItem(item, categoryLookup)?.analyticsBucket;
-      if (b === "labour") return "labour";
-      if (b === "equipment") return "equipment";
-      return "materials";
-    };
-    return [
-      { key: "Labour",    name: "Labour",    items: lineItems.filter((i) => bucketFor(i) === "labour") },
-      { key: "Materials", name: "Materials", items: lineItems.filter((i) => bucketFor(i) === "materials") },
-      { key: "Equipment", name: "Equipment", items: lineItems.filter((i) => bucketFor(i) === "equipment") },
-    ];
-  }
-
   if (breakoutStyle === "grand_total") {
     return [
       {

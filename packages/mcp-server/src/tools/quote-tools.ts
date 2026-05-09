@@ -2949,8 +2949,8 @@ export function registerQuoteTools(server: McpServer) {
     "updateRevision",
     `Update revision-level settings — breakout style, dates, status, quote type, print options, customer-facing notes, internal scratchpad, and more. Use this to configure how the quote is presented to the client.`,
     {
-      breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail", "labour_material_equipment"]).optional()
-        .describe("How costs are organized on the quote: grand_total (lump sum), category (by material/labour/etc), phase (by project phase), phase_detail (phases with category breakdown), labour_material_equipment (L/M/E columns)"),
+      breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail"]).optional()
+        .describe("How costs are organized on the quote: grand_total (lump sum), category (by material/labour/etc), phase (by project phase), phase_detail (phases with category breakdown)"),
       status: z.enum(["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"]).optional(),
       type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional().describe("Quote type: Firm (binding), Budget (estimate), BudgetDNE (do not exceed)"),
       title: z.string().optional().describe("Revision title"),

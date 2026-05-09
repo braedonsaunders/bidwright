@@ -1264,7 +1264,7 @@ export function SettingsPage({
                         { value: "category", label: "By Category" },
                         { value: "phase", label: "By Phase" },
                         { value: "phase_detail", label: "Phase Detail" },
-                        { value: "labour_material_equipment", label: "Labour / Material / Equipment" },
+
                       ]}
                     />
                   </div>

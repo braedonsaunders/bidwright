@@ -131,7 +131,7 @@ export interface QuoteRevision {
   title: string;
   description: string;
   notes: string;
-  breakoutStyle: "grand_total" | "category" | "phase" | "phase_detail" | "labour_material_equipment";
+  breakoutStyle: "grand_total" | "category" | "phase" | "phase_detail";
   type: "Firm" | "Budget" | "BudgetDNE";
   scratchpad: string;
   leadLetter: string;

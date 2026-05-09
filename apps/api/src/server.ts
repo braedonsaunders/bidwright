@@ -144,7 +144,7 @@ const revisionPatchSchema = z.object({
   title: z.string().min(1).optional(),
   description: z.string().optional(),
   notes: z.string().optional(),
-  breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail", "labour_material_equipment"]).optional(),
+  breakoutStyle: z.enum(["grand_total", "category", "phase", "phase_detail"]).optional(),
   type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional(),
   scratchpad: z.string().optional(),
   leadLetter: z.string().optional(),
