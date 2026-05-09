@@ -511,6 +511,59 @@ function enrichCandidatesWithBasis(candidates: SearchCandidate[], input: { q?: s
   return candidates.map((candidate) => enrichCandidateWithBasis(candidate, input));
 }
 
+/**
+ * Compact projection of a search candidate for the MCP tool boundary. The
+ * full SearchCandidate carries a `payload` blob and a verbose `basis` object
+ * that together can be 1-3KB per row; with default limits returning 15+ rows
+ * the result balloons to 50KB+ per call and chews through the agent's
+ * context window in a few searches. The agent only needs the human-readable
+ * row metadata plus the structural link IDs to plumb back into
+ * createWorksheetItem / createRateScheduleWorksheetItem. Promote the
+ * structural IDs out of `payload` to top-level so they're directly visible,
+ * and drop everything else that was just bloat.
+ */
+function compactCandidateForTool(candidate: EnrichedSearchCandidate, limitDescription = 220) {
+  const links = candidateLinks(candidate);
+  const basis = candidate.basis ?? null;
+  const truncate = (value: unknown, max: number) => {
+    const s = typeof value === "string" ? value.trim() : "";
+    if (!s) return undefined;
+    return s.length > max ? `${s.slice(0, Math.max(0, max - 3))}...` : s;
+  };
+  return {
+    id: candidate.id ?? null,
+    sourceType: candidate.sourceType ?? null,
+    sourceId: candidate.sourceId ?? null,
+    title: truncate(candidate.title, 200),
+    subtitle: truncate(candidate.subtitle, limitDescription),
+    code: candidate.code || undefined,
+    vendor: candidate.vendor || undefined,
+    category: candidate.category || undefined,
+    entityType: candidate.entityType || undefined,
+    uom: candidate.uom || undefined,
+    unitCost: candidate.unitCost ?? null,
+    unitPrice: candidate.unitPrice ?? null,
+    score: candidate.score,
+    matchType: candidate.matchType,
+    sourceQuality: candidate.sourceQuality,
+    rateScheduleItemId: links.rateScheduleItemId || undefined,
+    itemId: links.itemId || undefined,
+    costResourceId: links.costResourceId || undefined,
+    effectiveCostId: links.effectiveCostId || undefined,
+    laborUnitId: links.laborUnitId || undefined,
+    basis: basis
+      ? {
+          kind: basis.kind,
+          label: truncate(basis.label, 200),
+          matchType: basis.matchType,
+          sourceQuality: basis.sourceQuality,
+          confidence: basis.confidence,
+          notes: truncate(basis.notes, 160),
+        }
+      : undefined,
+  };
+}
+
 function fallbackResourceComposition(candidate: SearchCandidate, links = candidateLinks(candidate)) {
   if (!links.rateScheduleItemId && !links.itemId && !links.costResourceId && !links.effectiveCostId && !links.laborUnitId) {
     return {};
@@ -885,7 +938,14 @@ export function registerResourceTools(server: McpServer) {
         ...input,
         category: categoryNameForSearch(input.categoryId, input.category, categories),
       });
-      return { content: [{ type: "text" as const, text: JSON.stringify(enrichCandidatesWithBasis(results, { q: input.q }), null, 2) }] };
+      const enriched = enrichCandidatesWithBasis(results, { q: input.q });
+      // Compact projection — full payload+basis was 1-3KB per row and was
+      // blowing past Claude's context window after a handful of searches.
+      // The agent gets the structural IDs (costResourceId/effectiveCostId/
+      // itemId/rateScheduleItemId/laborUnitId) promoted to top-level so it
+      // can plumb them straight into createWorksheetItem.
+      const compact = enriched.map((entry) => compactCandidateForTool(entry));
+      return { content: [{ type: "text" as const, text: JSON.stringify(compact, null, 2) }] };
     },
   );
 
