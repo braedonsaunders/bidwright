@@ -284,7 +284,19 @@
     },
     "unassigned": "未分配",
     "emptyFiltered": "没有符合筛选条件的报价",
-    "empty": "未找到报价"
+    "empty": "未找到报价",
+    "loadErrorTitle": "无法加载报价",
+    "loadError": "加载报价失败",
+    "retry": "重试",
+    "pagination": {
+      "range": "共 {total} 条中的 {from}–{to}",
+      "rowsPerPage": "每页行数",
+      "pageOf": "第 {page} 页，共 {totalPages} 页",
+      "first": "首页",
+      "previous": "上一页",
+      "next": "下一页",
+      "last": "末页"
+    }
   },
   "Performance": {
     "eyebrow": "绩效",

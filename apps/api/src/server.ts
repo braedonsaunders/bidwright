@@ -1899,10 +1899,39 @@ export function buildServer() {
     dataRoot: resolveApiPath()
   }));
 
-  app.get("/projects", async (request) => {
+  const stringOrStringArray = z.union([z.string(), z.array(z.string())]).optional();
+  const projectsListQuerySchema = z.object({
+    page: z.coerce.number().int().positive().optional(),
+    pageSize: z.coerce.number().int().positive().max(200).optional(),
+    search: z.string().optional(),
+    status: stringOrStringArray,
+    userIds: stringOrStringArray,
+    departmentIds: stringOrStringArray,
+    clientNames: stringOrStringArray,
+    sortKey: z.enum([
+      "quoteNumber", "kind", "title", "client", "estimator",
+      "status", "subtotal", "margin", "updated",
+    ]).optional(),
+    sortDir: z.enum(["asc", "desc"]).optional(),
+  });
+
+  app.get("/projects", async (request, reply) => {
     const store = request.store!;
-    const projects = await store.listProjectsWithState();
-    // Include org users + departments for filter dropdowns
+    const parsed = projectsListQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Invalid query parameters",
+        issues: parsed.error.flatten(),
+      });
+    }
+    const q = parsed.data;
+    const toArray = (v?: string | string[]): string[] | undefined => {
+      if (v === undefined) return undefined;
+      const arr = (Array.isArray(v) ? v : [v]).map((s) => s.trim()).filter(Boolean);
+      return arr.length > 0 ? arr : undefined;
+    };
+    const isPaginated = q.page !== undefined || q.pageSize !== undefined;
+
     const [users, departments] = await Promise.all([
       prisma.user.findMany({
         where: { organizationId: store.organizationId, active: true },
@@ -1915,7 +1944,38 @@ export function buildServer() {
         orderBy: { name: "asc" },
       }),
     ]);
-    return { projects, users, departments };
+
+    if (!isPaginated) {
+      const projects = await store.listProjectsWithState();
+      return { projects, users, departments };
+    }
+
+    const page = q.page ?? 1;
+    const pageSize = q.pageSize ?? 25;
+    const result = await store.listProjectsForQuotesPage({
+      page,
+      pageSize,
+      search: q.search,
+      status: toArray(q.status),
+      userIds: toArray(q.userIds),
+      departmentIds: toArray(q.departmentIds),
+      clientNames: toArray(q.clientNames),
+      sortKey: q.sortKey ?? "updated",
+      sortDir: q.sortDir ?? "desc",
+    });
+
+    return {
+      projects: result.projects,
+      users,
+      departments,
+      clientOptions: result.clientOptions,
+      pagination: {
+        page,
+        pageSize,
+        total: result.total,
+        totalPages: Math.max(1, Math.ceil(result.total / pageSize)),
+      },
+    };
   });
 
   app.post("/projects", async (request, reply) => {

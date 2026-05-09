@@ -284,7 +284,19 @@
     },
     "unassigned": "अनअसाइन्ड",
     "emptyFiltered": "आपके फिल्टर से कोई कोट मेल नहीं खाता",
-    "empty": "कोई कोट नहीं मिला"
+    "empty": "कोई कोट नहीं मिला",
+    "loadErrorTitle": "कोट लोड नहीं हो सके",
+    "loadError": "कोट लोड करने में विफल",
+    "retry": "पुनः प्रयास",
+    "pagination": {
+      "range": "{total} में से {from}–{to}",
+      "rowsPerPage": "प्रति पृष्ठ पंक्तियाँ",
+      "pageOf": "पृष्ठ {page} / {totalPages}",
+      "first": "पहला पृष्ठ",
+      "previous": "पिछला पृष्ठ",
+      "next": "अगला पृष्ठ",
+      "last": "अंतिम पृष्ठ"
+    }
   },
   "Performance": {
     "eyebrow": "प्रदर्शन",

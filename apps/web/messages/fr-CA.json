@@ -284,7 +284,19 @@
     },
     "unassigned": "Non assigne",
     "emptyFiltered": "Aucune soumission ne correspond a vos filtres",
-    "empty": "Aucune soumission trouvee"
+    "empty": "Aucune soumission trouvee",
+    "loadErrorTitle": "Impossible de charger les soumissions",
+    "loadError": "Échec du chargement des soumissions",
+    "retry": "Réessayer",
+    "pagination": {
+      "range": "{from}–{to} sur {total}",
+      "rowsPerPage": "Lignes par page",
+      "pageOf": "Page {page} sur {totalPages}",
+      "first": "Première page",
+      "previous": "Page précédente",
+      "next": "Page suivante",
+      "last": "Dernière page"
+    }
   },
   "Performance": {
     "eyebrow": "Performance",

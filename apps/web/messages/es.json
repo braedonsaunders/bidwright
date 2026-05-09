@@ -284,7 +284,19 @@
     },
     "unassigned": "Sin asignar",
     "emptyFiltered": "Ninguna cotización coincide con tus filtros",
-    "empty": "No se encontraron cotizaciones"
+    "empty": "No se encontraron cotizaciones",
+    "loadErrorTitle": "No se pudieron cargar las cotizaciones",
+    "loadError": "Error al cargar las cotizaciones",
+    "retry": "Reintentar",
+    "pagination": {
+      "range": "{from}–{to} de {total}",
+      "rowsPerPage": "Filas por página",
+      "pageOf": "Página {page} de {totalPages}",
+      "first": "Primera página",
+      "previous": "Página anterior",
+      "next": "Página siguiente",
+      "last": "Última página"
+    }
   },
   "Performance": {
     "eyebrow": "Rendimiento",

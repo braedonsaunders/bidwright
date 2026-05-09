@@ -1,16 +1,21 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import {
+  AlertCircle,
   ArrowUpDown,
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   FileText,
   Loader2,
   PencilLine,
@@ -25,11 +30,12 @@ import {
   createCustomer,
   createProject,
   getCustomers,
+  getProjectsWithFilters,
   listRateBookAssignments,
   type Customer,
   type ProjectListItem,
-  type OrgUser,
-  type OrgDepartment,
+  type ProjectsResponse,
+  type QuotesSortKey,
 } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
@@ -43,17 +49,6 @@ import {
 import { getClientDisplayName } from "@/lib/client-display";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 
-type SortKey =
-  | "quoteNumber"
-  | "kind"
-  | "title"
-  | "client"
-  | "estimator"
-  | "status"
-  | "subtotal"
-  | "margin"
-  | "updated";
-
 type SortDir = "asc" | "desc";
 
 const STATUS_OPTIONS = [
@@ -66,6 +61,11 @@ const STATUS_OPTIONS = [
   { value: "Closed", labelKey: "Closed", tone: "default" },
   { value: "Other", labelKey: "Other", tone: "default" },
 ] as const;
+
+const DEFAULT_PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
+const DEFAULT_SORT_KEY: QuotesSortKey = "updated";
+const DEFAULT_SORT_DIR: SortDir = "desc";
 
 type QuoteStatusValue = (typeof STATUS_OPTIONS)[number]["value"];
 
@@ -82,20 +82,59 @@ function getQuoteKind(project: ProjectListItem): "snap" | "full" {
   return state?.quoteMode === "snap" && state.snapUpgraded !== true ? "snap" : "full";
 }
 
-function getEstimatorLabel(
-  project: ProjectListItem,
-  userMap: Map<string, OrgUser>,
-  departmentMap: Map<string, OrgDepartment>,
-  unassignedLabel = "Unassigned",
-) {
+function getEstimatorLabel(project: ProjectListItem, unassignedLabel = "Unassigned") {
   const quote = project.quote;
   if (!quote) return unassignedLabel;
-  return (
-    (quote.userId && userMap.get(quote.userId)?.name) ||
-    quote.userName ||
-    (quote.departmentId && departmentMap.get(quote.departmentId)?.name) ||
-    unassignedLabel
-  );
+  return quote.userName || quote.departmentName || unassignedLabel;
+}
+
+type QuotesQueryParams = {
+  page: number;
+  pageSize: number;
+  search: string;
+  status: string[];
+  clientNames: string[];
+  userIds: string[];
+  departmentIds: string[];
+  sortKey: QuotesSortKey;
+  sortDir: SortDir;
+};
+
+function useQuotesQuery() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const params = useMemo<QuotesQueryParams>(() => ({
+    page: Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1),
+    pageSize: Math.max(1, parseInt(searchParams.get("size") || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE),
+    search: searchParams.get("q") || "",
+    status: searchParams.getAll("status"),
+    clientNames: searchParams.getAll("clients"),
+    userIds: searchParams.getAll("users"),
+    departmentIds: searchParams.getAll("depts"),
+    sortKey: (searchParams.get("sort") as QuotesSortKey) || DEFAULT_SORT_KEY,
+    sortDir: (searchParams.get("dir") as SortDir) || DEFAULT_SORT_DIR,
+  }), [searchParams]);
+
+  const update = useCallback((next: Partial<QuotesQueryParams>, opts?: { resetPage?: boolean }) => {
+    const merged = { ...params, ...next };
+    if (opts?.resetPage) merged.page = 1;
+    const sp = new URLSearchParams();
+    if (merged.page !== 1) sp.set("page", String(merged.page));
+    if (merged.pageSize !== DEFAULT_PAGE_SIZE) sp.set("size", String(merged.pageSize));
+    if (merged.search) sp.set("q", merged.search);
+    for (const v of merged.status) sp.append("status", v);
+    for (const v of merged.clientNames) sp.append("clients", v);
+    for (const v of merged.userIds) sp.append("users", v);
+    for (const v of merged.departmentIds) sp.append("depts", v);
+    if (merged.sortKey !== DEFAULT_SORT_KEY) sp.set("sort", merged.sortKey);
+    if (merged.sortDir !== DEFAULT_SORT_DIR) sp.set("dir", merged.sortDir);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [params, router, pathname]);
+
+  return { params, update, rawSearchString: searchParams.toString() };
 }
 
 /* ─── Filter Dropdown ─── */
@@ -125,10 +164,6 @@ function FilterDropdown({
     );
   };
 
-  const selectedLabels = options
-    .filter((o) => selected.includes(o.value))
-    .map((o) => o.label);
-
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -152,7 +187,7 @@ function FilterDropdown({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          className="z-50 min-w-[180px] rounded-lg border border-line bg-panel shadow-xl py-1"
+          className="z-50 min-w-[180px] max-h-[320px] overflow-y-auto rounded-lg border border-line bg-panel shadow-xl py-1"
           sideOffset={4}
           align="start"
         >
@@ -204,27 +239,61 @@ function FilterDropdown({
   );
 }
 
+/* ─── Skeleton ─── */
+
+function TableSkeleton({ rows, cols }: { rows: number; cols: number }) {
+  return (
+    <tbody>
+      {Array.from({ length: rows }).map((_, i) => (
+        <tr key={i} className="border-b border-line last:border-0">
+          {Array.from({ length: cols }).map((_, j) => (
+            <td key={j} className="px-4 py-2.5">
+              <div className="h-3 w-full max-w-[80%] animate-pulse rounded bg-fg/5" />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  );
+}
+
 /* ─── Main Component ─── */
 
-export function QuotesList({ projects, users = [], departments = [] }: {
-  projects: ProjectListItem[];
-  users?: OrgUser[];
-  departments?: OrgDepartment[];
-}) {
+export function QuotesList() {
   const t = useTranslations("Quotes");
   const router = useRouter();
   const { user: currentUser } = useAuth();
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [clientFilter, setClientFilter] = useState<string[]>([]);
-  const [userFilter, setUserFilter] = useState<string[]>(() => {
-    // Default: estimators see only their own quotes
-    if (currentUser?.role === "estimator" && currentUser.id) return [currentUser.id];
-    return [];
-  });
-  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
-  const [sortKey, setSortKey] = useState<SortKey>("updated");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const { params, update, rawSearchString } = useQuotesQuery();
+
+  // Local search input state (debounced before pushing to URL)
+  const [searchInput, setSearchInput] = useState(params.search);
+  useEffect(() => {
+    setSearchInput(params.search);
+  }, [params.search]);
+  useEffect(() => {
+    if (searchInput === params.search) return;
+    const timer = setTimeout(() => {
+      update({ search: searchInput }, { resetPage: true });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, params.search, update]);
+
+  // Estimator default: on first mount with no URL state, scope to own quotes
+  const initialMountHandled = useRef(false);
+  useEffect(() => {
+    if (initialMountHandled.current) return;
+    if (!currentUser) return;
+    initialMountHandled.current = true;
+    if (
+      rawSearchString === "" &&
+      currentUser.role === "estimator" &&
+      currentUser.id
+    ) {
+      update({ userIds: [currentUser.id] });
+    }
+  }, [currentUser, rawSearchString, update]);
+
+  // Modal/quick-add state (unchanged from previous version)
   const [newQuoteMenuOpen, setNewQuoteMenuOpen] = useState(false);
   const [manualCreationMode, setManualCreationMode] = useState<"quote" | "snap">("quote");
   const [manualModalOpen, setManualModalOpen] = useState(false);
@@ -253,52 +322,110 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     };
   }, [manualModalOpen]);
 
-  // Only include projects that have a quote
-  const projectsWithQuotes = useMemo(
-    () => projects.filter((p): p is ProjectListItem & { quote: NonNullable<ProjectListItem["quote"]> } => p.quote != null),
-    [projects],
-  );
+  // ── Server fetch ─────────────────────────────────────────────────────────
+  const [data, setData] = useState<ProjectsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
 
-  // Derive unique filter options from data
-  const clientOptions = useMemo(() => {
-    const clients = new Map<string, string>();
-    for (const p of projectsWithQuotes) {
-      const clientLabel = getClientDisplayName(p, p.quote);
-      if (clientLabel && clientLabel !== "—") clients.set(clientLabel, clientLabel);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getProjectsWithFilters({
+      page: params.page,
+      pageSize: params.pageSize,
+      search: params.search || undefined,
+      status: params.status.length ? params.status : undefined,
+      userIds: params.userIds.length ? params.userIds : undefined,
+      departmentIds: params.departmentIds.length ? params.departmentIds : undefined,
+      clientNames: params.clientNames.length ? params.clientNames : undefined,
+      sortKey: params.sortKey,
+      sortDir: params.sortDir,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setData(res);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : t("loadError"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    params.page,
+    params.pageSize,
+    params.search,
+    params.sortKey,
+    params.sortDir,
+    params.status.join(","),
+    params.userIds.join(","),
+    params.departmentIds.join(","),
+    params.clientNames.join(","),
+    reloadTick,
+    t,
+  ]);
+
+  // After page-bounds shift (e.g. delete leaves empty page), redirect to page 1
+  useEffect(() => {
+    if (!data?.pagination) return;
+    if (params.page > data.pagination.totalPages) {
+      update({ page: 1 });
     }
-    return [...clients.entries()]
+  }, [data, params.page, update]);
+
+  const projects = data?.projects ?? [];
+  const users = data?.users ?? [];
+  const departments = data?.departments ?? [];
+  const pagination = data?.pagination;
+  const total = pagination?.total ?? 0;
+  const totalPages = pagination?.totalPages ?? 1;
+  const isInitialLoading = loading && !data;
+  const isRevalidating = loading && !!data;
+
+  const clientOptions = useMemo(() => {
+    if (data?.clientOptions && data.clientOptions.length > 0) return data.clientOptions;
+    // Fallback: derive from current page
+    const set = new Map<string, string>();
+    for (const p of projects) {
+      const name = getClientDisplayName(p, p.quote);
+      if (name && name !== "—") set.set(name, name);
+    }
+    return [...set.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectsWithQuotes]);
+  }, [data, projects]);
 
-  const userMap = useMemo(() => {
-    const m = new Map<string, OrgUser>();
-    for (const u of users) m.set(u.id, u);
-    return m;
-  }, [users]);
+  const userOptions = useMemo(
+    () => users.map((u) => ({ value: u.id, label: u.name || u.email })),
+    [users],
+  );
+  const departmentOptions = useMemo(
+    () => departments.map((d) => ({ value: d.id, label: d.name })),
+    [departments],
+  );
 
-  const userOptions = useMemo(() => {
-    return users.map((u) => ({ value: u.id, label: u.name || u.email }));
-  }, [users]);
-
-  const departmentOptions = useMemo(() => {
-    return departments.map((d) => ({ value: d.id, label: d.name }));
-  }, [departments]);
-
-  const departmentMap = useMemo(() => {
-    const m = new Map<string, OrgDepartment>();
-    for (const d of departments) m.set(d.id, d);
-    return m;
-  }, [departments]);
-
-  const hasActiveFilters = statusFilter.length > 0 || clientFilter.length > 0 || userFilter.length > 0 || departmentFilter.length > 0;
+  const hasActiveFilters =
+    params.status.length > 0 ||
+    params.clientNames.length > 0 ||
+    params.userIds.length > 0 ||
+    params.departmentIds.length > 0;
 
   function clearAllFilters() {
-    setStatusFilter([]);
-    setClientFilter([]);
-    setUserFilter([]);
-    setDepartmentFilter([]);
-    setSearch("");
+    update({
+      status: [],
+      clientNames: [],
+      userIds: [],
+      departmentIds: [],
+      search: "",
+    }, { resetPage: true });
+    setSearchInput("");
   }
 
   function openManualQuoteModal(mode: "quote" | "snap" = "quote") {
@@ -330,8 +457,8 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       setManualCustomerId(created.id);
       setQuickAddName("");
       setQuickAddOpen(false);
-    } catch (error) {
-      setManualError(error instanceof Error ? error.message : t("manual.failedClient"));
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : t("manual.failedClient"));
     } finally {
       setQuickAddSaving(false);
     }
@@ -374,93 +501,21 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       });
 
       router.push(`/projects/${result.project.id}?tab=estimate&subtab=worksheets`);
-    } catch (error) {
+    } catch (err) {
       setManualSaving(false);
-      setManualError(error instanceof Error ? error.message : t("manual.createError"));
+      setManualError(err instanceof Error ? err.message : t("manual.createError"));
     }
   }
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+  function handleSort(key: QuotesSortKey) {
+    if (params.sortKey === key) {
+      update({ sortDir: params.sortDir === "asc" ? "desc" : "asc" }, { resetPage: true });
     } else {
-      setSortKey(key);
-      setSortDir("asc");
+      update({ sortKey: key, sortDir: "asc" }, { resetPage: true });
     }
-  };
+  }
 
-  const filtered = useMemo(() => {
-    let list = [...projectsWithQuotes];
-
-    if (statusFilter.length > 0) {
-      list = list.filter((p) => statusFilter.includes(p.quote.status));
-    }
-
-    if (clientFilter.length > 0) {
-      list = list.filter((p) => clientFilter.includes(getClientDisplayName(p, p.quote)));
-    }
-
-    if (userFilter.length > 0) {
-      list = list.filter((p) => p.quote.userId && userFilter.includes(p.quote.userId));
-    }
-
-    if (departmentFilter.length > 0) {
-      list = list.filter((p) => p.quote.departmentId && departmentFilter.includes(p.quote.departmentId));
-    }
-
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.quote.quoteNumber.toLowerCase().includes(q) ||
-          p.quote.title.toLowerCase().includes(q) ||
-          getClientDisplayName(p, p.quote).toLowerCase().includes(q) ||
-          p.name.toLowerCase().includes(q) ||
-          (p.location || "").toLowerCase().includes(q)
-      );
-    }
-
-    list.sort((a, b) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case "quoteNumber":
-          cmp = a.quote.quoteNumber.localeCompare(b.quote.quoteNumber);
-          break;
-        case "kind":
-          cmp = getQuoteKind(a).localeCompare(getQuoteKind(b));
-          break;
-        case "title":
-          cmp = a.quote.title.localeCompare(b.quote.title);
-          break;
-        case "client":
-          cmp = getClientDisplayName(a, a.quote).localeCompare(getClientDisplayName(b, b.quote));
-          break;
-        case "estimator": {
-          const aName = getEstimatorLabel(a, userMap, departmentMap, unassignedLabel);
-          const bName = getEstimatorLabel(b, userMap, departmentMap, unassignedLabel);
-          cmp = aName.localeCompare(bName);
-          break;
-        }
-        case "status":
-          cmp = a.quote.status.localeCompare(b.quote.status);
-          break;
-        case "subtotal":
-          cmp = (a.latestRevision?.subtotal ?? 0) - (b.latestRevision?.subtotal ?? 0);
-          break;
-        case "margin":
-          cmp = (a.latestRevision?.estimatedMargin ?? 0) - (b.latestRevision?.estimatedMargin ?? 0);
-          break;
-        case "updated":
-          cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-          break;
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-
-    return list;
-  }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir, userMap, departmentMap, unassignedLabel]);
-
-  const headers: { key: SortKey; label: string; className?: string }[] = [
+  const headers: { key: QuotesSortKey; label: string; className?: string }[] = [
     { key: "quoteNumber", label: t("table.quoteNumber"), className: "w-32" },
     { key: "kind", label: t("table.kind"), className: "w-20" },
     { key: "title", label: t("table.title") },
@@ -473,10 +528,13 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   ];
   const manualIsSnap = manualCreationMode === "snap";
 
+  const fromIndex = total === 0 ? 0 : (params.page - 1) * params.pageSize + 1;
+  const toIndex = Math.min(total, params.page * params.pageSize);
+
   return (
-    <div className="space-y-5">
+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       {/* Header */}
-      <FadeIn>
+      <FadeIn className="shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
@@ -668,7 +726,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       </ModalBackdrop>
 
       {/* Filter bar */}
-      <FadeIn delay={0.1}>
+      <FadeIn delay={0.1} className="shrink-0">
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
           <div className="relative flex-1 min-w-[280px] max-w-lg">
@@ -676,25 +734,25 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             <Input
               className="h-8 pl-9 text-xs"
               placeholder={t("filters.searchPlaceholder")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
-                onClick={() => setSearch("")}
+                onClick={() => setSearchInput("")}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg/30 hover:text-fg/60 transition-colors"
+                aria-label={t("filters.clear")}
               >
                 <X className="h-3 w-3" />
               </button>
             )}
           </div>
 
-          {/* Status filter */}
           <FilterDropdown
             label={t("filters.status")}
             options={STATUS_OPTIONS.map((s) => ({ value: s.value, label: t(`status.${s.labelKey}`) }))}
-            selected={statusFilter}
-            onChange={setStatusFilter}
+            selected={params.status}
+            onChange={(v) => update({ status: v }, { resetPage: true })}
             clearLabel={t("filters.clear")}
             renderOption={(opt) => (
               <span className="flex items-center gap-2">
@@ -703,39 +761,35 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             )}
           />
 
-          {/* Client filter */}
           {clientOptions.length > 0 && (
             <FilterDropdown
               label={t("filters.client")}
               options={clientOptions}
-              selected={clientFilter}
-              onChange={setClientFilter}
+              selected={params.clientNames}
+              onChange={(v) => update({ clientNames: v }, { resetPage: true })}
               clearLabel={t("filters.clear")}
             />
           )}
 
-          {/* Estimator filter */}
           <FilterDropdown
             label={t("filters.estimator")}
             options={userOptions}
-            selected={userFilter}
-            onChange={setUserFilter}
+            selected={params.userIds}
+            onChange={(v) => update({ userIds: v }, { resetPage: true })}
             clearLabel={t("filters.clear")}
           />
 
-          {/* Department filter */}
           {departmentOptions.length > 0 && (
             <FilterDropdown
               label={t("filters.department")}
               options={departmentOptions}
-              selected={departmentFilter}
-              onChange={setDepartmentFilter}
+              selected={params.departmentIds}
+              onChange={(v) => update({ departmentIds: v }, { resetPage: true })}
               clearLabel={t("filters.clear")}
             />
           )}
 
-          {/* Clear all */}
-          {(hasActiveFilters || search) && (
+          {(hasActiveFilters || params.search) && (
             <button
               onClick={clearAllFilters}
               className="inline-flex items-center gap-1 rounded-lg px-2 h-8 text-xs text-fg/40 hover:text-fg/70 transition-colors"
@@ -744,21 +798,24 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             </button>
           )}
 
-          {/* Result count */}
-          <span className="ml-auto text-[11px] text-fg/30 tabular-nums shrink-0">
-            {filtered.length === projectsWithQuotes.length
-              ? t("filters.resultCount", { count: filtered.length })
-              : t("filters.filteredResultCount", { filtered: filtered.length, total: projectsWithQuotes.length })}
+          <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-fg/30 tabular-nums shrink-0">
+            {isRevalidating && <Loader2 className="h-3 w-3 animate-spin" />}
+            {!isInitialLoading && total > 0 && (
+              <span>{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
+            )}
+            {!isInitialLoading && total === 0 && !isRevalidating && (
+              <span>{t("filters.resultCount", { count: 0 })}</span>
+            )}
           </span>
         </div>
       </FadeIn>
 
       {/* Table */}
-      <FadeIn delay={0.15}>
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
+      <FadeIn delay={0.15} className="min-h-0 flex-1">
+        <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+            <table className={cn("w-full text-sm", isRevalidating && "opacity-60 transition-opacity")}>
+              <thead className="sticky top-0 z-10 bg-panel">
                 <tr className="border-b border-line">
                   {headers.map((h) => (
                     <th
@@ -768,78 +825,169 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                         h.className
                       )}
                       onClick={() => handleSort(h.key)}
+                      aria-sort={params.sortKey === h.key ? (params.sortDir === "asc" ? "ascending" : "descending") : "none"}
                     >
                       <span className="inline-flex items-center gap-1">
                         {h.label}
                         <ArrowUpDown
-                          className={cn("h-3 w-3", sortKey === h.key ? "text-accent" : "text-fg/15")}
+                          className={cn("h-3 w-3", params.sortKey === h.key ? "text-accent" : "text-fg/15")}
                         />
                       </span>
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody>
-                {filtered.length === 0 && (
+              {isInitialLoading ? (
+                <TableSkeleton rows={Math.min(params.pageSize, 8)} cols={headers.length} />
+              ) : error ? (
+                <tbody>
                   <tr>
-                    <td colSpan={headers.length} className="px-5 py-12 text-center text-sm text-fg/40">
-                      <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                      {hasActiveFilters || search ? t("emptyFiltered") : t("empty")}
+                    <td colSpan={headers.length} className="px-5 py-12 text-center text-sm">
+                      <div className="mx-auto flex max-w-md flex-col items-center gap-3 text-fg/60">
+                        <AlertCircle className="h-8 w-8 text-danger/70" />
+                        <div>
+                          <p className="font-medium text-fg/80">{t("loadErrorTitle")}</p>
+                          <p className="mt-1 text-xs text-fg/50">{error}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setReloadTick((n) => n + 1)}
+                        >
+                          {t("retry")}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
-                )}
-                {filtered.map((project, i) => {
-                  const quoteKind = getQuoteKind(project);
-                  return (
-                    <motion.tr
-                      key={project.id}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                      className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
-                    >
-                      <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
-                        <Link href={`/projects/${project.id}`} className="hover:underline">
-                          {project.quote.quoteNumber}
-                        </Link>
+                </tbody>
+              ) : (
+                <tbody>
+                  {projects.length === 0 ? (
+                    <tr>
+                      <td colSpan={headers.length} className="px-5 py-12 text-center text-sm text-fg/40">
+                        <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+                        {hasActiveFilters || params.search ? t("emptyFiltered") : t("empty")}
                       </td>
-                      <td className="px-4 py-2.5">
-                        <Badge tone={quoteKind === "snap" ? "info" : "default"} className="gap-1">
-                          {quoteKind === "snap" && <Zap className="h-3 w-3" />}
-                          {quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/80">
-                        <Link href={`/projects/${project.id}`} className="hover:underline">
-                          {project.quote.title || project.name}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/60">
-                        {getClientDisplayName(project, project.quote)}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/60">
-                        {getEstimatorLabel(project, userMap, departmentMap, unassignedLabel)}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <Badge tone={statusTone(project.quote.status) as any}>
-                          {t(`status.${statusLabelKey(project.quote.status)}`)}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                        {formatMoney(project.latestRevision?.subtotal ?? 0)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
-                        {formatPercent(project.latestRevision?.estimatedMargin ?? 0)}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/50">
-                        {formatDate(project.updatedAt)}
-                      </td>
-                    </motion.tr>
-                  );
-                })}
-              </tbody>
+                    </tr>
+                  ) : (
+                    projects.map((project, i) => {
+                      const quoteKind = getQuoteKind(project);
+                      if (!project.quote) return null;
+                      return (
+                        <motion.tr
+                          key={project.id}
+                          initial={{ opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
+                          className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
+                        >
+                          <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
+                            <Link href={`/projects/${project.id}`} className="hover:underline">
+                              {project.quote.quoteNumber}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Badge tone={quoteKind === "snap" ? "info" : "default"} className="gap-1">
+                              {quoteKind === "snap" && <Zap className="h-3 w-3" />}
+                              {quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-fg/80">
+                            <Link href={`/projects/${project.id}`} className="hover:underline">
+                              {project.quote.title || project.name}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-fg/60">
+                            {getClientDisplayName(project, project.quote)}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-fg/60">
+                            {getEstimatorLabel(project, unassignedLabel)}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <Badge tone={statusTone(project.quote.status) as any}>
+                              {t(`status.${statusLabelKey(project.quote.status)}`)}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                            {formatMoney(project.latestRevision?.subtotal ?? 0)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
+                            {formatPercent(project.latestRevision?.estimatedMargin ?? 0)}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-fg/50">
+                            {formatDate(project.updatedAt)}
+                          </td>
+                        </motion.tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              )}
             </table>
           </div>
+
+          {/* Pagination footer */}
+          {!isInitialLoading && !error && total > 0 && (
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[11px] text-fg/50">
+                <label className="flex items-center gap-1.5">
+                  <span>{t("pagination.rowsPerPage")}</span>
+                  <select
+                    value={params.pageSize}
+                    onChange={(e) => update({ pageSize: parseInt(e.target.value, 10) }, { resetPage: true })}
+                    className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs text-fg/80 focus:border-accent focus:outline-none"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <span className="text-fg/30">·</span>
+                <span className="tabular-nums">{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => update({ page: 1 })}
+                  disabled={params.page <= 1}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.first")}
+                >
+                  <ChevronsLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => update({ page: params.page - 1 })}
+                  disabled={params.page <= 1}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.previous")}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="px-2 text-[11px] tabular-nums text-fg/60">
+                  {t("pagination.pageOf", { page: params.page, totalPages })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => update({ page: params.page + 1 })}
+                  disabled={params.page >= totalPages}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.next")}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => update({ page: totalPages })}
+                  disabled={params.page >= totalPages}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.last")}
+                >
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </Card>
       </FadeIn>
     </div>

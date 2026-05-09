@@ -252,7 +252,19 @@
     },
     "unassigned": "Unassigned",
     "emptyFiltered": "No quotes match your filters",
-    "empty": "No quotes found"
+    "empty": "No quotes found",
+    "loadErrorTitle": "Could not load quotes",
+    "loadError": "Failed to load quotes",
+    "retry": "Retry",
+    "pagination": {
+      "range": "{from}–{to} of {total}",
+      "rowsPerPage": "Rows per page",
+      "pageOf": "Page {page} of {totalPages}",
+      "first": "First page",
+      "previous": "Previous page",
+      "next": "Next page",
+      "last": "Last page"
+    }
   },
   "Settings": {
     "title": "Settings",

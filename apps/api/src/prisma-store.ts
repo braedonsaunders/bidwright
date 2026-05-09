@@ -5565,6 +5565,222 @@ export class PrismaApiStore {
     });
   }
 
+  /**
+   * Paginated, server-filtered, server-sorted variant of listProjectsWithState
+   * that returns only projects which have a quote — used by the Quotes list.
+   *
+   * Sorting on `subtotal` / `margin` reads QuoteRevision.currentRevisionId.
+   * Sorting on `kind` reads WorkspaceState.state JSON.
+   */
+  async listProjectsForQuotesPage(opts: {
+    page: number;
+    pageSize: number;
+    search?: string;
+    status?: string[];
+    userIds?: string[];
+    departmentIds?: string[];
+    clientNames?: string[];
+    sortKey: "quoteNumber" | "kind" | "title" | "client" | "estimator" | "status" | "subtotal" | "margin" | "updated";
+    sortDir: "asc" | "desc";
+  }): Promise<{
+    projects: Array<ReturnType<typeof mapProject> & {
+      packageCount: number;
+      jobCount: number;
+      workspaceState: ReturnType<typeof mapWorkspaceState> | null;
+      quote: {
+        id: string;
+        quoteNumber: string;
+        title: string;
+        status: string;
+        currentRevisionId: string;
+        customerId: string | null;
+        customerName: string | null;
+        customerString: string;
+        userId: string | null;
+        userName: string | null;
+        departmentId: string | null;
+        departmentName: string | null;
+      } | null;
+      latestRevision: {
+        id: string;
+        revisionNumber: number;
+        subtotal: number;
+        estimatedProfit: number;
+        estimatedMargin: number;
+      } | null;
+    }>;
+    total: number;
+    clientOptions: Array<{ value: string; label: string }>;
+  }> {
+    const page = Math.max(1, Math.floor(opts.page) || 1);
+    const pageSize = Math.min(200, Math.max(1, Math.floor(opts.pageSize) || 25));
+    const sortDir = opts.sortDir === "asc" ? "ASC" : "DESC";
+
+    const params: unknown[] = [this.organizationId];
+    const whereParts: string[] = [`p."organizationId" = $1`];
+    let paramIdx = 2;
+
+    if (opts.status && opts.status.length > 0) {
+      params.push(opts.status);
+      whereParts.push(`q.status = ANY($${paramIdx++}::text[])`);
+    }
+    if (opts.userIds && opts.userIds.length > 0) {
+      params.push(opts.userIds);
+      whereParts.push(`q."userId" = ANY($${paramIdx++}::text[])`);
+    }
+    if (opts.departmentIds && opts.departmentIds.length > 0) {
+      params.push(opts.departmentIds);
+      whereParts.push(`q."departmentId" = ANY($${paramIdx++}::text[])`);
+    }
+    if (opts.clientNames && opts.clientNames.length > 0) {
+      params.push(opts.clientNames);
+      whereParts.push(`COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—') = ANY($${paramIdx++}::text[])`);
+    }
+    const search = opts.search?.trim();
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = paramIdx++;
+      whereParts.push(`(
+        q."quoteNumber" ILIKE $${idx} OR
+        q.title ILIKE $${idx} OR
+        COALESCE(c.name, '') ILIKE $${idx} OR
+        q."customerString" ILIKE $${idx} OR
+        p."clientName" ILIKE $${idx} OR
+        p.name ILIKE $${idx} OR
+        p.location ILIKE $${idx}
+      )`);
+    }
+
+    const baseFromJoin = `
+      FROM "Project" p
+      INNER JOIN "Quote" q ON q."projectId" = p.id
+      LEFT JOIN "QuoteRevision" r ON r.id = q."currentRevisionId"
+      LEFT JOIN "Customer" c ON c.id = q."customerId"
+      LEFT JOIN "User" u ON u.id = q."userId"
+      LEFT JOIN "Department" d ON d.id = q."departmentId"
+      LEFT JOIN "WorkspaceState" ws ON ws."projectId" = p.id
+    `;
+    const whereSql = whereParts.join(" AND ");
+
+    const orderColumn = (() => {
+      switch (opts.sortKey) {
+        case "quoteNumber": return `q."quoteNumber"`;
+        case "title": return `LOWER(q.title)`;
+        case "status": return `q.status`;
+        case "updated": return `p."updatedAt"`;
+        case "client": return `LOWER(COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—'))`;
+        case "estimator": return `LOWER(COALESCE(NULLIF(u.name, ''), NULLIF(d.name, '')))`;
+        case "subtotal": return `COALESCE(r.subtotal, 0)`;
+        case "margin": return `COALESCE(r."estimatedMargin", 0)`;
+        case "kind": return `CASE WHEN ws.state->>'quoteMode' = 'snap' AND COALESCE((ws.state->>'snapUpgraded')::boolean, false) = false THEN 'snap' ELSE 'full' END`;
+        default: return `p."updatedAt"`;
+      }
+    })();
+
+    const countSql = `SELECT COUNT(*)::int AS count ${baseFromJoin} WHERE ${whereSql}`;
+    const skip = (page - 1) * pageSize;
+    const limitParamIdx = paramIdx++;
+    const offsetParamIdx = paramIdx++;
+    const pageSql = `
+      SELECT p.id ${baseFromJoin}
+      WHERE ${whereSql}
+      ORDER BY ${orderColumn} ${sortDir} NULLS LAST, p.id ASC
+      LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
+    `;
+    const pageParams = [...params, pageSize, skip];
+
+    // Distinct client display names for the filter dropdown (org-wide, not just current page)
+    const clientOptionsSql = `
+      SELECT DISTINCT COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—') AS name
+      FROM "Project" p
+      INNER JOIN "Quote" q ON q."projectId" = p.id
+      LEFT JOIN "Customer" c ON c.id = q."customerId"
+      WHERE p."organizationId" = $1
+        AND COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", '')) IS NOT NULL
+      ORDER BY name ASC
+    `;
+
+    const [countRows, idRows, clientRows] = await Promise.all([
+      this.db.$queryRawUnsafe<Array<{ count: number | bigint }>>(countSql, ...params),
+      this.db.$queryRawUnsafe<Array<{ id: string }>>(pageSql, ...pageParams),
+      this.db.$queryRawUnsafe<Array<{ name: string }>>(clientOptionsSql, this.organizationId),
+    ]);
+
+    const total = Number(countRows[0]?.count ?? 0);
+    const orderedIds = idRows.map((r) => r.id);
+    const clientOptions = clientRows
+      .map((row) => row.name)
+      .filter((n): n is string => typeof n === "string" && n.length > 0 && n !== "—")
+      .map((n) => ({ value: n, label: n }));
+
+    if (orderedIds.length === 0) {
+      return { projects: [], total, clientOptions };
+    }
+
+    const [projectRows, packages, jobs, workspaceStates, quotes, revisions, quoteUsers, quoteSuperAdmins] = await Promise.all([
+      this.db.project.findMany({ where: { id: { in: orderedIds } } }),
+      this.db.storedPackage.findMany({ where: { projectId: { in: orderedIds } } }),
+      this.db.ingestionJob.findMany({ where: { projectId: { in: orderedIds } } }),
+      this.db.workspaceState.findMany({ where: { projectId: { in: orderedIds } } }),
+      this.db.quote.findMany({
+        where: { projectId: { in: orderedIds } },
+        include: { department: true, customer: true },
+      }),
+      this.db.quoteRevision.findMany({
+        where: { quote: { projectId: { in: orderedIds } } },
+      }),
+      this.db.user.findMany({ where: { organizationId: this.organizationId }, select: { id: true, name: true, email: true } }),
+      this.db.superAdmin.findMany({ select: { id: true, name: true, email: true } }),
+    ]);
+
+    const quoteUserMap = new Map(quoteUsers.map((u) => [u.id, u]));
+    const quoteSuperAdminMap = new Map(quoteSuperAdmins.map((u) => [u.id, u]));
+    const projectMap = new Map(projectRows.map((p) => [p.id, p]));
+
+    const projects = orderedIds.flatMap((id) => {
+      const p = projectMap.get(id);
+      if (!p) return [];
+      const mapped = mapProject(p);
+      const quote = quotes.find((q) => q.projectId === p.id);
+      const revision = quote
+        ? revisions.find((r) => r.id === quote.currentRevisionId) ??
+          revisions.filter((r) => r.quoteId === quote.id).sort((a, b) => b.revisionNumber - a.revisionNumber)[0]
+        : undefined;
+      const ws = workspaceStates.find((w) => w.projectId === p.id);
+      return [{
+        ...mapped,
+        packageCount: packages.filter((pkg) => pkg.projectId === p.id).length,
+        jobCount: jobs.filter((j) => j.projectId === p.id).length,
+        workspaceState: ws ? mapWorkspaceState(ws) : null,
+        quote: quote ? {
+          id: quote.id,
+          quoteNumber: quote.quoteNumber,
+          title: quote.title,
+          status: quote.status,
+          currentRevisionId: quote.currentRevisionId,
+          customerId: quote.customerId || null,
+          customerName: (quote as any).customer?.name || null,
+          customerString: quote.customerString || "",
+          userId: quote.userId || null,
+          userName: quote.userId
+            ? quoteUserMap.get(quote.userId)?.name || quoteSuperAdminMap.get(quote.userId)?.name || null
+            : null,
+          departmentId: quote.departmentId || null,
+          departmentName: (quote as any).department?.name || null,
+        } : null,
+        latestRevision: revision ? {
+          id: revision.id,
+          revisionNumber: revision.revisionNumber,
+          subtotal: revision.subtotal,
+          estimatedProfit: revision.estimatedProfit,
+          estimatedMargin: revision.estimatedMargin,
+        } : null,
+      }];
+    });
+
+    return { projects, total, clientOptions };
+  }
+
   async getProject(projectId: string) {
     const project = await this.db.project.findFirst({
       where: { id: projectId, organizationId: this.organizationId },
@@ -7342,6 +7558,25 @@ export class PrismaApiStore {
     return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input)).item;
   }
 
+  /**
+   * Recover from agent-CLI tokenization that drops or mangles a chunk of a
+   * worksheet UUID. The corrupted id keeps a long prefix and a long suffix
+   * of the real id; if exactly one worksheet in the revision matches both,
+   * return it. Returns null when the recovery is ambiguous or unsafe.
+   */
+  private async recoverWorksheetByFuzzyId(requestedId: string, revisionId: string) {
+    if (!requestedId.startsWith("worksheet-") || requestedId.length < 24) return null;
+    const candidates = await this.db.worksheet.findMany({ where: { revisionId } });
+    if (candidates.length === 0) return null;
+    const prefixLen = Math.min(20, Math.floor(requestedId.length * 0.55));
+    const suffixLen = Math.min(8, Math.floor(requestedId.length * 0.25));
+    const prefix = requestedId.slice(0, prefixLen);
+    const suffix = requestedId.slice(-suffixLen);
+    const matches = candidates.filter((w) => w.id.startsWith(prefix) && w.id.endsWith(suffix));
+    if (matches.length !== 1) return null;
+    return matches[0];
+  }
+
   async createWorksheetItemWithSnapshot(
     projectId: string,
     worksheetId: string,
@@ -7349,7 +7584,16 @@ export class PrismaApiStore {
   ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
-    const worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
+    let worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
+    if (!worksheet && revision) {
+      // Agent CLIs occasionally tokenize-corrupt the middle of a UUID-style
+      // worksheet id (e.g. "worksheet-322aec9c-0aa7-4c3e-b4e3-951b5f39ecff"
+      // arrives as "worksheet-322aec9c-0aa7-4c3e-b951b5f39ecff" with a
+      // 4-character chunk dropped). Try a prefix+suffix recovery against
+      // worksheets in the same revision; if exactly one matches, use it.
+      const recovered = await this.recoverWorksheetByFuzzyId(worksheetId, revision.id);
+      if (recovered) worksheet = recovered;
+    }
 
     if (!revision || !worksheet || worksheet.revisionId !== revision.id) {
       throw new Error(`Worksheet ${worksheetId} not found for project ${projectId}`);

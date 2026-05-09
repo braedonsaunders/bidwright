@@ -284,7 +284,19 @@
     },
     "unassigned": "Nicht zugewiesen",
     "emptyFiltered": "Keine Angebote entsprechen deinen Filtern",
-    "empty": "Keine Angebote gefunden"
+    "empty": "Keine Angebote gefunden",
+    "loadErrorTitle": "Angebote konnten nicht geladen werden",
+    "loadError": "Laden der Angebote fehlgeschlagen",
+    "retry": "Erneut versuchen",
+    "pagination": {
+      "range": "{from}–{to} von {total}",
+      "rowsPerPage": "Zeilen pro Seite",
+      "pageOf": "Seite {page} von {totalPages}",
+      "first": "Erste Seite",
+      "previous": "Vorherige Seite",
+      "next": "Nächste Seite",
+      "last": "Letzte Seite"
+    }
   },
   "Performance": {
     "eyebrow": "Leistung",

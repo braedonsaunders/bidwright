@@ -284,7 +284,19 @@
     },
     "unassigned": "Não atribuído",
     "emptyFiltered": "Nenhuma cotação corresponde aos filtros",
-    "empty": "Nenhuma cotação encontrada"
+    "empty": "Nenhuma cotação encontrada",
+    "loadErrorTitle": "Não foi possível carregar as cotações",
+    "loadError": "Falha ao carregar cotações",
+    "retry": "Tentar novamente",
+    "pagination": {
+      "range": "{from}–{to} de {total}",
+      "rowsPerPage": "Linhas por página",
+      "pageOf": "Página {page} de {totalPages}",
+      "first": "Primeira página",
+      "previous": "Página anterior",
+      "next": "Próxima página",
+      "last": "Última página"
+    }
   },
   "Performance": {
     "eyebrow": "Desempenho",

@@ -284,7 +284,19 @@
     },
     "unassigned": "미할당",
     "emptyFiltered": "필터와 일치하는 견적이 없습니다",
-    "empty": "견적이 없습니다"
+    "empty": "견적이 없습니다",
+    "loadErrorTitle": "견적을 불러올 수 없습니다",
+    "loadError": "견적 로드에 실패했습니다",
+    "retry": "다시 시도",
+    "pagination": {
+      "range": "전체 {total}개 중 {from}–{to}",
+      "rowsPerPage": "페이지당 행 수",
+      "pageOf": "{totalPages} 페이지 중 {page} 페이지",
+      "first": "첫 페이지",
+      "previous": "이전 페이지",
+      "next": "다음 페이지",
+      "last": "마지막 페이지"
+    }
   },
   "Performance": {
     "eyebrow": "성과",

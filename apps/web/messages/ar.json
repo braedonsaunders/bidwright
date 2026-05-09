@@ -284,7 +284,19 @@
     },
     "unassigned": "غير معين",
     "emptyFiltered": "لا توجد عروض تطابق عوامل التصفية",
-    "empty": "لم يتم العثور على عروض"
+    "empty": "لم يتم العثور على عروض",
+    "loadErrorTitle": "تعذر تحميل العروض",
+    "loadError": "فشل تحميل العروض",
+    "retry": "إعادة المحاولة",
+    "pagination": {
+      "range": "{from}–{to} من {total}",
+      "rowsPerPage": "صفوف لكل صفحة",
+      "pageOf": "صفحة {page} من {totalPages}",
+      "first": "الصفحة الأولى",
+      "previous": "الصفحة السابقة",
+      "next": "الصفحة التالية",
+      "last": "الصفحة الأخيرة"
+    }
   },
   "Performance": {
     "eyebrow": "الأداء",
