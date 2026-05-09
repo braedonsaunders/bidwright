@@ -7,7 +7,8 @@
       "clients": "العملاء",
       "library": "المكتبة",
       "performance": "الأداء",
-      "settings": "الإعدادات"
+      "settings": "الإعدادات",
+      "projects": "المشاريع"
     },
     "theme": {
       "light": "فاتح",
@@ -22,8 +23,8 @@
     "superAdmin": "مشرف عام",
     "personal": "شخصي",
     "adminPanel": "لوحة الإدارة",
-"searchPlaceholder": "البحث في المشاريع، عروض الأسعار، العملاء...",
-  "noResults": "لا نتائج لـ \"{query}\"",
+    "searchPlaceholder": "البحث في المشاريع، عروض الأسعار، العملاء...",
+    "noResults": "لا نتائج لـ \"{query}\"",
     "quotes": "عروض الأسعار",
     "quotesCount": "عروض الأسعار ({count})",
     "activeProject": "المشروع النشط",

@@ -7,7 +7,8 @@
       "clients": "Clientes",
       "library": "Biblioteca",
       "performance": "Rendimiento",
-      "settings": "Configuración"
+      "settings": "Configuración",
+      "projects": "Proyectos"
     },
     "theme": {
       "light": "Claro",
@@ -22,8 +23,8 @@
     "superAdmin": "Superadministrador",
     "personal": "Personal",
     "adminPanel": "Panel de administración",
-"searchPlaceholder": "Buscar proyectos, cotizaciones, clientes...",
-  "noResults": "Sin resultados para \"{query}\"",
+    "searchPlaceholder": "Buscar proyectos, cotizaciones, clientes...",
+    "noResults": "Sin resultados para \"{query}\"",
     "quotes": "Cotizaciones",
     "quotesCount": "Cotizaciones ({count})",
     "activeProject": "Proyecto activo",

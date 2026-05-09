@@ -7,7 +7,8 @@
       "clients": "고객",
       "library": "라이브러리",
       "performance": "성과",
-      "settings": "설정"
+      "settings": "설정",
+      "projects": "프로젝트"
     },
     "theme": {
       "light": "라이트",
@@ -22,8 +23,8 @@
     "superAdmin": "슈퍼 관리자",
     "personal": "개인",
     "adminPanel": "관리자 패널",
-"searchPlaceholder": "프로젝트, 견적, 고객 검색...",
-  "noResults": "\"{query}\"에 대한 결과 없음",
+    "searchPlaceholder": "프로젝트, 견적, 고객 검색...",
+    "noResults": "\"{query}\"에 대한 결과 없음",
     "quotes": "견적",
     "quotesCount": "견적({count})",
     "activeProject": "활성 프로젝트",

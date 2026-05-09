@@ -7,7 +7,8 @@
       "clients": "Clients",
       "library": "Bibliothèque",
       "performance": "Performance",
-      "settings": "Paramètres"
+      "settings": "Paramètres",
+      "projects": "Projets"
     },
     "theme": {
       "light": "Clair",
@@ -22,8 +23,8 @@
     "superAdmin": "Super administrateur",
     "personal": "Personnel",
     "adminPanel": "Panneau d’administration",
-"searchPlaceholder": "Rechercher projets, soumissions, clients...",
-  "noResults": "Aucun résultat pour \"{query}\"",
+    "searchPlaceholder": "Rechercher projets, soumissions, clients...",
+    "noResults": "Aucun résultat pour \"{query}\"",
     "quotes": "Soumissions",
     "quotesCount": "Soumissions ({count})",
     "activeProject": "Projet actif",

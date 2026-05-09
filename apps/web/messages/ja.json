@@ -7,7 +7,8 @@
       "clients": "顧客",
       "library": "ライブラリ",
       "performance": "実績",
-      "settings": "設定"
+      "settings": "設定",
+      "projects": "プロジェクト"
     },
     "theme": {
       "light": "ライト",
@@ -22,8 +23,8 @@
     "superAdmin": "スーパー管理者",
     "personal": "個人",
     "adminPanel": "管理パネル",
-"searchPlaceholder": "プロジェクト、見積もり、顧客を検索...",
-  "noResults": "\"{query}\"の結果はありません",
+    "searchPlaceholder": "プロジェクト、見積もり、顧客を検索...",
+    "noResults": "\"{query}\"の結果はありません",
     "quotes": "見積",
     "quotesCount": "見積（{count}）",
     "activeProject": "アクティブなプロジェクト",

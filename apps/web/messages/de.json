@@ -7,7 +7,8 @@
       "clients": "Kunden",
       "library": "Bibliothek",
       "performance": "Leistung",
-      "settings": "Einstellungen"
+      "settings": "Einstellungen",
+      "projects": "Projekte"
     },
     "theme": {
       "light": "Hell",
@@ -22,8 +23,8 @@
     "superAdmin": "Superadmin",
     "personal": "Persönlich",
     "adminPanel": "Adminbereich",
-"searchPlaceholder": "Projekte, Angebote, Kunden suchen...",
-  "noResults": "Keine Ergebnisse für \"{query}\"",
+    "searchPlaceholder": "Projekte, Angebote, Kunden suchen...",
+    "noResults": "Keine Ergebnisse für \"{query}\"",
     "quotes": "Angebote",
     "quotesCount": "Angebote ({count})",
     "activeProject": "Aktives Projekt",
