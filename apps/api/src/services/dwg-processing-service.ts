@@ -537,7 +537,12 @@ async function convertDwgToDxf(inputPath: string): Promise<{ dxfText?: string; c
   const envCommand = process.env.BIDWRIGHT_DWG_CONVERTER_CMD?.trim();
   const commands = envCommand
     ? [envCommand]
-    : ["dwg2dxf {input} -o {output}", "ODAFileConverter {input} {output} ACAD2018 DXF"];
+    : [
+        "dwg2dxf {input} -o {output} -y",
+        `${process.env.HOME ?? "/root"}/.local/bin/dwg2dxf {input} -o {output} -y`,
+        "/usr/local/bin/dwg2dxf {input} -o {output} -y",
+        "ODAFileConverter {input} {output} ACAD2018 DXF",
+      ];
 
   const tempDir = await mkdtemp(join(tmpdir(), "bidwright-dwg-"));
   const outputPath = join(tempDir, "converted.dxf");

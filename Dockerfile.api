@@ -25,6 +25,26 @@ COPY . .
 RUN pnpm --filter @bidwright/db db:generate
 RUN pnpm --filter @bidwright/api build
 
+# --- LibreDWG builder stage ---
+FROM debian:bookworm-slim AS libredwg-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    python3 \
+    wget \
+    texinfo \
+    xz-utils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN wget -q -O /tmp/libredwg.tar.gz "https://github.com/LibreDWG/libredwg/releases/download/0.13.4/libredwg-0.13.4.tar.gz" \
+    && mkdir -p /tmp/libredwg-src \
+    && tar xzf /tmp/libredwg.tar.gz -C /tmp/libredwg-src --strip-components=1 \
+    && cd /tmp/libredwg-src \
+    && ./configure --disable-bindings --disable-shared \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /tmp/libredwg.tar.gz /tmp/libredwg-src
+
 # --- runtime stage ---
 FROM node:22-bookworm-slim AS runner
 RUN corepack enable
@@ -42,8 +62,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     unzip \
     ripgrep \
-    libredwg-utils \
-  && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=libredwg-builder /usr/local/bin/dwg2dxf /usr/local/bin/dwg2dxf
+COPY --from=libredwg-builder /usr/local/bin/dwgread /usr/local/bin/dwgread
 RUN wget -q -O /tmp/mpxj.zip "https://downloads.sourceforge.net/project/mpxj/mpxj/Version%2016.1.0/mpxj-16.1.0.zip" \
   && mkdir -p /opt/mpxj-dist /opt/mpxj \
   && unzip -q /tmp/mpxj.zip -d /opt/mpxj-dist \
