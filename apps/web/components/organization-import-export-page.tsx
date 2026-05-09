@@ -53,6 +53,7 @@ import {
   getCustomers,
   getEntityCategories,
   getProjects,
+  listAssemblies,
   listEstimateFactorLibraryEntries,
   listKnowledgeBooks,
   listKnowledgeDocuments,
@@ -83,6 +84,7 @@ interface OrgCounts {
   customers: number;
   catalogItems: number;
   rateScheduleItems: number;
+  assemblies: number;
   entityCategories: number;
   conditionLibrary: number;
   factors: number;
@@ -292,6 +294,7 @@ const EMPTY_COUNTS: OrgCounts = {
   customers: 0,
   catalogItems: 0,
   rateScheduleItems: 0,
+  assemblies: 0,
   entityCategories: 0,
   conditionLibrary: 0,
   factors: 0,
@@ -588,6 +591,7 @@ export function OrganizationImportExportPage({
         customers,
         catalogs,
         schedules,
+        assemblyList,
         categories,
         conditions,
         factors,
@@ -600,12 +604,13 @@ export function OrganizationImportExportPage({
         getCustomers(),
         getCatalogs(),
         listRateSchedules(),
+        listAssemblies(),
         getEntityCategories(),
         getConditionLibrary(),
         listEstimateFactorLibraryEntries(),
         listKnowledgeBooks(),
         listKnowledgeDocuments(),
-        listLaborUnitLibraries("organization"),
+        listLaborUnitLibraries("all"),
         getCostIntelligenceSummary(),
       ]);
       setCounts({
@@ -613,6 +618,7 @@ export function OrganizationImportExportPage({
         customers: customers.status === "fulfilled" ? customers.value.length : 0,
         catalogItems: catalogs.status === "fulfilled" ? catalogs.value.reduce((sum, c) => sum + (c.itemCount ?? 0), 0) : 0,
         rateScheduleItems: schedules.status === "fulfilled" ? schedules.value.reduce((sum, s) => sum + (s.items?.length ?? 0), 0) : 0,
+        assemblies: assemblyList.status === "fulfilled" ? assemblyList.value.reduce((sum, a) => sum + (a.componentCount ?? 0), 0) : 0,
         entityCategories: categories.status === "fulfilled" ? categories.value.length : 0,
         conditionLibrary: conditions.status === "fulfilled" ? conditions.value.length : 0,
         factors: factors.status === "fulfilled" ? factors.value.length : 0,
@@ -757,7 +763,7 @@ export function OrganizationImportExportPage({
             <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
             <span>{formatCount(counts.projects)} estimates</span>
             <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
-            <span>{formatCount(counts.catalogItems + counts.rateScheduleItems + counts.conditionLibrary + counts.factors + counts.laborUnits + counts.costResources)} library</span>
+            <span>{formatCount(counts.catalogItems + counts.rateScheduleItems + counts.assemblies + counts.conditionLibrary + counts.factors + counts.laborUnits + counts.costResources)} library</span>
             {countsLoading && <Loader2 className="h-3 w-3 animate-spin text-fg/30" />}
           </div>
         </div>
@@ -934,7 +940,7 @@ function ExportView({
               : section.id === "datasets"
                 ? datasets.length
                 : section.id === "library"
-                  ? counts.catalogItems + counts.rateScheduleItems + counts.conditionLibrary + counts.factors + counts.laborUnits
+                  ? counts.catalogItems + counts.rateScheduleItems + counts.assemblies + counts.conditionLibrary + counts.factors + counts.laborUnits
                   : section.countKey
                     ? counts[section.countKey]
                     : 0;

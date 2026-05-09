@@ -4,13 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, AlertTriangle, Layers, ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { getDwgTakeoffMetadata, processDwgTakeoffMetadata, type DwgTakeoffEntity } from "@/lib/api";
 
 interface DxfViewerProps {
   url: string;
   fileName: string;
+  projectId?: string;
+  sourceKind?: "source_document" | "file_node";
+  sourceId?: string;
 }
 
-interface DxfEntity {
+interface NormalizedEntity {
   type: string;
   vertices?: Array<{ x: number; y: number }>;
   startPoint?: { x: number; y: number };
@@ -23,19 +27,14 @@ interface DxfEntity {
   text?: string;
   height?: number;
   layer?: string;
-  color?: number;
+  color?: string | number;
 }
 
 interface DxfData {
-  entities: DxfEntity[];
-  tables?: {
-    layer?: {
-      layers?: Record<string, { color?: number }>;
-    };
-  };
+  entities: NormalizedEntity[];
+  layerCount: number;
 }
 
-// AutoCAD color index to hex (simplified subset)
 const ACI_COLORS: Record<number, string> = {
   1: "#ff0000",
   2: "#ffff00",
@@ -48,13 +47,26 @@ const ACI_COLORS: Record<number, string> = {
   9: "#c0c0c0",
 };
 
-function getEntityColor(entity: DxfEntity, layerColors: Record<string, string>): string {
-  if (entity.color && ACI_COLORS[entity.color]) return ACI_COLORS[entity.color];
+function resolveColor(color: string | number | undefined): string {
+  if (color == null) return "#e0e0e0";
+  if (typeof color === "string") {
+    if (color.startsWith("#")) return color;
+    const n = Number(color);
+    return ACI_COLORS[n] ?? color;
+  }
+  return ACI_COLORS[color] ?? "#e0e0e0";
+}
+
+function getEntityColor(entity: NormalizedEntity, layerColors: Record<string, string>): string {
+  if (entity.color != null) {
+    const resolved = resolveColor(entity.color);
+    if (resolved !== "#e0e0e0") return resolved;
+  }
   if (entity.layer && layerColors[entity.layer]) return layerColors[entity.layer];
   return "#e0e0e0";
 }
 
-function computeBounds(entities: DxfEntity[]): { minX: number; minY: number; maxX: number; maxY: number } {
+function computeBounds(entities: NormalizedEntity[]): { minX: number; minY: number; maxX: number; maxY: number } {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 
   function update(x: number, y: number) {
@@ -82,66 +94,110 @@ function computeBounds(entities: DxfEntity[]): { minX: number; minY: number; max
   return { minX, minY, maxX, maxY };
 }
 
-export function DxfViewer({ url, fileName }: DxfViewerProps) {
+function normalizeApiEntities(apiEntities: DwgTakeoffEntity[]): NormalizedEntity[] {
+  return apiEntities.map((e) => {
+    const base: NormalizedEntity = {
+      type: e.type,
+      layer: e.layer,
+      color: e.color,
+    };
+    if (e.start) base.startPoint = e.start;
+    if (e.end) base.endPoint = e.end;
+    if (e.center) base.center = e.center;
+    if (e.radius != null) base.radius = e.radius;
+    if (e.vertices) base.vertices = e.vertices;
+    if (e.text != null) {
+      base.position = e.start ?? e.center ?? e.vertices?.[0];
+      base.text = e.text;
+    }
+    return base;
+  });
+}
+
+export function DxfViewer({ url, fileName, projectId, sourceKind, sourceId }: DxfViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dxf, setDxf] = useState<DxfData | null>(null);
-  const [layerCount, setLayerCount] = useState(0);
+  const [data, setData] = useState<DxfData | null>(null);
 
-  // Pan/zoom state
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragStart = useRef({ x: 0, y: 0 });
   const offsetStart = useRef({ x: 0, y: 0 });
+  const layerColorsRef = useRef<Record<string, string>>({});
+
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const isDwg = ext === "dwg";
 
   useEffect(() => {
     let cancelled = false;
 
-    async function loadDxf() {
+    async function load() {
       setLoading(true);
       setError(null);
 
       try {
-        const ext = fileName.split(".").pop()?.toLowerCase();
-        if (ext === "dwg") {
-          throw new Error("DWG files are not supported for preview. Please download the file to view it.");
+        if (isDwg && projectId && sourceKind && sourceId) {
+          let result = await getDwgTakeoffMetadata(projectId, sourceId);
+          if (result.status !== "processed") {
+            result = await processDwgTakeoffMetadata(projectId, sourceId);
+          }
+          if (cancelled) return;
+          if (result.status !== "processed") {
+            throw new Error(result.converter.message ?? "DWG file could not be processed. A DWG converter may need to be configured on the server.");
+          }
+          const entities = normalizeApiEntities(result.entities);
+          const lc: Record<string, string> = {};
+          for (const layer of result.layers) {
+            if (layer.color) lc[layer.name] = layer.color;
+          }
+          layerColorsRef.current = lc;
+          setData({ entities, layerCount: result.layers.length });
+        } else {
+          const response = await fetch(url, { credentials: "include" });
+          if (!response.ok) throw new Error(`Failed to fetch file: ${response.statusText}`);
+
+          const text = await response.text();
+          if (cancelled) return;
+
+          const DxfParser = (await import("dxf-parser")).default;
+          const parser = new DxfParser();
+          const parsed = parser.parseSync(text);
+          if (cancelled) return;
+
+          if (!parsed) throw new Error("Failed to parse DXF file");
+
+          const lc: Record<string, string> = {};
+          const layers = parsed.tables?.layer?.layers;
+          if (layers) {
+            for (const [name, layer] of Object.entries(layers)) {
+              if ((layer as { color?: number }).color && ACI_COLORS[(layer as { color?: number }).color!]) {
+                lc[name] = ACI_COLORS[(layer as { color?: number }).color!];
+              }
+            }
+          }
+          layerColorsRef.current = lc;
+
+          const rawEntities = (parsed as unknown as { entities: NormalizedEntity[] }).entities ?? [];
+          setData({ entities: rawEntities, layerCount: layers ? Object.keys(layers).length : 0 });
         }
-
-        const response = await fetch(url, { credentials: "include" });
-        if (!response.ok) throw new Error(`Failed to fetch file: ${response.statusText}`);
-
-        const text = await response.text();
-        if (cancelled) return;
-
-        const DxfParser = (await import("dxf-parser")).default;
-        const parser = new DxfParser();
-        const parsed = parser.parseSync(text);
-        if (cancelled) return;
-
-        if (!parsed) throw new Error("Failed to parse DXF file");
-
-        setDxf(parsed as unknown as DxfData);
-
-        const layers = parsed.tables?.layer?.layers;
-        setLayerCount(layers ? Object.keys(layers).length : 0);
       } catch (err) {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load DXF file");
+          setError(err instanceof Error ? err.message : "Failed to load drawing");
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
-    loadDxf();
+    load();
     return () => { cancelled = true; };
-  }, [url]);
+  }, [url, isDwg, projectId, sourceKind, sourceId]);
 
   const drawCanvas = useCallback(() => {
-    if (!dxf || !canvasRef.current || !containerRef.current) return;
+    if (!data || !canvasRef.current || !containerRef.current) return;
 
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -157,11 +213,10 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
     canvas.style.height = `${height}px`;
     ctx.scale(dpr, dpr);
 
-    // Background
     ctx.fillStyle = "#1a1a2e";
     ctx.fillRect(0, 0, width, height);
 
-    const bounds = computeBounds(dxf.entities);
+    const bounds = computeBounds(data.entities);
     const drawWidth = bounds.maxX - bounds.minX || 1;
     const drawHeight = bounds.maxY - bounds.minY || 1;
 
@@ -176,26 +231,18 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
     const midX = (bounds.minX + bounds.maxX) / 2;
     const midY = (bounds.minY + bounds.maxY) / 2;
 
-    // Build layer color map
-    const layerColors: Record<string, string> = {};
-    if (dxf.tables?.layer?.layers) {
-      for (const [name, layer] of Object.entries(dxf.tables.layer.layers)) {
-        if (layer.color && ACI_COLORS[layer.color]) {
-          layerColors[name] = ACI_COLORS[layer.color];
-        }
-      }
-    }
+    const layerColors = layerColorsRef.current;
 
     function toScreen(x: number, y: number): [number, number] {
       return [
         cx + (x - midX) * totalScale,
-        cy - (y - midY) * totalScale, // flip Y
+        cy - (y - midY) * totalScale,
       ];
     }
 
     ctx.lineWidth = 1;
 
-    for (const entity of dxf.entities) {
+    for (const entity of data.entities) {
       const color = getEntityColor(entity, layerColors);
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
@@ -227,7 +274,6 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
           const startAng = ((entity.startAngle || 0) * Math.PI) / 180;
           const endAng = ((entity.endAngle || 360) * Math.PI) / 180;
           ctx.beginPath();
-          // Y is flipped, so negate angles
           ctx.arc(acx, acy, ar, -startAng, -endAng, true);
           ctx.stroke();
           break;
@@ -250,14 +296,14 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
           if (!entity.position || !entity.text) break;
           const [tx, ty] = toScreen(entity.position.x, entity.position.y);
           const fontSize = Math.max(8, (entity.height || 2) * totalScale * 0.7);
-          if (fontSize < 4) break; // too small to read
+          if (fontSize < 4) break;
           ctx.font = `${Math.min(fontSize, 24)}px monospace`;
           ctx.fillText(entity.text, tx, ty);
           break;
         }
       }
     }
-  }, [dxf, zoom, offset]);
+  }, [data, zoom, offset]);
 
   useEffect(() => {
     drawCanvas();
@@ -315,21 +361,20 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-text-secondary" />
-        <span className="ml-2 text-sm text-text-secondary">Loading DXF drawing...</span>
+        <span className="ml-2 text-sm text-text-secondary">{isDwg ? "Processing DWG drawing..." : "Loading DXF drawing..."}</span>
       </div>
     );
   }
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-line bg-panel px-4 py-2">
         <div className="flex items-center gap-2">
           <Layers className="h-4 w-4 text-text-secondary" />
           <span className="text-sm font-medium text-text-primary truncate">{fileName}</span>
           <span className="text-xs text-text-secondary">
-            {layerCount} layer{layerCount !== 1 ? "s" : ""}
-            {dxf ? ` | ${dxf.entities.length} entities` : ""}
+            {data?.layerCount ?? 0} layer{data?.layerCount !== 1 ? "s" : ""}
+            {data ? ` | ${data.entities.length} entities` : ""}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -348,7 +393,6 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
         </div>
       </div>
 
-      {/* Canvas */}
       <div
         ref={containerRef}
         className={cn(

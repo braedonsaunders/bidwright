@@ -202,8 +202,7 @@ const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl
 const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
 const XLSX_EXTENSIONS = new Set(["xlsx", "xls", "xlsm", "ods"]);
 const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
-const DXF_EXTENSIONS = new Set(["dxf"]);
-const DWG_EXTENSIONS = new Set(["dwg"]);
+const DXF_EXTENSIONS = new Set(["dxf", "dwg"]);
 const ZIP_EXTENSIONS = new Set(["zip", "7z", "rar", "tar", "gz", "tgz"]);
 const MARKUP_CANDIDATE_EXTENSIONS = new Set(["csv", "tsv", "xml", "xlsx", "xls", "xlsm", "ods"]);
 const RTF_EXTENSIONS = new Set(["rtf"]);
@@ -266,7 +265,7 @@ function nextUntitledModelName(nodes: FileNode[]): string {
   }
 }
 
-type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "dwg" | "zip" | "rtf" | "none";
+type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
 type EditorMode = "none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist" | "model";
 
 function getFilePreviewType(item: TreeItem): FilePreviewType {
@@ -280,7 +279,6 @@ function getFilePreviewType(item: TreeItem): FilePreviewType {
   if (SPREADSHEET_EXTENSIONS.has(ext)) return "xlsx";
   if (EMAIL_EXTENSIONS.has(ext)) return "email";
     if (DXF_EXTENSIONS.has(ext)) return "dxf";
-    if (DWG_EXTENSIONS.has(ext)) return "dwg";
     if (ZIP_EXTENSIONS.has(ext)) return "zip";
   if (RTF_EXTENSIONS.has(ext)) return "rtf";
   return "none";
@@ -2348,7 +2346,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 sourceId={ingestSourceRef?.sourceId}
               />
             )}
-            {filePreviewType === "dxf" && previewUrl && <div className="flex-1 min-h-[400px]"><DxfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} /></div>}
+            {filePreviewType === "dxf" && previewUrl && <div className="flex-1 min-h-[400px]"><DxfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} projectId={projectId} sourceKind={ingestSourceRef?.sourceKind} sourceId={ingestSourceRef?.sourceId} /></div>}
             {filePreviewType === "zip" && previewUrl && (
               <ZipViewer
                 key={previewUrl}

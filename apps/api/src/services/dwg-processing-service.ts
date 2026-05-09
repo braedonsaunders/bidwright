@@ -577,15 +577,23 @@ function makeVersion(input: DwgProcessingVersion): DwgProcessingVersion {
   return input;
 }
 
-async function persistResult(documentId: string, result: DwgProcessingResult, currentStructuredData: unknown) {
-  const nextStructuredData = {
-    ...(currentStructuredData && typeof currentStructuredData === "object" ? currentStructuredData as Record<string, unknown> : {}),
-    dwgTakeoff: result,
-  };
-  await prisma.sourceDocument.update({
-    where: { id: documentId },
-    data: { structuredData: nextStructuredData as unknown as Prisma.InputJsonValue },
-  });
+async function persistResult(documentId: string, result: DwgProcessingResult, currentStructuredData: unknown, sourceKind?: "source_document" | "file_node") {
+  if (sourceKind === "file_node") {
+    const current = currentStructuredData && typeof currentStructuredData === "object" ? currentStructuredData as Record<string, unknown> : {};
+    await prisma.fileNode.update({
+      where: { id: documentId },
+      data: { metadata: { ...current, dwgTakeoff: result } as unknown as Prisma.InputJsonValue },
+    });
+  } else {
+    const nextStructuredData = {
+      ...(currentStructuredData && typeof currentStructuredData === "object" ? currentStructuredData as Record<string, unknown> : {}),
+      dwgTakeoff: result,
+    };
+    await prisma.sourceDocument.update({
+      where: { id: documentId },
+      data: { structuredData: nextStructuredData as unknown as Prisma.InputJsonValue },
+    });
+  }
 }
 
 export async function getDwgProcessingResult(
