@@ -423,7 +423,7 @@ export function AppShell({
                       return grouped.map((group) => (
                         <div key={group.type}>
                           <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30 border-t border-line/50 first:border-t-0">
-                            {t(`nav.${group.type === "project" ? "dashboard" : group.type === "quote" ? "quotes" : "clients"}`)}
+                            {t(`nav.${group.type === "project" ? "projects" : group.type === "quote" ? "quotes" : "clients"}`)}
                           </div>
                           {group.items.map((result) => {
                             const idx = flatIndex++;

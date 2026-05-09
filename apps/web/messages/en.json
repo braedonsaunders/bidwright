@@ -7,7 +7,8 @@
       "clients": "Clients",
       "library": "Library",
       "performance": "Performance",
-      "settings": "Settings"
+      "settings": "Settings",
+      "projects": "Projects"
     },
     "theme": {
       "light": "Light",
